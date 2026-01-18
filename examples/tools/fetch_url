@@ -1,0 +1,33 @@
+#!/bin/bash
+# Fetch content from a URL
+# Requires: curl, jq
+
+if [[ "$1" == "--schema" ]]; then
+  cat <<'EOF'
+{
+  "name": "fetch_url",
+  "description": "Fetch content from a URL and return the response body",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "The URL to fetch"
+      }
+    },
+    "required": ["url"]
+  }
+}
+EOF
+  exit 0
+fi
+
+# Read JSON from stdin and extract url
+url=$(jq -r '.url')
+
+if [[ -z "$url" || "$url" == "null" ]]; then
+  echo "Error: url parameter is required" >&2
+  exit 1
+fi
+
+curl -sL "$url"

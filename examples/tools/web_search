@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""
+Web search using DuckDuckGo (no API key required)
+Requires: pip install duckduckgo-search
+"""
+
+import sys
+import json
+
+if len(sys.argv) > 1 and sys.argv[1] == "--schema":
+    print(json.dumps({
+        "name": "web_search",
+        "description": "Search the web using DuckDuckGo and return results",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results (default: 5)"
+                }
+            },
+            "required": ["query"]
+        }
+    }))
+    sys.exit(0)
+
+# Read parameters from stdin
+params = json.load(sys.stdin)
+query = params.get("query")
+max_results = params.get("max_results", 5)
+
+if not query:
+    print("Error: query parameter is required", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    from duckduckgo_search import DDGS
+
+    with DDGS() as ddgs:
+        results = list(ddgs.text(query, max_results=max_results))
+
+    output = []
+    for r in results:
+        output.append({
+            "title": r.get("title", ""),
+            "url": r.get("href", ""),
+            "snippet": r.get("body", "")
+        })
+
+    print(json.dumps(output, indent=2))
+
+except ImportError:
+    print("Error: duckduckgo-search not installed. Run: pip install duckduckgo-search", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)

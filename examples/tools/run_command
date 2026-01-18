@@ -1,0 +1,34 @@
+#!/bin/bash
+# Run a shell command and return output
+# Use with caution - this executes arbitrary commands!
+
+if [[ "$1" == "--schema" ]]; then
+  cat <<'EOF'
+{
+  "name": "run_command",
+  "description": "Execute a shell command and return stdout. Use for system queries, file operations, etc.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "The shell command to execute"
+      }
+    },
+    "required": ["command"]
+  }
+}
+EOF
+  exit 0
+fi
+
+# Read JSON from stdin and extract command
+command=$(jq -r '.command')
+
+if [[ -z "$command" || "$command" == "null" ]]; then
+  echo "Error: command parameter is required" >&2
+  exit 1
+fi
+
+# Execute and capture both stdout and stderr
+eval "$command" 2>&1
