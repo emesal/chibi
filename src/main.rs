@@ -563,20 +563,31 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
     let context = app.get_current_context()?;
     
     if context.messages.is_empty() {
+        if _print_message {
+            println!("Context is already empty");
+        }
         return Ok(());
     }
     
     if context.messages.len() <= 2 {
         // Nothing to compact
+        if _print_message {
+            println!("Context is already compact (2 or fewer messages)");
+        }
         return Ok(());
     }
     
     // Append to transcript before compacting
     app.append_to_transcript(&context)?;
     
+    if _print_message {
+        eprintln!("[Compacting] Messages: {} -> requesting summary...", context.messages.len());
+    }
+    
     // Load compaction prompt
     let compaction_prompt = app.load_prompt("compaction")?;
     let compaction_prompt = if compaction_prompt.is_empty() {
+        eprintln!("[WARN] No compaction prompt found at ~/.chibi/prompts/compaction.md. Using default.");
         "Please summarize the following conversation into a concise summary. Capture the key points, decisions, and context."
     } else {
         &compaction_prompt
@@ -588,7 +599,11 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
         "content": compaction_prompt,
     })];
     
+    // Skip system messages to avoid confusing the summarizer with roleplay instructions
     for m in &context.messages {
+        if m.role == "system" {
+            continue;
+        }
         compaction_messages.push(serde_json::json!({
             "role": m.role,
             "content": m.content,
@@ -623,13 +638,25 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
     let json: serde_json::Value = response.json().await
         .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e)))?;
     
+    // Debug: print the response structure if parsing fails
     let summary = json["choices"][0]["message"]["content"]
         .as_str()
-        .unwrap_or("")
+        .unwrap_or_else(|| {
+            // Try alternative paths for different API responses
+            if let Some(s) = json["choices"][0]["message"]["content"].as_str() {
+                s
+            } else if let Some(s) = json["choices"][0]["content"].as_str() {
+                s
+            } else {
+                eprintln!("[DEBUG] Response structure: {}", json);
+                ""
+            }
+        })
         .to_string();
     
     if summary.is_empty() {
-        return Err(io::Error::new(ErrorKind::Other, "Empty summary received from LLM"));
+        eprintln!("[DEBUG] Full response: {}", json);
+        return Err(io::Error::new(ErrorKind::Other, "Empty summary received from LLM. Check console for debug info."));
     }
     
     // Prepare continuation prompt
@@ -729,22 +756,37 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
 
 fn read_prompt_from_stdin() -> io::Result<String> {
     let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
+    let mut stdin_lock = stdin.lock();
+    let mut buffer = String::new();
     let mut prompt = String::new();
     let mut first = true;
     
-    while let Some(line) = lines.next() {
-        let line = line?;
+    loop {
+        buffer.clear();
+        let bytes_read = stdin_lock.read_line(&mut buffer)?;
+        
+        // EOF (Ctrl+D)
+        if bytes_read == 0 {
+            break;
+        }
+        
+        // Remove trailing newline
+        if buffer.ends_with('\n') {
+            buffer.pop();
+            if buffer.ends_with('\r') {
+                buffer.pop();
+            }
+        }
         
         // Check for termination: a single dot on a line
-        if line.trim() == "." {
+        if buffer.trim() == "." {
             break;
         }
         
         if !first {
             prompt.push(' ');
         }
-        prompt.push_str(&line);
+        prompt.push_str(&buffer);
         first = false;
     }
     
