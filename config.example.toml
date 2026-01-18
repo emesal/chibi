@@ -9,7 +9,17 @@ api_key = "your-openrouter-api-key-here"
 # - openai/gpt-4o
 # - openai/gpt-4o-mini
 # - meta-llama/llama-3.1-70b-instruct
-model = "anthropic/claude-3.5-sonnet"
+#
+# Some free options
+# - meta-llama/llama-3.3-70b-instruct:free	(context: 131072)
+# - mistralai/devstral-2512:free		(context: 262144)
+# - nvidia/nemotron-3-nano-30b-a3b:free		(context: 256000)
+# - google/gemma-3-27b-it:free			(context: 131072)
+# - openai/gpt-oss-120b:free			(context: 131072)
+# - xiaomi/mimo-v2-flash:free			(context: 262144)
+# - google/gemini-2.0-flash-exp:free		(context: 1048576)
+# - qwen/qwen3-next-80b-a3b-instruct:free	(context: 262144)
+model = "xiaomi/mimo-v2-flash:free"
 
 # Context window limit (tokens)
 # This is used for calculating when to warn about approaching limits
@@ -19,6 +29,13 @@ context_window_limit = 100000
 # When context usage exceeds this percentage, a warning is printed to stderr
 warn_threshold_percent = 80.0
 
+# Auto-compaction settings
+# When enabled, chibi will automatically compact the context when it reaches
+# the threshold percentage of the context window
+auto_compact = false
+auto_compact_threshold = 80.0
+
 # Optional: Custom API base URL
 # Default: https://openrouter.ai/api/v1/chat/completions
 # base_url = "https://openrouter.ai/api/v1/chat/completions"
+
