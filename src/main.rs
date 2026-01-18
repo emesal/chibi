@@ -20,6 +20,8 @@ struct Cli {
     clear: bool,
     compact: bool,
     rename: Option<(String, String)>,
+    history: bool,
+    num_messages: Option<usize>,
     prompt: Vec<String>,
 }
 
@@ -34,6 +36,8 @@ impl Cli {
         let mut clear = false;
         let mut compact = false;
         let mut rename = None;
+        let mut history = false;
+        let mut num_messages: Option<usize> = None;
         let mut prompt = Vec::new();
         let mut i = 1;
         let mut is_prompt = false;
@@ -104,6 +108,23 @@ impl Cli {
                 continue;
             }
             
+            if arg == "-H" || arg == "--history" {
+                history = true;
+                i += 1;
+                continue;
+            }
+            
+            if arg == "-n" || arg == "--num-messages" {
+                if i + 1 >= args.len() {
+                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                }
+                num_messages = Some(args[i + 1].parse().map_err(|_| {
+                    io::Error::new(ErrorKind::InvalidInput, format!("Invalid number: {}", args[i + 1]))
+                })?);
+                i += 2;
+                continue;
+            }
+            
             if arg == "-h" || arg == "--help" {
                 Self::print_help();
                 std::process::exit(0);
@@ -125,8 +146,13 @@ impl Cli {
             i += 1;
         }
         
+        // -n implies -H
+        if num_messages.is_some() {
+            history = true;
+        }
+        
         // Validate argument combinations
-        let commands = [switch.is_some(), list, which, delete.is_some(), clear, compact, rename.is_some()]
+        let commands = [switch.is_some(), list, which, delete.is_some(), clear, compact, rename.is_some(), history]
             .iter()
             .filter(|&&x| x)
             .count();
@@ -147,6 +173,8 @@ impl Cli {
             clear,
             compact,
             rename,
+            history,
+            num_messages,
             prompt,
         })
     }
@@ -166,6 +194,8 @@ impl Cli {
         println!("  -C, --clear             Clear current context");
         println!("  -c, --compact           Compact current context");
         println!("  -r, --rename <OLD> <NEW>  Rename a context");
+        println!("  -H, --history           Show recent messages (default: 6)");
+        println!("  -n, --num-messages <N>  Number of messages to show (0 = all, implies -H)");
         println!();
         println!("Prompt input:");
         println!("  If arguments are provided after options, they are joined as the prompt.");
@@ -613,29 +643,34 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
     
     // Load compaction prompt
     let compaction_prompt = app.load_prompt("compaction")?;
+    let default_compaction_prompt = "Please summarize the following conversation into a concise summary. Capture the key points, decisions, and context.";
     let compaction_prompt = if compaction_prompt.is_empty() {
         eprintln!("[WARN] No compaction prompt found at ~/.chibi/prompts/compaction.md. Using default.");
-        "Please summarize the following conversation into a concise summary. Capture the key points, decisions, and context."
+        default_compaction_prompt
     } else {
         &compaction_prompt
     };
     
-    // Prepare messages for compaction request
-    let mut compaction_messages = vec![serde_json::json!({
-        "role": "system",
-        "content": compaction_prompt,
-    })];
-    
-    // Skip system messages to avoid confusing the summarizer with roleplay instructions
+    // Build conversation text for summarization
+    let mut conversation_text = String::new();
     for m in &context.messages {
         if m.role == "system" {
             continue;
         }
-        compaction_messages.push(serde_json::json!({
-            "role": m.role,
-            "content": m.content,
-        }));
+        conversation_text.push_str(&format!("[{}]: {}\n\n", m.role.to_uppercase(), m.content));
     }
+    
+    // Prepare messages for compaction request - use a single user message with the conversation
+    let compaction_messages = vec![
+        serde_json::json!({
+            "role": "system",
+            "content": compaction_prompt,
+        }),
+        serde_json::json!({
+            "role": "user",
+            "content": format!("Please summarize this conversation:\n\n{}", conversation_text),
+        }),
+    ];
     
     let request_body = serde_json::json!({
         "model": app.config.model,
@@ -675,7 +710,10 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
     
     if summary.is_empty() {
         eprintln!("[DEBUG] Full response: {}", json);
-        return Err(io::Error::new(ErrorKind::Other, "Empty summary received from LLM. Check console for debug info."));
+        return Err(io::Error::new(
+            ErrorKind::Other, 
+            "Empty summary received from LLM. This can happen with free-tier models. Try again or use a different model."
+        ));
     }
     
     // Prepare continuation prompt
@@ -986,7 +1024,23 @@ async fn main() -> io::Result<()> {
     } else if let Some((old_name, new_name)) = cli.rename {
         app.rename_context(&old_name, &new_name)?;
         println!("Renamed context '{}' to '{}'", old_name, new_name);
-    } else     if !cli.prompt.is_empty() {
+    } else if cli.history {
+        let context = app.get_current_context()?;
+        let num = cli.num_messages.unwrap_or(6);
+        let messages: Vec<_> = if num == 0 {
+            context.messages.iter().collect()
+        } else {
+            context.messages.iter().rev().take(num).collect::<Vec<_>>().into_iter().rev().collect()
+        };
+        for msg in messages {
+            if msg.role == "system" {
+                continue;
+            }
+            println!("=== {} ===", msg.role.to_uppercase());
+            println!("{}", msg.content);
+            println!();
+        }
+    } else if !cli.prompt.is_empty() {
         let prompt = cli.prompt.join(" ");
         // Create the context if it doesn't exist
         if !app.context_dir(&app.state.current_context).exists() {
