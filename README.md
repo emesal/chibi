@@ -44,7 +44,7 @@ api_key = "your-openrouter-api-key-here"
 # - openai/gpt-4o-mini
 # - meta-llama/llama-3.1-70b-instruct
 #
-# Some free options
+# Some free options:
 # - meta-llama/llama-3.3-70b-instruct:free (context: 131072)
 # - mistralai/devstral-2512:free (context: 262144)
 # - nvidia/nemotron-3-nano-30b-a3b:free (context: 256000)
