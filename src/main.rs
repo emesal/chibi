@@ -195,6 +195,20 @@ struct Context {
     updated_at: u64,
 }
 
+fn is_valid_context_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn validate_context_name(name: &str) -> io::Result<()> {
+    if !is_valid_context_name(name) {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Invalid context name '{}'. Names must be alphanumeric with dashes and underscores only.", name),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct ContextState {
     contexts: Vec<String>,
@@ -202,8 +216,10 @@ struct ContextState {
 }
 
 impl ContextState {
-    fn switch_context(&mut self, name: String) {
+    fn switch_context(&mut self, name: String) -> io::Result<()> {
+        validate_context_name(&name)?;
         self.current_context = name;
+        Ok(())
     }
     
     fn save(&self, state_path: &PathBuf) -> io::Result<()> {
@@ -283,9 +299,12 @@ impl AppState {
         let state = if state_path.exists() {
             let file = File::open(&state_path)?;
             serde_json::from_reader(BufReader::new(file))
-                .unwrap_or_else(|_| ContextState {
-                    contexts: Vec::new(),
-                    current_context: "default".to_string(),
+                .unwrap_or_else(|e| {
+                    eprintln!("[WARN] State file corrupted, resetting to defaults: {}", e);
+                    ContextState {
+                        contexts: Vec::new(),
+                        current_context: "default".to_string(),
+                    }
                 })
         } else {
             ContextState {
@@ -352,6 +371,10 @@ impl AppState {
             .open(self.transcript_file(&context.name))?;
         
         for msg in &context.messages {
+            // Skip system messages to avoid cluttering transcript with boilerplate
+            if msg.role == "system" {
+                continue;
+            }
             writeln!(file, "=== {} ===", msg.role.to_uppercase())?;
             writeln!(file, "{}", msg.content)?;
             writeln!(file, "")?;
@@ -385,7 +408,7 @@ impl AppState {
     fn save_current_context(&self, context: &Context) -> io::Result<()> {
         self.save_context(context)?;
         
-            // Ensure the context is tracked in state
+        // Ensure the context is tracked in state
         if !self.state.contexts.contains(&context.name) {
             let mut new_state = self.state.clone();
             new_state.contexts.push(context.name.clone());
@@ -451,6 +474,8 @@ impl AppState {
     }
     
     fn rename_context(&self, old_name: &str, new_name: &str) -> io::Result<()> {
+        validate_context_name(new_name)?;
+        
         let old_dir = self.context_dir(old_name);
         let new_dir = self.context_dir(new_name);
         
@@ -559,11 +584,11 @@ impl AppState {
     }
 }
 
-async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool) -> io::Result<()> {
+async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) -> io::Result<()> {
     let context = app.get_current_context()?;
     
     if context.messages.is_empty() {
-        if _print_message {
+        if print_message {
             println!("Context is already empty");
         }
         return Ok(());
@@ -571,7 +596,7 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
     
     if context.messages.len() <= 2 {
         // Nothing to compact
-        if _print_message {
+        if print_message {
             println!("Context is already compact (2 or fewer messages)");
         }
         return Ok(());
@@ -580,9 +605,11 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
     // Append to transcript before compacting
     app.append_to_transcript(&context)?;
     
-    if _print_message {
+    if print_message {
         eprintln!("[Compacting] Messages: {} -> requesting summary...", context.messages.len());
     }
+    
+    let client = Client::new();
     
     // Load compaction prompt
     let compaction_prompt = app.load_prompt("compaction")?;
@@ -616,7 +643,6 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
         "stream": false,
     });
     
-    let client = Client::new();
     let response = client
         .post(&app.config.base_url)
         .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
@@ -638,19 +664,12 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
     let json: serde_json::Value = response.json().await
         .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e)))?;
     
-    // Debug: print the response structure if parsing fails
     let summary = json["choices"][0]["message"]["content"]
         .as_str()
+        .or_else(|| json["choices"][0]["content"].as_str())
         .unwrap_or_else(|| {
-            // Try alternative paths for different API responses
-            if let Some(s) = json["choices"][0]["message"]["content"].as_str() {
-                s
-            } else if let Some(s) = json["choices"][0]["content"].as_str() {
-                s
-            } else {
-                eprintln!("[DEBUG] Response structure: {}", json);
-                ""
-            }
+            eprintln!("[DEBUG] Response structure: {}", json);
+            ""
         })
         .to_string();
     
@@ -696,7 +715,6 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
     });
     
     // Add assistant acknowledgment
-    let client = Client::new();
     let messages = vec![
         serde_json::json!({
             "role": "system",
@@ -748,7 +766,7 @@ async fn compact_context_with_llm_internal(app: &AppState, _print_message: bool)
     // Save the new context
     app.save_current_context(&new_context)?;
     
-    if _print_message {
+    if print_message {
         println!("Context compacted (history saved to transcript)");
     }
     Ok(())
@@ -815,9 +833,11 @@ async fn send_prompt(app: &AppState, prompt: String) -> io::Result<()> {
     }
     
     // Prepare messages for API
-    // Include system prompt if available
+    // Include system prompt if not already in context
     let system_prompt = app.load_prompt("chibi")?;
-    let mut messages: Vec<serde_json::Value> = if !system_prompt.is_empty() {
+    let context_has_system = context.messages.iter().any(|m| m.role == "system");
+    
+    let mut messages: Vec<serde_json::Value> = if !system_prompt.is_empty() && !context_has_system {
         vec![serde_json::json!({
             "role": "system",
             "content": system_prompt,
@@ -925,7 +945,7 @@ async fn main() -> io::Result<()> {
     let mut app = AppState::load()?;
     
     if let Some(name) = cli.switch {
-        app.state.switch_context(name);
+        app.state.switch_context(name)?;
         // Create the context if it doesn't exist
         if !app.context_dir(&app.state.current_context).exists() {
             let new_context = Context {
