@@ -37,22 +37,6 @@ Create a configuration file at `~/.chibi/config.toml`:
 api_key = "your-openrouter-api-key-here"
 
 # Model to use
-# Common options:
-# - anthropic/claude-3.5-sonnet
-# - anthropic/claude-3.5-haiku
-# - openai/gpt-4o
-# - openai/gpt-4o-mini
-# - meta-llama/llama-3.1-70b-instruct
-#
-# Some free options:
-# - meta-llama/llama-3.3-70b-instruct:free (context: 131072)
-# - mistralai/devstral-2512:free (context: 262144)
-# - nvidia/nemotron-3-nano-30b-a3b:free (context: 256000)
-# - google/gemma-3-27b-it:free (context: 131072)
-# - openai/gpt-oss-120b:free (context: 131072)
-# - xiaomi/mimo-v2-flash:free (context: 262144)
-# - google/gemini-2.0-flash-exp:free (context: 1048576)
-# - qwen/qwen3-next-80b-a3b-instruct:free (context: 262144)
 model = "xiaomi/mimo-v2-flash:free"
 
 # Context window limit (tokens)
