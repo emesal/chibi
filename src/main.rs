@@ -920,6 +920,7 @@ async fn send_prompt(app: &AppState, prompt: String) -> io::Result<()> {
     let mut stream = response.bytes_stream();
     let mut stdout = stdout();
     let mut full_response = String::new();
+    let mut is_first_content = true;
     
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.map_err(|e| io::Error::new(ErrorKind::Other, format!("Stream error: {}", e)))?;
@@ -941,6 +942,22 @@ async fn send_prompt(app: &AppState, prompt: String) -> io::Result<()> {
                     if let Some(choice) = choices.get(0) {
                         if let Some(delta) = choice.get("delta") {
                             if let Some(content) = delta["content"].as_str() {
+                                // Handle first content specially
+                                if is_first_content {
+                                    is_first_content = false;
+                                    if content.starts_with('\n') {
+                                        // Skip leading newline for both storage and display
+                                        let remaining = &content[1..];
+                                        if !remaining.is_empty() {
+                                            full_response.push_str(remaining);
+                                            stdout.write_all(remaining.as_bytes()).await?;
+                                            stdout.flush().await?;
+                                        }
+                                        continue;
+                                    }
+                                }
+                                
+                                // Normal case: store and display as-is
                                 full_response.push_str(content);
                                 stdout.write_all(content.as_bytes()).await?;
                                 stdout.flush().await?;
@@ -952,7 +969,6 @@ async fn send_prompt(app: &AppState, prompt: String) -> io::Result<()> {
         }
     }
     
-    // Add assistant response
     app.add_message(&mut context, "assistant".to_string(), full_response);
     
     // Save the updated context
