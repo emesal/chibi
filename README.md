@@ -45,14 +45,19 @@ api_key = "your-openrouter-api-key-here"
 # - meta-llama/llama-3.1-70b-instruct
 #
 # Free options
-# - meta-llama/llama-3.3-70b-instruct:free
-# - nvidia/nemotron-3-nano-30b-a3b:free
-# - xiaomi/mimo-v2-flash:free
-model = "meta-llama/llama-3.3-70b-instruct:free"
+# - meta-llama/llama-3.3-70b-instruct:free (context: 131072)
+# - mistralai/devstral-2512:free (context: 262144)
+# - nvidia/nemotron-3-nano-30b-a3b:free (context: 256000)
+# - google/gemma-3-27b-it:free (context: 131072)
+# - openai/gpt-oss-120b:free (context: 131072)
+# - xiaomi/mimo-v2-flash:free (context: 262144)
+# - google/gemini-2.0-flash-exp:free (context: 1048576)
+# - qwen/qwen3-next-80b-a3b-instruct:free (context: 262144)
+model = "xiaomi/mimo-v2-flash:free"
 
 # Context window limit (tokens)
 # This is used for calculating when to warn about approaching limits
-context_window_limit = 100000
+context_window_limit = 262144
 
 # Warning threshold percentage (0.0-100.0)
 # When context usage exceeds this percentage, a warning is printed to stderr
