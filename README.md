@@ -43,7 +43,12 @@ api_key = "your-openrouter-api-key-here"
 # - openai/gpt-4o
 # - openai/gpt-4o-mini
 # - meta-llama/llama-3.1-70b-instruct
-model = "anthropic/claude-3.5-sonnet"
+#
+# Free options
+# - meta-llama/llama-3.3-70b-instruct:free
+# - nvidia/nemotron-3-nano-30b-a3b:free
+# - xiaomi/mimo-v2-flash:free
+model = "meta-llama/llama-3.3-70b-instruct:free"
 
 # Context window limit (tokens)
 # This is used for calculating when to warn about approaching limits
