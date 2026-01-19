@@ -78,15 +78,13 @@ reflection_character_limit = 10000
 - `reflection_enabled` - Enable reflection/memory feature (default: true)
 - `reflection_character_limit` - Max characters for reflection content (default: 10000)
 
-**Note:** TOML format is used instead of JSON, allowing you to add helpful comments directly in the config file.
-
 ## System Prompts
 
 Chibi supports a default system prompt and per-context custom prompts.
 
 ### Default Prompt
 
-Copy the example prompts from `prompts.example/` to `~/.chibi/prompts/`:
+Copy the example prompts from `examples/prompts/` to `~/.chibi/prompts/`:
 
 ```bash
 mkdir -p ~/.chibi/prompts
@@ -132,7 +130,15 @@ chibi -s default  # Uses the default chibi.md prompt
 
 Chibi can call external scripts as tools, allowing the LLM to perform actions like reading files, fetching URLs, or running commands.
 
+### THIS IS THE DANGER ZONE!
+
+Chibi does not impose any restrictions on tools. NONE. Each tool is responsible for its own safety measures. *You are expected to understand the tools you install.*
+
+See *Tool Safety* below.
+
 ### Setting Up Tools
+
+You need to do this yourself.
 
 1. Create the tools directory: `mkdir -p ~/.chibi/tools`
 2. Add executable scripts to the directory
@@ -157,8 +163,9 @@ Each tool script must:
      }
    }
    ```
-3. **Accept JSON parameters on stdin** when called normally
+3. **Read JSON parameters from `CHIBI_TOOL_ARGS` env var**
 4. **Output results to stdout**
+5. **Use stderr for prompts** and stdin for user input (both are free since args come via env var)
 
 ### Example Tool (Bash)
 
@@ -183,8 +190,8 @@ EOF
   exit 0
 fi
 
-# Read JSON from stdin and extract path
-path=$(jq -r '.path')
+# Read args from env var
+path=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.path')
 cat "$path"
 ```
 
@@ -196,6 +203,7 @@ cat "$path"
 
 import sys
 import json
+import os
 
 if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     print(json.dumps({
@@ -211,7 +219,9 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     }))
     sys.exit(0)
 
-params = json.load(sys.stdin)
+# Read args from env var
+params = json.loads(os.environ["CHIBI_TOOL_ARGS"])
+
 # ... perform search ...
 print(json.dumps(results))
 ```
@@ -220,16 +230,65 @@ print(json.dumps(results))
 
 The `examples/tools/` directory contains ready-to-use tools:
 
-- `read_file` - Read file contents
-- `fetch_url` - Fetch content from a URL
-- `run_command` - Execute shell commands
-- `web_search` - Search the web (requires `duckduckgo-search` Python package)
+- `read_file` - Read file contents (bash)
+- `fetch_url` - Fetch content from a URL (bash)
+- `run_command` - Execute shell commands (bash)
+- `web_search` - Search the web via DuckDuckGo (Python, requires `uv`)
 
 Copy them to use:
 ```bash
 cp examples/tools/* ~/.chibi/tools/
 chmod +x ~/.chibi/tools/*
 ```
+
+### MCP Wrapper Tools
+
+Chibi can connect to MCP (Model Context Protocol) servers through wrapper tools. Two examples are provided:
+
+**fetch-mcp** (Bash) - Simple MCP wrapper, no caching:
+```bash
+# Requires: curl, jq
+# Configure: FETCH_MCP_URL=http://your-mcp-server
+cp examples/tools/fetch-mcp ~/.chibi/tools/
+```
+
+**github-mcp** (Python) - Full-featured with caching:
+```bash
+# Requires: uv (https://docs.astral.sh/uv/) - deps managed automatically
+# Configure: GITHUB_TOKEN=your-token
+cp examples/tools/github-mcp ~/.chibi/tools/
+
+# First, refresh the tool cache:
+echo '{"refresh_cache": true}' | ~/.chibi/tools/github-mcp
+```
+
+The GitHub MCP wrapper demonstrates caching: it stores discovered tools in `~/.chibi/cache/github-mcp.json` so they're available at startup. The LLM can call `{"refresh_cache": true}` to update the cache if tools change.
+
+These examples serve as templates - copy and modify them to connect to any MCP server.
+
+### Tool Safety
+
+Tools are responsible for their own safety guardrails. Chibi passes these environment variables to tools:
+- `CHIBI_TOOL_ARGS` - JSON arguments (always set)
+- `CHIBI_VERBOSE=1` - when `-v` is used, allowing tools to adjust their behavior
+
+Since args come via env var, **stdin is free for user interaction** (confirmations, multi-line input, etc.).
+
+**run_command** always requires user confirmation:
+```
+┌─────────────────────────────────────────────────────────────
+│ Tool: run_command
+│ Command: rm -rf /tmp/test
+└─────────────────────────────────────────────────────────────
+Execute this command? [y/N]
+```
+
+**github-mcp** has configurable safety lists:
+- `TOOLS_REQUIRE_CONFIRMATION` - always prompt (delete, create, merge, etc.)
+- `TOOLS_SAFE` - never prompt (read-only operations)
+- Unknown tools prompt unless `CHIBI_VERBOSE=1`
+
+Edit the tool files directly to customize which operations need confirmation.
 
 ### Viewing Tool Activity
 
@@ -296,9 +355,12 @@ Chibi stores data in `~/.chibi/`:
 │   ├── compaction.md    # Compaction instructions
 │   ├── continuation.md  # Post-compaction instructions
 │   └── reflection.md    # LLM's persistent memory (auto-created)
+├── cache/               # Tool caches (optional, tool-managed)
+│   └── github-mcp.json  # Example: cached MCP tool definitions
 ├── tools/               # Executable tool scripts
 │   ├── read_file
 │   ├── fetch_url
+│   ├── github-mcp       # MCP wrapper example
 │   └── ...
 └── contexts/
     ├── default/

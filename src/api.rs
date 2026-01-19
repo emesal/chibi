@@ -425,7 +425,7 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
                         Err(e) => format!("Error: {}", e),
                     }
                 } else if let Some(tool) = tools::find_tool(tools, &tc.name) {
-                    match tools::execute_tool(tool, &args) {
+                    match tools::execute_tool(tool, &args, verbose) {
                         Ok(output) => output,
                         Err(e) => format!("Error: {}", e),
                     }

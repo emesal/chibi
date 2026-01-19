@@ -1,0 +1,98 @@
+#!/bin/bash
+# fetch-mcp - A simple MCP wrapper for the Fetch MCP server
+#
+# This is a minimal example showing how to wrap a remote MCP as a chibi tool.
+# It connects to a fetch MCP server that provides URL fetching capabilities.
+#
+# Since the fetch MCP has a fixed, simple tool set, no caching is needed.
+#
+# Requirements: curl, jq
+#
+# Configuration:
+#   Set FETCH_MCP_URL to your fetch MCP server endpoint
+#   Default: assumes a local server at http://localhost:3000
+
+set -e
+
+FETCH_MCP_URL="${FETCH_MCP_URL:-http://localhost:3000}"
+
+# Schema mode - return tool definitions
+if [[ "$1" == "--schema" ]]; then
+    cat <<'EOF'
+{
+    "name": "fetch-mcp",
+    "description": "Fetch content from URLs via MCP. Tools: fetch (get URL content), fetch_html (get raw HTML)",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "tool": {
+                "type": "string",
+                "enum": ["fetch", "fetch_html"],
+                "description": "Which tool to use: 'fetch' for processed content, 'fetch_html' for raw HTML"
+            },
+            "url": {
+                "type": "string",
+                "description": "The URL to fetch"
+            },
+            "max_length": {
+                "type": "integer",
+                "description": "Maximum content length to return (optional)"
+            }
+        },
+        "required": ["tool", "url"]
+    }
+}
+EOF
+    exit 0
+fi
+
+# Read args from env var
+tool=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.tool // empty')
+url=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.url // empty')
+max_length=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.max_length // empty')
+
+if [[ -z "$tool" ]]; then
+    echo "Error: 'tool' parameter is required"
+    exit 1
+fi
+
+if [[ -z "$url" ]]; then
+    echo "Error: 'url' parameter is required"
+    exit 1
+fi
+
+# Build MCP JSON-RPC request
+request_id=$(date +%s%N)
+mcp_request=$(jq -n \
+    --arg id "$request_id" \
+    --arg tool "$tool" \
+    --arg url "$url" \
+    --arg max_length "$max_length" \
+    '{
+        "jsonrpc": "2.0",
+        "id": $id,
+        "method": "tools/call",
+        "params": {
+            "name": $tool,
+            "arguments": (
+                {url: $url} +
+                if $max_length != "" then {max_length: ($max_length | tonumber)} else {} end
+            )
+        }
+    }')
+
+# Send request to MCP server
+response=$(curl -s -X POST \
+    -H "Content-Type: application/json" \
+    -d "$mcp_request" \
+    "$FETCH_MCP_URL")
+
+# Extract result or error
+error=$(echo "$response" | jq -r '.error.message // empty')
+if [[ -n "$error" ]]; then
+    echo "MCP Error: $error"
+    exit 1
+fi
+
+# Return the content from the result
+echo "$response" | jq -r '.result.content[0].text // .result // "No content returned"'

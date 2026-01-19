@@ -1,11 +1,18 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "duckduckgo-search",
+# ]
+# ///
 """
 Web search using DuckDuckGo (no API key required)
-Requires: pip install duckduckgo-search
+Requires: uv (https://docs.astral.sh/uv/) - deps managed automatically
 """
 
 import sys
 import json
+import os
 
 if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     print(json.dumps({
@@ -28,8 +35,9 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     }))
     sys.exit(0)
 
-# Read parameters from stdin
-params = json.load(sys.stdin)
+# Read args from env var
+params = json.loads(os.environ["CHIBI_TOOL_ARGS"])
+
 query = params.get("query")
 max_results = params.get("max_results", 5)
 
@@ -37,9 +45,9 @@ if not query:
     print("Error: query parameter is required", file=sys.stderr)
     sys.exit(1)
 
-try:
-    from duckduckgo_search import DDGS
+from duckduckgo_search import DDGS
 
+try:
     with DDGS() as ddgs:
         results = list(ddgs.text(query, max_results=max_results))
 
@@ -53,9 +61,6 @@ try:
 
     print(json.dumps(output, indent=2))
 
-except ImportError:
-    print("Error: duckduckgo-search not installed. Run: pip install duckduckgo-search", file=sys.stderr)
-    sys.exit(1)
 except Exception as e:
     print(f"Error: {e}", file=sys.stderr)
     sys.exit(1)

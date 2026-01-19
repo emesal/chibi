@@ -1,0 +1,367 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "httpx",
+#     "httpx-sse",
+# ]
+# ///
+"""
+github-mcp - GitHub MCP wrapper for chibi
+
+This tool connects to GitHub's MCP server and exposes its tools to chibi.
+It demonstrates caching: tool definitions are stored locally and refreshed on demand.
+
+Requirements:
+    uv (https://docs.astral.sh/uv/) - dependencies are managed automatically via PEP 723
+
+Configuration:
+    GITHUB_TOKEN - Your GitHub personal access token (required)
+    GITHUB_MCP_URL - MCP server URL (default: https://api.githubcopilot.com/mcp/)
+
+Cache:
+    Tools are cached in ~/.chibi/cache/github-mcp.json
+    Use {"refresh_cache": true} to update the cache
+
+Safety:
+    Edit TOOLS_REQUIRE_CONFIRMATION below to control which tools need user approval.
+    By default, destructive operations (delete, create, update) require confirmation.
+
+Usage:
+    github-mcp --schema              # Return tool schema (from cache)
+    echo '{"tool": "...", "arguments": {...}}' | github-mcp  # Call a tool
+    echo '{"refresh_cache": true}' | github-mcp              # Refresh cache
+"""
+
+import json
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import httpx
+from httpx_sse import connect_sse
+
+# Configuration
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_MCP_URL = os.environ.get("GITHUB_MCP_URL", "https://api.githubcopilot.com/mcp/")
+CACHE_DIR = Path.home() / ".chibi" / "cache"
+CACHE_FILE = CACHE_DIR / "github-mcp.json"
+VERBOSE = os.environ.get("CHIBI_VERBOSE") == "1"
+
+# =============================================================================
+# SAFETY CONFIGURATION
+# Edit these lists to control which tools require user confirmation.
+# =============================================================================
+
+# Tools that ALWAYS require confirmation (destructive/dangerous operations)
+TOOLS_REQUIRE_CONFIRMATION = [
+    "delete_repository",
+    "delete_branch",
+    "delete_file",
+    "create_repository",
+    "create_issue",
+    "create_pull_request",
+    "merge_pull_request",
+    "update_issue",
+    "update_pull_request",
+    "push_files",
+    "create_or_update_file",
+]
+
+# Tools that NEVER require confirmation (read-only operations)
+# If a tool is not in either list, it follows CHIBI_VERBOSE (confirm if not verbose)
+TOOLS_SAFE = [
+    "get_file_contents",
+    "get_issue",
+    "get_pull_request",
+    "list_issues",
+    "list_pull_requests",
+    "list_commits",
+    "list_branches",
+    "search_code",
+    "search_issues",
+    "search_repositories",
+    "get_me",
+]
+
+# =============================================================================
+
+
+def load_cache():
+    """Load cached tool definitions."""
+    if CACHE_FILE.exists():
+        try:
+            with open(CACHE_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"updated": None, "tools": []}
+
+
+def save_cache(cache):
+    """Save tool definitions to cache."""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CACHE_FILE, "w") as f:
+        json.dump(cache, f, indent=2)
+
+
+def ask_confirmation(tool_name, arguments):
+    """Ask user for confirmation via stderr (prompt) and stdin (response)."""
+    print("", file=sys.stderr)
+    print("┌─────────────────────────────────────────────────────────────", file=sys.stderr)
+    print(f"│ Tool: github-mcp → {tool_name}", file=sys.stderr)
+    # Format arguments nicely, indented
+    args_str = json.dumps(arguments, indent=2)
+    for line in args_str.split("\n"):
+        print(f"│ {line}", file=sys.stderr)
+    print("└─────────────────────────────────────────────────────────────", file=sys.stderr)
+    print("Execute this action? [y/N] ", file=sys.stderr, end="", flush=True)
+
+    try:
+        # Read from stdin (now free since args come via env var)
+        answer = input().strip()
+        return answer.lower() == "y"
+    except EOFError:
+        # No input available - deny by default for safety
+        print("No input available - denying for safety", file=sys.stderr)
+        return False
+
+
+def needs_confirmation(tool_name):
+    """Check if a tool needs user confirmation."""
+    if tool_name in TOOLS_REQUIRE_CONFIRMATION:
+        return True
+    if tool_name in TOOLS_SAFE:
+        return False
+    # Unknown tool: require confirmation unless verbose mode
+    return not VERBOSE
+
+
+def fetch_tools_from_mcp():
+    """Connect to GitHub MCP and fetch available tools."""
+    if not GITHUB_TOKEN:
+        return {"error": "GITHUB_TOKEN environment variable not set"}
+
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    # MCP tools/list request
+    request = {
+        "jsonrpc": "2.0",
+        "id": "list-tools",
+        "method": "tools/list",
+        "params": {}
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                GITHUB_MCP_URL,
+                headers=headers,
+                json=request
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            if "error" in result:
+                return {"error": result["error"].get("message", "Unknown MCP error")}
+
+            tools = result.get("result", {}).get("tools", [])
+            return {"tools": tools}
+    except httpx.HTTPError as e:
+        return {"error": f"HTTP error: {e}"}
+    except Exception as e:
+        return {"error": f"Failed to connect: {e}"}
+
+
+def call_mcp_tool(tool_name, arguments):
+    """Call a tool on the GitHub MCP server."""
+    if not GITHUB_TOKEN:
+        return "Error: GITHUB_TOKEN environment variable not set"
+
+    # Safety check
+    if needs_confirmation(tool_name):
+        if not ask_confirmation(tool_name, arguments):
+            return "Action cancelled by user"
+
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    request = {
+        "jsonrpc": "2.0",
+        "id": f"call-{tool_name}",
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments
+        }
+    }
+
+    try:
+        with httpx.Client(timeout=60) as client:
+            response = client.post(
+                GITHUB_MCP_URL,
+                headers=headers,
+                json=request
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            if "error" in result:
+                return f"MCP Error: {result['error'].get('message', 'Unknown error')}"
+
+            # Extract content from result
+            content = result.get("result", {}).get("content", [])
+            if content and isinstance(content, list):
+                texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+                return "\n".join(texts) if texts else json.dumps(result.get("result", {}))
+            return json.dumps(result.get("result", {}))
+    except httpx.HTTPError as e:
+        return f"HTTP error: {e}"
+    except Exception as e:
+        return f"Failed to call tool: {e}"
+
+
+def refresh_cache():
+    """Fetch tools from MCP and update cache."""
+    result = fetch_tools_from_mcp()
+    if "error" in result:
+        return f"Failed to refresh cache: {result['error']}"
+
+    cache = {
+        "updated": datetime.now().isoformat(),
+        "tools": result["tools"]
+    }
+    save_cache(cache)
+    return f"Cache refreshed: {len(cache['tools'])} tools available"
+
+
+def build_schema():
+    """Build chibi tool schema from cached MCP tools."""
+    cache = load_cache()
+    tools = cache.get("tools", [])
+
+    if not tools:
+        # Return a minimal schema that prompts cache refresh
+        return {
+            "name": "github-mcp",
+            "description": "GitHub MCP tools (cache empty - send {\"refresh_cache\": true} to populate)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "refresh_cache": {
+                        "type": "boolean",
+                        "description": "Set to true to refresh the tool cache from GitHub MCP"
+                    }
+                }
+            }
+        }
+
+    # Build description with available tools
+    tool_names = [t.get("name", "unknown") for t in tools]
+    tool_list = ", ".join(tool_names[:10])
+    if len(tool_names) > 10:
+        tool_list += f", ... ({len(tool_names)} total)"
+
+    # Build a combined parameters schema
+    # The LLM will specify which tool to call and its arguments
+    return {
+        "name": "github-mcp",
+        "description": f"GitHub MCP tools: {tool_list}. Use 'tool' to specify which to call.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tool": {
+                    "type": "string",
+                    "enum": tool_names,
+                    "description": "The GitHub MCP tool to call"
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": "Arguments to pass to the tool"
+                },
+                "refresh_cache": {
+                    "type": "boolean",
+                    "description": "Set to true to refresh the tool cache"
+                },
+                "list_tools": {
+                    "type": "boolean",
+                    "description": "Set to true to list all available tools with descriptions"
+                }
+            }
+        }
+    }
+
+
+def list_tools_detailed():
+    """Return detailed info about all cached tools."""
+    cache = load_cache()
+    tools = cache.get("tools", [])
+
+    if not tools:
+        return "No tools cached. Send {\"refresh_cache\": true} to fetch tools."
+
+    lines = [f"GitHub MCP Tools ({len(tools)} available):", ""]
+    for tool in tools:
+        name = tool.get("name", "unknown")
+        desc = tool.get("description", "No description")
+
+        # Mark tools that require confirmation
+        if name in TOOLS_REQUIRE_CONFIRMATION:
+            name += " ⚠️"
+
+        lines.append(f"  {name}: {desc}")
+
+        # Show parameters if present
+        params = tool.get("inputSchema", {}).get("properties", {})
+        if params:
+            for pname, pinfo in params.items():
+                pdesc = pinfo.get("description", pinfo.get("type", ""))
+                lines.append(f"    - {pname}: {pdesc}")
+
+    lines.append("")
+    lines.append("⚠️ = requires user confirmation")
+    return "\n".join(lines)
+
+
+def main():
+    # Schema mode
+    if len(sys.argv) > 1 and sys.argv[1] == "--schema":
+        print(json.dumps(build_schema()))
+        return
+
+    # Read args from env var
+    try:
+        input_data = json.loads(os.environ["CHIBI_TOOL_ARGS"])
+    except (KeyError, json.JSONDecodeError) as e:
+        print(f"Error: Invalid or missing CHIBI_TOOL_ARGS: {e}")
+        sys.exit(1)
+
+    # Handle refresh_cache command
+    if input_data.get("refresh_cache"):
+        print(refresh_cache())
+        return
+
+    # Handle list_tools command
+    if input_data.get("list_tools"):
+        print(list_tools_detailed())
+        return
+
+    # Handle tool call
+    tool_name = input_data.get("tool")
+    if not tool_name:
+        print("Error: 'tool' parameter required. Use 'list_tools' to see available tools.")
+        sys.exit(1)
+
+    arguments = input_data.get("arguments", {})
+    result = call_mcp_tool(tool_name, arguments)
+    print(result)
+
+
+if __name__ == "__main__":
+    main()
