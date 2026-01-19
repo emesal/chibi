@@ -1,26 +1,38 @@
 ### context lockfiles
 - each chibi uses a lockfile for its context
 - lockfiles are touched every 30 seconds while the chibi is running
+  - the heartbeat can be changed in config.toml
+  - done by a background thread. since it's light it run for the duration
+  - after 1.5x the heartbeat duration, the lockfile is considered stale
+  - lockfiles contain the PID of the process holding the lock
+  - if no process has that PID, the lockfile is stale
 - in the context list, locked contexts are appended with [active]
-- in the context list, contexts with stale locks (+15 seconds) are appended [stale]
-- stale lockfiles are... deleted when a new chibi wants to acquire the context?
+- in the context list, contexts with stale locks are appended with [stale]
+- stale lockfiles are... deleted? when a new chibi wants to acquire the context?
+  - yes, on acquisition and not before
 - lockfiles are acquired immediately upon the chibi starting, and kept until it exists
-- lockfiles prevents *writes* but does not prohibit reads
+- lockfiles prevent *writes* but does not prohibit reads
 
 ### recursion
 - recursion can be implemented as a noop tool
   - all tools return control to the LLM for another turn; tool calls are really just recursion
     with context modification. a noop tool skips the context modification.
-  - we could still keep the "note to self" feature, if it serves any purpose?
-  - the recurse tool should be called "recurse"
-  - rename the agent tool to sub-agent
 - get rid of the internal tool for recursion
 - also rip out the recursion code from the external agent tool (renamed to sub-agent)
+- the recurse tool should be called "recurse"
+- we could still keep the "note to self" feature, if it serves any purpose?
+- the next iteration of the agent has access to the chat history and knows
+    what it did before calling the recurse tool
+  - the "note to self" could be described to the LLM as where it should explain
+    why it is recursing, and reiterating the task.
+  - we should check that it's possible to catch calls to the recurse tool with a hook
+- rename the agent tool to sub-agent
 
 ### local.toml per-context overrides
 - exactly what it sounds like
 - features like context-specific username and model (see below) are put here
 - values in this file override the corresponding values in the main config.toml
+- hearbeat can not be overridden here
 
 ### JSON transcripts
 - let's make the full transcripts be JSON, and let them include all details
