@@ -22,6 +22,10 @@
 - default prompts unless specified in context dir
 - idea: workflows with prompts could be tools that use hooks to inject bootstrap material
 
+### local.toml per-context overrides
+- exactly what it sounds like
+- features like username and model (see below) are put here instead of in their own files
+
 ### Inter-context communication
 - a feature of the rust code? or a tool?
 - contexts need a way to distinguish who's speaking
