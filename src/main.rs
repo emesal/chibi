@@ -110,6 +110,39 @@ async fn main() -> io::Result<()> {
         );
     }
 
+    // Handle sub-context: use a different context for this invocation without changing global state
+    // This must be processed before other commands so the context is set up
+    if let Some(name) = &cli.sub_context {
+        let actual_name = if name == "new" {
+            generate_new_context_name(&app, None)
+        } else if let Some(prefix) = name.strip_prefix("new:") {
+            if prefix.is_empty() {
+                return Err(io::Error::new(ErrorKind::InvalidInput, "Prefix cannot be empty in '-S new:prefix'"));
+            }
+            generate_new_context_name(&app, Some(prefix))
+        } else {
+            name.clone()
+        };
+
+        // Switch context in memory only (don't save to state file)
+        app.state.switch_context(actual_name)?;
+        // Create the context directory if it doesn't exist
+        if !app.context_dir(&app.state.current_context).exists() {
+            let new_context = Context {
+                name: app.state.current_context.clone(),
+                messages: Vec::new(),
+                created_at: now_timestamp(),
+                updated_at: 0,
+                summary: String::new(),
+            };
+            app.save_current_context(&new_context)?;
+        }
+        if verbose {
+            eprintln!("[Using sub-context: {}]", app.state.current_context);
+        }
+        // Note: we do NOT call app.save() here, so global state is unchanged
+    }
+
     if let Some(name) = cli.switch {
         // Handle `-s new` and `-s new:prefix` for auto-generated names
         let actual_name = if name == "new" {
@@ -191,16 +224,22 @@ async fn main() -> io::Result<()> {
                 println!();
             }
         }
-    } else if let Some(arg) = cli.set_prompt {
-        // Check if arg is a file path
-        let content = if std::path::Path::new(&arg).is_file() {
-            std::fs::read_to_string(&arg)?
-        } else {
-            arg
-        };
-        app.set_system_prompt(&content)?;
-        println!("System prompt set for context '{}'", app.state.current_context);
     } else {
+        // Handle set_prompt if provided (can be combined with sending a prompt)
+        let had_set_prompt = cli.set_prompt.is_some();
+        if let Some(arg) = cli.set_prompt {
+            // Check if arg is a file path
+            let content = if std::path::Path::new(&arg).is_file() {
+                std::fs::read_to_string(&arg)?
+            } else {
+                arg
+            };
+            app.set_system_prompt(&content)?;
+            if verbose {
+                eprintln!("[System prompt set for context '{}']", app.state.current_context);
+            }
+        }
+
         // Build prompt from args and/or stdin
         let stdin_is_pipe = !io::stdin().is_terminal();
         let arg_prompt = if cli.prompt.is_empty() {
@@ -223,8 +262,15 @@ async fn main() -> io::Result<()> {
             (true, None) => read_prompt_from_pipe()?,
             // Arg prompt only
             (false, Some(arg)) => arg,
-            // Interactive: read from terminal
-            (false, None) => read_prompt_interactive()?,
+            // Interactive: read from terminal (skip if -e was used without a prompt)
+            (false, None) => {
+                if had_set_prompt {
+                    // -e was used alone, don't wait for interactive input
+                    println!("System prompt set for context '{}'", app.state.current_context);
+                    return Ok(());
+                }
+                read_prompt_interactive()?
+            }
         };
 
         if prompt.trim().is_empty() {

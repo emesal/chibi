@@ -3,6 +3,7 @@ use std::io::{self, ErrorKind};
 #[derive(Debug)]
 pub struct Cli {
     pub switch: Option<String>,
+    pub sub_context: Option<String>,
     pub list: bool,
     pub which: bool,
     pub delete: Option<String>,
@@ -23,6 +24,7 @@ impl Cli {
         let args: Vec<String> = std::env::args().collect();
 
         let mut switch = None;
+        let mut sub_context = None;
         let mut list = false;
         let mut which = false;
         let mut delete = None;
@@ -59,6 +61,15 @@ impl Cli {
                     return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
                 }
                 switch = Some(args[i + 1].clone());
+                i += 2;
+                continue;
+            }
+
+            if arg == "-S" || arg == "--sub-context" {
+                if i + 1 >= args.len() {
+                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                }
+                sub_context = Some(args[i + 1].clone());
                 i += 2;
                 continue;
             }
@@ -176,21 +187,26 @@ impl Cli {
         }
 
         // Validate argument combinations
-        let commands = [switch.is_some(), list, which, delete.is_some(), clear, compact, rename.is_some(), history, show_prompt, set_prompt.is_some()]
+        // These are "exclusive" commands that can't be combined with prompts
+        let exclusive_commands = [switch.is_some(), list, which, delete.is_some(), clear, compact, rename.is_some(), history, show_prompt]
             .iter()
             .filter(|&&x| x)
             .count();
 
-        if commands > 1 {
+        // set_prompt can be combined with a prompt (set prompt, then send message)
+        let combinable_commands = set_prompt.is_some();
+
+        if exclusive_commands > 1 || (exclusive_commands > 0 && combinable_commands) {
             return Err(io::Error::new(ErrorKind::InvalidInput, "Only one command can be specified at a time"));
         }
 
-        if commands > 0 && !prompt.is_empty() {
+        if exclusive_commands > 0 && !prompt.is_empty() {
             return Err(io::Error::new(ErrorKind::InvalidInput, "Cannot specify both a command and a prompt"));
         }
 
         Ok(Cli {
             switch,
+            sub_context,
             list,
             which,
             delete,
@@ -215,9 +231,11 @@ impl Cli {
         println!("  chibi [COMMAND]");
         println!();
         println!("Commands:");
-        println!("  -s, --switch <NAME>       Switch to a different context");
+        println!("  -s, --switch <NAME>       Switch to a different context (persistent)");
         println!("                            Use 'new' for auto-generated name (YYYYMMDD_HHMMSS)");
         println!("                            Use 'new:prefix' for prefixed name (prefix_YYYYMMDD_HHMMSS)");
+        println!("  -S, --sub-context <NAME>  Run in a context without changing global state");
+        println!("                            Useful for sub-agents. Same 'new' syntax supported.");
         println!("  -l, --list                List all contexts");
         println!("  -w, --which               Show current context name");
         println!("  -d, --delete <NAME>       Delete a context");

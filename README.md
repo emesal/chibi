@@ -397,23 +397,27 @@ The LLM leaves itself a note about what to do next, then the conversation contin
 
 ### Sub-Agents
 
-Use the wrapper tool approach for sub-agents. Create a tool that spawns chibi with a different context:
+Use the `-S` (sub-context) flag to spawn agents without affecting the global context state:
 
 ```bash
-#!/bin/bash
-# ~/.chibi/tools/spawn_agent
-context_name=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.context')
-task=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.task')
-chibi -s "$context_name" "$task"
+# Run a task in another context (doesn't change your current context)
+chibi -S research "Find information about quantum computing"
+
+# Set system prompt and send task in one command
+chibi -S coding -e "You are a code reviewer" "Review this function for bugs"
 ```
 
-The main agent can then use `read_context` to inspect the sub-agent's results:
+The `agent` tool in `examples/tools/` provides a convenient wrapper:
 
 ```
-Main: [calls spawn_agent with context: "research", task: "Find info about X"]
+Main: [calls agent with mode: "spawn", context: "research", task: "Find info about X"]
 Main: [calls read_context with context_name: "research"]
 Main: "The sub-agent found: ..."
 ```
+
+The key difference between `-s` and `-S`:
+- `-s` (switch): Changes global context permanently
+- `-S` (sub-context): Uses context for this invocation only, global state unchanged
 
 ### Rolling Compaction
 
@@ -473,6 +477,7 @@ Chibi stores data in `~/.chibi/`:
 | Flag | Description |
 |------|-------------|
 | `-s, --switch <name>` | Switch to a different context (`new` for auto-name, `new:prefix` for prefixed) |
+| `-S, --sub-context <name>` | Run in a context without changing global state (for sub-agents) |
 | `-l, --list` | List all contexts |
 | `-w, --which` | Show current context name |
 | `-d, --delete <name>` | Delete a context |
@@ -482,7 +487,7 @@ Chibi stores data in `~/.chibi/`:
 | `-H, --history` | Show recent messages (default: 6) |
 | `-n, --num-messages <N>` | Number of messages to show (0 = all, implies -H) |
 | `-p, --prompt` | Show system prompt for current context |
-| `-e, --set-prompt <arg>` | Set system prompt (file path or literal text) |
+| `-e, --set-prompt <arg>` | Set system prompt (can combine with a prompt to send) |
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
 | `-x, --no-reflection` | Disable reflection for this invocation |
 | `-h, --help` | Show help message |

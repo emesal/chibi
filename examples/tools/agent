@@ -1,0 +1,121 @@
+#!/bin/bash
+# Spawn a sub-agent or continue processing in another context
+#
+# This tool combines two capabilities:
+# 1. SPAWN: Create/use a sub-agent in a different context
+# 2. CONTINUE: Continue processing in the current context (recursion)
+#
+# Both use the same mechanism: calling chibi with a prompt.
+#
+# CONFIGURATION - Edit these to enable/disable capabilities:
+ENABLE_SPAWN=true      # Allow spawning sub-agents in other contexts
+ENABLE_CONTINUE=true   # Allow continue_processing (same-context recursion)
+#
+# Security note: This tool can execute arbitrary prompts via chibi.
+# The prompts are visible in conversation history and transcripts.
+
+if [[ "$1" == "--schema" ]]; then
+  cat <<'EOF'
+{
+  "name": "agent",
+  "description": "Spawn a sub-agent in another context OR continue processing in the current context. For sub-agents: creates a new context (or uses existing) and sends a task. For continuation: sends yourself a note to continue working. Returns the agent's response.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["spawn", "continue"],
+        "description": "Mode: 'spawn' for sub-agent in another context, 'continue' for same-context recursion"
+      },
+      "context": {
+        "type": "string",
+        "description": "For spawn mode: target context name (created if doesn't exist). Use 'new' for auto-generated name. Ignored in continue mode."
+      },
+      "task": {
+        "type": "string",
+        "description": "For spawn mode: the task/prompt for the sub-agent. For continue mode: a note to yourself about what to do next."
+      },
+      "system_prompt": {
+        "type": "string",
+        "description": "For spawn mode only: optional system prompt to set for the new context before sending the task"
+      }
+    },
+    "required": ["mode", "task"]
+  }
+}
+EOF
+  exit 0
+fi
+
+# Read args from env var
+mode=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.mode // "spawn"')
+context=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.context // empty')
+task=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.task // empty')
+system_prompt=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.system_prompt // empty')
+
+if [[ -z "$task" ]]; then
+  echo '{"error": "task is required"}'
+  exit 0
+fi
+
+# Handle continue mode
+if [[ "$mode" == "continue" ]]; then
+  if [[ "$ENABLE_CONTINUE" != "true" ]]; then
+    echo '{"error": "continue mode is disabled in this tool configuration"}'
+    exit 0
+  fi
+
+  # Continue in current context - just call chibi with the note
+  prompt="[Continuing from previous round]
+
+Note to self: $task"
+
+  if [[ -n "$CHIBI_VERBOSE" ]]; then
+    echo "[agent: continuing in current context]" >&2
+  fi
+
+  # Call chibi and capture output
+  response=$(chibi "$prompt" 2>/dev/null)
+
+  # Return as JSON
+  echo "{\"mode\": \"continue\", \"response\": $(echo "$response" | jq -Rs .)}"
+  exit 0
+fi
+
+# Handle spawn mode
+if [[ "$mode" == "spawn" ]]; then
+  if [[ "$ENABLE_SPAWN" != "true" ]]; then
+    echo '{"error": "spawn mode is disabled in this tool configuration"}'
+    exit 0
+  fi
+
+  if [[ -z "$context" ]]; then
+    echo '{"error": "context is required for spawn mode"}'
+    exit 0
+  fi
+
+  # Validate context name (unless it's "new" or "new:prefix")
+  if [[ "$context" != "new" && ! "$context" =~ ^new: && ! "$context" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo '{"error": "Invalid context name. Must be alphanumeric with dashes and underscores only, or use '\''new'\'' for auto-generated name."}'
+    exit 0
+  fi
+
+  if [[ -n "$CHIBI_VERBOSE" ]]; then
+    echo "[agent: spawning sub-agent in context '$context']" >&2
+  fi
+
+  # Build the chibi command
+  # -S runs in sub-context (doesn't change global state)
+  # -e sets system prompt (optional, can be combined with task)
+  if [[ -n "$system_prompt" ]]; then
+    response=$(chibi -S "$context" -e "$system_prompt" "$task" 2>/dev/null)
+  else
+    response=$(chibi -S "$context" "$task" 2>/dev/null)
+  fi
+
+  # Return as JSON
+  echo "{\"mode\": \"spawn\", \"context\": \"$context\", \"response\": $(echo "$response" | jq -Rs .)}"
+  exit 0
+fi
+
+echo "{\"error\": \"Invalid mode '$mode'. Use 'spawn' or 'continue'.\"}"
