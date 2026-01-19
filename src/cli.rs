@@ -216,6 +216,8 @@ impl Cli {
         println!();
         println!("Commands:");
         println!("  -s, --switch <NAME>       Switch to a different context");
+        println!("                            Use 'new' for auto-generated name (YYYYMMDD_HHMMSS)");
+        println!("                            Use 'new:prefix' for prefixed name (prefix_YYYYMMDD_HHMMSS)");
         println!("  -l, --list                List all contexts");
         println!("  -w, --which               Show current context name");
         println!("  -d, --delete <NAME>       Delete a context");
@@ -237,6 +239,7 @@ impl Cli {
         println!("  If arguments are provided after options, they are joined as the prompt.");
         println!("  Use -- to force the rest to be a prompt (e.g., chibi -- -this starts with dash)");
         println!("  If no arguments, read prompt from stdin (end with . on empty line)");
+        println!("  Piped input: echo 'text' | chibi (can combine with arg prompt)");
         println!();
         println!("Examples:");
         println!("  chibi What is Rust?");

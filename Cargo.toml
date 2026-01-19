@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 
+chrono = "0.4"
 dirs-next = "2.0.0"
 futures-util = { version = "0.3.31", features = ["std"] }
 reqwest = { version = "0.13.1", features = ["json", "stream"] }

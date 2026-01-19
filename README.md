@@ -379,7 +379,7 @@ Chibi stores data in `~/.chibi/`:
 
 | Flag | Description |
 |------|-------------|
-| `-s, --switch <name>` | Switch to a different context |
+| `-s, --switch <name>` | Switch to a different context (`new` for auto-name, `new:prefix` for prefixed) |
 | `-l, --list` | List all contexts |
 | `-w, --which` | Show current context name |
 | `-d, --delete <name>` | Delete a context |
@@ -438,6 +438,12 @@ Explain the following concepts:
 # Switch to a context (creates if needed)
 chibi -s rust-learning
 
+# Create a new auto-named context (e.g., 20240115_143022)
+chibi -s new
+
+# Create a prefixed auto-named context (e.g., bugfix_20240115_143022)
+chibi -s new:bugfix
+
 # Continue conversation
 chibi Can you give me an example?
 
@@ -482,6 +488,13 @@ chibi "What's in my Cargo.toml?"
 ### Piping and Scripting
 
 ```bash
+# Pipe content into chibi
+cat error.log | chibi "explain this error"
+git diff | chibi "review these changes"
+
+# Combine piped input with prompt argument
+cat schema.sql | chibi "add a users table to this schema"
+
 # Generate and save
 chibi "Write a haiku about coding" > haiku.txt
 

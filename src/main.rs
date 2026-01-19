@@ -8,9 +8,10 @@ mod tools;
 use cli::Cli;
 use context::{Context, now_timestamp};
 use state::AppState;
-use std::io::{self, BufRead, ErrorKind};
+use std::io::{self, BufRead, ErrorKind, IsTerminal};
 
-fn read_prompt_from_stdin() -> io::Result<String> {
+/// Read prompt interactively from terminal (dot on empty line terminates)
+fn read_prompt_interactive() -> io::Result<String> {
     let stdin = io::stdin();
     let mut stdin_lock = stdin.lock();
     let mut buffer = String::new();
@@ -49,6 +50,49 @@ fn read_prompt_from_stdin() -> io::Result<String> {
     Ok(prompt)
 }
 
+/// Read prompt from piped stdin (reads until EOF)
+fn read_prompt_from_pipe() -> io::Result<String> {
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    // Read all remaining lines
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        input.push('\n');
+        input.push_str(&line?);
+    }
+
+    Ok(input.trim().to_string())
+}
+
+/// Generate a unique context name for `-s new` or `-s new:prefix`
+/// Format: [prefix_]YYYYMMDD_HHMMSS[_N]
+fn generate_new_context_name(app: &AppState, prefix: Option<&str>) -> String {
+    use chrono::Local;
+
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let base_name = match prefix {
+        Some(p) => format!("{}_{}", p, timestamp),
+        None => timestamp,
+    };
+
+    // Check for collisions
+    let existing = app.list_contexts();
+    if !existing.contains(&base_name) {
+        return base_name;
+    }
+
+    // Append _N until we find an unused name
+    let mut n = 2;
+    loop {
+        let candidate = format!("{}_{}", base_name, n);
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let cli = Cli::parse()?;
@@ -67,7 +111,19 @@ async fn main() -> io::Result<()> {
     }
 
     if let Some(name) = cli.switch {
-        app.state.switch_context(name)?;
+        // Handle `-s new` and `-s new:prefix` for auto-generated names
+        let actual_name = if name == "new" {
+            generate_new_context_name(&app, None)
+        } else if let Some(prefix) = name.strip_prefix("new:") {
+            if prefix.is_empty() {
+                return Err(io::Error::new(ErrorKind::InvalidInput, "Prefix cannot be empty in '-s new:prefix'"));
+            }
+            generate_new_context_name(&app, Some(prefix))
+        } else {
+            name
+        };
+
+        app.state.switch_context(actual_name)?;
         // Create the context if it doesn't exist
         if !app.context_dir(&app.state.current_context).exists() {
             let new_context = Context {
@@ -79,6 +135,10 @@ async fn main() -> io::Result<()> {
             app.save_current_context(&new_context)?;
         }
         app.save()?;
+        // Print the new context name so user knows what was created
+        if verbose {
+            eprintln!("[Switched to context: {}]", app.state.current_context);
+        }
     } else if cli.list {
         let contexts = app.list_contexts();
         let current = &app.state.current_context;
@@ -139,8 +199,37 @@ async fn main() -> io::Result<()> {
         };
         app.set_system_prompt(&content)?;
         println!("System prompt set for context '{}'", app.state.current_context);
-    } else if !cli.prompt.is_empty() {
-        let prompt = cli.prompt.join(" ");
+    } else {
+        // Build prompt from args and/or stdin
+        let stdin_is_pipe = !io::stdin().is_terminal();
+        let arg_prompt = if cli.prompt.is_empty() {
+            None
+        } else {
+            Some(cli.prompt.join(" "))
+        };
+
+        let prompt = match (stdin_is_pipe, arg_prompt) {
+            // Piped input + arg prompt: concatenate (arg prompt first, then piped content)
+            (true, Some(arg)) => {
+                let piped = read_prompt_from_pipe()?;
+                if piped.is_empty() {
+                    arg
+                } else {
+                    format!("{}\n\n{}", arg, piped)
+                }
+            }
+            // Piped input only
+            (true, None) => read_prompt_from_pipe()?,
+            // Arg prompt only
+            (false, Some(arg)) => arg,
+            // Interactive: read from terminal
+            (false, None) => read_prompt_interactive()?,
+        };
+
+        if prompt.trim().is_empty() {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
+        }
+
         // Create the context if it doesn't exist
         if !app.context_dir(&app.state.current_context).exists() {
             let new_context = Context {
@@ -150,13 +239,6 @@ async fn main() -> io::Result<()> {
                 updated_at: 0,
             };
             app.save_current_context(&new_context)?;
-        }
-        api::send_prompt(&app, prompt, &tools, verbose, use_reflection).await?;
-    } else {
-        // No command and no prompt - read from stdin
-        let prompt = read_prompt_from_stdin()?;
-        if prompt.trim().is_empty() {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
         }
         api::send_prompt(&app, prompt, &tools, verbose, use_reflection).await?;
     }
