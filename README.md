@@ -440,18 +440,21 @@ Chibi stores data in `~/.chibi/`:
 │   └── ...
 └── contexts/
     ├── default/
-    │   ├── context.json     # Current conversation state (includes summary)
+    │   ├── context.json     # Current conversation state (messages only)
+    │   ├── summary.md       # Conversation summary (auto-created on compaction)
     │   ├── transcript.txt   # Full chat history
     │   ├── todos.md         # Current todos (auto-created)
     │   └── goals.md         # Current goals (auto-created)
     ├── coding/
     │   ├── context.json
+    │   ├── summary.md
     │   ├── transcript.txt
     │   ├── todos.md
     │   ├── goals.md
     │   └── system_prompt.md # Custom prompt for this context
     └── my-project/
         ├── context.json
+        ├── summary.md
         ├── transcript.txt
         ├── todos.md
         └── goals.md

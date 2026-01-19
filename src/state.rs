@@ -85,6 +85,10 @@ impl AppState {
     pub fn transcript_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("transcript.txt")
     }
+
+    pub fn summary_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("summary.md")
+    }
     
     pub fn ensure_context_dir(&self, name: &str) -> io::Result<()> {
         let dir = self.context_dir(name);
@@ -93,8 +97,16 @@ impl AppState {
     
     pub fn load_context(&self, name: &str) -> io::Result<Context> {
         let file = File::open(self.context_file(name))?;
-        serde_json::from_reader(BufReader::new(file))
-            .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse context '{}': {}", name, e)))
+        let mut context: Context = serde_json::from_reader(BufReader::new(file))
+            .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse context '{}': {}", name, e)))?;
+
+        // Load summary from separate file
+        let summary_path = self.summary_file(name);
+        if summary_path.exists() {
+            context.summary = fs::read_to_string(&summary_path)?;
+        }
+
+        Ok(context)
     }
     
     pub fn save_context(&self, context: &Context) -> io::Result<()> {
@@ -107,6 +119,16 @@ impl AppState {
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, context)
             .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to save context: {}", e)))?;
+
+        // Save summary to separate file
+        let summary_path = self.summary_file(&context.name);
+        if !context.summary.is_empty() {
+            fs::write(&summary_path, &context.summary)?;
+        } else if summary_path.exists() {
+            // Remove empty summary file
+            fs::remove_file(&summary_path)?;
+        }
+
         Ok(())
     }
     
@@ -442,9 +464,19 @@ impl AppState {
             }
         };
 
+        // Load summary from file (context already has it loaded, but handle missing context case)
+        let summary = {
+            let summary_path = self.summary_file(context_name);
+            if summary_path.exists() {
+                fs::read_to_string(&summary_path).unwrap_or_default()
+            } else {
+                context.as_ref().map(|c| c.summary.clone()).unwrap_or_default()
+            }
+        };
+
         Ok(ContextReadState {
             name: context_name.to_string(),
-            summary: context.as_ref().map(|c| c.summary.clone()).unwrap_or_default(),
+            summary,
             todos,
             goals,
             system_prompt,

@@ -14,8 +14,8 @@ pub struct Context {
     pub messages: Vec<Message>,
     pub created_at: u64,
     pub updated_at: u64,
-    /// Summary of conversation history that has been stripped/compacted
-    #[serde(default)]
+    /// Summary of conversation history (loaded from separate file, not serialized)
+    #[serde(skip)]
     pub summary: String,
 }
 
