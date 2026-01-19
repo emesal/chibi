@@ -24,6 +24,12 @@
 
 ### Inter-context communication
 - a feature of the rust code? or a tool?
+- contexts need a way to distinguish who's speaking
+  - this will be reflected in the transcripts
+- username
+  - setting in config.toml, default is 'user'
+  - command line option -u/--username to set it per-context
+  - command line option -U/--temp-username to set it for just this invocation
 - if a tool, how to inject the messages? inbox/outbox files the rust code checks and passes on?
 - messages should have FROM/TO/CONTENT fields.
   - TO decides recipient context.
@@ -45,3 +51,10 @@
 - agents have instructions on cooperative work + roundtable discussion
 - needs more experimentation to develop the methodology
 - running any number of agents in parallel (or cooperative? but rust is good at this)
+
+### Per-context models
+- allow setting multiple named presets in config.toml containing model names
+  - does toml have arrays?
+- allow setting the model name per-context, or using any of the presets
+- not setting the model = use the default model
+- model name is stored in a flat text file in context dir
