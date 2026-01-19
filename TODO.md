@@ -1,23 +1,3 @@
-# Chibi TODO
-
-## Completed
-- [x] maximum recursion depth for continue_processing (config: max_recursion_depth, default 15)
-- [x] use environment variables for tool parameters (documented limitation)
-- [x] keep summary as a separate file in the context directory (summary.md)
-- [x] use flat text files or md for context files (kept context.json, added summary.md)
-- [x] consider using an external tool for accessing state of other contexts (read_context tool)
-- [x] consider using an external tool for recursing (agent tool combines spawn + continue)
-- [x] example tool for spawning sub-agents (agent tool in examples/tools/)
-- [x] added -S/--sub-context flag for running in a context without changing global state
-- [x] plugin hooks system
-  - tools register via `hooks` array in --schema output
-  - 13 hook points: on_start, on_end, pre_message, post_message, pre_tool, post_tool, on_context_switch, pre_clear, post_clear, pre_compact, post_compact, pre_rolling_compact, post_rolling_compact
-  - hooks can modify state (pre_*) or observe (post_*, on_*)
-  - hook data passed via CHIBI_HOOK and CHIBI_HOOK_DATA env vars
-  - example logger tool in examples/tools/logger
-
-## Deferred
-
 ### Reasoning tokens
 - https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#enable-reasoning-with-default-config
 
