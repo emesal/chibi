@@ -78,15 +78,13 @@ reflection_character_limit = 10000
 - `reflection_enabled` - Enable reflection/memory feature (default: true)
 - `reflection_character_limit` - Max characters for reflection content (default: 10000)
 
-**Note:** TOML format is used instead of JSON, allowing you to add helpful comments directly in the config file.
-
 ## System Prompts
 
 Chibi supports a default system prompt and per-context custom prompts.
 
 ### Default Prompt
 
-Copy the example prompts from `prompts.example/` to `~/.chibi/prompts/`:
+Copy the example prompts from `examples/prompts/` to `~/.chibi/prompts/`:
 
 ```bash
 mkdir -p ~/.chibi/prompts
@@ -132,7 +130,15 @@ chibi -s default  # Uses the default chibi.md prompt
 
 Chibi can call external scripts as tools, allowing the LLM to perform actions like reading files, fetching URLs, or running commands.
 
+### THIS IS THE DANGER ZONE!
+
+Chibi does not impose any restrictions on tools. NONE. Each tool is responsible for its own safety measures. *You are expected to understand the tools you install.*
+
+See *Tool Safety* below.
+
 ### Setting Up Tools
+
+You need to do this yourself.
 
 1. Create the tools directory: `mkdir -p ~/.chibi/tools`
 2. Add executable scripts to the directory
@@ -159,6 +165,7 @@ Each tool script must:
    ```
 3. **Accept JSON parameters on stdin** when called normally
 4. **Output results to stdout**
+5. **Use stderr for prompts etc** intended for the user
 
 ### Example Tool (Bash)
 
