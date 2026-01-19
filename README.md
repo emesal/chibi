@@ -360,9 +360,17 @@ The LLM always has access to these tools (no setup required):
 |------|-------------|
 | `update_todos` | Track tasks for the current conversation (persists in `todos.md`) |
 | `update_goals` | Set high-level objectives (persists in `goals.md`) |
-| `read_context` | Read another context's state (read-only, for sub-agents) |
 | `continue_processing` | Continue working without returning to user |
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
+
+### Optional External Tools
+
+These are available in `examples/tools/` and can be copied to `~/.chibi/tools/`:
+
+| Tool | Description |
+|------|-------------|
+| `read_context` | Read another context's state (read-only, for sub-agents) |
+| `agent` | Spawn sub-agents or continue processing in another context |
 
 ### Todos and Goals
 

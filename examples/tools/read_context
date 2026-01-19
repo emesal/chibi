@@ -1,0 +1,111 @@
+#!/bin/bash
+# Read the state of another chibi context (read-only)
+#
+# This tool allows cross-context inspection, useful for:
+# - Checking on sub-agents spawned in other contexts
+# - Coordinating between related contexts
+# - Reviewing summaries and progress of other conversations
+
+if [[ "$1" == "--schema" ]]; then
+  cat <<'EOF'
+{
+  "name": "read_context",
+  "description": "Read the state of another context (read-only). Returns summary, todos, goals, system prompt, and recent messages. Useful for inspecting sub-agents or coordinating with related contexts.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "context_name": {
+        "type": "string",
+        "description": "Name of the context to read"
+      },
+      "include_messages": {
+        "type": "boolean",
+        "description": "Include recent messages (default: true, set to false for summary only)"
+      },
+      "num_messages": {
+        "type": "integer",
+        "description": "Number of recent messages to include (default: 5)"
+      }
+    },
+    "required": ["context_name"]
+  }
+}
+EOF
+  exit 0
+fi
+
+# Read args from env var
+context_name=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.context_name // empty')
+include_messages=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.include_messages // true')
+num_messages=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.num_messages // 5')
+
+if [[ -z "$context_name" ]]; then
+  echo '{"error": "context_name is required"}'
+  exit 0
+fi
+
+# Validate context name (alphanumeric, dash, underscore only)
+if [[ ! "$context_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo '{"error": "Invalid context name. Must be alphanumeric with dashes and underscores only."}'
+  exit 0
+fi
+
+CHIBI_DIR="${HOME}/.chibi"
+CONTEXT_DIR="${CHIBI_DIR}/contexts/${context_name}"
+
+if [[ ! -d "$CONTEXT_DIR" ]]; then
+  echo "{\"error\": \"Context '$context_name' does not exist\"}"
+  exit 0
+fi
+
+# Build JSON response
+result="{\"name\": \"$context_name\""
+
+# Read summary
+if [[ -f "${CONTEXT_DIR}/summary.md" ]]; then
+  summary=$(cat "${CONTEXT_DIR}/summary.md" | jq -Rs .)
+  result="$result, \"summary\": $summary"
+else
+  result="$result, \"summary\": \"\""
+fi
+
+# Read todos
+if [[ -f "${CONTEXT_DIR}/todos.md" ]]; then
+  todos=$(cat "${CONTEXT_DIR}/todos.md" | jq -Rs .)
+  result="$result, \"todos\": $todos"
+else
+  result="$result, \"todos\": \"\""
+fi
+
+# Read goals
+if [[ -f "${CONTEXT_DIR}/goals.md" ]]; then
+  goals=$(cat "${CONTEXT_DIR}/goals.md" | jq -Rs .)
+  result="$result, \"goals\": $goals"
+else
+  result="$result, \"goals\": \"\""
+fi
+
+# Read system prompt
+if [[ -f "${CONTEXT_DIR}/system_prompt.md" ]]; then
+  prompt=$(cat "${CONTEXT_DIR}/system_prompt.md" | jq -Rs .)
+  result="$result, \"system_prompt\": $prompt"
+else
+  result="$result, \"system_prompt\": null"
+fi
+
+# Read recent messages from context.json
+if [[ -f "${CONTEXT_DIR}/context.json" && "$include_messages" == "true" ]]; then
+  messages=$(jq -c ".messages | .[-$num_messages:]" "${CONTEXT_DIR}/context.json" 2>/dev/null)
+  if [[ -n "$messages" && "$messages" != "null" ]]; then
+    message_count=$(jq '.messages | length' "${CONTEXT_DIR}/context.json" 2>/dev/null || echo "0")
+    result="$result, \"message_count\": $message_count, \"recent_messages\": $messages"
+  else
+    result="$result, \"message_count\": 0, \"recent_messages\": []"
+  fi
+else
+  result="$result, \"message_count\": 0, \"recent_messages\": []"
+fi
+
+result="$result}"
+
+echo "$result"

@@ -250,31 +250,6 @@ pub fn goals_tool_to_api_format() -> serde_json::Value {
     })
 }
 
-// --- Read Context Tool (cross-context, read-only) ---
-
-pub const READ_CONTEXT_TOOL_NAME: &str = "read_context";
-
-/// Create the built-in read_context tool definition for the API
-pub fn read_context_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": READ_CONTEXT_TOOL_NAME,
-            "description": "Read the state of another context (read-only). Use this to inspect sub-agents or related contexts. Returns summary, todos, goals, system prompt, and recent messages.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "context_name": {
-                        "type": "string",
-                        "description": "The name of the context to read"
-                    }
-                },
-                "required": ["context_name"]
-            }
-        }
-    })
-}
-
 // --- Continue Processing Tool (recurse/agentic) ---
 
 pub const CONTINUE_TOOL_NAME: &str = "continue_processing";

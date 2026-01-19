@@ -446,10 +446,9 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
     // Collect all tools (user-defined + built-in tools)
     let mut all_tools = tools::tools_to_api_format(tools);
 
-    // Always add agentic tools (todos, goals, read_context, continue_processing)
+    // Always add agentic tools (todos, goals, continue_processing)
     all_tools.push(tools::todos_tool_to_api_format());
     all_tools.push(tools::goals_tool_to_api_format());
-    all_tools.push(tools::read_context_tool_to_api_format());
     all_tools.push(tools::continue_tool_to_api_format());
 
     // Add reflection tool if enabled
@@ -630,18 +629,6 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                     match app.save_current_goals(content) {
                         Ok(()) => format!("Goals updated ({} characters).", content.len()),
                         Err(e) => format!("Error saving goals: {}", e),
-                    }
-                } else if tc.name == tools::READ_CONTEXT_TOOL_NAME {
-                    // Handle built-in read_context tool
-                    let context_name = args["context_name"].as_str().unwrap_or("");
-                    if context_name.is_empty() {
-                        "Error: context_name is required".to_string()
-                    } else {
-                        match app.read_context_state(context_name) {
-                            Ok(state) => serde_json::to_string_pretty(&state)
-                                .unwrap_or_else(|e| format!("Error serializing state: {}", e)),
-                            Err(e) => format!("Error reading context '{}': {}", context_name, e),
-                        }
                     }
                 } else if let Some(tool) = tools::find_tool(tools, &tc.name) {
                     match tools::execute_tool(tool, &args, verbose) {
