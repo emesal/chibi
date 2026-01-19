@@ -7,3 +7,5 @@
 * use flat text files or md for context files
 * consider using an external tool for accessing state of other contexts
   - pro: easy to disable the functionality
+* plugin hooks
+  - tools may register to be called by the binary at hook points
