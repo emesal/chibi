@@ -53,8 +53,9 @@ fn read_prompt_from_stdin() -> io::Result<String> {
 async fn main() -> io::Result<()> {
     let cli = Cli::parse()?;
     let verbose = cli.verbose;
-
+    // Reflection is enabled if: config allows it AND --no-reflection wasn't passed
     let mut app = AppState::load()?;
+    let use_reflection = app.config.reflection_enabled && !cli.no_reflection;
 
     // Load tools at startup
     let tools = tools::load_tools(&app.tools_dir, verbose)?;
@@ -150,14 +151,14 @@ async fn main() -> io::Result<()> {
             };
             app.save_current_context(&new_context)?;
         }
-        api::send_prompt(&app, prompt, &tools, verbose).await?;
+        api::send_prompt(&app, prompt, &tools, verbose, use_reflection).await?;
     } else {
         // No command and no prompt - read from stdin
         let prompt = read_prompt_from_stdin()?;
         if prompt.trim().is_empty() {
             return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
         }
-        api::send_prompt(&app, prompt, &tools, verbose).await?;
+        api::send_prompt(&app, prompt, &tools, verbose, use_reflection).await?;
     }
 
     Ok(())

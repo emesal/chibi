@@ -58,6 +58,11 @@ auto_compact_threshold = 80.0
 # Optional: Custom API base URL
 # Default: https://openrouter.ai/api/v1/chat/completions
 # base_url = "https://openrouter.ai/api/v1/chat/completions"
+
+# Reflection settings
+# When enabled, the LLM has access to a persistent memory that spans all contexts
+reflection_enabled = true
+reflection_character_limit = 10000
 ```
 
 **Required fields:**
@@ -70,6 +75,8 @@ auto_compact_threshold = 80.0
 - `auto_compact` - Enable automatic compaction (default: false)
 - `auto_compact_threshold` - Percentage at which to auto-compact (default: 80.0)
 - `base_url` - Custom API endpoint (default: `https://openrouter.ai/api/v1/chat/completions`)
+- `reflection_enabled` - Enable reflection/memory feature (default: true)
+- `reflection_character_limit` - Max characters for reflection content (default: 10000)
 
 **Note:** TOML format is used instead of JSON, allowing you to add helpful comments directly in the config file.
 
@@ -235,6 +242,47 @@ chibi -v "Read my Cargo.toml"
 # stdout: <LLM response about the file>
 ```
 
+## Reflection (Persistent Memory)
+
+Chibi includes a built-in "reflection" feature that gives the LLM persistent memory across all contexts and sessions. The LLM can store notes, preferences, and insights that it wants to remember.
+
+### How It Works
+
+- The reflection is stored in `~/.chibi/prompts/reflection.md`
+- It's automatically appended to the system prompt on every invocation
+- The LLM has a built-in `update_reflection` tool to modify its reflection
+- The reflection has a configurable character limit (default: 10,000 characters)
+
+### Configuration
+
+In `config.toml`:
+
+```toml
+# Enable/disable reflection (default: true)
+reflection_enabled = true
+
+# Maximum characters allowed (default: 10000)
+reflection_character_limit = 10000
+```
+
+### Disabling Reflection
+
+You can disable reflection for a single invocation:
+
+```bash
+chibi -x "Your prompt here"
+chibi --no-reflection "Your prompt here"
+```
+
+Or disable it permanently in `config.toml` by setting `reflection_enabled = false`.
+
+### Use Cases
+
+- The LLM can remember user preferences discovered during conversations
+- Store important facts or context that should persist
+- Keep notes for future conversations
+- Build up knowledge over time
+
 ## Storage Structure
 
 Chibi stores data in `~/.chibi/`:
@@ -246,7 +294,8 @@ Chibi stores data in `~/.chibi/`:
 ├── prompts/
 │   ├── chibi.md         # Default system/personality prompt
 │   ├── compaction.md    # Compaction instructions
-│   └── continuation.md  # Post-compaction instructions
+│   ├── continuation.md  # Post-compaction instructions
+│   └── reflection.md    # LLM's persistent memory (auto-created)
 ├── tools/               # Executable tool scripts
 │   ├── read_file
 │   ├── fetch_url
@@ -280,6 +329,7 @@ Chibi stores data in `~/.chibi/`:
 | `-p, --prompt` | Show system prompt for current context |
 | `-e, --set-prompt <arg>` | Set system prompt (file path or literal text) |
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
+| `-x, --no-reflection` | Disable reflection for this invocation |
 | `-h, --help` | Show help message |
 | `-V, --version` | Show version |
 

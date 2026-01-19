@@ -341,4 +341,15 @@ impl AppState {
         let usage_percent = (tokens as f32 / self.config.context_window_limit as f32) * 100.0;
         usage_percent >= self.config.auto_compact_threshold
     }
+
+    /// Load the reflection prompt from ~/.chibi/prompts/reflection.md
+    /// Returns empty string if the file doesn't exist
+    pub fn load_reflection_prompt(&self) -> io::Result<String> {
+        let reflection_path = self.prompts_dir.join("reflection.md");
+        if reflection_path.exists() {
+            fs::read_to_string(&reflection_path)
+        } else {
+            Ok(String::new())
+        }
+    }
 }

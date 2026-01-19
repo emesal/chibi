@@ -213,7 +213,7 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
     Ok(())
 }
 
-pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose: bool) -> io::Result<()> {
+pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose: bool, use_reflection: bool) -> io::Result<()> {
     if prompt.trim().is_empty() {
         return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
     }
@@ -236,12 +236,24 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
 
     // Prepare messages for API
     let system_prompt = app.load_system_prompt()?;
+    let reflection_prompt = if use_reflection {
+        app.load_reflection_prompt()?
+    } else {
+        String::new()
+    };
     let context_has_system = context.messages.iter().any(|m| m.role == "system");
 
-    let mut messages: Vec<serde_json::Value> = if !system_prompt.is_empty() && !context_has_system {
+    // Combine system prompt with reflection prompt
+    let full_system_prompt = if !reflection_prompt.is_empty() {
+        format!("{}\n\n{}", system_prompt, reflection_prompt)
+    } else {
+        system_prompt.clone()
+    };
+
+    let mut messages: Vec<serde_json::Value> = if !full_system_prompt.is_empty() && !context_has_system {
         vec![serde_json::json!({
             "role": "system",
-            "content": system_prompt,
+            "content": full_system_prompt,
         })]
     } else {
         Vec::new()
@@ -262,8 +274,14 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
         "stream": true,
     });
 
-    if !tools.is_empty() {
-        request_body["tools"] = serde_json::json!(tools::tools_to_api_format(tools));
+    // Collect all tools (user-defined + built-in reflection tool if enabled)
+    let mut all_tools = tools::tools_to_api_format(tools);
+    if use_reflection {
+        all_tools.push(tools::reflection_tool_to_api_format());
+    }
+
+    if !all_tools.is_empty() {
+        request_body["tools"] = serde_json::json!(all_tools);
     }
 
     let client = Client::new();
@@ -393,10 +411,20 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
                     eprintln!("[Tool: {}]", tc.name);
                 }
 
-                let result = if let Some(tool) = tools::find_tool(tools, &tc.name) {
-                    let args: serde_json::Value = serde_json::from_str(&tc.arguments)
-                        .unwrap_or(serde_json::json!({}));
+                let args: serde_json::Value = serde_json::from_str(&tc.arguments)
+                    .unwrap_or(serde_json::json!({}));
 
+                let result = if tc.name == tools::REFLECTION_TOOL_NAME && use_reflection {
+                    // Handle built-in reflection tool
+                    match tools::execute_reflection_tool(
+                        &app.prompts_dir,
+                        &args,
+                        app.config.reflection_character_limit,
+                    ) {
+                        Ok(output) => output,
+                        Err(e) => format!("Error: {}", e),
+                    }
+                } else if let Some(tool) = tools::find_tool(tools, &tc.name) {
                     match tools::execute_tool(tool, &args) {
                         Ok(output) => output,
                         Err(e) => format!("Error: {}", e),

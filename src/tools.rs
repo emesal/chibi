@@ -147,3 +147,52 @@ pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value) -> io::Result<St
 pub fn find_tool<'a>(tools: &'a [Tool], name: &str) -> Option<&'a Tool> {
     tools.iter().find(|t| t.name == name)
 }
+
+/// Name of the built-in reflection tool
+pub const REFLECTION_TOOL_NAME: &str = "update_reflection";
+
+/// Create the built-in update_reflection tool definition for the API
+pub fn reflection_tool_to_api_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": REFLECTION_TOOL_NAME,
+            "description": "Update your persistent reflection/memory that persists across all contexts and sessions. Use this to store anything you want to remember: insights about the user, preferences, important facts, or notes to your future self. Keep it concise and organized. The content will completely replace the previous reflection.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The new reflection content. This replaces the entire previous reflection."
+                    }
+                },
+                "required": ["content"]
+            }
+        }
+    })
+}
+
+/// Execute the built-in update_reflection tool
+pub fn execute_reflection_tool(
+    prompts_dir: &PathBuf,
+    arguments: &serde_json::Value,
+    character_limit: usize,
+) -> io::Result<String> {
+    let content = arguments["content"]
+        .as_str()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'content' parameter"))?;
+
+    // Check character limit
+    if content.len() > character_limit {
+        return Ok(format!(
+            "Error: Content exceeds the {} character limit ({} characters provided). Please shorten your reflection.",
+            character_limit,
+            content.len()
+        ));
+    }
+
+    let reflection_path = prompts_dir.join("reflection.md");
+    fs::write(&reflection_path, content)?;
+
+    Ok(format!("Reflection updated successfully ({} characters).", content.len()))
+}

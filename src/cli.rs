@@ -14,6 +14,7 @@ pub struct Cli {
     pub verbose: bool,
     pub show_prompt: bool,
     pub set_prompt: Option<String>,
+    pub no_reflection: bool,
     pub prompt: Vec<String>,
 }
 
@@ -33,6 +34,7 @@ impl Cli {
         let mut verbose = false;
         let mut show_prompt = false;
         let mut set_prompt = None;
+        let mut no_reflection = false;
         let mut prompt = Vec::new();
         let mut i = 1;
         let mut is_prompt = false;
@@ -141,6 +143,12 @@ impl Cli {
                 continue;
             }
 
+            if arg == "-x" || arg == "--no-reflection" {
+                no_reflection = true;
+                i += 1;
+                continue;
+            }
+
             if arg == "-h" || arg == "--help" {
                 Self::print_help();
                 std::process::exit(0);
@@ -194,6 +202,7 @@ impl Cli {
             verbose,
             show_prompt,
             set_prompt,
+            no_reflection,
             prompt,
         })
     }
@@ -220,6 +229,7 @@ impl Cli {
         println!();
         println!("Options:");
         println!("  -v, --verbose             Show extra info (tools loaded, etc.)");
+        println!("  -x, --no-reflection       Disable reflection prompt for this invocation");
         println!("  -h, --help                Show this help");
         println!("  -V, --version             Show version");
         println!();

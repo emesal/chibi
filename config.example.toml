@@ -39,3 +39,8 @@ auto_compact_threshold = 80.0
 # Default: https://openrouter.ai/api/v1/chat/completions
 # base_url = "https://openrouter.ai/api/v1/chat/completions"
 
+# Reflection settings
+# When enabled, the LLM has access to a persistent memory that spans all contexts.
+# The LLM can use the update_reflection tool to store notes, preferences, and insights.
+reflection_enabled = true
+reflection_character_limit = 10000
