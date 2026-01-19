@@ -16,16 +16,16 @@ fn read_prompt_from_stdin() -> io::Result<String> {
     let mut buffer = String::new();
     let mut prompt = String::new();
     let mut first = true;
-    
+
     loop {
         buffer.clear();
         let bytes_read = stdin_lock.read_line(&mut buffer)?;
-        
+
         // EOF (Ctrl+D)
         if bytes_read == 0 {
             break;
         }
-        
+
         // Remove trailing newline
         if buffer.ends_with('\n') {
             buffer.pop();
@@ -33,37 +33,38 @@ fn read_prompt_from_stdin() -> io::Result<String> {
                 buffer.pop();
             }
         }
-        
+
         // Check for termination: a single dot on a line
         if buffer.trim() == "." {
             break;
         }
-        
+
         if !first {
             prompt.push(' ');
         }
         prompt.push_str(&buffer);
         first = false;
     }
-    
+
     Ok(prompt)
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let cli = Cli::parse()?;
-    
+    let verbose = cli.verbose;
+
     let mut app = AppState::load()?;
-    
+
     // Load tools at startup
-    let tools = tools::load_tools(&app.tools_dir)?;
-    if !tools.is_empty() {
-        eprintln!("[Loaded {} tool(s): {}]", 
-            tools.len(), 
+    let tools = tools::load_tools(&app.tools_dir, verbose)?;
+    if verbose && !tools.is_empty() {
+        eprintln!("[Loaded {} tool(s): {}]",
+            tools.len(),
             tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
         );
     }
-    
+
     if let Some(name) = cli.switch {
         app.state.switch_context(name)?;
         // Create the context if it doesn't exist
@@ -99,7 +100,7 @@ async fn main() -> io::Result<()> {
         app.clear_context()?;
         println!("Context cleared (history saved to transcript)");
     } else if cli.compact {
-        api::compact_context_with_llm_manual(&app).await?;
+        api::compact_context_with_llm_manual(&app, verbose).await?;
     } else if let Some((old_name, new_name)) = cli.rename {
         app.rename_context(&old_name, &new_name)?;
         println!("Renamed context '{}' to '{}'", old_name, new_name);
@@ -129,15 +130,15 @@ async fn main() -> io::Result<()> {
             };
             app.save_current_context(&new_context)?;
         }
-        api::send_prompt(&app, prompt, &tools).await?;
+        api::send_prompt(&app, prompt, &tools, verbose).await?;
     } else {
         // No command and no prompt - read from stdin
         let prompt = read_prompt_from_stdin()?;
         if prompt.trim().is_empty() {
             return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
         }
-        api::send_prompt(&app, prompt, &tools).await?;
+        api::send_prompt(&app, prompt, &tools, verbose).await?;
     }
-    
+
     Ok(())
 }

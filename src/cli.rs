@@ -11,6 +11,7 @@ pub struct Cli {
     pub rename: Option<(String, String)>,
     pub history: bool,
     pub num_messages: Option<usize>,
+    pub verbose: bool,
     pub prompt: Vec<String>,
 }
 
@@ -27,6 +28,7 @@ impl Cli {
         let mut rename = None;
         let mut history = false;
         let mut num_messages: Option<usize> = None;
+        let mut verbose = false;
         let mut prompt = Vec::new();
         let mut i = 1;
         let mut is_prompt = false;
@@ -114,12 +116,18 @@ impl Cli {
                 continue;
             }
             
+            if arg == "-v" || arg == "--verbose" {
+                verbose = true;
+                i += 1;
+                continue;
+            }
+            
             if arg == "-h" || arg == "--help" {
                 Self::print_help();
                 std::process::exit(0);
             }
             
-            if arg == "-v" || arg == "--version" {
+            if arg == "-V" || arg == "--version" {
                 println!("chibi {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
@@ -164,6 +172,7 @@ impl Cli {
             rename,
             history,
             num_messages,
+            verbose,
             prompt,
         })
     }
@@ -185,6 +194,11 @@ impl Cli {
         println!("  -r, --rename <OLD> <NEW>  Rename a context");
         println!("  -H, --history           Show recent messages (default: 6)");
         println!("  -n, --num-messages <N>  Number of messages to show (0 = all, implies -H)");
+        println!();
+        println!("Options:");
+        println!("  -v, --verbose           Show extra info (tools loaded, etc.)");
+        println!("  -h, --help              Show this help");
+        println!("  -V, --version           Show version");
         println!();
         println!("Prompt input:");
         println!("  If arguments are provided after options, they are joined as the prompt.");

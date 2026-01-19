@@ -13,23 +13,23 @@ pub struct Tool {
 }
 
 /// Load all tools from the tools directory by calling each with --schema
-pub fn load_tools(tools_dir: &PathBuf) -> io::Result<Vec<Tool>> {
+pub fn load_tools(tools_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
     let mut tools = Vec::new();
-    
+
     if !tools_dir.exists() {
         return Ok(tools);
     }
-    
+
     let entries = fs::read_dir(tools_dir)?;
-    
+
     for entry in entries.flatten() {
         let path = entry.path();
-        
+
         // Skip directories and non-executable files
         if path.is_dir() {
             continue;
         }
-        
+
         // Check if executable (on Unix)
         #[cfg(unix)]
         {
@@ -40,16 +40,18 @@ pub fn load_tools(tools_dir: &PathBuf) -> io::Result<Vec<Tool>> {
                 }
             }
         }
-        
+
         // Try to get schema from the tool
         match get_tool_schema(&path) {
             Ok(tool) => tools.push(tool),
             Err(e) => {
-                eprintln!("[WARN] Failed to load tool {:?}: {}", path.file_name(), e);
+                if verbose {
+                    eprintln!("[WARN] Failed to load tool {:?}: {}", path.file_name(), e);
+                }
             }
         }
     }
-    
+
     Ok(tools)
 }
 

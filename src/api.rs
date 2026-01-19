@@ -7,51 +7,52 @@ use reqwest::{Client, StatusCode};
 use std::io::{self, ErrorKind};
 use tokio::io::{stdout, AsyncWriteExt};
 
-pub async fn compact_context_with_llm(app: &AppState) -> io::Result<()> {
-    compact_context_with_llm_internal(app, false).await
+pub async fn compact_context_with_llm(app: &AppState, verbose: bool) -> io::Result<()> {
+    compact_context_with_llm_internal(app, false, verbose).await
 }
 
-pub async fn compact_context_with_llm_manual(app: &AppState) -> io::Result<()> {
-    compact_context_with_llm_internal(app, true).await
+pub async fn compact_context_with_llm_manual(app: &AppState, verbose: bool) -> io::Result<()> {
+    compact_context_with_llm_internal(app, true, verbose).await
 }
 
-async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) -> io::Result<()> {
+async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, verbose: bool) -> io::Result<()> {
     let context = app.get_current_context()?;
-    
+
     if context.messages.is_empty() {
         if print_message {
             println!("Context is already empty");
         }
         return Ok(());
     }
-    
+
     if context.messages.len() <= 2 {
-        // Nothing to compact
         if print_message {
             println!("Context is already compact (2 or fewer messages)");
         }
         return Ok(());
     }
-    
+
     // Append to transcript before compacting
     app.append_to_transcript(&context)?;
-    
-    if print_message {
+
+    if print_message && verbose {
         eprintln!("[Compacting] Messages: {} -> requesting summary...", context.messages.len());
     }
-    
+
     let client = Client::new();
-    
+
     // Load compaction prompt
     let compaction_prompt = app.load_prompt("compaction")?;
     let default_compaction_prompt = "Please summarize the following conversation into a concise summary. Capture the key points, decisions, and context.";
     let compaction_prompt = if compaction_prompt.is_empty() {
-        eprintln!("[WARN] No compaction prompt found at ~/.chibi/prompts/compaction.md. Using default.");
+        if verbose {
+            eprintln!("[WARN] No compaction prompt found at ~/.chibi/prompts/compaction.md. Using default.");
+        }
         default_compaction_prompt
     } else {
         &compaction_prompt
     };
-    
+
     // Build conversation text for summarization
     let mut conversation_text = String::new();
     for m in &context.messages {
@@ -60,8 +61,8 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
         }
         conversation_text.push_str(&format!("[{}]: {}\n\n", m.role.to_uppercase(), m.content));
     }
-    
-    // Prepare messages for compaction request - use a single user message with the conversation
+
+    // Prepare messages for compaction request
     let compaction_messages = vec![
         serde_json::json!({
             "role": "system",
@@ -72,13 +73,13 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
             "content": format!("Please summarize this conversation:\n\n{}", conversation_text),
         }),
     ];
-    
+
     let request_body = serde_json::json!({
         "model": app.config.model,
         "messages": compaction_messages,
         "stream": false,
     });
-    
+
     let response = client
         .post(&app.config.base_url)
         .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
@@ -87,7 +88,7 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
         .send()
         .await
         .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to send request: {}", e)))?;
-    
+
     if response.status() != StatusCode::OK {
         let status = response.status();
         let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
@@ -96,27 +97,31 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
             format!("API error ({}): {}", status, body),
         ));
     }
-    
+
     let json: serde_json::Value = response.json().await
         .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e)))?;
-    
+
     let summary = json["choices"][0]["message"]["content"]
         .as_str()
         .or_else(|| json["choices"][0]["content"].as_str())
         .unwrap_or_else(|| {
-            eprintln!("[DEBUG] Response structure: {}", json);
+            if verbose {
+                eprintln!("[DEBUG] Response structure: {}", json);
+            }
             ""
         })
         .to_string();
-    
+
     if summary.is_empty() {
-        eprintln!("[DEBUG] Full response: {}", json);
+        if verbose {
+            eprintln!("[DEBUG] Full response: {}", json);
+        }
         return Err(io::Error::new(
-            ErrorKind::Other, 
+            ErrorKind::Other,
             "Empty summary received from LLM. This can happen with free-tier models. Try again or use a different model."
         ));
     }
-    
+
     // Prepare continuation prompt
     let continuation_prompt = app.load_prompt("continuation")?;
     let continuation_prompt = if continuation_prompt.is_empty() {
@@ -124,10 +129,10 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
     } else {
         &continuation_prompt
     };
-    
+
     // Load system prompt
     let system_prompt = app.load_prompt("chibi")?;
-    
+
     // Create new context with system prompt, continuation instructions, and summary
     let mut new_context = Context {
         name: context.name.clone(),
@@ -135,7 +140,7 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
         created_at: context.created_at,
         updated_at: now_timestamp(),
     };
-    
+
     // Add system prompt as first message
     if !system_prompt.is_empty() {
         new_context.messages.push(Message {
@@ -143,13 +148,13 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
             content: system_prompt.clone(),
         });
     }
-    
+
     // Add continuation prompt + summary as user message
     new_context.messages.push(Message {
         role: "user".to_string(),
         content: format!("{}\n\n--- SUMMARY ---\n{}", continuation_prompt, summary),
     });
-    
+
     // Add assistant acknowledgment
     let messages = vec![
         serde_json::json!({
@@ -161,13 +166,13 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
             "content": format!("{}\n\n--- SUMMARY ---\n{}", continuation_prompt, summary),
         }),
     ];
-    
+
     let request_body = serde_json::json!({
         "model": app.config.model,
         "messages": messages,
         "stream": false,
     });
-    
+
     let response = client
         .post(&app.config.base_url)
         .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
@@ -176,7 +181,7 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
         .send()
         .await
         .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to send request: {}", e)))?;
-    
+
     if response.status() != StatusCode::OK {
         let status = response.status();
         let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
@@ -185,55 +190,54 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool) 
             format!("API error ({}): {}", status, body),
         ));
     }
-    
+
     let json: serde_json::Value = response.json().await
         .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e)))?;
-    
+
     let acknowledgment = json["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("")
         .to_string();
-    
+
     new_context.messages.push(Message {
         role: "assistant".to_string(),
         content: acknowledgment,
     });
-    
+
     // Save the new context
     app.save_current_context(&new_context)?;
-    
+
     if print_message {
         println!("Context compacted (history saved to transcript)");
     }
     Ok(())
 }
 
-pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::Result<()> {
+pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose: bool) -> io::Result<()> {
     if prompt.trim().is_empty() {
         return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
     }
-    
+
     let mut context = app.get_current_context()?;
-    
+
     // Add user message
     app.add_message(&mut context, "user".to_string(), prompt.clone());
-    
+
     // Check if we need to warn about context window
-    if app.should_warn(&context.messages) {
+    if app.should_warn(&context.messages) && verbose {
         let remaining = app.remaining_tokens(&context.messages);
         eprintln!("[Context window warning: {} tokens remaining]", remaining);
     }
-    
+
     // Auto-compaction check
     if app.should_auto_compact(&context) {
-        return compact_context_with_llm(app).await;
+        return compact_context_with_llm(app, verbose).await;
     }
-    
+
     // Prepare messages for API
-    // Include system prompt if not already in context
     let system_prompt = app.load_prompt("chibi")?;
     let context_has_system = context.messages.iter().any(|m| m.role == "system");
-    
+
     let mut messages: Vec<serde_json::Value> = if !system_prompt.is_empty() && !context_has_system {
         vec![serde_json::json!({
             "role": "system",
@@ -242,7 +246,7 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::
     } else {
         Vec::new()
     };
-    
+
     // Add conversation messages
     for m in &context.messages {
         messages.push(serde_json::json!({
@@ -250,20 +254,20 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::
             "content": m.content,
         }));
     }
-    
+
     // Build request with optional tools
     let mut request_body = serde_json::json!({
         "model": app.config.model,
         "messages": messages,
         "stream": true,
     });
-    
+
     if !tools.is_empty() {
         request_body["tools"] = serde_json::json!(tools::tools_to_api_format(tools));
     }
-    
+
     let client = Client::new();
-    
+
     // Tool call loop - keep going until we get a final text response
     loop {
         let response = client
@@ -274,7 +278,7 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::
             .send()
             .await
             .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to send request: {}", e)))?;
-        
+
         if response.status() != StatusCode::OK {
             let status = response.status();
             let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
@@ -283,21 +287,21 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::
                 format!("API error ({}): {}", status, body),
             ));
         }
-        
+
         let mut stream = response.bytes_stream();
         let mut stdout = stdout();
         let mut full_response = String::new();
         let mut is_first_content = true;
-        
+
         // Tool call accumulation
         let mut tool_calls: Vec<ToolCallAccumulator> = Vec::new();
         let mut has_tool_calls = false;
-        
+
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| io::Error::new(ErrorKind::Other, format!("Stream error: {}", e)))?;
             let chunk_str = std::str::from_utf8(&chunk)
                 .map_err(|e| io::Error::new(ErrorKind::Other, format!("UTF-8 error: {}", e)))?;
-            
+
             // Parse Server-Sent Events format
             for line in chunk_str.lines() {
                 if line.starts_with("data: ") {
@@ -305,20 +309,18 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::
                     if data == "[DONE]" {
                         continue;
                     }
-                    
+
                     let json: serde_json::Value = serde_json::from_str(data)
                         .map_err(|e| io::Error::new(ErrorKind::Other, format!("JSON parse error: {}", e)))?;
-                    
+
                     if let Some(choices) = json["choices"].as_array() {
                         if let Some(choice) = choices.get(0) {
                             if let Some(delta) = choice.get("delta") {
                                 // Handle regular content
                                 if let Some(content) = delta["content"].as_str() {
-                                    // Handle first content specially
                                     if is_first_content {
                                         is_first_content = false;
                                         if content.starts_with('\n') {
-                                            // Skip leading newline for both storage and display
                                             let remaining = &content[1..];
                                             if !remaining.is_empty() {
                                                 full_response.push_str(remaining);
@@ -328,25 +330,22 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::
                                             continue;
                                         }
                                     }
-                                    
-                                    // Normal case: store and display as-is
+
                                     full_response.push_str(content);
                                     stdout.write_all(content.as_bytes()).await?;
                                     stdout.flush().await?;
                                 }
-                                
+
                                 // Handle tool calls
                                 if let Some(tc_array) = delta["tool_calls"].as_array() {
                                     has_tool_calls = true;
                                     for tc in tc_array {
                                         let index = tc["index"].as_u64().unwrap_or(0) as usize;
-                                        
-                                        // Ensure we have enough accumulators
+
                                         while tool_calls.len() <= index {
                                             tool_calls.push(ToolCallAccumulator::default());
                                         }
-                                        
-                                        // Accumulate tool call data
+
                                         if let Some(id) = tc["id"].as_str() {
                                             tool_calls[index].id = id.to_string();
                                         }
@@ -366,10 +365,9 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::
                 }
             }
         }
-        
+
         // If we have tool calls, execute them and continue the loop
         if has_tool_calls && !tool_calls.is_empty() {
-            // Add assistant message with tool calls to messages
             let tool_calls_json: Vec<serde_json::Value> = tool_calls
                 .iter()
                 .map(|tc| {
@@ -383,21 +381,22 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::
                     })
                 })
                 .collect();
-            
+
             messages.push(serde_json::json!({
                 "role": "assistant",
                 "tool_calls": tool_calls_json,
             }));
-            
+
             // Execute each tool and add results
             for tc in &tool_calls {
-                eprintln!("[Tool: {}]", tc.name);
-                
+                if verbose {
+                    eprintln!("[Tool: {}]", tc.name);
+                }
+
                 let result = if let Some(tool) = tools::find_tool(tools, &tc.name) {
-                    // Parse arguments
                     let args: serde_json::Value = serde_json::from_str(&tc.arguments)
                         .unwrap_or(serde_json::json!({}));
-                    
+
                     match tools::execute_tool(tool, &args) {
                         Ok(output) => output,
                         Err(e) => format!("Error: {}", e),
@@ -405,33 +404,27 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool]) -> io::
                 } else {
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
-                
+
                 messages.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": result,
                 }));
             }
-            
-            // Update request for next iteration
+
             request_body["messages"] = serde_json::json!(messages);
-            
-            // Continue the loop to get the next response
             continue;
         }
-        
+
         // No tool calls - we have a final response
         app.add_message(&mut context, "assistant".to_string(), full_response);
-        
-        // Save the updated context
         app.save_current_context(&context)?;
-        
-        // Check context window after response
-        if app.should_warn(&context.messages) {
+
+        if app.should_warn(&context.messages) && verbose {
             let remaining = app.remaining_tokens(&context.messages);
             eprintln!("[Context window warning: {} tokens remaining]", remaining);
         }
-        
+
         println!();
         return Ok(());
     }
