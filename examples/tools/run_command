@@ -2,7 +2,6 @@
 # Run a shell command and return output
 #
 # SAFETY: This tool ALWAYS asks for user confirmation before executing.
-# The confirmation prompt uses stdin, which is free since args come via env var.
 
 if [[ "$1" == "--schema" ]]; then
   cat <<'EOF'
@@ -24,14 +23,8 @@ EOF
   exit 0
 fi
 
-# Read args from env var (preferred) or stdin (fallback)
-if [[ -n "$CHIBI_TOOL_ARGS" ]]; then
-  args="$CHIBI_TOOL_ARGS"
-else
-  args=$(cat)
-fi
-
-command=$(echo "$args" | jq -r '.command')
+# Read args from env var
+command=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.command')
 
 if [[ -z "$command" || "$command" == "null" ]]; then
   echo "Error: command parameter is required" >&2
@@ -46,7 +39,6 @@ echo "│ Command: $command" >&2
 echo "└─────────────────────────────────────────────────────────────" >&2
 echo -n "Execute this command? [y/N] " >&2
 
-# Read confirmation from stdin (now free since args come via env var)
 read -r answer
 
 if [[ "$answer" != "y" && "$answer" != "Y" ]]; then

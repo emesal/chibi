@@ -335,15 +335,11 @@ def main():
         print(json.dumps(build_schema()))
         return
 
-    # Read args from env var (preferred) or stdin (fallback)
-    args_str = os.environ.get("CHIBI_TOOL_ARGS")
+    # Read args from env var
     try:
-        if args_str:
-            input_data = json.loads(args_str)
-        else:
-            input_data = json.load(sys.stdin)
-    except json.JSONDecodeError as e:
-        print(f"Error: Invalid JSON input: {e}")
+        input_data = json.loads(os.environ["CHIBI_TOOL_ARGS"])
+    except (KeyError, json.JSONDecodeError) as e:
+        print(f"Error: Invalid or missing CHIBI_TOOL_ARGS: {e}")
         sys.exit(1)
 
     # Handle refresh_cache command

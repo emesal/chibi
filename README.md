@@ -163,9 +163,9 @@ Each tool script must:
      }
    }
    ```
-3. **Accept JSON parameters on stdin** when called normally
+3. **Read JSON parameters from `CHIBI_TOOL_ARGS` env var**
 4. **Output results to stdout**
-5. **Use stderr for prompts etc** intended for the user
+5. **Use stderr for prompts** and stdin for user input (both are free since args come via env var)
 
 ### Example Tool (Bash)
 
@@ -190,8 +190,8 @@ EOF
   exit 0
 fi
 
-# Read JSON from stdin and extract path
-path=$(jq -r '.path')
+# Read args from env var
+path=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.path')
 cat "$path"
 ```
 
@@ -203,6 +203,7 @@ cat "$path"
 
 import sys
 import json
+import os
 
 if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     print(json.dumps({
@@ -218,7 +219,9 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     }))
     sys.exit(0)
 
-params = json.load(sys.stdin)
+# Read args from env var
+params = json.loads(os.environ["CHIBI_TOOL_ARGS"])
+
 # ... perform search ...
 print(json.dumps(results))
 ```
@@ -265,7 +268,11 @@ These examples serve as templates - copy and modify them to connect to any MCP s
 
 ### Tool Safety
 
-Tools are responsible for their own safety guardrails. Chibi passes `CHIBI_VERBOSE=1` to tools when `-v` is used, allowing tools to adjust their behavior.
+Tools are responsible for their own safety guardrails. Chibi passes these environment variables to tools:
+- `CHIBI_TOOL_ARGS` - JSON arguments (always set)
+- `CHIBI_VERBOSE=1` - when `-v` is used, allowing tools to adjust their behavior
+
+Since args come via env var, **stdin is free for user interaction** (confirmations, multi-line input, etc.).
 
 **run_command** always requires user confirmation:
 ```
