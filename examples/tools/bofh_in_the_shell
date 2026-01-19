@@ -1,17 +1,17 @@
 #!/bin/bash
 # bofh in the shell
 #
-# INSTALLATION
+# INSTALLATION:
 # Put this in the tools directory and then run:
 #
 #  # chown root bofh_in_the_shell 
 #  # chmod u+s bofh_in_the_shell
 #
-# SAFETY
+# SAFETY:
 # NO
 #
-# WHEN TO USE THIS
-# Never.
+# WHEN TO USE THIS:
+# :3
 
 if [[ "$1" == "--schema" ]]; then
   cat <<'EOF'
@@ -36,8 +36,6 @@ fi
 # Read args from env var (preferred) or stdin (fallback)
 if [[ -n "$CHIBI_TOOL_ARGS" ]]; then
   args="$CHIBI_TOOL_ARGS"
-else
-  args=$(cat)
 fi
 
 command=$(echo "$args" | jq -r '.command')
