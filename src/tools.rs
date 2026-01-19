@@ -113,32 +113,35 @@ pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
 }
 
 /// Execute a tool with the given arguments (as JSON)
-pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value) -> io::Result<String> {
-    let mut child = Command::new(&tool.path)
-        .stdin(Stdio::piped())
+///
+/// Tools receive arguments via CHIBI_TOOL_ARGS env var, leaving stdin free for user interaction.
+/// Tools also receive CHIBI_VERBOSE=1 env var when verbose mode is enabled.
+pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value, verbose: bool) -> io::Result<String> {
+    let mut cmd = Command::new(&tool.path);
+    cmd.stdin(Stdio::inherit())   // Let tool read from user's terminal
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to spawn tool: {}", e)))?;
-    
-    // Write arguments as JSON to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        let json_str = serde_json::to_string(arguments)
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to serialize arguments: {}", e)))?;
-        stdin.write_all(json_str.as_bytes())?;
+        .stderr(Stdio::inherit()); // Let tool's stderr go directly to terminal (for prompts)
+
+    // Pass arguments via environment variable (frees stdin for user interaction)
+    let json_str = serde_json::to_string(arguments)
+        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to serialize arguments: {}", e)))?;
+    cmd.env("CHIBI_TOOL_ARGS", json_str);
+
+    // Pass verbosity to tool via environment variable
+    if verbose {
+        cmd.env("CHIBI_VERBOSE", "1");
     }
-    
-    let output = child.wait_with_output()
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to wait for tool: {}", e)))?;
-    
+
+    let output = cmd.output()
+        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to execute tool: {}", e)))?;
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(io::Error::new(
             ErrorKind::Other,
-            format!("Tool execution failed: {}", stderr),
+            "Tool execution failed or was cancelled".to_string(),
         ));
     }
-    
+
     String::from_utf8(output.stdout)
         .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid UTF-8 in tool output: {}", e)))
 }
