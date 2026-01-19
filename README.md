@@ -171,6 +171,8 @@ Each tool script must:
 4. **Output results to stdout**
 5. **Use stderr for prompts** and stdin for user input (both are free since args come via env var)
 
+**Note on Environment Variables:** Tool parameters are passed as a single JSON string in `CHIBI_TOOL_ARGS`. Environment variables have size limits (typically 128KB-2MB depending on OS) and cannot represent certain binary data. For the simple tools chibi is designed for, this is rarely an issue. If you need to pass large data, consider using file paths instead.
+
 ### Example Tool (Bash)
 
 ```bash
