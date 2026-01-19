@@ -20,6 +20,16 @@ pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
         return Ok(());
     }
 
+    // Execute pre_rolling_compact hook
+    let tools = tools::load_tools(&app.tools_dir, verbose)?;
+    let hook_data = serde_json::json!({
+        "context_name": context.name,
+        "message_count": context.messages.len(),
+        "non_system_count": non_system_count,
+        "summary": context.summary,
+    });
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PreRollingCompact, &hook_data, verbose);
+
     // Load goals and todos to guide compaction decisions
     let goals = app.load_current_goals()?;
     let todos = app.load_current_todos()?;
@@ -139,6 +149,14 @@ Output ONLY the updated summary, no preamble."#,
         eprintln!("[Rolling compaction complete: {} messages remaining, summary updated]", context.messages.len());
     }
 
+    // Execute post_rolling_compact hook
+    let hook_data = serde_json::json!({
+        "context_name": context.name,
+        "message_count": context.messages.len(),
+        "summary": context.summary,
+    });
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PostRollingCompact, &hook_data, verbose);
+
     Ok(())
 }
 
@@ -169,6 +187,15 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
         }
         return Ok(());
     }
+
+    // Execute pre_compact hook
+    let tools = tools::load_tools(&app.tools_dir, verbose)?;
+    let hook_data = serde_json::json!({
+        "context_name": context.name,
+        "message_count": context.messages.len(),
+        "summary": context.summary,
+    });
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PreCompact, &hook_data, verbose);
 
     // Append to transcript before compacting
     app.append_to_transcript(&context)?;
@@ -349,6 +376,15 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
     if print_message {
         println!("Context compacted (history saved to transcript)");
     }
+
+    // Execute post_compact hook
+    let hook_data = serde_json::json!({
+        "context_name": new_context.name,
+        "message_count": new_context.messages.len(),
+        "summary": new_context.summary,
+    });
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PostCompact, &hook_data, verbose);
+
     Ok(())
 }
 
@@ -363,8 +399,25 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
 
     let mut context = app.get_current_context()?;
 
+    // Execute pre_message hooks (can modify prompt)
+    let mut final_prompt = prompt.clone();
+    let hook_data = serde_json::json!({
+        "prompt": prompt,
+        "context_name": context.name,
+        "summary": context.summary,
+    });
+    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data, verbose)?;
+    for (tool_name, result) in hook_results {
+        if let Some(modified) = result.get("prompt").and_then(|v| v.as_str()) {
+            if verbose {
+                eprintln!("[Hook pre_message: {} modified prompt]", tool_name);
+            }
+            final_prompt = modified.to_string();
+        }
+    }
+
     // Add user message
-    app.add_message(&mut context, "user".to_string(), prompt.clone());
+    app.add_message(&mut context, "user".to_string(), final_prompt.clone());
 
     // Check if we need to warn about context window
     if app.should_warn(&context.messages) && verbose {
@@ -591,7 +644,7 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                     eprintln!("[Tool: {}]", tc.name);
                 }
 
-                let args: serde_json::Value = serde_json::from_str(&tc.arguments)
+                let mut args: serde_json::Value = serde_json::from_str(&tc.arguments)
                     .unwrap_or(serde_json::json!({}));
 
                 // Check for continue_processing first (special handling)
@@ -604,6 +657,21 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                         "content": "Acknowledged. Continuing processing...",
                     }));
                     continue;
+                }
+
+                // Execute pre_tool hooks (can modify arguments)
+                let pre_hook_data = serde_json::json!({
+                    "tool_name": tc.name,
+                    "arguments": args,
+                });
+                let pre_hook_results = tools::execute_hook(tools, tools::HookPoint::PreTool, &pre_hook_data, verbose)?;
+                for (hook_tool_name, result) in pre_hook_results {
+                    if let Some(modified_args) = result.get("arguments") {
+                        if verbose {
+                            eprintln!("[Hook pre_tool: {} modified arguments for {}]", hook_tool_name, tc.name);
+                        }
+                        args = modified_args.clone();
+                    }
                 }
 
                 let result = if tc.name == tools::REFLECTION_TOOL_NAME && use_reflection {
@@ -639,6 +707,14 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
 
+                // Execute post_tool hooks (observe only)
+                let post_hook_data = serde_json::json!({
+                    "tool_name": tc.name,
+                    "arguments": args,
+                    "result": result,
+                });
+                let _ = tools::execute_hook(tools, tools::HookPoint::PostTool, &post_hook_data, verbose);
+
                 messages.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -653,6 +729,14 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         // No tool calls - we have a final response
         app.add_message(&mut context, "assistant".to_string(), full_response.clone());
         app.save_current_context(&context)?;
+
+        // Execute post_message hooks (observe only)
+        let hook_data = serde_json::json!({
+            "prompt": final_prompt,
+            "response": full_response,
+            "context_name": context.name,
+        });
+        let _ = tools::execute_hook(tools, tools::HookPoint::PostMessage, &hook_data, verbose);
 
         if app.should_warn(&context.messages) && verbose {
             let remaining = app.remaining_tokens(&context.messages);

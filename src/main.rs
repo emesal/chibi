@@ -110,6 +110,13 @@ async fn main() -> io::Result<()> {
         );
     }
 
+    // Execute on_start hook
+    let hook_data = serde_json::json!({
+        "current_context": app.state.current_context,
+        "verbose": verbose,
+    });
+    let _ = tools::execute_hook(&tools, tools::HookPoint::OnStart, &hook_data, verbose);
+
     // Handle sub-context: use a different context for this invocation without changing global state
     // This must be processed before other commands so the context is set up
     if let Some(name) = &cli.sub_context {
@@ -124,6 +131,7 @@ async fn main() -> io::Result<()> {
             name.clone()
         };
 
+        let prev_context = app.state.current_context.clone();
         // Switch context in memory only (don't save to state file)
         app.state.switch_context(actual_name)?;
         // Create the context directory if it doesn't exist
@@ -140,6 +148,15 @@ async fn main() -> io::Result<()> {
         if verbose {
             eprintln!("[Using sub-context: {}]", app.state.current_context);
         }
+
+        // Execute on_context_switch hook
+        let hook_data = serde_json::json!({
+            "from_context": prev_context,
+            "to_context": app.state.current_context,
+            "is_sub_context": true,
+        });
+        let _ = tools::execute_hook(&tools, tools::HookPoint::OnContextSwitch, &hook_data, verbose);
+
         // Note: we do NOT call app.save() here, so global state is unchanged
     }
 
@@ -156,6 +173,7 @@ async fn main() -> io::Result<()> {
             name
         };
 
+        let prev_context = app.state.current_context.clone();
         app.state.switch_context(actual_name)?;
         // Create the context if it doesn't exist
         if !app.context_dir(&app.state.current_context).exists() {
@@ -173,6 +191,14 @@ async fn main() -> io::Result<()> {
         if verbose {
             eprintln!("[Switched to context: {}]", app.state.current_context);
         }
+
+        // Execute on_context_switch hook
+        let hook_data = serde_json::json!({
+            "from_context": prev_context,
+            "to_context": app.state.current_context,
+            "is_sub_context": false,
+        });
+        let _ = tools::execute_hook(&tools, tools::HookPoint::OnContextSwitch, &hook_data, verbose);
     } else if cli.list {
         let contexts = app.list_contexts();
         let current = &app.state.current_context;
@@ -192,8 +218,23 @@ async fn main() -> io::Result<()> {
             Err(e) => return Err(e),
         }
     } else if cli.clear {
+        // Execute pre_clear hook
+        let context = app.get_current_context()?;
+        let hook_data = serde_json::json!({
+            "context_name": context.name,
+            "message_count": context.messages.len(),
+            "summary": context.summary,
+        });
+        let _ = tools::execute_hook(&tools, tools::HookPoint::PreClear, &hook_data, verbose);
+
         app.clear_context()?;
         println!("Context cleared (history saved to transcript)");
+
+        // Execute post_clear hook
+        let hook_data = serde_json::json!({
+            "context_name": app.state.current_context,
+        });
+        let _ = tools::execute_hook(&tools, tools::HookPoint::PostClear, &hook_data, verbose);
     } else if cli.compact {
         api::compact_context_with_llm_manual(&app, verbose).await?;
     } else if let Some((old_name, new_name)) = cli.rename {
@@ -290,6 +331,12 @@ async fn main() -> io::Result<()> {
         }
         api::send_prompt(&app, prompt, &tools, verbose, use_reflection).await?;
     }
+
+    // Execute on_end hook
+    let hook_data = serde_json::json!({
+        "current_context": app.state.current_context,
+    });
+    let _ = tools::execute_hook(&tools, tools::HookPoint::OnEnd, &hook_data, verbose);
 
     Ok(())
 }

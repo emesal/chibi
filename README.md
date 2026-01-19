@@ -236,10 +236,16 @@ print(json.dumps(results))
 
 The `examples/tools/` directory contains ready-to-use tools:
 
+**LLM-Callable Tools:**
 - `read_file` - Read file contents (bash)
 - `fetch_url` - Fetch content from a URL (bash)
 - `run_command` - Execute shell commands (bash)
 - `web_search` - Search the web via DuckDuckGo (Python, requires `uv`)
+- `read_context` - Read another context's state (bash)
+- `agent` - Spawn sub-agents or continue processing (bash)
+
+**Hook Tools:**
+- `hook-inspector` - Detailed hook debugger with JSON data logging (bash)
 
 Copy them to use:
 ```bash
@@ -306,6 +312,156 @@ chibi -v "Read my Cargo.toml"
 # stderr: [Tool: read_file]
 # stdout: <LLM response about the file>
 ```
+
+## Hooks
+
+Chibi supports a hooks system that allows tools to register for lifecycle events. Tools can observe events or modify data as it flows through the system.
+
+### Hook Points
+
+Tools can register for these hook points:
+
+**Session Lifecycle:**
+- `on_start` - When chibi starts (before any processing)
+- `on_end` - When chibi exits (after all processing)
+
+**Message Lifecycle:**
+- `pre_message` - Before sending a prompt to the LLM (can modify prompt)
+- `post_message` - After receiving LLM response (observe only)
+
+**Tool Lifecycle:**
+- `pre_tool` - Before executing a tool (can modify arguments)
+- `post_tool` - After executing a tool (observe only)
+
+**Context Lifecycle:**
+- `on_context_switch` - When switching contexts
+- `pre_clear` - Before clearing context
+- `post_clear` - After clearing context
+- `pre_compact` - Before full compaction
+- `post_compact` - After full compaction
+- `pre_rolling_compact` - Before rolling compaction
+- `post_rolling_compact` - After rolling compaction
+
+### Hook Registration
+
+Tools register for hooks via their `--schema` JSON output by adding a `hooks` array:
+
+```json
+{
+  "name": "my_tool",
+  "description": "Tool description",
+  "parameters": { ... },
+  "hooks": ["on_start", "pre_message", "post_message"]
+}
+```
+
+### Hook Execution
+
+When a hook fires, registered tools are called with:
+- `CHIBI_HOOK` - Hook point name (e.g., "pre_message")
+- `CHIBI_HOOK_DATA` - JSON data about the event
+
+Hook data varies by hook type:
+
+**on_start / on_end:**
+```json
+{"current_context": "default", "verbose": true}
+```
+
+**pre_message:**
+```json
+{"prompt": "user's prompt", "context_name": "default", "summary": "..."}
+```
+
+**post_message:**
+```json
+{"prompt": "...", "response": "...", "context_name": "default"}
+```
+
+**pre_tool / post_tool:**
+```json
+{"tool_name": "read_file", "arguments": {...}, "result": "..."}
+```
+
+**on_context_switch:**
+```json
+{"from_context": "old", "to_context": "new", "is_sub_context": false}
+```
+
+**pre_clear / post_clear:**
+```json
+{"context_name": "default", "message_count": 10, "summary": "..."}
+```
+
+**pre_compact / post_compact / pre_rolling_compact / post_rolling_compact:**
+```json
+{"context_name": "default", "message_count": 20, "summary": "..."}
+```
+
+### Hook Output
+
+- **Modifying hooks** (`pre_*`): Can output JSON to modify data (not yet implemented for all hooks)
+- **Observing hooks** (`post_*`, `on_*`): Output is ignored
+
+### Example Hook Tools
+
+**Simple Logger** (`examples/tools/logger`):
+
+A minimal hook that logs event names to `~/.chibi/hook.log`:
+
+```bash
+#!/bin/bash
+
+if [[ "$1" == "--schema" ]]; then
+  cat <<'EOF'
+{
+  "name": "logger",
+  "description": "Logs lifecycle events",
+  "parameters": {"type": "object", "properties": {}},
+  "hooks": ["on_start", "on_end", "pre_message", "post_message"]
+}
+EOF
+  exit 0
+fi
+
+# Log the event
+echo "[$( date '+%Y-%m-%d %H:%M:%S')] $CHIBI_HOOK" >> ~/.chibi/hook.log
+```
+
+**Hook Inspector** (`examples/tools/hook-inspector`):
+
+A detailed debugging tool that logs all hook events with formatted JSON data to `~/.chibi/hook-inspector.log`. Useful for:
+- Understanding what data is available at each hook point
+- Debugging hook behavior
+- Learning how to build your own hooks
+
+```bash
+# Copy to your tools directory
+cp examples/tools/hook-inspector ~/.chibi/tools/
+
+# Run commands and check the log
+chibi -v -s my-context "hello"
+cat ~/.chibi/hook-inspector.log
+```
+
+Example output:
+```
+[2026-01-19 20:19:45] on_context_switch
+  Data:
+    {
+      "from_context": "default",
+      "is_sub_context": false,
+      "to_context": "my-context"
+    }
+```
+
+### Use Cases
+
+- **Logging**: Record all interactions for debugging or auditing
+- **Metrics**: Track tool usage, message counts, context switches
+- **Integration**: Notify external systems about events
+- **Validation**: Pre-check messages or tool arguments before execution
+- **Backup**: Save state before destructive operations (clear, compact)
 
 ## Reflection (Persistent Memory)
 

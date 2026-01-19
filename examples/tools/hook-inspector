@@ -1,0 +1,64 @@
+#!/bin/bash
+# Hook inspector tool - logs hook events with full data
+#
+# This tool demonstrates how to access hook data and is useful for:
+# - Debugging hook behavior
+# - Understanding what data is available at each hook point
+# - Learning how to build your own hook tools
+#
+# Logs to: ~/.chibi/hook-inspector.log
+
+if [[ "$1" == "--schema" ]]; then
+  cat <<'EOF'
+{
+  "name": "hook_inspector",
+  "description": "Logs all hook events with detailed data for debugging and learning",
+  "parameters": {
+    "type": "object",
+    "properties": {}
+  },
+  "hooks": [
+    "on_start",
+    "on_end",
+    "pre_message",
+    "post_message",
+    "pre_tool",
+    "post_tool",
+    "on_context_switch",
+    "pre_clear",
+    "post_clear",
+    "pre_compact",
+    "post_compact",
+    "pre_rolling_compact",
+    "post_rolling_compact"
+  ]
+}
+EOF
+  exit 0
+fi
+
+# Hook execution - log the event with full details
+LOG_FILE="$HOME/.chibi/hook-inspector.log"
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Get hook type and data from environment
+HOOK="${CHIBI_HOOK}"
+DATA="${CHIBI_HOOK_DATA}"
+
+# Create log directory if it doesn't exist
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# Log the event with formatted data
+echo "[$TIMESTAMP] $HOOK" >> "$LOG_FILE"
+
+# Pretty-print the JSON data (if jq is available)
+if command -v jq &> /dev/null && [[ -n "$DATA" ]]; then
+  echo "  Data:" >> "$LOG_FILE"
+  echo "$DATA" | jq '.' 2>/dev/null | sed 's/^/    /' >> "$LOG_FILE" || echo "    $DATA" >> "$LOG_FILE"
+else
+  [[ -n "$DATA" ]] && echo "  Data: $DATA" >> "$LOG_FILE"
+fi
+
+echo "" >> "$LOG_FILE"
+
+exit 0

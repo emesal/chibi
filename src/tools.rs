@@ -3,6 +3,63 @@ use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+/// Hook points where tools can register to be called
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HookPoint {
+    PreMessage,
+    PostMessage,
+    PreTool,
+    PostTool,
+    OnContextSwitch,
+    PreClear,
+    PostClear,
+    PreCompact,
+    PostCompact,
+    PreRollingCompact,
+    PostRollingCompact,
+    OnStart,
+    OnEnd,
+}
+
+impl HookPoint {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "pre_message" => Some(Self::PreMessage),
+            "post_message" => Some(Self::PostMessage),
+            "pre_tool" => Some(Self::PreTool),
+            "post_tool" => Some(Self::PostTool),
+            "on_context_switch" => Some(Self::OnContextSwitch),
+            "pre_clear" => Some(Self::PreClear),
+            "post_clear" => Some(Self::PostClear),
+            "pre_compact" => Some(Self::PreCompact),
+            "post_compact" => Some(Self::PostCompact),
+            "pre_rolling_compact" => Some(Self::PreRollingCompact),
+            "post_rolling_compact" => Some(Self::PostRollingCompact),
+            "on_start" => Some(Self::OnStart),
+            "on_end" => Some(Self::OnEnd),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PreMessage => "pre_message",
+            Self::PostMessage => "post_message",
+            Self::PreTool => "pre_tool",
+            Self::PostTool => "post_tool",
+            Self::OnContextSwitch => "on_context_switch",
+            Self::PreClear => "pre_clear",
+            Self::PostClear => "post_clear",
+            Self::PreCompact => "pre_compact",
+            Self::PostCompact => "post_compact",
+            Self::PreRollingCompact => "pre_rolling_compact",
+            Self::PostRollingCompact => "post_rolling_compact",
+            Self::OnStart => "on_start",
+            Self::OnEnd => "on_end",
+        }
+    }
+}
+
 /// Represents a tool that can be called by the LLM
 #[derive(Debug, Clone)]
 pub struct Tool {
@@ -10,6 +67,7 @@ pub struct Tool {
     pub description: String,
     pub parameters: serde_json::Value,
     pub path: PathBuf,
+    pub hooks: Vec<HookPoint>,
 }
 
 /// Load all tools from the tools directory by calling each with --schema
@@ -42,7 +100,7 @@ pub fn load_tools(tools_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
         }
 
         // Try to get schema from the tool
-        match get_tool_schema(&path) {
+        match get_tool_schema(&path, verbose) {
             Ok(tool) => tools.push(tool),
             Err(e) => {
                 if verbose {
@@ -56,42 +114,60 @@ pub fn load_tools(tools_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
 }
 
 /// Get tool schema by calling it with --schema
-fn get_tool_schema(path: &PathBuf) -> io::Result<Tool> {
+fn get_tool_schema(path: &PathBuf, verbose: bool) -> io::Result<Tool> {
     let output = Command::new(path)
         .arg("--schema")
         .output()
         .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to execute tool: {}", e)))?;
-    
+
     if !output.status.success() {
         return Err(io::Error::new(
             ErrorKind::Other,
             format!("Tool returned error: {}", String::from_utf8_lossy(&output.stderr)),
         ));
     }
-    
+
     let schema_str = String::from_utf8(output.stdout)
         .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid UTF-8 in schema: {}", e)))?;
-    
+
     let schema: serde_json::Value = serde_json::from_str(&schema_str)
         .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid JSON schema: {}", e)))?;
-    
+
     let name = schema["name"]
         .as_str()
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Schema missing 'name' field"))?
         .to_string();
-    
+
     let description = schema["description"]
         .as_str()
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Schema missing 'description' field"))?
         .to_string();
-    
+
     let parameters = schema["parameters"].clone();
-    
+
+    // Parse hooks array (optional)
+    let hooks = if let Some(hooks_array) = schema["hooks"].as_array() {
+        hooks_array
+            .iter()
+            .filter_map(|v| {
+                let hook_str = v.as_str()?;
+                let hook = HookPoint::from_str(hook_str);
+                if hook.is_none() && verbose {
+                    eprintln!("[WARN] Unknown hook '{}' in tool '{}'", hook_str, name);
+                }
+                hook
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(Tool {
         name,
         description,
         parameters,
         path: path.clone(),
+        hooks,
     })
 }
 
@@ -110,6 +186,69 @@ pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
             })
         })
         .collect()
+}
+
+/// Execute a hook on all tools that registered for it
+/// Returns a vector of (tool_name, result) for tools that returned non-empty output
+pub fn execute_hook(
+    tools: &[Tool],
+    hook: HookPoint,
+    data: &serde_json::Value,
+    verbose: bool,
+) -> io::Result<Vec<(String, serde_json::Value)>> {
+    let mut results = Vec::new();
+
+    for tool in tools {
+        if !tool.hooks.contains(&hook) {
+            continue;
+        }
+
+        if verbose {
+            eprintln!("[Hook {}: {}]", hook.as_str(), tool.name);
+        }
+
+        let output = Command::new(&tool.path)
+            .env("CHIBI_HOOK", hook.as_str())
+            .env("CHIBI_HOOK_DATA", data.to_string())
+            .env_remove("CHIBI_TOOL_ARGS") // Clear tool args to avoid confusion
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .output()
+            .map_err(|e| {
+                io::Error::new(
+                    ErrorKind::Other,
+                    format!("Failed to execute hook {} on {}: {}", hook.as_str(), tool.name, e),
+                )
+            })?;
+
+        if !output.status.success() {
+            if verbose {
+                eprintln!(
+                    "[WARN] Hook {} on {} failed (exit code {:?})",
+                    hook.as_str(),
+                    tool.name,
+                    output.status.code()
+                );
+            }
+            continue;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let trimmed = stdout.trim();
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Try to parse as JSON, otherwise wrap as string
+        let value: serde_json::Value = serde_json::from_str(trimmed).unwrap_or_else(|_| {
+            serde_json::Value::String(trimmed.to_string())
+        });
+
+        results.push((tool.name.clone(), value));
+    }
+
+    Ok(results)
 }
 
 /// Execute a tool with the given arguments (as JSON)
