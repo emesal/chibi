@@ -36,8 +36,6 @@ fi
 # Read args from env var (preferred) or stdin (fallback)
 if [[ -n "$CHIBI_TOOL_ARGS" ]]; then
   args="$CHIBI_TOOL_ARGS"
-else
-  args=$(cat)
 fi
 
 command=$(echo "$args" | jq -r '.command')
