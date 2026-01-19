@@ -17,6 +17,9 @@
 - potential hook points: pre/post message, pre/post tool call, on context switch, on compaction
 - consider: can hooks modify state or just observe?
 
+### Reasoning tokens
+- https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#enable-reasoning-with-default-config
+
 ### JSON transcripts
 - let's make the full transcripts be JSON, to include all detail
 - let's still make txt transcripts because appending is quick
