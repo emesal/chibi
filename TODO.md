@@ -17,6 +17,10 @@
 - potential hook points: pre/post message, pre/post tool call, on context switch, on compaction
 - consider: can hooks modify state or just observe?
 
+### JSON transcripts
+- let's make the full transcripts be JSON, to include all detail
+- let's still make txt transcripts because appending is quick
+
 ### Agentic Workflow Prompts
 - write more example prompts for agentic workflows
 - default prompts unless specified in context dir
