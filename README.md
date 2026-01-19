@@ -6,11 +6,13 @@ Prototype CLI tool for having conversations with AI models via OpenRouter. Chibi
 
 - **Persistent conversations** - State is saved between sessions
 - **Multiple contexts** - Maintain separate conversations for different projects/topics
+- **Per-context system prompts** - Each context can have its own personality/instructions
+- **Tools support** - Extend capabilities with custom scripts the LLM can call
 - **Transcript history** - Full chat history is preserved when contexts are cleared or compacted
 - **Streaming responses** - Real-time output as the AI responds
 - **Context window management** - Warnings when approaching context limits
 - **Context compaction** - Reduce context size while preserving key information
-- **TOML configuration** - Config file with comments support
+- **Unix philosophy** - Only LLM output goes to stdout, making it pipeable
 
 ## Installation
 
@@ -73,7 +75,11 @@ auto_compact_threshold = 80.0
 
 ## System Prompts
 
-Chibi supports custom prompts to define its personality and behavior. Copy the example prompts from `prompts.example/` to `~/.chibi/prompts/`:
+Chibi supports a default system prompt and per-context custom prompts.
+
+### Default Prompt
+
+Copy the example prompts from `prompts.example/` to `~/.chibi/prompts/`:
 
 ```bash
 mkdir -p ~/.chibi/prompts
@@ -82,11 +88,152 @@ cp prompts.example/*.md ~/.chibi/prompts/
 
 **Available prompts:**
 
-- `chibi.md` - System/personality prompt (prepended as a system message to every conversation)
+- `chibi.md` - Default system/personality prompt (used when no context-specific prompt is set)
 - `compaction.md` - Instructions for summarizing conversations when compacting
 - `continuation.md` - Instructions after compaction/summary to guide the LLM's continuation
 
-**Note:** These are optional. If not provided, default prompts will be used.
+### Per-Context Prompts
+
+Each context can have its own system prompt, overriding the default:
+
+```bash
+# View current context's system prompt
+chibi -p
+
+# Set a custom prompt for the current context (from text)
+chibi -e "You are a helpful coding assistant"
+
+# Set a custom prompt from a file
+chibi -e ~/prompts/coder.md
+```
+
+When you set a custom prompt, it's stored in `~/.chibi/contexts/<name>/system_prompt.md`. If no custom prompt is set, the default from `~/.chibi/prompts/chibi.md` is used.
+
+This allows different contexts to have completely different personalities:
+
+```bash
+chibi -s coding
+chibi -e "You are a senior software engineer. Be precise and technical."
+
+chibi -s creative
+chibi -e "You are a creative writing assistant. Be imaginative and playful."
+
+chibi -s default  # Uses the default chibi.md prompt
+```
+
+## Tools
+
+Chibi can call external scripts as tools, allowing the LLM to perform actions like reading files, fetching URLs, or running commands.
+
+### Setting Up Tools
+
+1. Create the tools directory: `mkdir -p ~/.chibi/tools`
+2. Add executable scripts to the directory
+3. Each script must support `--schema` to describe itself
+
+### Tool Script Requirements
+
+Each tool script must:
+
+1. **Be executable** (`chmod +x`)
+2. **Output JSON schema when called with `--schema`**:
+   ```json
+   {
+     "name": "tool_name",
+     "description": "What the tool does",
+     "parameters": {
+       "type": "object",
+       "properties": {
+         "param1": {"type": "string", "description": "..."}
+       },
+       "required": ["param1"]
+     }
+   }
+   ```
+3. **Accept JSON parameters on stdin** when called normally
+4. **Output results to stdout**
+
+### Example Tool (Bash)
+
+```bash
+#!/bin/bash
+# ~/.chibi/tools/read_file
+
+if [[ "$1" == "--schema" ]]; then
+  cat <<'EOF'
+{
+  "name": "read_file",
+  "description": "Read and return the contents of a file",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {"type": "string", "description": "Path to the file"}
+    },
+    "required": ["path"]
+  }
+}
+EOF
+  exit 0
+fi
+
+# Read JSON from stdin and extract path
+path=$(jq -r '.path')
+cat "$path"
+```
+
+### Example Tool (Python)
+
+```python
+#!/usr/bin/env python3
+# ~/.chibi/tools/web_search
+
+import sys
+import json
+
+if len(sys.argv) > 1 and sys.argv[1] == "--schema":
+    print(json.dumps({
+        "name": "web_search",
+        "description": "Search the web",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"}
+            },
+            "required": ["query"]
+        }
+    }))
+    sys.exit(0)
+
+params = json.load(sys.stdin)
+# ... perform search ...
+print(json.dumps(results))
+```
+
+### Example Tools
+
+The `examples/tools/` directory contains ready-to-use tools:
+
+- `read_file` - Read file contents
+- `fetch_url` - Fetch content from a URL
+- `run_command` - Execute shell commands
+- `web_search` - Search the web (requires `duckduckgo-search` Python package)
+
+Copy them to use:
+```bash
+cp examples/tools/* ~/.chibi/tools/
+chmod +x ~/.chibi/tools/*
+```
+
+### Viewing Tool Activity
+
+Use `-v` to see which tools are loaded and when they're called:
+
+```bash
+chibi -v "Read my Cargo.toml"
+# stderr: [Loaded 1 tool(s): read_file]
+# stderr: [Tool: read_file]
+# stdout: <LLM response about the file>
+```
 
 ## Storage Structure
 
@@ -97,16 +244,21 @@ Chibi stores data in `~/.chibi/`:
 ├── config.toml          # Configuration (TOML format)
 ├── state.json           # Current context tracking
 ├── prompts/
-│   ├── chibi.md         # System/personality prompt
+│   ├── chibi.md         # Default system/personality prompt
 │   ├── compaction.md    # Compaction instructions
 │   └── continuation.md  # Post-compaction instructions
+├── tools/               # Executable tool scripts
+│   ├── read_file
+│   ├── fetch_url
+│   └── ...
 └── contexts/
     ├── default/
     │   ├── context.json     # Current conversation state
     │   └── transcript.txt   # Full chat history
     ├── coding/
     │   ├── context.json
-    │   └── transcript.txt
+    │   ├── transcript.txt
+    │   └── system_prompt.md # Custom prompt for this context
     └── my-project/
         ├── context.json
         └── transcript.txt
@@ -114,31 +266,52 @@ Chibi stores data in `~/.chibi/`:
 
 ## Command Reference
 
-Commands are specified with the `--` prefix. When a non-dash argument is encountered, all remaining arguments are treated as a prompt.
-
 | Flag | Description |
 |------|-------------|
-| `--switch <name>` / `-s <name>` | Switch to a different context |
-| `--list` / `-l` | List all contexts |
-| `--which` / `-w` | Show current context name |
-| `--delete <name>` / `-d <name>` | Delete a context |
-| `--clear` / `-C` | Clear current context (saves to transcript) |
-| `--compact` / `-c` | Compact current context (saves to transcript) |
-| `--rename <old> <new>` / `-r <old> <new>` | Rename a context |
-| `--help` / `-h` | Show help message |
-| `--version` / `-v` | Show version |
+| `-s, --switch <name>` | Switch to a different context |
+| `-l, --list` | List all contexts |
+| `-w, --which` | Show current context name |
+| `-d, --delete <name>` | Delete a context |
+| `-C, --clear` | Clear current context (saves to transcript) |
+| `-c, --compact` | Compact current context (saves to transcript) |
+| `-r, --rename <old> <new>` | Rename a context |
+| `-H, --history` | Show recent messages (default: 6) |
+| `-n, --num-messages <N>` | Number of messages to show (0 = all, implies -H) |
+| `-p, --prompt` | Show system prompt for current context |
+| `-e, --set-prompt <arg>` | Set system prompt (file path or literal text) |
+| `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
+| `-h, --help` | Show help message |
+| `-V, --version` | Show version |
 
-**Note:** Full-word commands require `--` prefix. Short flags (`-s`, `-l`, etc.) still work for convenience.
+## Output Philosophy
+
+Chibi follows Unix conventions:
+
+- **stdout**: Only LLM responses (clean, pipeable)
+- **stderr**: Diagnostics (only with `-v`)
+
+This means you can pipe chibi's output:
+
+```bash
+# Pipe to another command
+chibi "Generate a JSON config" | jq .
+
+# Save response to file
+chibi "Write a poem" > poem.txt
+
+# Use in scripts
+result=$(chibi "What is 2+2")
+```
 
 ## Examples
 
-### Starting a New Conversation
+### Basic Usage
 
 ```bash
 # Simple prompt
 chibi What are the benefits of using Rust?
 
-# Multi-line prompt
+# Multi-line prompt (end with . on empty line)
 chibi
 Explain the following concepts:
 - Ownership
@@ -147,108 +320,86 @@ Explain the following concepts:
 .
 ```
 
-### Continuing a Conversation
+### Managing Contexts
 
 ```bash
-# Switch to a context, then ask follow-up
-chibi --switch rust-learning
-chibi Can you give me an example of borrowing?
+# Switch to a context (creates if needed)
+chibi -s rust-learning
 
-# Or combine in one command
-chibi --switch rust-learning give me examples of ownership in action
+# Continue conversation
+chibi Can you give me an example?
 
-# Using short flags
-chibi -s rust-learning give me examples of ownership
-```
-
-### Managing Multiple Projects
-
-```bash
-# Work on different projects in separate contexts
-chibi --switch project-a explain the architecture
-
-chibi --switch project-b help me debug this error
-
-# List all your contexts
-chibi --list
-
-# Using short flags
+# List all contexts
 chibi -l
-```
 
-### When Context Gets Too Large
-
-```bash
-# Check which context you're in
-chibi --which
-
-# Compact to keep only essential messages
-chibi --compact
-
-# Or clear entirely and start fresh (history preserved)
-chibi --clear
-
-# Using short flags
+# Check current context
 chibi -w
-chibi -c
+
+# Clear context (preserves transcript)
 chibi -C
+
+# Delete a context
+chibi -d old-project
 ```
 
-### Auto-Compaction
-
-If `auto_compact = true` in config, chibi will automatically compact the context when it reaches the threshold:
-
-```toml
-# In ~/.chibi/config.toml
-auto_compact = true
-auto_compact_threshold = 80.0  # Compact when 80% of context window is used
-```
-
-### Creating a New Context
+### Using Custom Prompts
 
 ```bash
-# Switching to a non-existent context creates it automatically
-chibi --switch my-new-project
-# Now working in 'my-new-project'
+# Create a coding-focused context
+chibi -s coding
+chibi -e "You are a senior engineer. Be precise and technical."
 
-# Send a prompt (context will be created if it doesn't exist)
-chibi --switch another-context explain something
+# View the prompt
+chibi -p
+
+# Create a creative context
+chibi -s stories
+chibi -e ~/prompts/storyteller.md
 ```
 
-### Custom Prompts
-
-After setting up custom prompts in `~/.chibi/prompts/`, chibi will use them automatically:
-
-- `chibi.md` defines the AI's personality
-- `compaction.md` guides how conversations are summarized
-- `continuation.md` helps the AI continue after compaction
-
-### Prompt Starting with Dash
+### Using Tools
 
 ```bash
-# Force prompt interpretation with --
-chibi -- -this prompt starts with dash
-chibi -- -v is a flag but here it's part of the prompt
+# With verbose mode to see tool calls
+chibi -v "Read my package.json and list the dependencies"
+
+# Tools work silently by default
+chibi "What's in my Cargo.toml?"
+```
+
+### Piping and Scripting
+
+```bash
+# Generate and save
+chibi "Write a haiku about coding" > haiku.txt
+
+# Process output
+chibi "List 5 random numbers as JSON" | jq '.[0]'
+
+# Use in shell scripts
+version=$(chibi "What version of Python should I use for a new project in 2024? Just the number.")
+echo "Using Python $version"
+```
+
+### Prompts Starting with Dash
+
+```bash
+# Use -- to force prompt interpretation
+chibi -- -v is not a flag here, it's part of my prompt
 ```
 
 ## Transcript File Format
 
-The `transcript.txt` file stores the full conversation history:
+The `transcript.txt` file stores conversation history in a format matching the LLM's context:
 
 ```
-=== USER ===
-What is Rust?
+[USER]: What is Rust?
 
-=== ASSISTANT ===
-Rust is a systems programming language...
+[ASSISTANT]: Rust is a systems programming language...
 
-================================
+[USER]: Tell me more about ownership.
 
-=== USER ===
-Tell me more about ownership.
-
-=== ASSISTANT ===
-Ownership is Rust's key feature...
+[ASSISTANT]: Ownership is Rust's key feature...
 ```
 
 ## Error Handling
@@ -257,25 +408,20 @@ Errors are reported to stderr. Common errors include:
 
 - **Config not found**: Create `~/.chibi/config.toml` with required fields
 - **API errors**: Check your API key and network connection
-- **Empty prompt**: Prompt cannot be empty (after trimming whitespace)
-- **Context doesn't exist**: Check context name with `chibi --list` or `chibi -l`
-- **Unknown option**: Make sure full-word commands use `--` prefix (e.g., `--switch` not `switch`)
-- **Compaction errors**: If using auto-compaction or manual compaction, ensure the LLM can generate a summary
+- **Empty prompt**: Prompt cannot be empty
+- **Tool errors**: Check tool scripts are executable and output valid JSON
 
 **Tips:**
-- Contexts are created automatically when you switch to them or send a prompt
-- The `default` context is created on first use
-- Prompts can be changed by editing `~/.chibi/prompts/*.md`
+- Contexts are created automatically when you switch to them
+- Use `-v` to debug tool and API issues
+- The default context is created on first use
 
 ## Building from Source
 
 ```bash
-# Clone and build
 git clone <repository>
 cd chibi
 cargo build --release
-
-# Install to ~/.cargo/bin
 cargo install --path .
 ```
 
@@ -283,9 +429,10 @@ cargo install --path .
 
 - `reqwest` - HTTP client with streaming support
 - `tokio` - Async runtime
-- `serde` - Serialization
+- `serde` / `serde_json` - Serialization
 - `toml` - TOML parsing for config files
 - `dirs-next` - Cross-platform directory handling
+- `futures-util` - Stream utilities
 
 ## License
 
