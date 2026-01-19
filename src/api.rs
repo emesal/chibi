@@ -353,6 +353,10 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
 }
 
 pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose: bool, use_reflection: bool) -> io::Result<()> {
+    send_prompt_with_depth(app, prompt, tools, verbose, use_reflection, 0).await
+}
+
+async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], verbose: bool, use_reflection: bool, recursion_depth: usize) -> io::Result<()> {
     if prompt.trim().is_empty() {
         return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
     }
@@ -672,12 +676,17 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
 
         // Check if we should recurse (continue_processing was called)
         if should_recurse {
+            let new_depth = recursion_depth + 1;
+            if new_depth >= app.config.max_recursion_depth {
+                eprintln!("[Max recursion depth ({}) reached, stopping]", app.config.max_recursion_depth);
+                return Ok(());
+            }
             if verbose {
-                eprintln!("[Continuing processing: {}]", recurse_note);
+                eprintln!("[Continuing processing ({}/{}): {}]", new_depth, app.config.max_recursion_depth, recurse_note);
             }
             // Recursively call send_prompt with the note as the new prompt
             let continue_prompt = format!("[Continuing from previous round]\n\nNote to self: {}", recurse_note);
-            return Box::pin(send_prompt(app, continue_prompt, tools, verbose, use_reflection)).await;
+            return Box::pin(send_prompt_with_depth(app, continue_prompt, tools, verbose, use_reflection, new_depth)).await;
         }
 
         return Ok(());

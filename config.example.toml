@@ -44,3 +44,7 @@ auto_compact_threshold = 80.0
 # The LLM can use the update_reflection tool to store notes, preferences, and insights.
 reflection_enabled = true
 reflection_character_limit = 10000
+
+# Maximum recursion depth for continue_processing tool
+# Prevents runaway agent loops
+max_recursion_depth = 15

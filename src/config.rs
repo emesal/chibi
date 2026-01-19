@@ -22,6 +22,10 @@ fn default_reflection_character_limit() -> usize {
     10000
 }
 
+fn default_max_recursion_depth() -> usize {
+    15
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub api_key: String,
@@ -38,4 +42,6 @@ pub struct Config {
     pub reflection_enabled: bool,
     #[serde(default = "default_reflection_character_limit")]
     pub reflection_character_limit: usize,
+    #[serde(default = "default_max_recursion_depth")]
+    pub max_recursion_depth: usize,
 }

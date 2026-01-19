@@ -80,6 +80,7 @@ reflection_character_limit = 10000
 - `base_url` - Custom API endpoint (default: `https://openrouter.ai/api/v1/chat/completions`)
 - `reflection_enabled` - Enable reflection/memory feature (default: true)
 - `reflection_character_limit` - Max characters for reflection content (default: 10000)
+- `max_recursion_depth` - Limit for `continue_processing` loops (default: 15)
 
 ## System Prompts
 
