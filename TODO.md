@@ -14,3 +14,4 @@
   - tools may register to be called by the binary at hook points
 * write more example prompts for agentic workflows
   - default prompts unles specified in context dir
+* tandem goals+tandem workflow 
