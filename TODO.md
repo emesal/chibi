@@ -1,30 +1,44 @@
-* rolling context window with LLM-guided stripping of the oldest bits
-  - triggered by existing auto_compact_threshold in config.toml (when auto_compact = true)
-  - if auto_compact = false, this never triggers (current behavior preserved)
-  - manual compaction via -c still available for full context compaction
-  - the LLM decides what to drop based on todos and goals (see below)
-  - the LLM is then tasked to integrate the dropped bits into the summary (see below)
-* a summary of the stripped chat history is maintained in the context state
-* agentic workflow
-  - todos as part of context state (this round?)
-  - goals as part of context state (between rounds?)
-  - recurse switch that allows the llm to respond without losing control
-* sub-agents:
-  - use wrapper tool approach (simpler, fits unix philosophy)
-  - sub-agents receive JSON parameters indicating which other contexts they might relate to
-  - read-only context access tool for cross-context state inspection
-  - use cross-context state tool BEFORE reflection (reflection is for personality, not tasks)
-* cross-context task memory?
-  - reflection is personality/preferences, not for coordinating tasks
-  - do we need a separate shared task state? or is read-only context access sufficient?
-  - could be: shared goals file, or a "workspace" concept grouping related contexts
-* `-s new` creates auto-named context
+# Implemented
+
+* [x] stdin prompt support
+  - `echo "prompt here" | chibi -s context`
+  - if both stdin and arg prompt provided, concatenate them
+
+* [x] `-s new` creates auto-named context
   - name format: YYYYMMDD_HHMMSS (underscores, not hyphens)
   - if collision, append _N (e.g., 20240115_143022_2)
   - optional prefix: `-s new:prefix` creates prefix_YYYYMMDD_HHMMSS
   - the literal name "new" is reserved
-* stdin prompt support
-  - `chibi -s context "prompt here"` (current)
-  - `echo "prompt here" | chibi -s context` (new)
-  - if stdin is not a tty, read prompt from stdin
-  - if both stdin and arg prompt provided, concatenate them
+
+* [x] todos and goals as part of context state
+  - stored as separate files in context directory (todos.md, goals.md)
+  - built-in tools: update_todos, update_goals
+  - automatically included in system prompt
+
+* [x] conversation summary maintained in context state
+  - stored in context.json as "summary" field
+  - included in system prompt automatically
+
+* [x] rolling compaction (LLM-guided stripping)
+  - triggered by existing auto_compact_threshold in config.toml (when auto_compact = true)
+  - if auto_compact = false, this never triggers (current behavior preserved)
+  - manual compaction via -c still available for full context compaction
+  - strips oldest half of messages
+  - LLM integrates stripped content into summary, guided by goals/todos
+
+* [x] agentic workflow
+  - built-in continue_processing tool
+  - LLM can recurse without returning control to user
+  - includes "note to self" for next round
+
+* [x] sub-agents via wrapper tool
+  - read_context tool for cross-context state inspection (read-only)
+  - sub-agents can be spawned via external tool that calls chibi
+  - main agent reads sub-agent results via read_context
+
+# Future Ideas
+
+* workspace concept - grouping related contexts
+* shared goals across workspace
+* maximum recursion depth for continue_processing
+* built-in spawn_agent tool (currently requires external script)

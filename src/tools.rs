@@ -199,3 +199,119 @@ pub fn execute_reflection_tool(
 
     Ok(format!("Reflection updated successfully ({} characters).", content.len()))
 }
+
+// --- Todos Tool ---
+
+pub const TODOS_TOOL_NAME: &str = "update_todos";
+
+/// Create the built-in update_todos tool definition for the API
+pub fn todos_tool_to_api_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": TODOS_TOOL_NAME,
+            "description": "Update the todo list for this context. Use this to track tasks you need to complete during this conversation. Todos persist across messages but are specific to this context. Format as markdown checklist.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The todo list content (markdown format, e.g., '- [ ] Task 1\\n- [x] Completed task')"
+                    }
+                },
+                "required": ["content"]
+            }
+        }
+    })
+}
+
+// --- Goals Tool ---
+
+pub const GOALS_TOOL_NAME: &str = "update_goals";
+
+/// Create the built-in update_goals tool definition for the API
+pub fn goals_tool_to_api_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": GOALS_TOOL_NAME,
+            "description": "Update the goals for this context. Goals are high-level objectives that persist between conversation rounds and guide your work. Use goals to track what you're trying to achieve overall.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The goals content (markdown format)"
+                    }
+                },
+                "required": ["content"]
+            }
+        }
+    })
+}
+
+// --- Read Context Tool (cross-context, read-only) ---
+
+pub const READ_CONTEXT_TOOL_NAME: &str = "read_context";
+
+/// Create the built-in read_context tool definition for the API
+pub fn read_context_tool_to_api_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": READ_CONTEXT_TOOL_NAME,
+            "description": "Read the state of another context (read-only). Use this to inspect sub-agents or related contexts. Returns summary, todos, goals, system prompt, and recent messages.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "context_name": {
+                        "type": "string",
+                        "description": "The name of the context to read"
+                    }
+                },
+                "required": ["context_name"]
+            }
+        }
+    })
+}
+
+// --- Continue Processing Tool (recurse/agentic) ---
+
+pub const CONTINUE_TOOL_NAME: &str = "continue_processing";
+
+/// Create the built-in continue_processing tool definition for the API
+pub fn continue_tool_to_api_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": CONTINUE_TOOL_NAME,
+            "description": "Signal that you want to continue processing without returning control to the user. Use this when you have more work to do on your current task. Include a note to yourself about what to do next.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "note": {
+                        "type": "string",
+                        "description": "A note to yourself about what to do next (this will be included in the next round)"
+                    }
+                },
+                "required": ["note"]
+            }
+        }
+    })
+}
+
+/// Result of continue_processing tool - signals the API layer to recurse
+#[derive(Debug)]
+pub struct ContinueSignal {
+    pub note: String,
+}
+
+/// Check if the tool call is for continue_processing and extract the signal
+pub fn check_continue_signal(tool_name: &str, arguments: &serde_json::Value) -> Option<ContinueSignal> {
+    if tool_name == CONTINUE_TOOL_NAME {
+        let note = arguments["note"].as_str().unwrap_or("").to_string();
+        Some(ContinueSignal { note })
+    } else {
+        None
+    }
+}

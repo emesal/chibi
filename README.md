@@ -11,7 +11,10 @@ Prototype CLI tool for having conversations with AI models via OpenRouter. Chibi
 - **Transcript history** - Full chat history is preserved when contexts are cleared or compacted
 - **Streaming responses** - Real-time output as the AI responds
 - **Context window management** - Warnings when approaching context limits
-- **Context compaction** - Reduce context size while preserving key information
+- **Rolling compaction** - Automatically strips oldest messages and integrates them into a summary
+- **Agentic workflow** - Built-in tools for todos, goals, and autonomous processing
+- **Cross-context access** - Read state from other contexts (for sub-agents)
+- **Piped input** - Accept prompts from stdin for scripting
 - **Unix philosophy** - Only LLM output goes to stdout, making it pipeable
 
 ## Installation
@@ -342,6 +345,76 @@ Or disable it permanently in `config.toml` by setting `reflection_enabled = fals
 - Keep notes for future conversations
 - Build up knowledge over time
 
+## Agentic Workflow
+
+Chibi includes built-in tools that enable autonomous, multi-step workflows.
+
+### Built-in Tools
+
+The LLM always has access to these tools (no setup required):
+
+| Tool | Description |
+|------|-------------|
+| `update_todos` | Track tasks for the current conversation (persists in `todos.md`) |
+| `update_goals` | Set high-level objectives (persists in `goals.md`) |
+| `read_context` | Read another context's state (read-only, for sub-agents) |
+| `continue_processing` | Continue working without returning to user |
+| `update_reflection` | Update persistent memory (when reflection is enabled) |
+
+### Todos and Goals
+
+Each context can have its own todos and goals stored in markdown files:
+
+- **Todos** (`~/.chibi/contexts/<name>/todos.md`) - Short-term tasks for the current round
+- **Goals** (`~/.chibi/contexts/<name>/goals.md`) - Long-term objectives that persist
+
+These are automatically included in the system prompt, so the LLM always knows what it's working toward.
+
+### Continue Processing (Autonomous Mode)
+
+The `continue_processing` tool lets the LLM work autonomously:
+
+```
+LLM: "I need to do more work. Let me continue."
+     [calls continue_processing with note: "Check the test results next"]
+
+LLM: (new round) "Continuing from previous round. Note to self: Check the test results next"
+     ... continues working ...
+```
+
+The LLM leaves itself a note about what to do next, then the conversation continues automatically.
+
+### Sub-Agents
+
+Use the wrapper tool approach for sub-agents. Create a tool that spawns chibi with a different context:
+
+```bash
+#!/bin/bash
+# ~/.chibi/tools/spawn_agent
+context_name=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.context')
+task=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.task')
+chibi -s "$context_name" "$task"
+```
+
+The main agent can then use `read_context` to inspect the sub-agent's results:
+
+```
+Main: [calls spawn_agent with context: "research", task: "Find info about X"]
+Main: [calls read_context with context_name: "research"]
+Main: "The sub-agent found: ..."
+```
+
+### Rolling Compaction
+
+When auto-compaction is enabled and the context exceeds the threshold:
+
+1. The oldest half of messages are stripped
+2. The LLM summarizes the stripped content
+3. The summary is integrated with the existing conversation summary
+4. Goals and todos guide what's important to preserve
+
+This happens automatically, keeping the conversation going indefinitely while preserving key context.
+
 ## Storage Structure
 
 Chibi stores data in `~/.chibi/`:
@@ -364,15 +437,21 @@ Chibi stores data in `~/.chibi/`:
 │   └── ...
 └── contexts/
     ├── default/
-    │   ├── context.json     # Current conversation state
-    │   └── transcript.txt   # Full chat history
+    │   ├── context.json     # Current conversation state (includes summary)
+    │   ├── transcript.txt   # Full chat history
+    │   ├── todos.md         # Current todos (auto-created)
+    │   └── goals.md         # Current goals (auto-created)
     ├── coding/
     │   ├── context.json
     │   ├── transcript.txt
+    │   ├── todos.md
+    │   ├── goals.md
     │   └── system_prompt.md # Custom prompt for this context
     └── my-project/
         ├── context.json
-        └── transcript.txt
+        ├── transcript.txt
+        ├── todos.md
+        └── goals.md
 ```
 
 ## Command Reference

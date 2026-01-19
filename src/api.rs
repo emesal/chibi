@@ -7,10 +7,148 @@ use reqwest::{Client, StatusCode};
 use std::io::{self, ErrorKind};
 use tokio::io::{stdout, AsyncWriteExt};
 
-pub async fn compact_context_with_llm(app: &AppState, verbose: bool) -> io::Result<()> {
-    compact_context_with_llm_internal(app, false, verbose).await
+/// Rolling compaction: strips oldest messages and integrates them into the summary
+/// This is triggered automatically when context exceeds threshold
+pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
+    let mut context = app.get_current_context()?;
+
+    // Skip system messages when counting
+    let non_system_count = context.messages.iter().filter(|m| m.role != "system").count();
+
+    if non_system_count <= 4 {
+        // Not enough messages to strip - too few to meaningfully compact
+        return Ok(());
+    }
+
+    // Load goals and todos to guide compaction decisions
+    let goals = app.load_current_goals()?;
+    let todos = app.load_current_todos()?;
+
+    // Strip the oldest half of non-system messages (keeping recent context)
+    let messages_to_strip = non_system_count / 2;
+
+    if verbose {
+        eprintln!("[Rolling compaction: stripping {} oldest messages]", messages_to_strip);
+    }
+
+    // Collect messages to strip (oldest non-system messages)
+    let mut stripped_messages = Vec::new();
+    let mut stripped_count = 0;
+    let mut remaining_messages = Vec::new();
+
+    for m in &context.messages {
+        if m.role == "system" {
+            remaining_messages.push(m.clone());
+        } else if stripped_count < messages_to_strip {
+            stripped_messages.push(m.clone());
+            stripped_count += 1;
+        } else {
+            remaining_messages.push(m.clone());
+        }
+    }
+
+    // Build stripped content text
+    let mut stripped_text = String::new();
+    for m in &stripped_messages {
+        stripped_text.push_str(&format!("[{}]: {}\n\n", m.role.to_uppercase(), m.content));
+    }
+
+    // Build context for the LLM to update the summary
+    let existing_summary = &context.summary;
+
+    let update_prompt = format!(
+        r#"You are updating a conversation summary. Your task is to integrate new content into the existing summary.
+
+EXISTING SUMMARY:
+{}
+
+NEW CONTENT TO INTEGRATE:
+{}
+
+{}{}
+
+Create an updated summary that:
+1. Preserves important information from the existing summary
+2. Integrates key points from the new content
+3. Keeps information relevant to the goals and todos
+4. Is concise but comprehensive
+5. Maintains chronological awareness (what happened earlier vs later)
+
+Output ONLY the updated summary, no preamble."#,
+        if existing_summary.is_empty() { "(No existing summary)" } else { existing_summary },
+        stripped_text,
+        if goals.is_empty() { String::new() } else { format!("\nCURRENT GOALS:\n{}\n", goals) },
+        if todos.is_empty() { String::new() } else { format!("\nCURRENT TODOS:\n{}\n", todos) },
+    );
+
+    let client = Client::new();
+
+    let request_body = serde_json::json!({
+        "model": app.config.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": update_prompt,
+            }
+        ],
+        "stream": false,
+    });
+
+    let response = client
+        .post(&app.config.base_url)
+        .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
+        .header(CONTENT_TYPE, "application/json")
+        .body(request_body.to_string())
+        .send()
+        .await
+        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Rolling compact request failed: {}", e)))?;
+
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(io::Error::new(
+            ErrorKind::Other,
+            format!("Rolling compact API error ({}): {}", status, body),
+        ));
+    }
+
+    let json: serde_json::Value = response.json().await
+        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to parse rolling compact response: {}", e)))?;
+
+    let new_summary = json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    if new_summary.is_empty() {
+        if verbose {
+            eprintln!("[WARN] Rolling compaction returned empty summary, keeping old state");
+        }
+        return Ok(());
+    }
+
+    // Update context with new summary and remaining messages
+    context.summary = new_summary;
+    context.messages = remaining_messages;
+    context.updated_at = now_timestamp();
+
+    // Save updated context
+    app.save_current_context(&context)?;
+
+    if verbose {
+        eprintln!("[Rolling compaction complete: {} messages remaining, summary updated]", context.messages.len());
+    }
+
+    Ok(())
 }
 
+/// Full compaction: summarizes all messages and starts fresh (auto-triggered)
+pub async fn compact_context_with_llm(app: &AppState, verbose: bool) -> io::Result<()> {
+    // Use rolling compaction for auto-triggered compaction
+    rolling_compact(app, verbose).await
+}
+
+/// Full compaction: summarizes all messages and starts fresh (manual -c flag)
 pub async fn compact_context_with_llm_manual(app: &AppState, verbose: bool) -> io::Result<()> {
     compact_context_with_llm_internal(app, true, verbose).await
 }
@@ -139,6 +277,7 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
         messages: Vec::new(),
         created_at: context.created_at,
         updated_at: now_timestamp(),
+        summary: summary.clone(),
     };
 
     // Add system prompt as first message
@@ -241,14 +380,40 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
     } else {
         String::new()
     };
+
+    // Load context-specific state: todos, goals, and summary
+    let todos = app.load_current_todos()?;
+    let goals = app.load_current_goals()?;
+    let summary = &context.summary;
+
     let context_has_system = context.messages.iter().any(|m| m.role == "system");
 
-    // Combine system prompt with reflection prompt
-    let full_system_prompt = if !reflection_prompt.is_empty() {
-        format!("{}\n\n{}", system_prompt, reflection_prompt)
-    } else {
-        system_prompt.clone()
-    };
+    // Build full system prompt with all components
+    let mut full_system_prompt = system_prompt.clone();
+
+    // Add summary if present
+    if !summary.is_empty() {
+        full_system_prompt.push_str("\n\n--- CONVERSATION SUMMARY ---\n");
+        full_system_prompt.push_str(summary);
+    }
+
+    // Add goals if present
+    if !goals.is_empty() {
+        full_system_prompt.push_str("\n\n--- CURRENT GOALS ---\n");
+        full_system_prompt.push_str(&goals);
+    }
+
+    // Add todos if present
+    if !todos.is_empty() {
+        full_system_prompt.push_str("\n\n--- CURRENT TODOS ---\n");
+        full_system_prompt.push_str(&todos);
+    }
+
+    // Add reflection prompt last (personality layer)
+    if !reflection_prompt.is_empty() {
+        full_system_prompt.push_str("\n\n");
+        full_system_prompt.push_str(&reflection_prompt);
+    }
 
     let mut messages: Vec<serde_json::Value> = if !full_system_prompt.is_empty() && !context_has_system {
         vec![serde_json::json!({
@@ -274,8 +439,16 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
         "stream": true,
     });
 
-    // Collect all tools (user-defined + built-in reflection tool if enabled)
+    // Collect all tools (user-defined + built-in tools)
     let mut all_tools = tools::tools_to_api_format(tools);
+
+    // Always add agentic tools (todos, goals, read_context, continue_processing)
+    all_tools.push(tools::todos_tool_to_api_format());
+    all_tools.push(tools::goals_tool_to_api_format());
+    all_tools.push(tools::read_context_tool_to_api_format());
+    all_tools.push(tools::continue_tool_to_api_format());
+
+    // Add reflection tool if enabled
     if use_reflection {
         all_tools.push(tools::reflection_tool_to_api_format());
     }
@@ -283,6 +456,10 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
     if !all_tools.is_empty() {
         request_body["tools"] = serde_json::json!(all_tools);
     }
+
+    // Track if we should recurse (continue_processing was called)
+    let mut should_recurse = false;
+    let mut recurse_note = String::new();
 
     let client = Client::new();
 
@@ -414,6 +591,18 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
                 let args: serde_json::Value = serde_json::from_str(&tc.arguments)
                     .unwrap_or(serde_json::json!({}));
 
+                // Check for continue_processing first (special handling)
+                if let Some(signal) = tools::check_continue_signal(&tc.name, &args) {
+                    should_recurse = true;
+                    recurse_note = signal.note;
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": "Acknowledged. Continuing processing...",
+                    }));
+                    continue;
+                }
+
                 let result = if tc.name == tools::REFLECTION_TOOL_NAME && use_reflection {
                     // Handle built-in reflection tool
                     match tools::execute_reflection_tool(
@@ -423,6 +612,32 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
                     ) {
                         Ok(output) => output,
                         Err(e) => format!("Error: {}", e),
+                    }
+                } else if tc.name == tools::TODOS_TOOL_NAME {
+                    // Handle built-in todos tool
+                    let content = args["content"].as_str().unwrap_or("");
+                    match app.save_current_todos(content) {
+                        Ok(()) => format!("Todos updated ({} characters).", content.len()),
+                        Err(e) => format!("Error saving todos: {}", e),
+                    }
+                } else if tc.name == tools::GOALS_TOOL_NAME {
+                    // Handle built-in goals tool
+                    let content = args["content"].as_str().unwrap_or("");
+                    match app.save_current_goals(content) {
+                        Ok(()) => format!("Goals updated ({} characters).", content.len()),
+                        Err(e) => format!("Error saving goals: {}", e),
+                    }
+                } else if tc.name == tools::READ_CONTEXT_TOOL_NAME {
+                    // Handle built-in read_context tool
+                    let context_name = args["context_name"].as_str().unwrap_or("");
+                    if context_name.is_empty() {
+                        "Error: context_name is required".to_string()
+                    } else {
+                        match app.read_context_state(context_name) {
+                            Ok(state) => serde_json::to_string_pretty(&state)
+                                .unwrap_or_else(|e| format!("Error serializing state: {}", e)),
+                            Err(e) => format!("Error reading context '{}': {}", context_name, e),
+                        }
                     }
                 } else if let Some(tool) = tools::find_tool(tools, &tc.name) {
                     match tools::execute_tool(tool, &args, verbose) {
@@ -445,7 +660,7 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
         }
 
         // No tool calls - we have a final response
-        app.add_message(&mut context, "assistant".to_string(), full_response);
+        app.add_message(&mut context, "assistant".to_string(), full_response.clone());
         app.save_current_context(&context)?;
 
         if app.should_warn(&context.messages) && verbose {
@@ -454,6 +669,17 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
         }
 
         println!();
+
+        // Check if we should recurse (continue_processing was called)
+        if should_recurse {
+            if verbose {
+                eprintln!("[Continuing processing: {}]", recurse_note);
+            }
+            // Recursively call send_prompt with the note as the new prompt
+            let continue_prompt = format!("[Continuing from previous round]\n\nNote to self: {}", recurse_note);
+            return Box::pin(send_prompt(app, continue_prompt, tools, verbose, use_reflection)).await;
+        }
+
         return Ok(());
     }
 }

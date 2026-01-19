@@ -139,6 +139,7 @@ impl AppState {
                         messages: Vec::new(),
                         created_at: now_timestamp(),
                         updated_at: 0,
+                        summary: String::new(),
                     })
                 } else {
                     Err(e)
@@ -175,18 +176,19 @@ impl AppState {
         // Append to transcript before clearing
         self.append_to_transcript(&context)?;
         
-        // Create fresh context
+        // Create fresh context (preserving nothing - full clear)
         let new_context = Context {
             name: self.state.current_context.clone(),
             messages: Vec::new(),
             created_at: now_timestamp(),
             updated_at: 0,
+            summary: String::new(),
         };
-        
+
         self.save_current_context(&new_context)?;
         Ok(())
     }
-    
+
     pub fn delete_context(&self, name: &str) -> io::Result<bool> {
         if self.state.current_context == name {
             return Err(io::Error::new(
@@ -352,4 +354,122 @@ impl AppState {
             Ok(String::new())
         }
     }
+
+    // --- Todos and Goals file helpers ---
+
+    /// Get the path to a context's todos file
+    pub fn todos_file(&self, context_name: &str) -> PathBuf {
+        self.context_dir(context_name).join("todos.md")
+    }
+
+    /// Get the path to a context's goals file
+    pub fn goals_file(&self, context_name: &str) -> PathBuf {
+        self.context_dir(context_name).join("goals.md")
+    }
+
+    /// Load todos for a context (returns empty string if file doesn't exist)
+    pub fn load_todos(&self, context_name: &str) -> io::Result<String> {
+        let path = self.todos_file(context_name);
+        if path.exists() {
+            fs::read_to_string(&path)
+        } else {
+            Ok(String::new())
+        }
+    }
+
+    /// Load goals for a context (returns empty string if file doesn't exist)
+    pub fn load_goals(&self, context_name: &str) -> io::Result<String> {
+        let path = self.goals_file(context_name);
+        if path.exists() {
+            fs::read_to_string(&path)
+        } else {
+            Ok(String::new())
+        }
+    }
+
+    /// Save todos for a context
+    pub fn save_todos(&self, context_name: &str, content: &str) -> io::Result<()> {
+        self.ensure_context_dir(context_name)?;
+        fs::write(self.todos_file(context_name), content)
+    }
+
+    /// Save goals for a context
+    pub fn save_goals(&self, context_name: &str, content: &str) -> io::Result<()> {
+        self.ensure_context_dir(context_name)?;
+        fs::write(self.goals_file(context_name), content)
+    }
+
+    /// Load todos for current context
+    pub fn load_current_todos(&self) -> io::Result<String> {
+        self.load_todos(&self.state.current_context)
+    }
+
+    /// Load goals for current context
+    pub fn load_current_goals(&self) -> io::Result<String> {
+        self.load_goals(&self.state.current_context)
+    }
+
+    /// Save todos for current context
+    pub fn save_current_todos(&self, content: &str) -> io::Result<()> {
+        self.save_todos(&self.state.current_context, content)
+    }
+
+    /// Save goals for current context
+    pub fn save_current_goals(&self, content: &str) -> io::Result<()> {
+        self.save_goals(&self.state.current_context, content)
+    }
+
+    /// Read state files for a named context (for cross-context access tool)
+    /// Returns a struct with all readable state
+    pub fn read_context_state(&self, context_name: &str) -> io::Result<ContextReadState> {
+        // Check if context exists
+        if !self.context_dir(context_name).exists() {
+            return Err(io::Error::new(
+                ErrorKind::NotFound,
+                format!("Context '{}' does not exist", context_name),
+            ));
+        }
+
+        let context = self.load_context(context_name).ok();
+        let todos = self.load_todos(context_name).ok().unwrap_or_default();
+        let goals = self.load_goals(context_name).ok().unwrap_or_default();
+        let system_prompt = {
+            let path = self.context_prompt_file(context_name);
+            if path.exists() {
+                fs::read_to_string(&path).ok()
+            } else {
+                None
+            }
+        };
+
+        Ok(ContextReadState {
+            name: context_name.to_string(),
+            summary: context.as_ref().map(|c| c.summary.clone()).unwrap_or_default(),
+            todos,
+            goals,
+            system_prompt,
+            message_count: context.as_ref().map(|c| c.messages.len()).unwrap_or(0),
+            recent_messages: context.map(|c| {
+                c.messages
+                    .iter()
+                    .rev()
+                    .take(5)
+                    .rev()
+                    .cloned()
+                    .collect()
+            }).unwrap_or_default(),
+        })
+    }
+}
+
+/// Read-only snapshot of a context's state (for cross-context access)
+#[derive(Debug, serde::Serialize)]
+pub struct ContextReadState {
+    pub name: String,
+    pub summary: String,
+    pub todos: String,
+    pub goals: String,
+    pub system_prompt: Option<String>,
+    pub message_count: usize,
+    pub recent_messages: Vec<crate::context::Message>,
 }

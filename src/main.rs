@@ -131,6 +131,7 @@ async fn main() -> io::Result<()> {
                 messages: Vec::new(),
                 created_at: now_timestamp(),
                 updated_at: 0,
+                summary: String::new(),
             };
             app.save_current_context(&new_context)?;
         }
@@ -237,6 +238,7 @@ async fn main() -> io::Result<()> {
                 messages: Vec::new(),
                 created_at: now_timestamp(),
                 updated_at: 0,
+                summary: String::new(),
             };
             app.save_current_context(&new_context)?;
         }
