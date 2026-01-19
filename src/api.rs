@@ -131,7 +131,7 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
     };
 
     // Load system prompt
-    let system_prompt = app.load_prompt("chibi")?;
+    let system_prompt = app.load_system_prompt()?;
 
     // Create new context with system prompt, continuation instructions, and summary
     let mut new_context = Context {
@@ -235,7 +235,7 @@ pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose
     }
 
     // Prepare messages for API
-    let system_prompt = app.load_prompt("chibi")?;
+    let system_prompt = app.load_system_prompt()?;
     let context_has_system = context.messages.iter().any(|m| m.role == "system");
 
     let mut messages: Vec<serde_json::Value> = if !system_prompt.is_empty() && !context_has_system {

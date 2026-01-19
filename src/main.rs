@@ -118,6 +118,26 @@ async fn main() -> io::Result<()> {
             }
             println!("[{}]: {}\n", msg.role.to_uppercase(), msg.content);
         }
+    } else if cli.show_prompt {
+        let prompt = app.load_system_prompt()?;
+        if prompt.is_empty() {
+            println!("(no system prompt set)");
+        } else {
+            print!("{}", prompt);
+            // Add newline if the prompt doesn't end with one
+            if !prompt.ends_with('\n') {
+                println!();
+            }
+        }
+    } else if let Some(arg) = cli.set_prompt {
+        // Check if arg is a file path
+        let content = if std::path::Path::new(&arg).is_file() {
+            std::fs::read_to_string(&arg)?
+        } else {
+            arg
+        };
+        app.set_system_prompt(&content)?;
+        println!("System prompt set for context '{}'", app.state.current_context);
     } else if !cli.prompt.is_empty() {
         let prompt = cli.prompt.join(" ");
         // Create the context if it doesn't exist

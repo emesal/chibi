@@ -308,7 +308,31 @@ impl AppState {
             Ok(String::new())
         }
     }
-    
+
+    /// Get the path to a context's system prompt file
+    pub fn context_prompt_file(&self, context_name: &str) -> PathBuf {
+        self.context_dir(context_name).join("system_prompt.md")
+    }
+
+    /// Load the system prompt for the current context.
+    /// Returns context-specific prompt if it exists, otherwise falls back to default.
+    pub fn load_system_prompt(&self) -> io::Result<String> {
+        let context_prompt_path = self.context_prompt_file(&self.state.current_context);
+        if context_prompt_path.exists() {
+            fs::read_to_string(&context_prompt_path)
+        } else {
+            // Fall back to default prompt
+            self.load_prompt("chibi")
+        }
+    }
+
+    /// Set a custom system prompt for the current context.
+    pub fn set_system_prompt(&self, content: &str) -> io::Result<()> {
+        self.ensure_context_dir(&self.state.current_context)?;
+        let prompt_path = self.context_prompt_file(&self.state.current_context);
+        fs::write(&prompt_path, content)
+    }
+
     pub fn should_auto_compact(&self, context: &Context) -> bool {
         if !self.config.auto_compact {
             return false;
