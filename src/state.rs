@@ -20,6 +20,36 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Create AppState from a custom directory (for testing)
+    #[cfg(test)]
+    pub fn from_dir(chibi_dir: PathBuf, config: Config) -> io::Result<Self> {
+        let contexts_dir = chibi_dir.join("contexts");
+        let prompts_dir = chibi_dir.join("prompts");
+        let tools_dir = chibi_dir.join("tools");
+        let state_path = chibi_dir.join("state.json");
+
+        fs::create_dir_all(&chibi_dir)?;
+        fs::create_dir_all(&contexts_dir)?;
+        fs::create_dir_all(&prompts_dir)?;
+        fs::create_dir_all(&tools_dir)?;
+
+        let state = ContextState {
+            contexts: Vec::new(),
+            current_context: "default".to_string(),
+        };
+
+        Ok(AppState {
+            config,
+            models_config: ModelsConfig::default(),
+            state,
+            state_path,
+            chibi_dir,
+            contexts_dir,
+            prompts_dir,
+            tools_dir,
+        })
+    }
+
     pub fn load() -> io::Result<Self> {
         let home = home_dir().ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Home directory not found"))?;
         let chibi_dir = home.join(".chibi");
@@ -722,4 +752,511 @@ impl AppState {
         Ok(entries)
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Create a test AppState with a temporary directory
+    fn create_test_app() -> (AppState, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config {
+            api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
+            context_window_limit: 8000,
+            warn_threshold_percent: 75.0,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            base_url: "https://test.api/v1".to_string(),
+            reflection_enabled: true,
+            reflection_character_limit: 10000,
+            max_recursion_depth: 15,
+            username: "testuser".to_string(),
+            lock_heartbeat_seconds: 30,
+        };
+        let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+        (app, temp_dir)
+    }
+
+    // === Path construction tests ===
+
+    #[test]
+    fn test_context_dir() {
+        let (app, _temp) = create_test_app();
+        let dir = app.context_dir("mycontext");
+        assert!(dir.ends_with("contexts/mycontext"));
+    }
+
+    #[test]
+    fn test_context_file() {
+        let (app, _temp) = create_test_app();
+        let file = app.context_file("mycontext");
+        assert!(file.ends_with("contexts/mycontext/context.json"));
+    }
+
+    #[test]
+    fn test_todos_file() {
+        let (app, _temp) = create_test_app();
+        let file = app.todos_file("mycontext");
+        assert!(file.ends_with("contexts/mycontext/todos.md"));
+    }
+
+    #[test]
+    fn test_goals_file() {
+        let (app, _temp) = create_test_app();
+        let file = app.goals_file("mycontext");
+        assert!(file.ends_with("contexts/mycontext/goals.md"));
+    }
+
+    #[test]
+    fn test_inbox_file() {
+        let (app, _temp) = create_test_app();
+        let file = app.inbox_file("mycontext");
+        assert!(file.ends_with("contexts/mycontext/inbox.jsonl"));
+    }
+
+    // === Context lifecycle tests ===
+
+    #[test]
+    fn test_get_current_context_creates_default() {
+        let (app, _temp) = create_test_app();
+        let context = app.get_current_context().unwrap();
+        assert_eq!(context.name, "default");
+        assert!(context.messages.is_empty());
+    }
+
+    #[test]
+    fn test_save_and_load_context() {
+        let (app, _temp) = create_test_app();
+
+        let context = Context {
+            name: "test-context".to_string(),
+            messages: vec![
+                Message { role: "user".to_string(), content: "Hello".to_string() },
+                Message { role: "assistant".to_string(), content: "Hi there!".to_string() },
+            ],
+            created_at: 1234567890,
+            updated_at: 1234567891,
+            summary: "Test summary".to_string(),
+        };
+
+        app.save_context(&context).unwrap();
+
+        let loaded = app.load_context("test-context").unwrap();
+        assert_eq!(loaded.name, "test-context");
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].content, "Hello");
+        assert_eq!(loaded.summary, "Test summary");
+    }
+
+    #[test]
+    fn test_add_message() {
+        let (app, _temp) = create_test_app();
+        let mut context = app.get_current_context().unwrap();
+
+        assert!(context.messages.is_empty());
+
+        app.add_message(&mut context, "user".to_string(), "Test message".to_string());
+
+        assert_eq!(context.messages.len(), 1);
+        assert_eq!(context.messages[0].role, "user");
+        assert_eq!(context.messages[0].content, "Test message");
+        assert!(context.updated_at > 0);
+    }
+
+    #[test]
+    fn test_list_contexts_empty() {
+        let (app, _temp) = create_test_app();
+        let contexts = app.list_contexts();
+        assert!(contexts.is_empty());
+    }
+
+    #[test]
+    fn test_list_contexts_with_contexts() {
+        let (app, _temp) = create_test_app();
+
+        // Create some contexts
+        for name in &["alpha", "beta", "gamma"] {
+            let context = Context {
+                name: name.to_string(),
+                messages: vec![],
+                created_at: 0,
+                updated_at: 0,
+                summary: String::new(),
+            };
+            app.save_context(&context).unwrap();
+        }
+
+        let contexts = app.list_contexts();
+        assert_eq!(contexts.len(), 3);
+        // Should be sorted
+        assert_eq!(contexts[0], "alpha");
+        assert_eq!(contexts[1], "beta");
+        assert_eq!(contexts[2], "gamma");
+    }
+
+    #[test]
+    fn test_rename_context() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create a context
+        let context = Context {
+            name: "old-name".to_string(),
+            messages: vec![Message { role: "user".to_string(), content: "Hello".to_string() }],
+            created_at: 0,
+            updated_at: 0,
+            summary: String::new(),
+        };
+        app.save_context(&context).unwrap();
+
+        // Set it as current
+        app.state.current_context = "old-name".to_string();
+
+        // Rename
+        app.rename_context("old-name", "new-name").unwrap();
+
+        // Verify
+        assert!(!app.context_dir("old-name").exists());
+        assert!(app.context_dir("new-name").exists());
+
+        let loaded = app.load_context("new-name").unwrap();
+        assert_eq!(loaded.name, "new-name");
+        assert_eq!(loaded.messages[0].content, "Hello");
+    }
+
+    #[test]
+    fn test_rename_nonexistent_context() {
+        let (app, _temp) = create_test_app();
+        let result = app.rename_context("nonexistent", "new-name");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_rename_to_existing_context() {
+        let (app, _temp) = create_test_app();
+
+        // Create both contexts
+        for name in &["source", "target"] {
+            let context = Context {
+                name: name.to_string(),
+                messages: vec![],
+                created_at: 0,
+                updated_at: 0,
+                summary: String::new(),
+            };
+            app.save_context(&context).unwrap();
+        }
+
+        let result = app.rename_context("source", "target");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn test_delete_context() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create context to delete
+        let context = Context {
+            name: "to-delete".to_string(),
+            messages: vec![],
+            created_at: 0,
+            updated_at: 0,
+            summary: String::new(),
+        };
+        app.save_context(&context).unwrap();
+
+        // Make sure we're not on this context
+        app.state.current_context = "default".to_string();
+
+        // Delete
+        let deleted = app.delete_context("to-delete").unwrap();
+        assert!(deleted);
+        assert!(!app.context_dir("to-delete").exists());
+    }
+
+    #[test]
+    fn test_delete_current_context_fails() {
+        let (app, _temp) = create_test_app();
+
+        // Try to delete current context
+        let result = app.delete_context("default");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Cannot delete the current context"));
+    }
+
+    #[test]
+    fn test_delete_nonexistent_context() {
+        let (app, _temp) = create_test_app();
+        let deleted = app.delete_context("nonexistent").unwrap();
+        assert!(!deleted);
+    }
+
+    // === Token calculation tests ===
+
+    #[test]
+    fn test_calculate_token_count_empty() {
+        let (app, _temp) = create_test_app();
+        let count = app.calculate_token_count(&[]);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_calculate_token_count() {
+        let (app, _temp) = create_test_app();
+        let messages = vec![
+            Message { role: "user".to_string(), content: "Hello world!".to_string() }, // 4+12 = 16 chars / 4 = 4 tokens
+        ];
+        let count = app.calculate_token_count(&messages);
+        assert_eq!(count, 4); // (4 + 12) / 4 = 4
+    }
+
+    #[test]
+    fn test_remaining_tokens() {
+        let (app, _temp) = create_test_app();
+        let messages = vec![
+            Message { role: "user".to_string(), content: "x".repeat(4000) }, // ~1000 tokens
+        ];
+        let remaining = app.remaining_tokens(&messages);
+        // 8000 - ~1000 = ~7000
+        assert!(remaining < 8000);
+        assert!(remaining > 6000);
+    }
+
+    #[test]
+    fn test_should_warn() {
+        let (app, _temp) = create_test_app();
+
+        // Small message shouldn't warn
+        let small_messages = vec![Message { role: "user".to_string(), content: "Hello".to_string() }];
+        assert!(!app.should_warn(&small_messages));
+
+        // Large message should warn (above 75% of 8000 = 6000 tokens = ~24000 chars)
+        let large_messages = vec![Message { role: "user".to_string(), content: "x".repeat(30000) }];
+        assert!(app.should_warn(&large_messages));
+    }
+
+    // === Todos/Goals tests ===
+
+    #[test]
+    fn test_todos_save_and_load() {
+        let (app, _temp) = create_test_app();
+
+        app.save_todos("default", "- [ ] Task 1\n- [x] Task 2").unwrap();
+        let loaded = app.load_todos("default").unwrap();
+        assert_eq!(loaded, "- [ ] Task 1\n- [x] Task 2");
+    }
+
+    #[test]
+    fn test_todos_empty_returns_empty_string() {
+        let (app, _temp) = create_test_app();
+        let loaded = app.load_todos("nonexistent").unwrap();
+        assert_eq!(loaded, "");
+    }
+
+    #[test]
+    fn test_goals_save_and_load() {
+        let (app, _temp) = create_test_app();
+
+        app.save_goals("default", "Build something awesome").unwrap();
+        let loaded = app.load_goals("default").unwrap();
+        assert_eq!(loaded, "Build something awesome");
+    }
+
+    // === Local config tests ===
+
+    #[test]
+    fn test_local_config_default() {
+        let (app, _temp) = create_test_app();
+        let local = app.load_local_config("default").unwrap();
+        assert!(local.model.is_none());
+        assert!(local.username.is_none());
+    }
+
+    #[test]
+    fn test_local_config_save_and_load() {
+        let (app, _temp) = create_test_app();
+
+        let local = LocalConfig {
+            model: Some("custom-model".to_string()),
+            api_key: None,
+            base_url: None,
+            username: Some("alice".to_string()),
+            auto_compact: Some(true),
+            max_recursion_depth: None,
+        };
+
+        app.save_local_config("default", &local).unwrap();
+        let loaded = app.load_local_config("default").unwrap();
+
+        assert_eq!(loaded.model, Some("custom-model".to_string()));
+        assert_eq!(loaded.username, Some("alice".to_string()));
+        assert_eq!(loaded.auto_compact, Some(true));
+    }
+
+    // === Inbox tests ===
+
+    #[test]
+    fn test_inbox_empty() {
+        let (app, _temp) = create_test_app();
+        let entries = app.load_and_clear_current_inbox().unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_inbox_append_and_load() {
+        let (app, _temp) = create_test_app();
+
+        let entry1 = InboxEntry {
+            id: "1".to_string(),
+            timestamp: 1000,
+            from: "sender".to_string(),
+            to: "default".to_string(),
+            content: "Message 1".to_string(),
+        };
+        let entry2 = InboxEntry {
+            id: "2".to_string(),
+            timestamp: 2000,
+            from: "sender".to_string(),
+            to: "default".to_string(),
+            content: "Message 2".to_string(),
+        };
+
+        app.append_to_inbox("default", &entry1).unwrap();
+        app.append_to_inbox("default", &entry2).unwrap();
+
+        let entries = app.load_and_clear_current_inbox().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].content, "Message 1");
+        assert_eq!(entries[1].content, "Message 2");
+
+        // Should be cleared
+        let entries_after = app.load_and_clear_current_inbox().unwrap();
+        assert!(entries_after.is_empty());
+    }
+
+    // === System prompt tests ===
+
+    #[test]
+    fn test_set_and_load_system_prompt() {
+        let (app, _temp) = create_test_app();
+
+        app.set_system_prompt("You are a helpful assistant.").unwrap();
+        let loaded = app.load_system_prompt().unwrap();
+        assert_eq!(loaded, "You are a helpful assistant.");
+    }
+
+    #[test]
+    fn test_system_prompt_fallback() {
+        let (app, _temp) = create_test_app();
+
+        // Write default prompt
+        fs::write(app.prompts_dir.join("chibi.md"), "Default prompt").unwrap();
+
+        // No context-specific prompt, should fall back
+        let loaded = app.load_system_prompt().unwrap();
+        assert_eq!(loaded, "Default prompt");
+    }
+
+    // === Config resolution tests ===
+
+    #[test]
+    fn test_resolve_config_defaults() {
+        let (app, _temp) = create_test_app();
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        assert_eq!(resolved.api_key, "test-key");
+        assert_eq!(resolved.model, "test-model");
+        assert_eq!(resolved.username, "testuser");
+    }
+
+    #[test]
+    fn test_resolve_config_local_override() {
+        let (app, _temp) = create_test_app();
+
+        // Set local config
+        let local = LocalConfig {
+            model: Some("local-model".to_string()),
+            api_key: None,
+            base_url: None,
+            username: Some("localuser".to_string()),
+            auto_compact: Some(true),
+            max_recursion_depth: None,
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+        assert_eq!(resolved.model, "local-model");
+        assert_eq!(resolved.username, "localuser");
+        assert!(resolved.auto_compact);
+    }
+
+    #[test]
+    fn test_resolve_config_cli_override() {
+        let (app, _temp) = create_test_app();
+
+        // Set local config
+        let local = LocalConfig {
+            model: None,
+            api_key: None,
+            base_url: None,
+            username: Some("localuser".to_string()),
+            auto_compact: None,
+            max_recursion_depth: None,
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        // CLI temp username should override local
+        let resolved = app.resolve_config(None, Some("cliuser")).unwrap();
+        assert_eq!(resolved.username, "cliuser");
+    }
+
+    // === Transcript entry creation tests ===
+
+    #[test]
+    fn test_create_user_message_entry() {
+        let (app, _temp) = create_test_app();
+        let entry = app.create_user_message_entry("Hello", "alice");
+
+        assert!(!entry.id.is_empty());
+        assert!(entry.timestamp > 0);
+        assert_eq!(entry.from, "alice");
+        assert_eq!(entry.to, "default");
+        assert_eq!(entry.content, "Hello");
+        assert_eq!(entry.entry_type, "message");
+    }
+
+    #[test]
+    fn test_create_assistant_message_entry() {
+        let (app, _temp) = create_test_app();
+        let entry = app.create_assistant_message_entry("Hi there!");
+
+        assert_eq!(entry.from, "default");
+        assert_eq!(entry.to, "user");
+        assert_eq!(entry.content, "Hi there!");
+        assert_eq!(entry.entry_type, "message");
+    }
+
+    #[test]
+    fn test_create_tool_call_entry() {
+        let (app, _temp) = create_test_app();
+        let entry = app.create_tool_call_entry("web_search", r#"{"query": "rust"}"#);
+
+        assert_eq!(entry.from, "default");
+        assert_eq!(entry.to, "web_search");
+        assert_eq!(entry.entry_type, "tool_call");
+    }
+
+    #[test]
+    fn test_create_tool_result_entry() {
+        let (app, _temp) = create_test_app();
+        let entry = app.create_tool_result_entry("web_search", "Search results...");
+
+        assert_eq!(entry.from, "web_search");
+        assert_eq!(entry.to, "default");
+        assert_eq!(entry.entry_type, "tool_result");
+    }
 }

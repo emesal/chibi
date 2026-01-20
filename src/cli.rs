@@ -24,7 +24,11 @@ pub struct Cli {
 impl Cli {
     pub fn parse() -> io::Result<Self> {
         let args: Vec<String> = std::env::args().collect();
+        Self::parse_from(&args)
+    }
 
+    /// Parse CLI arguments from a slice (testable version)
+    pub fn parse_from(args: &[String]) -> io::Result<Self> {
         let mut switch = None;
         let mut sub_context = None;
         let mut list = false;
@@ -293,5 +297,291 @@ impl Cli {
         println!("  chibi -r old-name new-name");
         println!("  chibi -e prompt.md          Set prompt from file");
         println!("  chibi -e 'You are helpful'  Set prompt directly");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create args from a command string
+    fn args(s: &str) -> Vec<String> {
+        // Always include "chibi" as argv[0]
+        std::iter::once("chibi".to_string())
+            .chain(s.split_whitespace().map(|s| s.to_string()))
+            .collect()
+    }
+
+    // === Basic flag tests ===
+
+    #[test]
+    fn test_no_args() {
+        let cli = Cli::parse_from(&args("")).unwrap();
+        assert!(cli.prompt.is_empty());
+        assert!(!cli.verbose);
+        assert!(!cli.list);
+    }
+
+    #[test]
+    fn test_simple_prompt() {
+        let cli = Cli::parse_from(&args("hello world")).unwrap();
+        assert_eq!(cli.prompt, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_switch_short() {
+        let cli = Cli::parse_from(&args("-s coding")).unwrap();
+        assert_eq!(cli.switch, Some("coding".to_string()));
+    }
+
+    #[test]
+    fn test_switch_long() {
+        let cli = Cli::parse_from(&args("--switch coding")).unwrap();
+        assert_eq!(cli.switch, Some("coding".to_string()));
+    }
+
+    #[test]
+    fn test_sub_context_short() {
+        let cli = Cli::parse_from(&args("-S temp")).unwrap();
+        assert_eq!(cli.sub_context, Some("temp".to_string()));
+    }
+
+    #[test]
+    fn test_sub_context_long() {
+        let cli = Cli::parse_from(&args("--sub-context temp")).unwrap();
+        assert_eq!(cli.sub_context, Some("temp".to_string()));
+    }
+
+    #[test]
+    fn test_list_short() {
+        let cli = Cli::parse_from(&args("-l")).unwrap();
+        assert!(cli.list);
+    }
+
+    #[test]
+    fn test_list_long() {
+        let cli = Cli::parse_from(&args("--list")).unwrap();
+        assert!(cli.list);
+    }
+
+    #[test]
+    fn test_which_short() {
+        let cli = Cli::parse_from(&args("-w")).unwrap();
+        assert!(cli.which);
+    }
+
+    #[test]
+    fn test_delete_short() {
+        let cli = Cli::parse_from(&args("-d old-context")).unwrap();
+        assert_eq!(cli.delete, Some("old-context".to_string()));
+    }
+
+    #[test]
+    fn test_clear_short() {
+        let cli = Cli::parse_from(&args("-C")).unwrap();
+        assert!(cli.clear);
+    }
+
+    #[test]
+    fn test_compact_short() {
+        let cli = Cli::parse_from(&args("-c")).unwrap();
+        assert!(cli.compact);
+    }
+
+    #[test]
+    fn test_rename_short() {
+        let cli = Cli::parse_from(&args("-r old new")).unwrap();
+        assert_eq!(cli.rename, Some(("old".to_string(), "new".to_string())));
+    }
+
+    #[test]
+    fn test_rename_long() {
+        let cli = Cli::parse_from(&args("--rename old new")).unwrap();
+        assert_eq!(cli.rename, Some(("old".to_string(), "new".to_string())));
+    }
+
+    #[test]
+    fn test_history_short() {
+        let cli = Cli::parse_from(&args("-H")).unwrap();
+        assert!(cli.history);
+    }
+
+    #[test]
+    fn test_num_messages() {
+        let cli = Cli::parse_from(&args("-n 10")).unwrap();
+        assert_eq!(cli.num_messages, Some(10));
+        assert!(cli.history); // -n implies -H
+    }
+
+    #[test]
+    fn test_verbose_short() {
+        let cli = Cli::parse_from(&args("-v")).unwrap();
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn test_verbose_long() {
+        let cli = Cli::parse_from(&args("--verbose")).unwrap();
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn test_show_prompt() {
+        let cli = Cli::parse_from(&args("-p")).unwrap();
+        assert!(cli.show_prompt);
+    }
+
+    #[test]
+    fn test_set_prompt() {
+        let cli = Cli::parse_from(&args("-e prompt.md")).unwrap();
+        assert_eq!(cli.set_prompt, Some("prompt.md".to_string()));
+    }
+
+    #[test]
+    fn test_no_reflection() {
+        let cli = Cli::parse_from(&args("-x")).unwrap();
+        assert!(cli.no_reflection);
+    }
+
+    #[test]
+    fn test_username() {
+        let cli = Cli::parse_from(&args("-u alice")).unwrap();
+        assert_eq!(cli.username, Some("alice".to_string()));
+    }
+
+    #[test]
+    fn test_temp_username() {
+        let cli = Cli::parse_from(&args("-U bob")).unwrap();
+        assert_eq!(cli.temp_username, Some("bob".to_string()));
+    }
+
+    // === Double dash handling ===
+
+    #[test]
+    fn test_double_dash_forces_prompt() {
+        let cli = Cli::parse_from(&args("-- -this -looks -like -flags")).unwrap();
+        assert_eq!(cli.prompt, vec!["-this", "-looks", "-like", "-flags"]);
+        assert!(!cli.verbose);
+    }
+
+    #[test]
+    fn test_prompt_after_options() {
+        let cli = Cli::parse_from(&args("-v hello world")).unwrap();
+        assert!(cli.verbose);
+        assert_eq!(cli.prompt, vec!["hello", "world"]);
+    }
+
+    // === Combinable options ===
+
+    #[test]
+    fn test_set_prompt_with_prompt() {
+        let cli = Cli::parse_from(&args("-e prompt.md hello")).unwrap();
+        assert_eq!(cli.set_prompt, Some("prompt.md".to_string()));
+        assert_eq!(cli.prompt, vec!["hello"]);
+    }
+
+    #[test]
+    fn test_verbose_with_prompt() {
+        let cli = Cli::parse_from(&args("-v write code")).unwrap();
+        assert!(cli.verbose);
+        assert_eq!(cli.prompt, vec!["write", "code"]);
+    }
+
+    #[test]
+    fn test_sub_context_with_prompt() {
+        let cli = Cli::parse_from(&args("-S temp hello")).unwrap();
+        assert_eq!(cli.sub_context, Some("temp".to_string()));
+        assert_eq!(cli.prompt, vec!["hello"]);
+    }
+
+    // === Error cases ===
+
+    #[test]
+    fn test_switch_missing_arg() {
+        let result = Cli::parse_from(&args("-s"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("requires an argument"));
+    }
+
+    #[test]
+    fn test_delete_missing_arg() {
+        let result = Cli::parse_from(&args("-d"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rename_missing_args() {
+        let result = Cli::parse_from(&args("-r old"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("requires two arguments"));
+    }
+
+    #[test]
+    fn test_num_messages_invalid() {
+        let result = Cli::parse_from(&args("-n abc"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid number"));
+    }
+
+    #[test]
+    fn test_unknown_option() {
+        let result = Cli::parse_from(&args("--unknown"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown option"));
+    }
+
+    // === Exclusive commands ===
+
+    #[test]
+    fn test_exclusive_commands_error() {
+        let result = Cli::parse_from(&args("-l -w"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Only one command"));
+    }
+
+    #[test]
+    fn test_command_with_prompt_error() {
+        let result = Cli::parse_from(&args("-l hello"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Cannot specify both"));
+    }
+
+    #[test]
+    fn test_switch_is_exclusive() {
+        let result = Cli::parse_from(&args("-s ctx hello"));
+        assert!(result.is_err());
+    }
+
+    // === New context syntax ===
+
+    #[test]
+    fn test_switch_new() {
+        let cli = Cli::parse_from(&args("-s new")).unwrap();
+        assert_eq!(cli.switch, Some("new".to_string()));
+    }
+
+    #[test]
+    fn test_switch_new_with_prefix() {
+        let cli = Cli::parse_from(&args("-s new:myproject")).unwrap();
+        assert_eq!(cli.switch, Some("new:myproject".to_string()));
+    }
+
+    // === Complex combinations ===
+
+    #[test]
+    fn test_multiple_non_exclusive_options() {
+        let cli = Cli::parse_from(&args("-v -x -U test hello world")).unwrap();
+        assert!(cli.verbose);
+        assert!(cli.no_reflection);
+        assert_eq!(cli.temp_username, Some("test".to_string()));
+        assert_eq!(cli.prompt, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_sub_context_with_verbose_and_prompt() {
+        let cli = Cli::parse_from(&args("-S agent -v run task")).unwrap();
+        assert_eq!(cli.sub_context, Some("agent".to_string()));
+        assert!(cli.verbose);
+        assert_eq!(cli.prompt, vec!["run", "task"]);
     }
 }

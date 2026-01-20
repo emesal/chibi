@@ -447,3 +447,192 @@ pub fn send_message_tool_to_api_format() -> serde_json::Value {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // All 17 hook points for testing
+    const ALL_HOOKS: &[(&str, HookPoint)] = &[
+        ("pre_message", HookPoint::PreMessage),
+        ("post_message", HookPoint::PostMessage),
+        ("pre_tool", HookPoint::PreTool),
+        ("post_tool", HookPoint::PostTool),
+        ("on_context_switch", HookPoint::OnContextSwitch),
+        ("pre_clear", HookPoint::PreClear),
+        ("post_clear", HookPoint::PostClear),
+        ("pre_compact", HookPoint::PreCompact),
+        ("post_compact", HookPoint::PostCompact),
+        ("pre_rolling_compact", HookPoint::PreRollingCompact),
+        ("post_rolling_compact", HookPoint::PostRollingCompact),
+        ("on_start", HookPoint::OnStart),
+        ("on_end", HookPoint::OnEnd),
+        ("pre_system_prompt", HookPoint::PreSystemPrompt),
+        ("post_system_prompt", HookPoint::PostSystemPrompt),
+        ("pre_send_message", HookPoint::PreSendMessage),
+        ("post_send_message", HookPoint::PostSendMessage),
+    ];
+
+    #[test]
+    fn test_hook_point_from_str_valid() {
+        for (s, expected) in ALL_HOOKS {
+            let result = HookPoint::from_str(s);
+            assert!(result.is_some(), "from_str failed for '{}'", s);
+            assert_eq!(result.unwrap(), *expected);
+        }
+    }
+
+    #[test]
+    fn test_hook_point_from_str_invalid() {
+        assert!(HookPoint::from_str("").is_none());
+        assert!(HookPoint::from_str("unknown").is_none());
+        assert!(HookPoint::from_str("PreMessage").is_none()); // wrong case
+        assert!(HookPoint::from_str("pre-message").is_none()); // wrong separator
+    }
+
+    #[test]
+    fn test_hook_point_as_str() {
+        for (expected_str, hook) in ALL_HOOKS {
+            assert_eq!(hook.as_str(), *expected_str);
+        }
+    }
+
+    #[test]
+    fn test_hook_point_round_trip() {
+        for (s, _) in ALL_HOOKS {
+            let hook = HookPoint::from_str(s).unwrap();
+            assert_eq!(hook.as_str(), *s);
+        }
+    }
+
+    #[test]
+    fn test_tool_struct() {
+        let tool = Tool {
+            name: "test_tool".to_string(),
+            description: "A test tool".to_string(),
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+            path: PathBuf::from("/usr/bin/test"),
+            hooks: vec![HookPoint::OnStart, HookPoint::OnEnd],
+        };
+        assert_eq!(tool.name, "test_tool");
+        assert_eq!(tool.hooks.len(), 2);
+        assert!(tool.hooks.contains(&HookPoint::OnStart));
+    }
+
+    #[test]
+    fn test_tools_to_api_format() {
+        let tools = vec![
+            Tool {
+                name: "tool_one".to_string(),
+                description: "First tool".to_string(),
+                parameters: serde_json::json!({"type": "object", "properties": {"arg": {"type": "string"}}}),
+                path: PathBuf::from("/bin/one"),
+                hooks: vec![],
+            },
+            Tool {
+                name: "tool_two".to_string(),
+                description: "Second tool".to_string(),
+                parameters: serde_json::json!({"type": "object", "properties": {}}),
+                path: PathBuf::from("/bin/two"),
+                hooks: vec![HookPoint::PreTool],
+            },
+        ];
+
+        let api_format = tools_to_api_format(&tools);
+        assert_eq!(api_format.len(), 2);
+
+        // Check first tool
+        assert_eq!(api_format[0]["type"], "function");
+        assert_eq!(api_format[0]["function"]["name"], "tool_one");
+        assert_eq!(api_format[0]["function"]["description"], "First tool");
+
+        // Check second tool
+        assert_eq!(api_format[1]["function"]["name"], "tool_two");
+    }
+
+    #[test]
+    fn test_find_tool() {
+        let tools = vec![
+            Tool {
+                name: "alpha".to_string(),
+                description: "Alpha tool".to_string(),
+                parameters: serde_json::json!({}),
+                path: PathBuf::from("/bin/alpha"),
+                hooks: vec![],
+            },
+            Tool {
+                name: "beta".to_string(),
+                description: "Beta tool".to_string(),
+                parameters: serde_json::json!({}),
+                path: PathBuf::from("/bin/beta"),
+                hooks: vec![],
+            },
+        ];
+
+        assert!(find_tool(&tools, "alpha").is_some());
+        assert_eq!(find_tool(&tools, "alpha").unwrap().name, "alpha");
+
+        assert!(find_tool(&tools, "beta").is_some());
+        assert!(find_tool(&tools, "gamma").is_none());
+        assert!(find_tool(&tools, "").is_none());
+    }
+
+    #[test]
+    fn test_reflection_tool_api_format() {
+        let tool = reflection_tool_to_api_format();
+        assert_eq!(tool["type"], "function");
+        assert_eq!(tool["function"]["name"], REFLECTION_TOOL_NAME);
+        assert!(tool["function"]["description"].as_str().unwrap().contains("reflection"));
+        assert!(tool["function"]["parameters"]["required"].as_array().unwrap().contains(&serde_json::json!("content")));
+    }
+
+    #[test]
+    fn test_todos_tool_api_format() {
+        let tool = todos_tool_to_api_format();
+        assert_eq!(tool["function"]["name"], TODOS_TOOL_NAME);
+        assert!(tool["function"]["description"].as_str().unwrap().contains("todo"));
+    }
+
+    #[test]
+    fn test_goals_tool_api_format() {
+        let tool = goals_tool_to_api_format();
+        assert_eq!(tool["function"]["name"], GOALS_TOOL_NAME);
+        assert!(tool["function"]["description"].as_str().unwrap().contains("goal"));
+    }
+
+    #[test]
+    fn test_send_message_tool_api_format() {
+        let tool = send_message_tool_to_api_format();
+        assert_eq!(tool["function"]["name"], SEND_MESSAGE_TOOL_NAME);
+        assert!(tool["function"]["description"].as_str().unwrap().contains("message"));
+        let required = tool["function"]["parameters"]["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("to")));
+        assert!(required.contains(&serde_json::json!("content")));
+    }
+
+    #[test]
+    fn test_check_recurse_signal() {
+        // With recurse tool and note
+        let args = serde_json::json!({"note": "test note"});
+        let result = check_recurse_signal(RECURSE_TOOL_NAME, &args);
+        assert_eq!(result, Some("test note".to_string()));
+
+        // With recurse tool but no note
+        let args_empty = serde_json::json!({});
+        let result_empty = check_recurse_signal(RECURSE_TOOL_NAME, &args_empty);
+        assert_eq!(result_empty, Some("".to_string()));
+
+        // With different tool
+        let result_other = check_recurse_signal("other_tool", &args);
+        assert!(result_other.is_none());
+    }
+
+    #[test]
+    fn test_tool_constants() {
+        assert_eq!(REFLECTION_TOOL_NAME, "update_reflection");
+        assert_eq!(TODOS_TOOL_NAME, "update_todos");
+        assert_eq!(GOALS_TOOL_NAME, "update_goals");
+        assert_eq!(RECURSE_TOOL_NAME, "recurse");
+        assert_eq!(SEND_MESSAGE_TOOL_NAME, "send_message");
+    }
+}

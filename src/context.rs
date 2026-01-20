@@ -89,3 +89,111 @@ pub struct InboxEntry {
     pub to: String,
     pub content: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_context_names() {
+        assert!(is_valid_context_name("default"));
+        assert!(is_valid_context_name("my-context"));
+        assert!(is_valid_context_name("my_context"));
+        assert!(is_valid_context_name("MyContext123"));
+        assert!(is_valid_context_name("a"));
+        assert!(is_valid_context_name("context-with-dashes"));
+        assert!(is_valid_context_name("context_with_underscores"));
+        assert!(is_valid_context_name("MixedCase-And_123"));
+    }
+
+    #[test]
+    fn test_invalid_context_names() {
+        assert!(!is_valid_context_name(""));
+        assert!(!is_valid_context_name("has spaces"));
+        assert!(!is_valid_context_name("has.dots"));
+        assert!(!is_valid_context_name("has/slash"));
+        assert!(!is_valid_context_name("has\\backslash"));
+        assert!(!is_valid_context_name("has:colon"));
+        assert!(!is_valid_context_name("emoji🎉"));
+        assert!(!is_valid_context_name("café"));
+        assert!(!is_valid_context_name("日本語"));
+    }
+
+    #[test]
+    fn test_validate_context_name_ok() {
+        assert!(validate_context_name("valid-name").is_ok());
+        assert!(validate_context_name("another_valid_123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_context_name_error() {
+        let result = validate_context_name("invalid name");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("Invalid context name"));
+    }
+
+    #[test]
+    fn test_now_timestamp_is_reasonable() {
+        let ts = now_timestamp();
+        // Should be after Jan 1, 2024 (1704067200)
+        assert!(ts > 1704067200);
+        // Should be before Jan 1, 2100 (4102444800)
+        assert!(ts < 4102444800);
+    }
+
+    #[test]
+    fn test_context_state_switch_valid() {
+        let mut state = ContextState {
+            contexts: vec!["default".to_string()],
+            current_context: "default".to_string(),
+        };
+        assert!(state.switch_context("new-context".to_string()).is_ok());
+        assert_eq!(state.current_context, "new-context");
+    }
+
+    #[test]
+    fn test_context_state_switch_invalid() {
+        let mut state = ContextState {
+            contexts: vec!["default".to_string()],
+            current_context: "default".to_string(),
+        };
+        assert!(state.switch_context("invalid name".to_string()).is_err());
+        // Should not have changed
+        assert_eq!(state.current_context, "default");
+    }
+
+    #[test]
+    fn test_message_serialization() {
+        let msg = Message {
+            role: "user".to_string(),
+            content: "Hello, world!".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("user"));
+        assert!(json.contains("Hello, world!"));
+
+        let parsed: Message = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.role, "user");
+        assert_eq!(parsed.content, "Hello, world!");
+    }
+
+    #[test]
+    fn test_inbox_entry_serialization() {
+        let entry = InboxEntry {
+            id: "test-id".to_string(),
+            timestamp: 1234567890,
+            from: "context-a".to_string(),
+            to: "context-b".to_string(),
+            content: "Test message".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: InboxEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "test-id");
+        assert_eq!(parsed.timestamp, 1234567890);
+        assert_eq!(parsed.from, "context-a");
+        assert_eq!(parsed.to, "context-b");
+        assert_eq!(parsed.content, "Test message");
+    }
+}
