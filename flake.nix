@@ -27,9 +27,6 @@
 
           buildInputs = [
             pkgs.openssl
-          ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-            pkgs.apple-sdk.frameworks.Security
-            pkgs.apple-sdk.frameworks.SystemConfiguration
           ];
 
           meta = {
