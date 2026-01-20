@@ -246,7 +246,7 @@ impl AppState {
     }
 
     pub fn add_message(&self, context: &mut Context, role: String, content: String) {
-        context.messages.push(Message { role, content });
+        context.messages.push(Message::new(role, content));
         context.updated_at = now_timestamp();
     }
 
@@ -806,6 +806,7 @@ mod tests {
             max_recursion_depth: 15,
             username: "testuser".to_string(),
             lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)
@@ -865,14 +866,8 @@ mod tests {
         let context = Context {
             name: "test-context".to_string(),
             messages: vec![
-                Message {
-                    role: "user".to_string(),
-                    content: "Hello".to_string(),
-                },
-                Message {
-                    role: "assistant".to_string(),
-                    content: "Hi there!".to_string(),
-                },
+                Message::new("user", "Hello"),
+                Message::new("assistant", "Hi there!"),
             ],
             created_at: 1234567890,
             updated_at: 1234567891,
@@ -941,10 +936,7 @@ mod tests {
         // Create a context
         let context = Context {
             name: "old-name".to_string(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: "Hello".to_string(),
-            }],
+            messages: vec![Message::new("user", "Hello")],
             created_at: 0,
             updated_at: 0,
             summary: String::new(),
@@ -1053,10 +1045,7 @@ mod tests {
     fn test_calculate_token_count() {
         let (app, _temp) = create_test_app();
         let messages = vec![
-            Message {
-                role: "user".to_string(),
-                content: "Hello world!".to_string(),
-            }, // 4+12 = 16 chars / 4 = 4 tokens
+            Message::new("user", "Hello world!"), // 4+12 = 16 chars / 4 = 4 tokens
         ];
         let count = app.calculate_token_count(&messages);
         assert_eq!(count, 4); // (4 + 12) / 4 = 4
@@ -1066,10 +1055,7 @@ mod tests {
     fn test_remaining_tokens() {
         let (app, _temp) = create_test_app();
         let messages = vec![
-            Message {
-                role: "user".to_string(),
-                content: "x".repeat(4000),
-            }, // ~1000 tokens
+            Message::new("user", "x".repeat(4000)), // ~1000 tokens
         ];
         let remaining = app.remaining_tokens(&messages);
         // 8000 - ~1000 = ~7000
@@ -1082,17 +1068,11 @@ mod tests {
         let (app, _temp) = create_test_app();
 
         // Small message shouldn't warn
-        let small_messages = vec![Message {
-            role: "user".to_string(),
-            content: "Hello".to_string(),
-        }];
+        let small_messages = vec![Message::new("user", "Hello")];
         assert!(!app.should_warn(&small_messages));
 
         // Large message should warn (above 75% of 8000 = 6000 tokens = ~24000 chars)
-        let large_messages = vec![Message {
-            role: "user".to_string(),
-            content: "x".repeat(30000),
-        }];
+        let large_messages = vec![Message::new("user", "x".repeat(30000))];
         assert!(app.should_warn(&large_messages));
     }
 

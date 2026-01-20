@@ -35,6 +35,10 @@ fn default_username() -> String {
     "user".to_string()
 }
 
+fn default_rolling_compact_drop_percentage() -> f32 {
+    50.0
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -58,6 +62,8 @@ pub struct Config {
     pub username: String,
     #[serde(default = "default_lock_heartbeat_seconds")]
     pub lock_heartbeat_seconds: u64,
+    #[serde(default = "default_rolling_compact_drop_percentage")]
+    pub rolling_compact_drop_percentage: f32,
 }
 
 /// Per-context config from ~/.chibi/contexts/<name>/local.toml
@@ -141,6 +147,11 @@ mod tests {
     #[test]
     fn test_default_username() {
         assert_eq!(default_username(), "user");
+    }
+
+    #[test]
+    fn test_default_rolling_compact_drop_percentage() {
+        assert_eq!(default_rolling_compact_drop_percentage(), 50.0);
     }
 
     #[test]

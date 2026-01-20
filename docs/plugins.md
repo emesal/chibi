@@ -102,8 +102,8 @@ Plugins can register for lifecycle hooks by including a `hooks` array in the sch
 | `post_clear` | After clearing context | `{context_name}` |
 | `pre_compact` | Before manual compaction | `{context_name, message_count}` |
 | `post_compact` | After manual compaction | `{context_name}` |
-| `pre_rolling_compact` | Before auto-compaction | `{context_name, token_count}` |
-| `post_rolling_compact` | After auto-compaction | `{context_name}` |
+| `pre_rolling_compact` | Before auto-compaction | `{context_name, message_count, non_system_count, summary}` |
+| `post_rolling_compact` | After auto-compaction | `{context_name, message_count, messages_archived, summary}` |
 | `pre_system_prompt` | Building system prompt | `{context_name}` |
 | `post_system_prompt` | After system prompt built | `{context_name}` |
 | `pre_send_message` | Before inter-context message | `{from_context, to_context, content}` |

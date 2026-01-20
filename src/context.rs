@@ -1,11 +1,30 @@
 use serde::{Deserialize, Serialize};
 use std::io::{self, ErrorKind};
 use std::path::PathBuf;
+use uuid::Uuid;
+
+/// Generate a new UUID for message IDs (used as serde default)
+fn generate_uuid() -> String {
+    Uuid::new_v4().to_string()
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
+    #[serde(default = "generate_uuid")]
+    pub id: String,
     pub role: String,
     pub content: String,
+}
+
+impl Message {
+    /// Create a new message with auto-generated ID
+    pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            id: generate_uuid(),
+            role: role.into(),
+            content: content.into(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -172,16 +191,15 @@ mod tests {
 
     #[test]
     fn test_message_serialization() {
-        let msg = Message {
-            role: "user".to_string(),
-            content: "Hello, world!".to_string(),
-        };
+        let msg = Message::new("user", "Hello, world!");
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("user"));
         assert!(json.contains("Hello, world!"));
+        assert!(json.contains("id")); // Should have auto-generated id
 
         let parsed: Message = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.role, "user");
+        assert!(!parsed.id.is_empty()); // ID should be present
         assert_eq!(parsed.content, "Hello, world!");
     }
 

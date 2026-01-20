@@ -80,6 +80,7 @@ reflection_character_limit = 10000
 **Optional fields:**
 - `auto_compact` - Enable automatic compaction (default: false)
 - `auto_compact_threshold` - Percentage at which to auto-compact (default: 80.0)
+- `rolling_compact_drop_percentage` - Target percentage of messages to archive during compaction (default: 50.0)
 - `base_url` - Custom API endpoint (default: `https://openrouter.ai/api/v1/chat/completions`)
 - `reflection_enabled` - Enable reflection/memory feature (default: true)
 - `reflection_character_limit` - Max characters for reflection content (default: 10000)
@@ -601,10 +602,13 @@ The key difference between `-s` and `-S`:
 
 When auto-compaction is enabled and the context exceeds the threshold:
 
-1. The oldest half of messages are stripped
-2. The LLM summarizes the stripped content
+1. The LLM analyzes all messages and decides which to archive based on:
+   - Current goals and todos (keeps relevant messages)
+   - Message recency (prefers keeping recent context)
+   - Content importance (preserves key decisions and information)
+2. Selected messages are archived and summarized
 3. The summary is integrated with the existing conversation summary
-4. Goals and todos guide what's important to preserve
+4. If the LLM decision fails, falls back to archiving the oldest N% (configured by `rolling_compact_drop_percentage`, default 50%)
 
 This happens automatically, keeping the conversation going indefinitely while preserving key context.
 

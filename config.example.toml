@@ -28,6 +28,12 @@ warn_threshold_percent = 80.0
 auto_compact = false
 auto_compact_threshold = 80.0
 
+# Rolling compaction drop percentage (0.0-100.0)
+# During auto-compaction, the LLM decides which messages to archive based on
+# current goals/todos. This percentage is the target amount to drop, used as
+# guidance for the LLM and as fallback if LLM decision fails.
+rolling_compact_drop_percentage = 50.0
+
 # Optional: Custom API base URL
 # Default: https://openrouter.ai/api/v1/chat/completions
 # base_url = "https://openrouter.ai/api/v1/chat/completions"

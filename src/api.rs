@@ -9,19 +9,20 @@ use std::io::{self, ErrorKind};
 use tokio::io::{AsyncWriteExt, stdout};
 use uuid::Uuid;
 
-/// Rolling compaction: strips oldest messages and integrates them into the summary
+/// Rolling compaction: strips messages and integrates them into the summary
 /// This is triggered automatically when context exceeds threshold
+/// The LLM decides which messages to drop based on goals/todos, with fallback to percentage
 pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
     let mut context = app.get_current_context()?;
 
     // Skip system messages when counting
-    let non_system_count = context
+    let non_system_messages: Vec<_> = context
         .messages
         .iter()
         .filter(|m| m.role != "system")
-        .count();
+        .collect();
 
-    if non_system_count <= 4 {
+    if non_system_messages.len() <= 4 {
         // Not enough messages to strip - too few to meaningfully compact
         return Ok(());
     }
@@ -31,7 +32,7 @@ pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
     let hook_data = serde_json::json!({
         "context_name": context.name,
         "message_count": context.messages.len(),
-        "non_system_count": non_system_count,
+        "non_system_count": non_system_messages.len(),
         "summary": context.summary,
     });
     let _ = tools::execute_hook(
@@ -45,64 +46,181 @@ pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
     let goals = app.load_current_goals()?;
     let todos = app.load_current_todos()?;
 
-    // Strip the oldest half of non-system messages (keeping recent context)
-    let messages_to_strip = non_system_count / 2;
+    // Build message list in transcript format for LLM to analyze
+    let messages_for_llm: Vec<serde_json::Value> = non_system_messages
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "role": m.role,
+                "content": if m.content.len() > 500 {
+                    format!("{}... [truncated]", &m.content[..500])
+                } else {
+                    m.content.clone()
+                }
+            })
+        })
+        .collect();
 
-    if verbose {
-        eprintln!(
-            "[Rolling compaction: stripping {} oldest messages]",
-            messages_to_strip
-        );
-    }
+    // Calculate target drop count based on config percentage
+    let drop_percentage = app.config.rolling_compact_drop_percentage;
+    let target_drop_count =
+        ((non_system_messages.len() as f32 * drop_percentage / 100.0).round() as usize).max(1);
 
-    // Collect messages to strip (oldest non-system messages)
-    let mut stripped_messages = Vec::new();
-    let mut stripped_count = 0;
-    let mut remaining_messages = Vec::new();
+    // Ask LLM which messages to drop
+    let decision_prompt = format!(
+        r#"You are deciding which conversation messages to archive during context compaction.
 
-    for m in &context.messages {
-        if m.role == "system" {
-            remaining_messages.push(m.clone());
-        } else if stripped_count < messages_to_strip {
-            stripped_messages.push(m.clone());
-            stripped_count += 1;
+CURRENT MESSAGES (oldest first):
+{}
+
+{}{}
+EXISTING SUMMARY:
+{}
+
+Your task: Select approximately {} messages to archive (move to summary). 
+Consider:
+1. Keep messages directly relevant to current goals and todos
+2. Keep recent messages (they provide immediate context)
+3. Archive older messages that have been superseded or are less relevant
+4. Preserve messages containing important decisions or key information
+
+Return ONLY a JSON array of message IDs to archive, e.g.: ["id1", "id2", "id3"]
+No explanation, just the JSON array."#,
+        serde_json::to_string_pretty(&messages_for_llm).unwrap_or_default(),
+        if goals.is_empty() {
+            String::new()
         } else {
-            remaining_messages.push(m.clone());
+            format!("CURRENT GOALS:\n{}\n\n", goals)
+        },
+        if todos.is_empty() {
+            String::new()
+        } else {
+            format!("CURRENT TODOS:\n{}\n\n", todos)
+        },
+        if context.summary.is_empty() {
+            "(No existing summary)"
+        } else {
+            &context.summary
+        },
+        target_drop_count,
+    );
+
+    let client = Client::new();
+
+    // First LLM call: decide what to drop
+    let decision_request = serde_json::json!({
+        "model": app.config.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": decision_prompt,
+            }
+        ],
+        "stream": false,
+    });
+
+    let ids_to_drop: Vec<String> = match client
+        .post(&app.config.base_url)
+        .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
+        .header(CONTENT_TYPE, "application/json")
+        .body(decision_request.to_string())
+        .send()
+        .await
+    {
+        Ok(response) if response.status() == StatusCode::OK => {
+            match response.json::<serde_json::Value>().await {
+                Ok(json) => {
+                    let content = json["choices"][0]["message"]["content"]
+                        .as_str()
+                        .unwrap_or("[]");
+                    // Try to parse as JSON array
+                    serde_json::from_str(content).unwrap_or_else(|_| {
+                        // Try to extract JSON array from response if wrapped in other text
+                        if let Some(start) = content.find('[') {
+                            if let Some(end) = content.rfind(']') {
+                                serde_json::from_str(&content[start..=end]).unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            }
+                        } else {
+                            Vec::new()
+                        }
+                    })
+                }
+                Err(_) => Vec::new(),
+            }
         }
+        _ => Vec::new(),
+    };
+
+    // Determine which messages to actually drop
+    let messages_to_drop: Vec<&Message> = if ids_to_drop.is_empty() {
+        // Fallback: drop oldest N messages based on percentage
+        if verbose {
+            eprintln!(
+                "[Rolling compaction: LLM decision failed, falling back to dropping oldest {}%]",
+                drop_percentage
+            );
+        }
+        non_system_messages
+            .iter()
+            .take(target_drop_count)
+            .copied()
+            .collect()
+    } else {
+        if verbose {
+            eprintln!(
+                "[Rolling compaction: LLM selected {} messages to archive]",
+                ids_to_drop.len()
+            );
+        }
+        non_system_messages
+            .iter()
+            .filter(|m| ids_to_drop.contains(&m.id))
+            .copied()
+            .collect()
+    };
+
+    if messages_to_drop.is_empty() {
+        if verbose {
+            eprintln!("[Rolling compaction: no messages to drop]");
+        }
+        return Ok(());
     }
 
-    // Build stripped content text
+    // Build text of messages to summarize
     let mut stripped_text = String::new();
-    for m in &stripped_messages {
+    for m in &messages_to_drop {
         stripped_text.push_str(&format!("[{}]: {}\n\n", m.role.to_uppercase(), m.content));
     }
 
-    // Build context for the LLM to update the summary
-    let existing_summary = &context.summary;
+    // Collect IDs of messages to drop for filtering
+    let drop_ids: std::collections::HashSet<_> = messages_to_drop.iter().map(|m| &m.id).collect();
 
+    // Second LLM call: update summary with dropped content
     let update_prompt = format!(
-        r#"You are updating a conversation summary. Your task is to integrate new content into the existing summary.
+        r#"You are updating a conversation summary. Your task is to integrate archived content into the existing summary.
 
 EXISTING SUMMARY:
 {}
 
-NEW CONTENT TO INTEGRATE:
+CONTENT BEING ARCHIVED:
 {}
 
 {}{}
-
 Create an updated summary that:
 1. Preserves important information from the existing summary
-2. Integrates key points from the new content
+2. Integrates key points from the archived content
 3. Keeps information relevant to the goals and todos
 4. Is concise but comprehensive
 5. Maintains chronological awareness (what happened earlier vs later)
 
 Output ONLY the updated summary, no preamble."#,
-        if existing_summary.is_empty() {
+        if context.summary.is_empty() {
             "(No existing summary)"
         } else {
-            existing_summary
+            &context.summary
         },
         stripped_text,
         if goals.is_empty() {
@@ -117,9 +235,7 @@ Output ONLY the updated summary, no preamble."#,
         },
     );
 
-    let client = Client::new();
-
-    let request_body = serde_json::json!({
+    let summary_request = serde_json::json!({
         "model": app.config.model,
         "messages": [
             {
@@ -134,7 +250,7 @@ Output ONLY the updated summary, no preamble."#,
         .post(&app.config.base_url)
         .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
         .header(CONTENT_TYPE, "application/json")
-        .body(request_body.to_string())
+        .body(summary_request.to_string())
         .send()
         .await
         .map_err(|e| io::Error::other(format!("Rolling compact request failed: {}", e)))?;
@@ -167,6 +283,20 @@ Output ONLY the updated summary, no preamble."#,
         return Ok(());
     }
 
+    // Capture count before we drop the borrow
+    let archived_count = messages_to_drop.len();
+
+    // Drop the borrow by ending use of messages_to_drop
+    drop(messages_to_drop);
+
+    // Filter out dropped messages, keeping system messages and non-dropped messages
+    let remaining_messages: Vec<Message> = context
+        .messages
+        .iter()
+        .filter(|m| m.role == "system" || !drop_ids.contains(&m.id))
+        .cloned()
+        .collect();
+
     // Update context with new summary and remaining messages
     context.summary = new_summary;
     context.messages = remaining_messages;
@@ -177,8 +307,9 @@ Output ONLY the updated summary, no preamble."#,
 
     if verbose {
         eprintln!(
-            "[Rolling compaction complete: {} messages remaining, summary updated]",
-            context.messages.len()
+            "[Rolling compaction complete: {} messages remaining, {} archived]",
+            context.messages.len(),
+            archived_count
         );
     }
 
@@ -186,6 +317,7 @@ Output ONLY the updated summary, no preamble."#,
     let hook_data = serde_json::json!({
         "context_name": context.name,
         "message_count": context.messages.len(),
+        "messages_archived": archived_count,
         "summary": context.summary,
     });
     let _ = tools::execute_hook(
@@ -360,17 +492,16 @@ async fn compact_context_with_llm_internal(
 
     // Add system prompt as first message
     if !system_prompt.is_empty() {
-        new_context.messages.push(Message {
-            role: "system".to_string(),
-            content: system_prompt.clone(),
-        });
+        new_context
+            .messages
+            .push(Message::new("system", system_prompt.clone()));
     }
 
     // Add continuation prompt + summary as user message
-    new_context.messages.push(Message {
-        role: "user".to_string(),
-        content: format!("{}\n\n--- SUMMARY ---\n{}", continuation_prompt, summary),
-    });
+    new_context.messages.push(Message::new(
+        "user",
+        format!("{}\n\n--- SUMMARY ---\n{}", continuation_prompt, summary),
+    ));
 
     // Add assistant acknowledgment
     let messages = vec![
@@ -421,10 +552,9 @@ async fn compact_context_with_llm_internal(
         .unwrap_or("")
         .to_string();
 
-    new_context.messages.push(Message {
-        role: "assistant".to_string(),
-        content: acknowledgment,
-    });
+    new_context
+        .messages
+        .push(Message::new("assistant", acknowledgment));
 
     // Save the new context
     app.save_current_context(&new_context)?;
