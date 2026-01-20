@@ -1,3 +1,7 @@
+### terminology tools≠plugins
+- rename "tools" dir to "pluginsx
+- plugins can provide tools (tool calls the LLM can do)
+
 ### more tests
 - test CLI parameter paradigm
 - tests for the example tools
