@@ -80,7 +80,63 @@ reflection_character_limit = 10000
 - `base_url` - Custom API endpoint (default: `https://openrouter.ai/api/v1/chat/completions`)
 - `reflection_enabled` - Enable reflection/memory feature (default: true)
 - `reflection_character_limit` - Max characters for reflection content (default: 10000)
-- `max_recursion_depth` - Limit for `continue_processing` loops (default: 15)
+- `max_recursion_depth` - Limit for `recurse` tool loops (default: 15)
+- `username` - Default username shown to LLM (default: "user")
+- `lock_heartbeat_seconds` - Interval for context lock heartbeat (default: 30)
+
+### Per-Context Configuration (local.toml)
+
+Each context can override global settings with a `local.toml` file:
+
+```
+~/.chibi/contexts/<name>/local.toml
+```
+
+```toml
+# Override model for this context
+model = "anthropic/claude-3-opus"
+
+# Override API key (useful for different providers)
+api_key = "sk-different-key"
+
+# Override base URL
+base_url = "https://api.anthropic.com/v1/messages"
+
+# Override username
+username = "alice"
+
+# Override auto-compact behavior
+auto_compact = true
+
+# Override recursion depth
+max_recursion_depth = 25
+```
+
+You can set the username via CLI flag `-u` which automatically saves to `local.toml`:
+
+```bash
+chibi -u alice "Hello"  # Saves username to local.toml
+```
+
+### Model Aliases (models.toml)
+
+Define model aliases and metadata in `~/.chibi/models.toml`:
+
+```toml
+[models.claude]
+context_window = 200000
+
+[models.gpt4]
+context_window = 128000
+
+[models.fast]
+context_window = 32000
+```
+
+When a model name matches a key in `models.toml`, chibi will use the `context_window` value from there instead of `config.toml`. This is useful for:
+
+- Documenting context windows for models you frequently use
+- Overriding context window limits per model
 
 ## System Prompts
 
@@ -242,7 +298,8 @@ The `examples/tools/` directory contains ready-to-use tools:
 - `run_command` - Execute shell commands (bash)
 - `web_search` - Search the web via DuckDuckGo (Python, requires `uv`)
 - `read_context` - Read another context's state (bash)
-- `agent` - Spawn sub-agents or continue processing (bash)
+- `sub-agent` - Spawn sub-agents in other contexts (bash)
+- `recurse` - Continue processing without returning to user (bash)
 
 **Hook Tools:**
 - `hook-inspector` - Detailed hook debugger with JSON data logging (bash)
@@ -516,7 +573,6 @@ The LLM always has access to these tools (no setup required):
 |------|-------------|
 | `update_todos` | Track tasks for the current conversation (persists in `todos.md`) |
 | `update_goals` | Set high-level objectives (persists in `goals.md`) |
-| `continue_processing` | Continue working without returning to user |
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
 
 ### Optional External Tools
@@ -525,8 +581,9 @@ These are available in `examples/tools/` and can be copied to `~/.chibi/tools/`:
 
 | Tool | Description |
 |------|-------------|
+| `recurse` | Continue working without returning to user |
 | `read_context` | Read another context's state (read-only, for sub-agents) |
-| `agent` | Spawn sub-agents or continue processing in another context |
+| `sub-agent` | Spawn sub-agents in another context |
 
 ### Todos and Goals
 
@@ -537,19 +594,19 @@ Each context can have its own todos and goals stored in markdown files:
 
 These are automatically included in the system prompt, so the LLM always knows what it's working toward.
 
-### Continue Processing (Autonomous Mode)
+### Recurse (Autonomous Mode)
 
-The `continue_processing` tool lets the LLM work autonomously:
+The `recurse` tool (in `examples/tools/`) lets the LLM work autonomously:
 
 ```
 LLM: "I need to do more work. Let me continue."
-     [calls continue_processing with note: "Check the test results next"]
+     [calls recurse with note: "Check the test results next"]
 
 LLM: (new round) "Continuing from previous round. Note to self: Check the test results next"
      ... continues working ...
 ```
 
-The LLM leaves itself a note about what to do next, then the conversation continues automatically.
+The LLM leaves itself a note about what to do next, then the conversation continues automatically. The `max_recursion_depth` config option limits how many times this can happen (default: 15).
 
 ### Sub-Agents
 
@@ -563,10 +620,10 @@ chibi -S research "Find information about quantum computing"
 chibi -S coding -e "You are a code reviewer" "Review this function for bugs"
 ```
 
-The `agent` tool in `examples/tools/` provides a convenient wrapper:
+The `sub-agent` tool in `examples/tools/` provides a convenient wrapper for the LLM:
 
 ```
-Main: [calls agent with mode: "spawn", context: "research", task: "Find info about X"]
+Main: [calls sub-agent with context: "research", task: "Find info about X"]
 Main: [calls read_context with context_name: "research"]
 Main: "The sub-agent found: ..."
 ```
@@ -592,7 +649,8 @@ Chibi stores data in `~/.chibi/`:
 
 ```
 ~/.chibi/
-├── config.toml          # Configuration (TOML format)
+├── config.toml          # Global configuration (TOML format)
+├── models.toml          # Model aliases and metadata (optional)
 ├── state.json           # Current context tracking
 ├── prompts/
 │   ├── chibi.md         # Default system/personality prompt
@@ -604,26 +662,34 @@ Chibi stores data in `~/.chibi/`:
 ├── tools/               # Executable tool scripts
 │   ├── read_file
 │   ├── fetch_url
+│   ├── recurse          # Continue processing tool
+│   ├── sub-agent        # Spawn sub-agents tool
 │   ├── github-mcp       # MCP wrapper example
 │   └── ...
 └── contexts/
     ├── default/
-    │   ├── context.json     # Current conversation state (messages only)
-    │   ├── summary.md       # Conversation summary (auto-created on compaction)
-    │   ├── transcript.txt   # Full chat history
-    │   ├── todos.md         # Current todos (auto-created)
-    │   └── goals.md         # Current goals (auto-created)
+    │   ├── context.json      # Current conversation state (messages only)
+    │   ├── local.toml        # Per-context config overrides (optional)
+    │   ├── summary.md        # Conversation summary (auto-created on compaction)
+    │   ├── transcript.txt    # Full chat history (human-readable)
+    │   ├── transcript.jsonl  # Full chat history (machine-readable, JSONL)
+    │   ├── todos.md          # Current todos (auto-created)
+    │   ├── goals.md          # Current goals (auto-created)
+    │   └── .lock             # Context lock file (when active)
     ├── coding/
     │   ├── context.json
+    │   ├── local.toml        # Example: different model for this context
     │   ├── summary.md
     │   ├── transcript.txt
+    │   ├── transcript.jsonl
     │   ├── todos.md
     │   ├── goals.md
-    │   └── system_prompt.md # Custom prompt for this context
+    │   └── system_prompt.md  # Custom prompt for this context
     └── my-project/
         ├── context.json
         ├── summary.md
         ├── transcript.txt
+        ├── transcript.jsonl
         ├── todos.md
         └── goals.md
 ```

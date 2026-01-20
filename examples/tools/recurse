@@ -1,0 +1,29 @@
+#!/bin/bash
+# Recurse tool - signals chibi to continue processing after this turn
+#
+# This is a noop tool that just returns a message. The actual recursion
+# is triggered by chibi detecting that this tool was called.
+
+if [[ "$1" == "--schema" ]]; then
+  cat <<'EOF'
+{
+  "name": "recurse",
+  "description": "Continue processing without returning control to the user. Use this when you have more work to do. Include a note about what to do next.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "note": {
+        "type": "string",
+        "description": "A note to yourself about what to do next"
+      }
+    },
+    "required": ["note"]
+  }
+}
+EOF
+  exit 0
+fi
+
+# Read args from env var
+note=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.note // ""')
+echo "Continuing: $note"

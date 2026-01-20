@@ -68,3 +68,14 @@ pub fn now_timestamp() -> u64 {
         .unwrap()
         .as_secs()
 }
+
+/// Entry for JSONL transcript file
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TranscriptEntry {
+    pub id: String,
+    pub timestamp: u64,
+    pub from: String,
+    pub to: String,
+    pub content: String,
+    pub entry_type: String, // "message", "tool_call", "tool_result", "compaction"
+}

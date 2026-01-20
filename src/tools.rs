@@ -389,42 +389,16 @@ pub fn goals_tool_to_api_format() -> serde_json::Value {
     })
 }
 
-// --- Continue Processing Tool (recurse/agentic) ---
+// --- Recurse Tool (external noop) ---
 
-pub const CONTINUE_TOOL_NAME: &str = "continue_processing";
+/// Name of the external recurse tool that triggers recursion
+pub const RECURSE_TOOL_NAME: &str = "recurse";
 
-/// Create the built-in continue_processing tool definition for the API
-pub fn continue_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": CONTINUE_TOOL_NAME,
-            "description": "Signal that you want to continue processing without returning control to the user. Use this when you have more work to do on your current task. Include a note to yourself about what to do next.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "note": {
-                        "type": "string",
-                        "description": "A note to yourself about what to do next (this will be included in the next round)"
-                    }
-                },
-                "required": ["note"]
-            }
-        }
-    })
-}
-
-/// Result of continue_processing tool - signals the API layer to recurse
-#[derive(Debug)]
-pub struct ContinueSignal {
-    pub note: String,
-}
-
-/// Check if the tool call is for continue_processing and extract the signal
-pub fn check_continue_signal(tool_name: &str, arguments: &serde_json::Value) -> Option<ContinueSignal> {
-    if tool_name == CONTINUE_TOOL_NAME {
+/// Check if the tool call is for the recurse tool and extract the note
+pub fn check_recurse_signal(tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
+    if tool_name == RECURSE_TOOL_NAME {
         let note = arguments["note"].as_str().unwrap_or("").to_string();
-        Some(ContinueSignal { note })
+        Some(note)
     } else {
         None
     }

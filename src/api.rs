@@ -1,3 +1,4 @@
+use crate::config::ResolvedConfig;
 use crate::context::{Context, Message, now_timestamp};
 use crate::state::AppState;
 use crate::tools::{self, Tool};
@@ -388,11 +389,11 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
     Ok(())
 }
 
-pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose: bool, use_reflection: bool) -> io::Result<()> {
-    send_prompt_with_depth(app, prompt, tools, verbose, use_reflection, 0).await
+pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose: bool, use_reflection: bool, resolved_config: &ResolvedConfig) -> io::Result<()> {
+    send_prompt_with_depth(app, prompt, tools, verbose, use_reflection, 0, resolved_config).await
 }
 
-async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], verbose: bool, use_reflection: bool, recursion_depth: usize) -> io::Result<()> {
+async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], verbose: bool, use_reflection: bool, recursion_depth: usize, resolved_config: &ResolvedConfig) -> io::Result<()> {
     if prompt.trim().is_empty() {
         return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
     }
@@ -418,6 +419,10 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
 
     // Add user message
     app.add_message(&mut context, "user".to_string(), final_prompt.clone());
+
+    // Log user message to JSONL transcript
+    let user_entry = app.create_user_message_entry(&final_prompt, &resolved_config.username);
+    let _ = app.append_to_jsonl_transcript(&user_entry);
 
     // Check if we need to warn about context window
     if app.should_warn(&context.messages) && verbose {
@@ -447,6 +452,11 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
 
     // Build full system prompt with all components
     let mut full_system_prompt = system_prompt.clone();
+
+    // Add username info at the start if not "user"
+    if resolved_config.username != "user" {
+        full_system_prompt.push_str(&format!("\n\nThe user speaking to you is called: {}", resolved_config.username));
+    }
 
     // Add summary if present
     if !summary.is_empty() {
@@ -499,10 +509,10 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
     // Collect all tools (user-defined + built-in tools)
     let mut all_tools = tools::tools_to_api_format(tools);
 
-    // Always add agentic tools (todos, goals, continue_processing)
+    // Always add agentic tools (todos, goals)
+    // Note: recurse tool is now external (loaded from tools directory)
     all_tools.push(tools::todos_tool_to_api_format());
     all_tools.push(tools::goals_tool_to_api_format());
-    all_tools.push(tools::continue_tool_to_api_format());
 
     // Add reflection tool if enabled
     if use_reflection {
@@ -647,16 +657,12 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                 let mut args: serde_json::Value = serde_json::from_str(&tc.arguments)
                     .unwrap_or(serde_json::json!({}));
 
-                // Check for continue_processing first (special handling)
-                if let Some(signal) = tools::check_continue_signal(&tc.name, &args) {
+                // Check for recurse tool first (special handling - triggers recursion after this turn)
+                if let Some(note) = tools::check_recurse_signal(&tc.name, &args) {
                     should_recurse = true;
-                    recurse_note = signal.note;
-                    messages.push(serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": "Acknowledged. Continuing processing...",
-                    }));
-                    continue;
+                    recurse_note = note;
+                    // Still execute the tool normally (it's a noop that just returns a message)
+                    // The tool result will be added below after normal tool execution
                 }
 
                 // Execute pre_tool hooks (can modify arguments)
@@ -707,6 +713,12 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
 
+                // Log tool call and result to JSONL transcript
+                let tool_call_entry = app.create_tool_call_entry(&tc.name, &tc.arguments);
+                let _ = app.append_to_jsonl_transcript(&tool_call_entry);
+                let tool_result_entry = app.create_tool_result_entry(&tc.name, &result);
+                let _ = app.append_to_jsonl_transcript(&tool_result_entry);
+
                 // Execute post_tool hooks (observe only)
                 let post_hook_data = serde_json::json!({
                     "tool_name": tc.name,
@@ -729,6 +741,10 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         // No tool calls - we have a final response
         app.add_message(&mut context, "assistant".to_string(), full_response.clone());
         app.save_current_context(&context)?;
+
+        // Log assistant message to JSONL transcript
+        let assistant_entry = app.create_assistant_message_entry(&full_response);
+        let _ = app.append_to_jsonl_transcript(&assistant_entry);
 
         // Execute post_message hooks (observe only)
         let hook_data = serde_json::json!({
@@ -757,7 +773,7 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
             }
             // Recursively call send_prompt with the note as the new prompt
             let continue_prompt = format!("[Continuing from previous round]\n\nNote to self: {}", recurse_note);
-            return Box::pin(send_prompt_with_depth(app, continue_prompt, tools, verbose, use_reflection, new_depth)).await;
+            return Box::pin(send_prompt_with_depth(app, continue_prompt, tools, verbose, use_reflection, new_depth, resolved_config)).await;
         }
 
         return Ok(());

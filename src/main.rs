@@ -2,6 +2,7 @@ mod api;
 mod cli;
 mod config;
 mod context;
+mod lock;
 mod state;
 mod tools;
 
@@ -203,10 +204,13 @@ async fn main() -> io::Result<()> {
         let contexts = app.list_contexts();
         let current = &app.state.current_context;
         for name in contexts {
+            let context_dir = app.context_dir(&name);
+            let status = lock::ContextLock::get_status(&context_dir, app.config.lock_heartbeat_seconds);
+            let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
             if &name == current {
-                println!("* {}", name);
+                println!("* {}{}", name, status_str);
             } else {
-                println!("  {}", name);
+                println!("  {}{}", name, status_str);
             }
         }
     } else if cli.which {
@@ -281,6 +285,22 @@ async fn main() -> io::Result<()> {
             }
         }
 
+        // Handle -u (persistent username) - save to local.toml
+        if let Some(ref username) = cli.username {
+            let mut local_config = app.load_local_config(&app.state.current_context)?;
+            local_config.username = Some(username.clone());
+            app.save_local_config(&app.state.current_context, &local_config)?;
+            if verbose {
+                eprintln!("[Username '{}' saved to context '{}']", username, app.state.current_context);
+            }
+        }
+
+        // Resolve the full configuration with CLI overrides
+        let resolved = app.resolve_config(
+            cli.username.as_deref(),
+            cli.temp_username.as_deref(),
+        )?;
+
         // Build prompt from args and/or stdin
         let stdin_is_pipe = !io::stdin().is_terminal();
         let arg_prompt = if cli.prompt.is_empty() {
@@ -329,7 +349,12 @@ async fn main() -> io::Result<()> {
             };
             app.save_current_context(&new_context)?;
         }
-        api::send_prompt(&app, prompt, &tools, verbose, use_reflection).await?;
+
+        // Acquire context lock (keeps lock alive via heartbeat until we're done)
+        let context_dir = app.context_dir(&app.state.current_context);
+        let _lock = lock::ContextLock::acquire(&context_dir, app.config.lock_heartbeat_seconds)?;
+
+        api::send_prompt(&app, prompt, &tools, verbose, use_reflection, &resolved).await?;
     }
 
     // Execute on_end hook

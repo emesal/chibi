@@ -1,15 +1,18 @@
-use crate::config::Config;
-use crate::context::{Context, ContextState, Message, validate_context_name, now_timestamp};
+use crate::config::{Config, LocalConfig, ModelsConfig, ResolvedConfig};
+use crate::context::{Context, ContextState, Message, TranscriptEntry, validate_context_name, now_timestamp};
 use dirs_next::home_dir;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
 use std::path::PathBuf;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct AppState {
     pub config: Config,
+    pub models_config: ModelsConfig,
     pub state: ContextState,
     pub state_path: PathBuf,
+    pub chibi_dir: PathBuf,
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
     pub tools_dir: PathBuf,
@@ -22,17 +25,18 @@ impl AppState {
         let contexts_dir = chibi_dir.join("contexts");
         let prompts_dir = chibi_dir.join("prompts");
         let tools_dir = chibi_dir.join("tools");
-        
+
         // Create directories if they don't exist
         fs::create_dir_all(&chibi_dir)?;
         fs::create_dir_all(&contexts_dir)?;
         fs::create_dir_all(&prompts_dir)?;
         fs::create_dir_all(&tools_dir)?;
-        
+
         let config_path = chibi_dir.join("config.toml");
+        let models_path = chibi_dir.join("models.toml");
         let state_path = chibi_dir.join("state.json");
-        
-        let config = if config_path.exists() {
+
+        let config: Config = if config_path.exists() {
             let content = fs::read_to_string(&config_path)?;
             toml::from_str(&content)
                 .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse config: {}", e)))?
@@ -42,7 +46,16 @@ impl AppState {
                 format!("Config file not found at {}. Please create config.toml with api_key, model, context_window_limit, and warn_threshold_percent", config_path.display()),
             ));
         };
-        
+
+        // Load models.toml (optional)
+        let models_config: ModelsConfig = if models_path.exists() {
+            let content = fs::read_to_string(&models_path)?;
+            toml::from_str(&content)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse models.toml: {}", e)))?
+        } else {
+            ModelsConfig::default()
+        };
+
         let state = if state_path.exists() {
             let file = File::open(&state_path)?;
             serde_json::from_reader(BufReader::new(file))
@@ -59,11 +72,13 @@ impl AppState {
                 current_context: "default".to_string(),
             }
         };
-        
+
         Ok(AppState {
             config,
+            models_config,
             state,
             state_path,
+            chibi_dir,
             contexts_dir,
             prompts_dir,
             tools_dir,
@@ -439,6 +454,186 @@ impl AppState {
     /// Save goals for current context
     pub fn save_current_goals(&self, content: &str) -> io::Result<()> {
         self.save_goals(&self.state.current_context, content)
+    }
+
+    /// Get the path to a context's local config file
+    pub fn local_config_file(&self, context_name: &str) -> PathBuf {
+        self.context_dir(context_name).join("local.toml")
+    }
+
+    /// Load local config for a context (returns default if doesn't exist)
+    pub fn load_local_config(&self, context_name: &str) -> io::Result<LocalConfig> {
+        let path = self.local_config_file(context_name);
+        if path.exists() {
+            let content = fs::read_to_string(&path)?;
+            toml::from_str(&content)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse local.toml: {}", e)))
+        } else {
+            Ok(LocalConfig::default())
+        }
+    }
+
+    /// Save local config for a context
+    pub fn save_local_config(&self, context_name: &str, local_config: &LocalConfig) -> io::Result<()> {
+        self.ensure_context_dir(context_name)?;
+        let path = self.local_config_file(context_name);
+        let content = toml::to_string_pretty(local_config)
+            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to serialize local.toml: {}", e)))?;
+        fs::write(&path, content)
+    }
+
+    /// Resolve model name using models.toml aliases
+    /// If the model is an alias defined in models.toml, return the full model name
+    /// Otherwise return the original model name
+    pub fn resolve_model_name(&self, model: &str) -> String {
+        if self.models_config.models.contains_key(model) {
+            // The model name itself is a key in models.toml, use it as-is
+            // (models.toml maps alias -> metadata, not alias -> full name)
+            model.to_string()
+        } else {
+            model.to_string()
+        }
+    }
+
+    /// Get context window limit for a model (from models.toml if available)
+    pub fn get_model_context_window(&self, model: &str) -> Option<usize> {
+        self.models_config.models.get(model).and_then(|m| m.context_window)
+    }
+
+    /// Resolve the full configuration, applying overrides in order:
+    /// 1. CLI flags (passed as parameters)
+    /// 2. Context-local config (local.toml)
+    /// 3. Global config (config.toml)
+    /// 4. Models.toml (for model expansion)
+    /// 5. Defaults
+    pub fn resolve_config(
+        &self,
+        cli_username: Option<&str>,
+        cli_temp_username: Option<&str>,
+    ) -> io::Result<ResolvedConfig> {
+        let local = self.load_local_config(&self.state.current_context)?;
+
+        // Start with global config values
+        let mut resolved = ResolvedConfig {
+            api_key: self.config.api_key.clone(),
+            model: self.config.model.clone(),
+            context_window_limit: self.config.context_window_limit,
+            base_url: self.config.base_url.clone(),
+            auto_compact: self.config.auto_compact,
+            auto_compact_threshold: self.config.auto_compact_threshold,
+            reflection_enabled: self.config.reflection_enabled,
+            reflection_character_limit: self.config.reflection_character_limit,
+            max_recursion_depth: self.config.max_recursion_depth,
+            warn_threshold_percent: self.config.warn_threshold_percent,
+            username: self.config.username.clone(),
+            lock_heartbeat_seconds: self.config.lock_heartbeat_seconds,
+        };
+
+        // Apply local config overrides
+        if let Some(ref api_key) = local.api_key {
+            resolved.api_key = api_key.clone();
+        }
+        if let Some(ref model) = local.model {
+            resolved.model = model.clone();
+        }
+        if let Some(ref base_url) = local.base_url {
+            resolved.base_url = base_url.clone();
+        }
+        if let Some(auto_compact) = local.auto_compact {
+            resolved.auto_compact = auto_compact;
+        }
+        if let Some(max_recursion_depth) = local.max_recursion_depth {
+            resolved.max_recursion_depth = max_recursion_depth;
+        }
+        if let Some(ref username) = local.username {
+            resolved.username = username.clone();
+        }
+
+        // Apply CLI overrides (highest priority)
+        // Note: -u (persistent) should have been saved to local.toml before calling this
+        // -U (temp) overrides for this invocation only
+        if let Some(username) = cli_temp_username {
+            resolved.username = username.to_string();
+        } else if let Some(username) = cli_username {
+            resolved.username = username.to_string();
+        }
+
+        // Resolve model name and potentially override context window
+        resolved.model = self.resolve_model_name(&resolved.model);
+        if let Some(context_window) = self.get_model_context_window(&resolved.model) {
+            resolved.context_window_limit = context_window;
+        }
+
+        Ok(resolved)
+    }
+
+    /// Get the path to the JSONL transcript file
+    pub fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("transcript.jsonl")
+    }
+
+    /// Append an entry to the JSONL transcript
+    pub fn append_to_jsonl_transcript(&self, entry: &TranscriptEntry) -> io::Result<()> {
+        self.ensure_context_dir(&self.state.current_context)?;
+        let path = self.transcript_jsonl_file(&self.state.current_context);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(&path)?;
+
+        let json = serde_json::to_string(entry)
+            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to serialize transcript entry: {}", e)))?;
+        writeln!(file, "{}", json)?;
+        Ok(())
+    }
+
+    /// Create a transcript entry for a user message
+    pub fn create_user_message_entry(&self, content: &str, username: &str) -> TranscriptEntry {
+        TranscriptEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: username.to_string(),
+            to: self.state.current_context.clone(),
+            content: content.to_string(),
+            entry_type: "message".to_string(),
+        }
+    }
+
+    /// Create a transcript entry for an assistant message
+    pub fn create_assistant_message_entry(&self, content: &str) -> TranscriptEntry {
+        TranscriptEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: self.state.current_context.clone(),
+            to: "user".to_string(),
+            content: content.to_string(),
+            entry_type: "message".to_string(),
+        }
+    }
+
+    /// Create a transcript entry for a tool call
+    pub fn create_tool_call_entry(&self, tool_name: &str, arguments: &str) -> TranscriptEntry {
+        TranscriptEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: self.state.current_context.clone(),
+            to: tool_name.to_string(),
+            content: arguments.to_string(),
+            entry_type: "tool_call".to_string(),
+        }
+    }
+
+    /// Create a transcript entry for a tool result
+    pub fn create_tool_result_entry(&self, tool_name: &str, result: &str) -> TranscriptEntry {
+        TranscriptEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: tool_name.to_string(),
+            to: self.state.current_context.clone(),
+            content: result.to_string(),
+            entry_type: "tool_result".to_string(),
+        }
     }
 
 }

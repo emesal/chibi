@@ -16,6 +16,8 @@ pub struct Cli {
     pub show_prompt: bool,
     pub set_prompt: Option<String>,
     pub no_reflection: bool,
+    pub username: Option<String>,
+    pub temp_username: Option<String>,
     pub prompt: Vec<String>,
 }
 
@@ -37,6 +39,8 @@ impl Cli {
         let mut show_prompt = false;
         let mut set_prompt = None;
         let mut no_reflection = false;
+        let mut username = None;
+        let mut temp_username = None;
         let mut prompt = Vec::new();
         let mut i = 1;
         let mut is_prompt = false;
@@ -160,6 +164,24 @@ impl Cli {
                 continue;
             }
 
+            if arg == "-u" || arg == "--username" {
+                if i + 1 >= args.len() {
+                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                }
+                username = Some(args[i + 1].clone());
+                i += 2;
+                continue;
+            }
+
+            if arg == "-U" || arg == "--temp-username" {
+                if i + 1 >= args.len() {
+                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                }
+                temp_username = Some(args[i + 1].clone());
+                i += 2;
+                continue;
+            }
+
             if arg == "-h" || arg == "--help" {
                 Self::print_help();
                 std::process::exit(0);
@@ -219,6 +241,8 @@ impl Cli {
             show_prompt,
             set_prompt,
             no_reflection,
+            username,
+            temp_username,
             prompt,
         })
     }
@@ -250,6 +274,8 @@ impl Cli {
         println!("Options:");
         println!("  -v, --verbose             Show extra info (tools loaded, etc.)");
         println!("  -x, --no-reflection       Disable reflection prompt for this invocation");
+        println!("  -u, --username <NAME>     Set username (persists to context's local.toml)");
+        println!("  -U, --temp-username <NAME> Set username for this invocation only");
         println!("  -h, --help                Show this help");
         println!("  -V, --version             Show version");
         println!();
