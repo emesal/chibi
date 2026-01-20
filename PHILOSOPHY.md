@@ -5,7 +5,7 @@
 ### 1. Unix Philosophy First
 - **Clean output separation**: stdout only contains LLM responses (pipeable), stderr for diagnostics (with `-v`)
 - **Composable**: Designed to work in pipelines (`cat error.log | chibi "explain this"`)
-- **Consistent CLI:** Any argv string not starting with `-` begins the prompt (or force it with `--`)
+- **Consistent CLI:** Any argv string not beginning with `-` is interpreted as the start of the prompt (can be forced with `--`)
 - **Do one thing well**: Focused on LLM conversations without overreaching
 
 ### 2. Extensibility Over Safety Rails
