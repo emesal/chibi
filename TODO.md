@@ -1,5 +1,5 @@
 ### terminology tools≠plugins
-- rename "tools" dir to "pluginsx
+- rename "tools" dir to "plugins"
 - plugins can provide tools (tool calls the LLM can do)
 
 ### more tests
