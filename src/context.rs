@@ -79,3 +79,13 @@ pub struct TranscriptEntry {
     pub content: String,
     pub entry_type: String, // "message", "tool_call", "tool_result", "compaction"
 }
+
+/// Entry for inbox.jsonl file - messages from other contexts
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxEntry {
+    pub id: String,
+    pub timestamp: u64,
+    pub from: String,
+    pub to: String,
+    pub content: String,
+}

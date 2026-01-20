@@ -19,6 +19,10 @@ pub enum HookPoint {
     PostRollingCompact,
     OnStart,
     OnEnd,
+    PreSystemPrompt,   // Can inject content before system prompt sections
+    PostSystemPrompt,  // Can inject content after all system prompt sections
+    PreSendMessage,    // Can intercept delivery (return {"delivered": true, "via": "..."})
+    PostSendMessage,   // Observe delivery (read-only)
 }
 
 impl HookPoint {
@@ -37,6 +41,10 @@ impl HookPoint {
             "post_rolling_compact" => Some(Self::PostRollingCompact),
             "on_start" => Some(Self::OnStart),
             "on_end" => Some(Self::OnEnd),
+            "pre_system_prompt" => Some(Self::PreSystemPrompt),
+            "post_system_prompt" => Some(Self::PostSystemPrompt),
+            "pre_send_message" => Some(Self::PreSendMessage),
+            "post_send_message" => Some(Self::PostSendMessage),
             _ => None,
         }
     }
@@ -56,6 +64,10 @@ impl HookPoint {
             Self::PostRollingCompact => "post_rolling_compact",
             Self::OnStart => "on_start",
             Self::OnEnd => "on_end",
+            Self::PreSystemPrompt => "pre_system_prompt",
+            Self::PostSystemPrompt => "post_system_prompt",
+            Self::PreSendMessage => "pre_send_message",
+            Self::PostSendMessage => "post_send_message",
         }
     }
 }
@@ -402,4 +414,36 @@ pub fn check_recurse_signal(tool_name: &str, arguments: &serde_json::Value) -> O
     } else {
         None
     }
+}
+
+/// Name of the built-in send_message tool for inter-context messaging
+pub const SEND_MESSAGE_TOOL_NAME: &str = "send_message";
+
+/// Create the built-in send_message tool definition for the API
+pub fn send_message_tool_to_api_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": SEND_MESSAGE_TOOL_NAME,
+            "description": "Send a message to another context's inbox. The message will be delivered to the target context and shown to them before their next prompt.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": "Target context name"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Message content"
+                    },
+                    "from": {
+                        "type": "string",
+                        "description": "Optional sender name (defaults to current context)"
+                    }
+                },
+                "required": ["to", "content"]
+            }
+        }
+    })
 }

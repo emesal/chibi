@@ -1,0 +1,171 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+"""
+coffee-table - A shared communication space for all contexts
+
+This tool demonstrates inter-context messaging by:
+1. Creating a "coffee-table" context as a shared bulletin board
+2. Injecting awareness instructions into all other contexts
+3. Providing a tool to post messages to the coffee-table
+
+To install: cp examples/tools/coffee-table ~/.chibi/tools/
+The coffee-table context will be created automatically on first use.
+"""
+
+import json
+import os
+import sys
+import time
+import uuid
+import fcntl
+from pathlib import Path
+
+CHIBI_DIR = Path.home() / ".chibi"
+COFFEE_TABLE_CONTEXT = "coffee-table"
+COFFEE_TABLE_DIR = CHIBI_DIR / "contexts" / COFFEE_TABLE_CONTEXT
+
+if len(sys.argv) > 1 and sys.argv[1] == "--schema":
+    print(json.dumps({
+        "name": "post_to_coffee_table",
+        "description": "Post a message to the coffee-table, a shared space where all contexts can leave notes for each other. Use this when you want to communicate something to other contexts or leave information that might be useful for future conversations.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "The message to post to the coffee-table"
+                }
+            },
+            "required": ["message"]
+        },
+        "hooks": [
+            "on_start",
+            "post_system_prompt"
+        ]
+    }))
+    sys.exit(0)
+
+
+def ensure_coffee_table_context():
+    """Create the coffee-table context if it doesn't exist."""
+    if COFFEE_TABLE_DIR.exists():
+        return
+
+    COFFEE_TABLE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Create context.json
+    timestamp = int(time.time())
+    context_data = {
+        "name": COFFEE_TABLE_CONTEXT,
+        "messages": [],
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "summary": ""
+    }
+    with open(COFFEE_TABLE_DIR / "context.json", "w") as f:
+        json.dump(context_data, f, indent=2)
+
+    # Create system prompt
+    prompt = """You are the coffee-table - a shared communication space for all contexts in this chibi installation.
+
+Your role:
+- Receive and organize messages from other contexts
+- When asked, summarize or relay information that has been posted
+- Help contexts communicate with each other
+- Maintain a friendly, casual atmosphere (like conversations around a coffee table)
+
+When messages arrive in your inbox, acknowledge them and incorporate the information.
+When asked about what's been posted, summarize the relevant messages."""
+
+    with open(COFFEE_TABLE_DIR / "prompt.md", "w") as f:
+        f.write(prompt)
+
+
+def post_message(message: str):
+    """Post a message to the coffee-table's inbox."""
+    if not message:
+        print("Error: message is required", file=sys.stderr)
+        sys.exit(1)
+
+    # Get current context name from environment
+    from_context = os.environ.get("CHIBI_CONTEXT", "unknown")
+
+    # Ensure coffee-table context exists
+    ensure_coffee_table_context()
+
+    # Create inbox entry
+    entry = {
+        "id": str(uuid.uuid4()),
+        "timestamp": int(time.time()),
+        "from": from_context,
+        "to": COFFEE_TABLE_CONTEXT,
+        "content": message
+    }
+
+    inbox_file = COFFEE_TABLE_DIR / "inbox.jsonl"
+    lock_file = COFFEE_TABLE_DIR / ".inbox.lock"
+
+    # Use file locking for safe concurrent access
+    with open(lock_file, "w") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            with open(inbox_file, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    print(f'Posted to coffee-table: "{message}"')
+
+
+# Get hook info from environment
+hook = os.environ.get("CHIBI_HOOK", "")
+hook_data_str = os.environ.get("CHIBI_HOOK_DATA", "{}")
+
+try:
+    hook_data = json.loads(hook_data_str)
+except json.JSONDecodeError:
+    hook_data = {}
+
+# Handle on_start hook - create coffee-table context if needed
+if hook == "on_start":
+    ensure_coffee_table_context()
+    print("{}")
+    sys.exit(0)
+
+# Handle post_system_prompt hook - inject awareness into other contexts
+if hook == "post_system_prompt":
+    context_name = hook_data.get("context_name", "")
+
+    # Don't inject into coffee-table itself
+    if context_name == COFFEE_TABLE_CONTEXT:
+        print("{}")
+    else:
+        # Inject awareness about the coffee-table
+        print(json.dumps({
+            "inject": """--- INTER-CONTEXT COMMUNICATION ---
+You have access to a shared space called 'coffee-table' where you can:
+- Post messages using the post_to_coffee_table tool
+- Send direct messages to specific contexts using send_message
+
+The coffee-table is a bulletin board visible to all contexts. Use it to leave notes, share discoveries, or communicate across conversations."""
+        }))
+    sys.exit(0)
+
+# Handle direct tool call - read args from env var
+if "CHIBI_TOOL_ARGS" in os.environ:
+    params = json.loads(os.environ["CHIBI_TOOL_ARGS"])
+    message = params.get("message", "")
+    post_message(message)
+    sys.exit(0)
+
+# No arguments and not a hook - show help
+print("coffee-table: A shared communication space for chibi contexts")
+print()
+print("This tool is meant to be installed in ~/.chibi/tools/")
+print("It will automatically create a coffee-table context and inject")
+print("awareness into all other contexts.")
+print()
+print('Usage as tool: post_to_coffee_table({"message": "your message"})')

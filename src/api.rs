@@ -1,7 +1,8 @@
 use crate::config::ResolvedConfig;
-use crate::context::{Context, Message, now_timestamp};
+use crate::context::{Context, InboxEntry, Message, now_timestamp};
 use crate::state::AppState;
 use crate::tools::{self, Tool};
+use uuid::Uuid;
 use futures_util::stream::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode};
@@ -417,6 +418,20 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         }
     }
 
+    // Check inbox and inject messages before the user prompt
+    let inbox_messages = app.load_and_clear_current_inbox()?;
+    if !inbox_messages.is_empty() {
+        let mut inbox_content = String::from("--- INBOX MESSAGES ---\n");
+        for msg in &inbox_messages {
+            inbox_content.push_str(&format!("[From: {}] {}\n", msg.from, msg.content));
+        }
+        inbox_content.push_str("--- END INBOX ---\n\n");
+        final_prompt = format!("{}{}", inbox_content, final_prompt);
+        if verbose {
+            eprintln!("[Inbox: {} message(s) injected]", inbox_messages.len());
+        }
+    }
+
     // Add user message
     app.add_message(&mut context, "user".to_string(), final_prompt.clone());
 
@@ -450,8 +465,29 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
 
     let context_has_system = context.messages.iter().any(|m| m.role == "system");
 
+    // Execute pre_system_prompt hook - can inject content before system prompt sections
+    let pre_sys_hook_data = serde_json::json!({
+        "context_name": context.name,
+        "summary": summary,
+        "todos": todos,
+        "goals": goals,
+    });
+    let pre_sys_hook_results = tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data, verbose)?;
+
     // Build full system prompt with all components
     let mut full_system_prompt = system_prompt.clone();
+
+    // Prepend any content from pre_system_prompt hooks
+    for (hook_tool_name, result) in &pre_sys_hook_results {
+        if let Some(inject) = result.get("inject").and_then(|v| v.as_str()) {
+            if !inject.is_empty() {
+                if verbose {
+                    eprintln!("[Hook pre_system_prompt: {} injected content]", hook_tool_name);
+                }
+                full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
+            }
+        }
+    }
 
     // Add username info at the start if not "user"
     if resolved_config.username != "user" {
@@ -482,6 +518,28 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         full_system_prompt.push_str(&reflection_prompt);
     }
 
+    // Execute post_system_prompt hook - can inject content after all system prompt sections
+    let post_sys_hook_data = serde_json::json!({
+        "context_name": context.name,
+        "summary": summary,
+        "todos": todos,
+        "goals": goals,
+    });
+    let post_sys_hook_results = tools::execute_hook(tools, tools::HookPoint::PostSystemPrompt, &post_sys_hook_data, verbose)?;
+
+    // Append any content from post_system_prompt hooks
+    for (hook_tool_name, result) in &post_sys_hook_results {
+        if let Some(inject) = result.get("inject").and_then(|v| v.as_str()) {
+            if !inject.is_empty() {
+                if verbose {
+                    eprintln!("[Hook post_system_prompt: {} injected content]", hook_tool_name);
+                }
+                full_system_prompt.push_str("\n\n");
+                full_system_prompt.push_str(inject);
+            }
+        }
+    }
+
     let mut messages: Vec<serde_json::Value> = if !full_system_prompt.is_empty() && !context_has_system {
         vec![serde_json::json!({
             "role": "system",
@@ -509,10 +567,11 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
     // Collect all tools (user-defined + built-in tools)
     let mut all_tools = tools::tools_to_api_format(tools);
 
-    // Always add agentic tools (todos, goals)
+    // Always add agentic tools (todos, goals, send_message)
     // Note: recurse tool is now external (loaded from tools directory)
     all_tools.push(tools::todos_tool_to_api_format());
     all_tools.push(tools::goals_tool_to_api_format());
+    all_tools.push(tools::send_message_tool_to_api_format());
 
     // Add reflection tool if enabled
     if use_reflection {
@@ -703,6 +762,69 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                     match app.save_current_goals(content) {
                         Ok(()) => format!("Goals updated ({} characters).", content.len()),
                         Err(e) => format!("Error saving goals: {}", e),
+                    }
+                } else if tc.name == tools::SEND_MESSAGE_TOOL_NAME {
+                    // Handle built-in send_message tool
+                    let to = args["to"].as_str().unwrap_or("");
+                    let content = args["content"].as_str().unwrap_or("");
+                    let from = args["from"].as_str().unwrap_or(&context.name);
+
+                    if to.is_empty() {
+                        "Error: 'to' field is required".to_string()
+                    } else if content.is_empty() {
+                        "Error: 'content' field is required".to_string()
+                    } else {
+                        // Execute pre_send_message hooks - can intercept delivery
+                        let pre_hook_data = serde_json::json!({
+                            "from": from,
+                            "to": to,
+                            "content": content,
+                            "context_name": context.name,
+                        });
+                        let pre_hook_results = tools::execute_hook(tools, tools::HookPoint::PreSendMessage, &pre_hook_data, verbose)?;
+
+                        // Check if any hook claimed delivery
+                        let mut delivered_via: Option<String> = None;
+                        for (hook_tool_name, result) in &pre_hook_results {
+                            if result.get("delivered").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                let via = result.get("via").and_then(|v| v.as_str()).unwrap_or(&hook_tool_name);
+                                delivered_via = Some(via.to_string());
+                                if verbose {
+                                    eprintln!("[Hook pre_send_message: {} intercepted delivery]", hook_tool_name);
+                                }
+                                break;
+                            }
+                        }
+
+                        let delivery_result = if let Some(via) = delivered_via {
+                            // Hook claimed delivery, skip local inbox
+                            format!("Message delivered to '{}' via {}", to, via)
+                        } else {
+                            // No hook claimed delivery, write to local inbox
+                            let entry = InboxEntry {
+                                id: Uuid::new_v4().to_string(),
+                                timestamp: now_timestamp(),
+                                from: from.to_string(),
+                                to: to.to_string(),
+                                content: content.to_string(),
+                            };
+                            match app.append_to_inbox(to, &entry) {
+                                Ok(()) => format!("Message delivered to '{}' via local inbox", to),
+                                Err(e) => format!("Error delivering message: {}", e),
+                            }
+                        };
+
+                        // Execute post_send_message hooks (observe only)
+                        let post_hook_data = serde_json::json!({
+                            "from": from,
+                            "to": to,
+                            "content": content,
+                            "context_name": context.name,
+                            "delivery_result": delivery_result,
+                        });
+                        let _ = tools::execute_hook(tools, tools::HookPoint::PostSendMessage, &post_hook_data, verbose);
+
+                        delivery_result
                     }
                 } else if let Some(tool) = tools::find_tool(tools, &tc.name) {
                     match tools::execute_tool(tool, &args, verbose) {
