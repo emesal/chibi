@@ -17,3 +17,8 @@
 ### Reasoning tokens
 - this is something we need to research and make use of:
   https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#enable-reasoning-with-default-config
+
+### -l option
+- current behaviour: -l 4 outputs the last 4 exchanges, -l 0 outputs all exchanges (in current context)
+- add this behaviour: -l -5 outputs the *first* five exchanges (of the current context)
+- -L/--list-all works like -l/--list but operates on _the full_ transcript (both current and stored combined)
