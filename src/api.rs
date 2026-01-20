@@ -23,7 +23,7 @@ pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
     }
 
     // Execute pre_rolling_compact hook
-    let tools = tools::load_tools(&app.tools_dir, verbose)?;
+    let tools = tools::load_tools(&app.plugins_dir, verbose)?;
     let hook_data = serde_json::json!({
         "context_name": context.name,
         "message_count": context.messages.len(),
@@ -191,7 +191,7 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
     }
 
     // Execute pre_compact hook
-    let tools = tools::load_tools(&app.tools_dir, verbose)?;
+    let tools = tools::load_tools(&app.plugins_dir, verbose)?;
     let hook_data = serde_json::json!({
         "context_name": context.name,
         "message_count": context.messages.len(),

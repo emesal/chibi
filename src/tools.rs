@@ -82,15 +82,15 @@ pub struct Tool {
     pub hooks: Vec<HookPoint>,
 }
 
-/// Load all tools from the tools directory by calling each with --schema
-pub fn load_tools(tools_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
+/// Load all tools from the plugins directory by calling each with --schema
+pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
     let mut tools = Vec::new();
 
-    if !tools_dir.exists() {
+    if !plugins_dir.exists() {
         return Ok(tools);
     }
 
-    let entries = fs::read_dir(tools_dir)?;
+    let entries = fs::read_dir(plugins_dir)?;
 
     for entry in entries.flatten() {
         let path = entry.path();

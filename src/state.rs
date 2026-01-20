@@ -16,7 +16,7 @@ pub struct AppState {
     pub chibi_dir: PathBuf,
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
-    pub tools_dir: PathBuf,
+    pub plugins_dir: PathBuf,
 }
 
 impl AppState {
@@ -25,13 +25,13 @@ impl AppState {
     pub fn from_dir(chibi_dir: PathBuf, config: Config) -> io::Result<Self> {
         let contexts_dir = chibi_dir.join("contexts");
         let prompts_dir = chibi_dir.join("prompts");
-        let tools_dir = chibi_dir.join("tools");
+        let plugins_dir = chibi_dir.join("plugins");
         let state_path = chibi_dir.join("state.json");
 
         fs::create_dir_all(&chibi_dir)?;
         fs::create_dir_all(&contexts_dir)?;
         fs::create_dir_all(&prompts_dir)?;
-        fs::create_dir_all(&tools_dir)?;
+        fs::create_dir_all(&plugins_dir)?;
 
         let state = ContextState {
             contexts: Vec::new(),
@@ -46,7 +46,7 @@ impl AppState {
             chibi_dir,
             contexts_dir,
             prompts_dir,
-            tools_dir,
+            plugins_dir,
         })
     }
 
@@ -55,13 +55,13 @@ impl AppState {
         let chibi_dir = home.join(".chibi");
         let contexts_dir = chibi_dir.join("contexts");
         let prompts_dir = chibi_dir.join("prompts");
-        let tools_dir = chibi_dir.join("tools");
+        let plugins_dir = chibi_dir.join("plugins");
 
         // Create directories if they don't exist
         fs::create_dir_all(&chibi_dir)?;
         fs::create_dir_all(&contexts_dir)?;
         fs::create_dir_all(&prompts_dir)?;
-        fs::create_dir_all(&tools_dir)?;
+        fs::create_dir_all(&plugins_dir)?;
 
         let config_path = chibi_dir.join("config.toml");
         let models_path = chibi_dir.join("models.toml");
@@ -112,7 +112,7 @@ impl AppState {
             chibi_dir,
             contexts_dir,
             prompts_dir,
-            tools_dir,
+            plugins_dir,
         })
     }
     

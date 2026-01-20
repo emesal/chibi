@@ -41,4 +41,4 @@ cargo test cli        # CLI parsing tests
 
 ## Plugins Repo
 
-For plugin contributions, see [chibi-plugins](https://github.com/...) (planned).
+For plugin contributions, see [chibi-plugins](https://github.com/emesal/chibi-plugins).

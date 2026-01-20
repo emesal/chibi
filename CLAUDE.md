@@ -13,7 +13,7 @@ cargo run -- <args>      # Run with arguments (e.g., cargo run -- -v "hello")
 
 ## Architecture Overview
 
-Chibi is a CLI tool for conversing with LLMs via OpenRouter. It maintains persistent conversation state and supports tools/hooks for extensibility.
+Chibi is a CLI tool for conversing with LLMs via OpenRouter. It maintains persistent conversation state and supports plugins/hooks for extensibility.
 
 ### Source Files (`src/`)
 
@@ -23,7 +23,7 @@ Chibi is a CLI tool for conversing with LLMs via OpenRouter. It maintains persis
 - **context.rs** - Data structures for conversations (`Context`, `Message`, `ContextState`, `TranscriptEntry`, `InboxEntry`)
 - **state.rs** - `AppState` manages all file I/O: contexts, prompts, todos, goals, transcripts, inbox
 - **api.rs** - LLM API communication, streaming responses, tool execution loop, compaction
-- **tools.rs** - Tool loading, schema parsing, hook system (`HookPoint` enum), built-in tool definitions
+- **tools.rs** - Plugin loading, schema parsing, hook system (`HookPoint` enum), built-in tool definitions
 - **lock.rs** - Context locking with heartbeat to prevent concurrent access
 
 ### Data Flow
@@ -38,9 +38,9 @@ Chibi is a CLI tool for conversing with LLMs via OpenRouter. It maintains persis
    - Executes tool calls in a loop until final text response
    - Logs to transcript files (txt and jsonl)
 
-### Tool System
+### Plugin System
 
-External tools are executable scripts in `~/.chibi/tools/` that:
+Plugins are executable scripts in `~/.chibi/plugins/` that provide tools for the LLM:
 - Output JSON schema when called with `--schema`
 - Receive arguments via `CHIBI_TOOL_ARGS` environment variable
 - Can register for hooks via `"hooks": [...]` in schema
@@ -52,7 +52,7 @@ Built-in tools (defined in `tools.rs`, executed in `api.rs`):
 
 ### Hook System
 
-Hooks fire at lifecycle points. Tools register via schema. Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
+Hooks fire at lifecycle points. Plugins register via schema. Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
 
 Key hooks: `on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `post_tool`, `pre_system_prompt`, `post_system_prompt`, `pre_send_message`, `post_send_message`, `on_context_switch`, `pre_clear`, `post_clear`, `pre_compact`, `post_compact`, `pre_rolling_compact`, `post_rolling_compact`
 
@@ -68,7 +68,7 @@ Key hooks: `on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `pos
 │   ├── reflection.md       # LLM's persistent memory
 │   ├── compaction.md       # Compaction instructions
 │   └── continuation.md     # Post-compaction instructions
-├── tools/                   # Executable tool scripts
+├── plugins/                 # Plugin scripts (provide tools for LLM)
 └── contexts/<name>/
     ├── context.json        # Messages array
     ├── local.toml          # Per-context config overrides
@@ -81,7 +81,7 @@ Key hooks: `on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `pos
     └── prompt.md           # Context-specific system prompt
 ```
 
-### Example Tool Pattern (Python with uv)
+### Example Plugin Pattern (Python with uv)
 
 ```python
 #!/usr/bin/env -S uv run --quiet --script
@@ -117,8 +117,8 @@ print("result")
 
 - stdout: Only LLM output (pipeable)
 - stderr: Diagnostics (with `-v`)
-- Tools read args from `CHIBI_TOOL_ARGS` env var (not stdin)
-- Tools can use stdin for user interaction (confirmations)
+- Plugins read args from `CHIBI_TOOL_ARGS` env var (not stdin)
+- Plugins can use stdin for user interaction (confirmations)
 - Hooks receive data via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars
 
 ### See Also

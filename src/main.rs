@@ -103,7 +103,7 @@ async fn main() -> io::Result<()> {
     let use_reflection = app.config.reflection_enabled && !cli.no_reflection;
 
     // Load tools at startup
-    let tools = tools::load_tools(&app.tools_dir, verbose)?;
+    let tools = tools::load_tools(&app.plugins_dir, verbose)?;
     if verbose && !tools.is_empty() {
         eprintln!("[Loaded {} tool(s): {}]",
             tools.len(),

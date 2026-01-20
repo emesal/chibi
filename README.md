@@ -7,7 +7,7 @@ Prototype CLI tool for having conversations with AI models via OpenRouter. Chibi
 - **Persistent conversations** - State is saved between sessions
 - **Multiple contexts** - Maintain separate conversations for different projects/topics
 - **Per-context system prompts** - Each context can have its own personality/instructions
-- **Tools support** - Extend capabilities with custom scripts the LLM can call
+- **Plugin system** - Extend capabilities with custom scripts the LLM can call
 - **Transcript history** - Full chat history is preserved when contexts are cleared or compacted
 - **Streaming responses** - Real-time output as the AI responds
 - **Context window management** - Warnings when approaching context limits
@@ -189,27 +189,27 @@ chibi -e "You are a creative writing assistant. Be imaginative and playful."
 chibi -s default  # Uses the default chibi.md prompt
 ```
 
-## Tools
+## Plugins
 
-Chibi can call external scripts as tools, allowing the LLM to perform actions like reading files, fetching URLs, or running commands.
+Plugins are executable scripts that provide tools for the LLM to call. They enable actions like reading files, fetching URLs, or running commands.
 
 ### THIS IS THE DANGER ZONE!
 
-Chibi does not impose any restrictions on tools. NONE. Each tool is responsible for its own safety measures. *You are expected to understand the tools you install.*
+Chibi does not impose any restrictions on plugins. NONE. Each plugin is responsible for its own safety measures. *You are expected to understand the plugins you install.*
 
-See *Tool Safety* below.
+See *Plugin Safety* below.
 
-### Setting Up Tools
+### Setting Up Plugins
 
 You need to do this yourself.
 
-1. Create the tools directory: `mkdir -p ~/.chibi/tools`
+1. Create the plugins directory: `mkdir -p ~/.chibi/plugins`
 2. Add executable scripts to the directory
 3. Each script must support `--schema` to describe itself
 
-### Tool Script Requirements
+### Plugin Script Requirements
 
-Each tool script must:
+Each plugin script must:
 
 1. **Be executable** (`chmod +x`)
 2. **Output JSON schema when called with `--schema`**:
@@ -230,13 +230,13 @@ Each tool script must:
 4. **Output results to stdout**
 5. **Use stderr for prompts** and stdin for user input (both are free since args come via env var)
 
-**Note on Environment Variables:** Tool parameters are passed as a single JSON string in `CHIBI_TOOL_ARGS`. Environment variables have size limits (typically 128KB-2MB depending on OS) and cannot represent certain binary data. For the simple tools chibi is designed for, this is rarely an issue. If you need to pass large data, consider using file paths instead.
+**Note on Environment Variables:** Tool parameters are passed as a single JSON string in `CHIBI_TOOL_ARGS`. Environment variables have size limits (typically 128KB-2MB depending on OS) and cannot represent certain binary data. For the simple plugins chibi is designed for, this is rarely an issue. If you need to pass large data, consider using file paths instead.
 
-### Example Tool (Bash)
+### Example Plugin (Bash)
 
 ```bash
 #!/bin/bash
-# ~/.chibi/tools/read_file
+# ~/.chibi/plugins/read_file
 
 if [[ "$1" == "--schema" ]]; then
   cat <<'EOF'
@@ -260,11 +260,11 @@ path=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.path')
 cat "$path"
 ```
 
-### Example Tool (Python)
+### Example Plugin (Python)
 
 ```python
 #!/usr/bin/env python3
-# ~/.chibi/tools/web_search
+# ~/.chibi/plugins/web_search
 
 import sys
 import json
@@ -291,9 +291,9 @@ params = json.loads(os.environ["CHIBI_TOOL_ARGS"])
 print(json.dumps(results))
 ```
 
-### Example Tools
+### Example Plugins
 
-The `examples/tools/` directory contains ready-to-use tools:
+See the [chibi-plugins](https://github.com/emesal/chibi-plugins) repository for ready-to-use plugins:
 
 **LLM-Callable Tools:**
 - `read_file` - Read file contents (bash)
@@ -304,45 +304,23 @@ The `examples/tools/` directory contains ready-to-use tools:
 - `sub-agent` - Spawn sub-agents in other contexts (bash)
 - `recurse` - Continue processing without returning to user (bash)
 
-**Hook Tools:**
+**Hook Plugins:**
 - `hook-inspector` - Detailed hook debugger with JSON data logging (bash)
 
-Copy them to use:
-```bash
-cp examples/tools/* ~/.chibi/tools/
-chmod +x ~/.chibi/tools/*
-```
+### MCP Wrapper Plugins
 
-### MCP Wrapper Tools
+Chibi can connect to MCP (Model Context Protocol) servers through wrapper plugins. See [chibi-plugins](https://github.com/emesal/chibi-plugins) for examples:
 
-Chibi can connect to MCP (Model Context Protocol) servers through wrapper tools. Two examples are provided:
+- **fetch-mcp** (Bash) - Simple MCP wrapper, no caching
+- **github-mcp** (Python) - Full-featured with caching
 
-**fetch-mcp** (Bash) - Simple MCP wrapper, no caching:
-```bash
-# Requires: curl, jq
-# Configure: FETCH_MCP_URL=http://your-mcp-server
-cp examples/tools/fetch-mcp ~/.chibi/tools/
-```
+These serve as templates for connecting to any MCP server.
 
-**github-mcp** (Python) - Full-featured with caching:
-```bash
-# Requires: uv (https://docs.astral.sh/uv/) - deps managed automatically
-# Configure: GITHUB_TOKEN=your-token
-cp examples/tools/github-mcp ~/.chibi/tools/
+### Plugin Safety
 
-# First, refresh the tool cache:
-echo '{"refresh_cache": true}' | ~/.chibi/tools/github-mcp
-```
-
-The GitHub MCP wrapper demonstrates caching: it stores discovered tools in `~/.chibi/cache/github-mcp.json` so they're available at startup. The LLM can call `{"refresh_cache": true}` to update the cache if tools change.
-
-These examples serve as templates - copy and modify them to connect to any MCP server.
-
-### Tool Safety
-
-Tools are responsible for their own safety guardrails. Chibi passes these environment variables to tools:
+Plugins are responsible for their own safety guardrails. Chibi passes these environment variables to plugins:
 - `CHIBI_TOOL_ARGS` - JSON arguments (always set)
-- `CHIBI_VERBOSE=1` - when `-v` is used, allowing tools to adjust their behavior
+- `CHIBI_VERBOSE=1` - when `-v` is used, allowing plugins to adjust their behavior
 
 Since args come via env var, **stdin is free for user interaction** (confirmations, multi-line input, etc.).
 
@@ -463,11 +441,11 @@ Hook data varies by hook type:
 - **Modifying hooks** (`pre_*`): Can output JSON to modify data (not yet implemented for all hooks)
 - **Observing hooks** (`post_*`, `on_*`): Output is ignored
 
-### Example Hook Tools
+### Example Hook Plugins
 
-**Simple Logger** (`examples/tools/logger`):
+See [chibi-plugins](https://github.com/emesal/chibi-plugins) for hook examples like `logger` and `hook-inspector`.
 
-A minimal hook that logs event names to `~/.chibi/hook.log`:
+A minimal hook plugin that logs event names:
 
 ```bash
 #!/bin/bash
@@ -486,22 +464,6 @@ fi
 
 # Log the event
 echo "[$( date '+%Y-%m-%d %H:%M:%S')] $CHIBI_HOOK" >> ~/.chibi/hook.log
-```
-
-**Hook Inspector** (`examples/tools/hook-inspector`):
-
-A detailed debugging tool that logs all hook events with formatted JSON data to `~/.chibi/hook-inspector.log`. Useful for:
-- Understanding what data is available at each hook point
-- Debugging hook behavior
-- Learning how to build your own hooks
-
-```bash
-# Copy to your tools directory
-cp examples/tools/hook-inspector ~/.chibi/tools/
-
-# Run commands and check the log
-chibi -v -s my-context "hello"
-cat ~/.chibi/hook-inspector.log
 ```
 
 Example output:
@@ -578,15 +540,15 @@ The LLM always has access to these tools (no setup required):
 | `update_goals` | Set high-level objectives (persists in `goals.md`) |
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
 
-### Optional External Tools
+### Optional External Plugins
 
-These are available in `examples/tools/` and can be copied to `~/.chibi/tools/`:
+These are available in [chibi-plugins](https://github.com/emesal/chibi-plugins):
 
-| Tool | Description |
-|------|-------------|
-| `recurse` | Continue working without returning to user |
-| `read_context` | Read another context's state (read-only, for sub-agents) |
-| `sub-agent` | Spawn sub-agents in another context |
+| Plugin | Tool Provided | Description |
+|--------|---------------|-------------|
+| `recurse` | `recurse` | Continue working without returning to user |
+| `read_context` | `read_context` | Read another context's state (read-only) |
+| `sub-agent` | `sub-agent` | Spawn sub-agents in another context |
 
 ### Todos and Goals
 
@@ -599,7 +561,7 @@ These are automatically included in the system prompt, so the LLM always knows w
 
 ### Recurse (Autonomous Mode)
 
-The `recurse` tool (in `examples/tools/`) lets the LLM work autonomously:
+The `recurse` plugin (from [chibi-plugins](https://github.com/emesal/chibi-plugins)) lets the LLM work autonomously:
 
 ```
 LLM: "I need to do more work. Let me continue."
@@ -623,7 +585,7 @@ chibi -S research "Find information about quantum computing"
 chibi -S coding -e "You are a code reviewer" "Review this function for bugs"
 ```
 
-The `sub-agent` tool in `examples/tools/` provides a convenient wrapper for the LLM:
+The `sub-agent` plugin provides a convenient wrapper for the LLM:
 
 ```
 Main: [calls sub-agent with context: "research", task: "Find info about X"]
@@ -662,7 +624,7 @@ Chibi stores data in `~/.chibi/`:
 │   └── reflection.md    # LLM's persistent memory (auto-created)
 ├── cache/               # Tool caches (optional, tool-managed)
 │   └── github-mcp.json  # Example: cached MCP tool definitions
-├── tools/               # Executable tool scripts
+├── plugins/             # Plugin scripts (provide tools for LLM)
 │   ├── read_file
 │   ├── fetch_url
 │   ├── recurse          # Continue processing tool
