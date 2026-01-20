@@ -182,9 +182,8 @@ impl AppState {
             .truncate(true)
             .open(self.context_file(&context.name))?;
         let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, context).map_err(|e| {
-            io::Error::other(format!("Failed to save context: {}", e))
-        })?;
+        serde_json::to_writer_pretty(writer, context)
+            .map_err(|e| io::Error::other(format!("Failed to save context: {}", e)))?;
 
         // Save summary to separate file
         let summary_path = self.summary_file(&context.name);
@@ -201,7 +200,6 @@ impl AppState {
     pub fn append_to_transcript(&self, context: &Context) -> io::Result<()> {
         self.ensure_context_dir(&context.name)?;
         let mut file = OpenOptions::new()
-            
             .create(true)
             .append(true)
             .open(self.transcript_file(&context.name))?;
@@ -342,9 +340,8 @@ impl AppState {
                 .create(true)
                 .truncate(true)
                 .open(&new_context_file)?;
-            serde_json::to_writer_pretty(BufWriter::new(file), &context).map_err(|e| {
-                io::Error::other(format!("Failed to save context: {}", e))
-            })?;
+            serde_json::to_writer_pretty(BufWriter::new(file), &context)
+                .map_err(|e| io::Error::other(format!("Failed to save context: {}", e)))?;
         }
 
         // Update state
@@ -543,11 +540,8 @@ impl AppState {
     ) -> io::Result<()> {
         self.ensure_context_dir(context_name)?;
         let path = self.local_config_file(context_name);
-        let content = toml::to_string_pretty(local_config).map_err(|e| {
-            io::Error::other(
-                format!("Failed to serialize local.toml: {}", e),
-            )
-        })?;
+        let content = toml::to_string_pretty(local_config)
+            .map_err(|e| io::Error::other(format!("Failed to serialize local.toml: {}", e)))?;
         fs::write(&path, content)
     }
 
@@ -644,16 +638,10 @@ impl AppState {
     pub fn append_to_jsonl_transcript(&self, entry: &TranscriptEntry) -> io::Result<()> {
         self.ensure_context_dir(&self.state.current_context)?;
         let path = self.transcript_jsonl_file(&self.state.current_context);
-        let mut file = OpenOptions::new()
-            
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
         let json = serde_json::to_string(entry).map_err(|e| {
-            io::Error::other(
-                format!("Failed to serialize transcript entry: {}", e),
-            )
+            io::Error::other(format!("Failed to serialize transcript entry: {}", e))
         })?;
         writeln!(file, "{}", json)?;
         Ok(())
@@ -741,9 +729,8 @@ impl AppState {
             .append(true)
             .open(&inbox_path)?;
 
-        let json = serde_json::to_string(entry).map_err(|e| {
-            io::Error::other(format!("JSON serialize error: {}", e))
-        })?;
+        let json = serde_json::to_string(entry)
+            .map_err(|e| io::Error::other(format!("JSON serialize error: {}", e)))?;
         writeln!(file, "{}", json)?;
 
         // Release lock

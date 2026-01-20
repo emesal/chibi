@@ -137,11 +137,7 @@ Output ONLY the updated summary, no preamble."#,
         .body(request_body.to_string())
         .send()
         .await
-        .map_err(|e| {
-            io::Error::other(
-                format!("Rolling compact request failed: {}", e),
-            )
-        })?;
+        .map_err(|e| io::Error::other(format!("Rolling compact request failed: {}", e)))?;
 
     if response.status() != StatusCode::OK {
         let status = response.status();
@@ -149,15 +145,14 @@ Output ONLY the updated summary, no preamble."#,
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(io::Error::other(
-            format!("Rolling compact API error ({}): {}", status, body),
-        ));
+        return Err(io::Error::other(format!(
+            "Rolling compact API error ({}): {}",
+            status, body
+        )));
     }
 
     let json: serde_json::Value = response.json().await.map_err(|e| {
-        io::Error::other(
-            format!("Failed to parse rolling compact response: {}", e),
-        )
+        io::Error::other(format!("Failed to parse rolling compact response: {}", e))
     })?;
 
     let new_summary = json["choices"][0]["message"]["content"]
@@ -312,14 +307,16 @@ async fn compact_context_with_llm_internal(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(io::Error::other(
-            format!("API error ({}): {}", status, body),
-        ));
+        return Err(io::Error::other(format!(
+            "API error ({}): {}",
+            status, body
+        )));
     }
 
-    let json: serde_json::Value = response.json().await.map_err(|e| {
-        io::Error::other(format!("Failed to parse response: {}", e))
-    })?;
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| io::Error::other(format!("Failed to parse response: {}", e)))?;
 
     let summary = json["choices"][0]["message"]["content"]
         .as_str()
@@ -408,14 +405,16 @@ async fn compact_context_with_llm_internal(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(io::Error::other(
-            format!("API error ({}): {}", status, body),
-        ));
+        return Err(io::Error::other(format!(
+            "API error ({}): {}",
+            status, body
+        )));
     }
 
-    let json: serde_json::Value = response.json().await.map_err(|e| {
-        io::Error::other(format!("Failed to parse response: {}", e))
-    })?;
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| io::Error::other(format!("Failed to parse response: {}", e)))?;
 
     let acknowledgment = json["choices"][0]["message"]["content"]
         .as_str()
@@ -568,15 +567,16 @@ async fn send_prompt_with_depth(
     // Prepend any content from pre_system_prompt hooks
     for (hook_tool_name, result) in &pre_sys_hook_results {
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
-            && !inject.is_empty() {
-                if verbose {
-                    eprintln!(
-                        "[Hook pre_system_prompt: {} injected content]",
-                        hook_tool_name
-                    );
-                }
-                full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
+            && !inject.is_empty()
+        {
+            if verbose {
+                eprintln!(
+                    "[Hook pre_system_prompt: {} injected content]",
+                    hook_tool_name
+                );
             }
+            full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
+        }
     }
 
     // Add username info at the start if not "user"
@@ -628,16 +628,17 @@ async fn send_prompt_with_depth(
     // Append any content from post_system_prompt hooks
     for (hook_tool_name, result) in &post_sys_hook_results {
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
-            && !inject.is_empty() {
-                if verbose {
-                    eprintln!(
-                        "[Hook post_system_prompt: {} injected content]",
-                        hook_tool_name
-                    );
-                }
-                full_system_prompt.push_str("\n\n");
-                full_system_prompt.push_str(inject);
+            && !inject.is_empty()
+        {
+            if verbose {
+                eprintln!(
+                    "[Hook post_system_prompt: {} injected content]",
+                    hook_tool_name
+                );
             }
+            full_system_prompt.push_str("\n\n");
+            full_system_prompt.push_str(inject);
+        }
     }
 
     let mut messages: Vec<serde_json::Value> =
@@ -698,9 +699,7 @@ async fn send_prompt_with_depth(
             .body(request_body.to_string())
             .send()
             .await
-            .map_err(|e| {
-                io::Error::other(format!("Failed to send request: {}", e))
-            })?;
+            .map_err(|e| io::Error::other(format!("Failed to send request: {}", e)))?;
 
         if response.status() != StatusCode::OK {
             let status = response.status();
@@ -708,9 +707,10 @@ async fn send_prompt_with_depth(
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(io::Error::other(
-                format!("API error ({}): {}", status, body),
-            ));
+            return Err(io::Error::other(format!(
+                "API error ({}): {}",
+                status, body
+            )));
         }
 
         let mut stream = response.bytes_stream();
@@ -723,8 +723,8 @@ async fn send_prompt_with_depth(
         let mut has_tool_calls = false;
 
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result
-                .map_err(|e| io::Error::other(format!("Stream error: {}", e)))?;
+            let chunk =
+                chunk_result.map_err(|e| io::Error::other(format!("Stream error: {}", e)))?;
             let chunk_str = std::str::from_utf8(&chunk)
                 .map_err(|e| io::Error::other(format!("UTF-8 error: {}", e)))?;
 
@@ -735,56 +735,56 @@ async fn send_prompt_with_depth(
                         continue;
                     }
 
-                    let json: serde_json::Value = serde_json::from_str(data).map_err(|e| {
-                        io::Error::other(format!("JSON parse error: {}", e))
-                    })?;
+                    let json: serde_json::Value = serde_json::from_str(data)
+                        .map_err(|e| io::Error::other(format!("JSON parse error: {}", e)))?;
 
                     if let Some(choices) = json["choices"].as_array()
                         && let Some(choice) = choices.first()
-                            && let Some(delta) = choice.get("delta") {
-                                // Handle regular content
-                                if let Some(content) = delta["content"].as_str() {
-                                    if is_first_content {
-                                        is_first_content = false;
-                                        if let Some(remaining) = content.strip_prefix('\n') {
-                                            if !remaining.is_empty() {
-                                                full_response.push_str(remaining);
-                                                stdout.write_all(remaining.as_bytes()).await?;
-                                                stdout.flush().await?;
-                                            }
-                                            continue;
-                                        }
+                        && let Some(delta) = choice.get("delta")
+                    {
+                        // Handle regular content
+                        if let Some(content) = delta["content"].as_str() {
+                            if is_first_content {
+                                is_first_content = false;
+                                if let Some(remaining) = content.strip_prefix('\n') {
+                                    if !remaining.is_empty() {
+                                        full_response.push_str(remaining);
+                                        stdout.write_all(remaining.as_bytes()).await?;
+                                        stdout.flush().await?;
                                     }
+                                    continue;
+                                }
+                            }
 
-                                    full_response.push_str(content);
-                                    stdout.write_all(content.as_bytes()).await?;
-                                    stdout.flush().await?;
+                            full_response.push_str(content);
+                            stdout.write_all(content.as_bytes()).await?;
+                            stdout.flush().await?;
+                        }
+
+                        // Handle tool calls
+                        if let Some(tc_array) = delta["tool_calls"].as_array() {
+                            has_tool_calls = true;
+                            for tc in tc_array {
+                                let index = tc["index"].as_u64().unwrap_or(0) as usize;
+
+                                while tool_calls.len() <= index {
+                                    tool_calls.push(ToolCallAccumulator::default());
                                 }
 
-                                // Handle tool calls
-                                if let Some(tc_array) = delta["tool_calls"].as_array() {
-                                    has_tool_calls = true;
-                                    for tc in tc_array {
-                                        let index = tc["index"].as_u64().unwrap_or(0) as usize;
-
-                                        while tool_calls.len() <= index {
-                                            tool_calls.push(ToolCallAccumulator::default());
-                                        }
-
-                                        if let Some(id) = tc["id"].as_str() {
-                                            tool_calls[index].id = id.to_string();
-                                        }
-                                        if let Some(func) = tc.get("function") {
-                                            if let Some(name) = func["name"].as_str() {
-                                                tool_calls[index].name = name.to_string();
-                                            }
-                                            if let Some(args) = func["arguments"].as_str() {
-                                                tool_calls[index].arguments.push_str(args);
-                                            }
-                                        }
+                                if let Some(id) = tc["id"].as_str() {
+                                    tool_calls[index].id = id.to_string();
+                                }
+                                if let Some(func) = tc.get("function") {
+                                    if let Some(name) = func["name"].as_str() {
+                                        tool_calls[index].name = name.to_string();
+                                    }
+                                    if let Some(args) = func["arguments"].as_str() {
+                                        tool_calls[index].arguments.push_str(args);
                                     }
                                 }
                             }
+                        }
+                    }
                 }
             }
         }

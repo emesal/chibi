@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{self, ErrorKind};
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Hook points where tools can register to be called
@@ -105,9 +105,10 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
         {
             use std::os::unix::fs::PermissionsExt;
             if let Ok(metadata) = path.metadata()
-                && metadata.permissions().mode() & 0o111 == 0 {
-                    continue; // Not executable
-                }
+                && metadata.permissions().mode() & 0o111 == 0
+            {
+                continue; // Not executable
+            }
         }
 
         // Try to get schema from the tool
@@ -132,12 +133,10 @@ fn get_tool_schema(path: &PathBuf, verbose: bool) -> io::Result<Tool> {
         .map_err(|e| io::Error::other(format!("Failed to execute tool: {}", e)))?;
 
     if !output.status.success() {
-        return Err(io::Error::other(
-            format!(
-                "Tool returned error: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        ));
+        return Err(io::Error::other(format!(
+            "Tool returned error: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
     }
 
     let schema_str = String::from_utf8(output.stdout).map_err(|e| {
@@ -238,14 +237,12 @@ pub fn execute_hook(
             .stderr(Stdio::inherit())
             .output()
             .map_err(|e| {
-                io::Error::other(
-                    format!(
-                        "Failed to execute hook {} on {}: {}",
-                        hook.as_str(),
-                        tool.name,
-                        e
-                    ),
-                )
+                io::Error::other(format!(
+                    "Failed to execute hook {} on {}: {}",
+                    hook.as_str(),
+                    tool.name,
+                    e
+                ))
             })?;
 
         if !output.status.success() {
@@ -292,11 +289,8 @@ pub fn execute_tool(
         .stderr(Stdio::inherit()); // Let tool's stderr go directly to terminal (for prompts)
 
     // Pass arguments via environment variable (frees stdin for user interaction)
-    let json_str = serde_json::to_string(arguments).map_err(|e| {
-        io::Error::other(
-            format!("Failed to serialize arguments: {}", e),
-        )
-    })?;
+    let json_str = serde_json::to_string(arguments)
+        .map_err(|e| io::Error::other(format!("Failed to serialize arguments: {}", e)))?;
     cmd.env("CHIBI_TOOL_ARGS", json_str);
 
     // Pass verbosity to tool via environment variable
