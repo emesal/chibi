@@ -120,3 +120,6 @@ print("result")
 - Tools read args from `CHIBI_TOOL_ARGS` env var (not stdin)
 - Tools can use stdin for user interaction (confirmations)
 - Hooks receive data via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars
+
+### See Also
+- PHILOSOPHY.md for architectural decisions etc
