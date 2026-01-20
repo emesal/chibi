@@ -33,18 +33,26 @@
 - features like context-specific username and model (see below) are put here
 - values in this file override the corresponding values in the main config.toml
 - hearbeat can not be overridden here
+- see separate config-plan.md for tentative implementation plan
+
+### Per-context models
+- allow setting model per-context, the presets are just aliases. use local.toml
+- not setting the model = use the default model (mandatory 'model' variable in config.toml)
 
 ### JSON transcripts
 - let's make the full transcripts be JSON, and let them include all details
 - let's still make txt transcripts because appending is quick
 - every message/event needs a unique identifier (to avoid duplication issues for one)
+  - i imagine messages are a type of event, as are all tool calls and compaction events etc
 - messages should have from/to/content fields.
-  - to decides recipient context.
-  - from decides what the "[SPEAKER]" will be reported as in transcripts
-  - content is just the message itself
-  - we don't need to enforce FROM fields in any way. ACAB!
-  - should the from-field or a fourth field indicate if the from entity is a chibi, a human or the system?
-    - the system should just be called SYSTEM. the system prompt should indicate this.
+  - 'to' decides which context receives the message.
+  - 'from' decides what the "[SPEAKER]" will be reported as in transcripts
+  - 'content' is just the message itself
+  - we don't need to enforce 'from' fields in any way. ACAB!
+  - should the 'from' field, or a fourth field, indicate if the from entity is a chibi or a human?
+    - chibis should normally put the name of their context in the from field, as that's
+      how to refer to each chibi
+- the JSON transcript will be the "source of truth" while the txt transcript is for the convenience of humans
 
 ### Inter-context communication
 - a feature of the rust code? or a tool? i lean tool if it's solvable
@@ -59,7 +67,9 @@
   - the system prompt should make the LLM aware what the user is called,
     and that there may be other speakers than the user
 - let tools create context. a tool could ensure that a context is always created at startup if it doesn't exist.
-- external tool that creates "coffee-table" context
+  - this happens by the tool signalling the rust app that a context should be created
+  - the tool can also specify the system prompt to assign to the context
+- external tool called "coffee-table" that creates "coffee-table" context
   - coffee-table is an inter-context communication bus that provides a fika space
   - coffee-table itself has a system prompt to push discussions forward iff needed
     (and to stay out of the way if things are going smoothly)
@@ -67,11 +77,24 @@
     - this is because sending a message to the coffee-table means that it ends
       up in the coffee table's context, which is checked by all chibis
       who are interested in that conversation
+  - an "attendant" is simply an agent that uses the tool to read the state of other contexts
+    to read the context of the coffee-table
 
 ### Agentic Workflow Prompts
 - write more example prompts for agentic workflows
 - idea: workflows could be tools that use hooks to inject bootstrap material/prompts/howtos etc
-- coffee-table is one example?
+- coffee-table is one such example. it injects a message in the system prompt, explaining its existence
+  and purpose, to that all chibis know where to read and send messages to participate in
+  inter-chibi communication
+- this is elegant because if one removes the coffee-table tool from the tools folder,
+  the feature disappears (although the context remains, but new chibis won't know about it)
+  - also, if in the future the tool for reading other context's state, and the tool
+    for sending messages (which must be created), are rewritten to support remote locations,
+    the chibi swarm becomes distributed (extra bonus is the spawn subagent tool can also spawn remotely)
+
+see also ./additional-features-plan.md
+
+# for later
 
 ### Tandem Goals + Tandem Workflow
 - instead of one agent for complex goals, spawn several agents with adjacent goals
@@ -80,14 +103,6 @@
   - "implement X quickly"
   - "implement X with rigorous security"
 - agents have instructions on cooperative work + coffee-table discussion
-
-### Per-context models
-- allow setting multiple named presets in config.toml containing model names
-  - ie 'model[quick] = "model_name"'
-  - but does toml have arrays?
-- there are no mandatory presets. it's up to the user. the example config can include a bunch though
-- allow setting model per-context, the presets are just aliases. use local.toml
-- not setting the model = use the default model (mandatory 'model' variable in config.toml)
 
 ### Reasoning tokens
 - this is something we need to research and make use of:
