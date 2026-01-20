@@ -16,6 +16,7 @@ pub struct AppState {
     pub models_config: ModelsConfig,
     pub state: ContextState,
     pub state_path: PathBuf,
+    #[allow(dead_code)]
     pub chibi_dir: PathBuf,
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
@@ -182,7 +183,7 @@ impl AppState {
             .open(self.context_file(&context.name))?;
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, context).map_err(|e| {
-            io::Error::new(ErrorKind::Other, format!("Failed to save context: {}", e))
+            io::Error::other(format!("Failed to save context: {}", e))
         })?;
 
         // Save summary to separate file
@@ -200,7 +201,7 @@ impl AppState {
     pub fn append_to_transcript(&self, context: &Context) -> io::Result<()> {
         self.ensure_context_dir(&context.name)?;
         let mut file = OpenOptions::new()
-            .write(true)
+            
             .create(true)
             .append(true)
             .open(self.transcript_file(&context.name))?;
@@ -342,7 +343,7 @@ impl AppState {
                 .truncate(true)
                 .open(&new_context_file)?;
             serde_json::to_writer_pretty(BufWriter::new(file), &context).map_err(|e| {
-                io::Error::new(ErrorKind::Other, format!("Failed to save context: {}", e))
+                io::Error::other(format!("Failed to save context: {}", e))
             })?;
         }
 
@@ -393,11 +394,7 @@ impl AppState {
 
     pub fn remaining_tokens(&self, messages: &[Message]) -> usize {
         let tokens = self.calculate_token_count(messages);
-        if tokens >= self.config.context_window_limit {
-            0
-        } else {
-            self.config.context_window_limit - tokens
-        }
+        self.config.context_window_limit.saturating_sub(tokens)
     }
 
     pub fn load_prompt(&self, name: &str) -> io::Result<String> {
@@ -547,8 +544,7 @@ impl AppState {
         self.ensure_context_dir(context_name)?;
         let path = self.local_config_file(context_name);
         let content = toml::to_string_pretty(local_config).map_err(|e| {
-            io::Error::new(
-                ErrorKind::Other,
+            io::Error::other(
                 format!("Failed to serialize local.toml: {}", e),
             )
         })?;
@@ -649,14 +645,13 @@ impl AppState {
         self.ensure_context_dir(&self.state.current_context)?;
         let path = self.transcript_jsonl_file(&self.state.current_context);
         let mut file = OpenOptions::new()
-            .write(true)
+            
             .create(true)
             .append(true)
             .open(&path)?;
 
         let json = serde_json::to_string(entry).map_err(|e| {
-            io::Error::new(
-                ErrorKind::Other,
+            io::Error::other(
                 format!("Failed to serialize transcript entry: {}", e),
             )
         })?;
@@ -747,7 +742,7 @@ impl AppState {
             .open(&inbox_path)?;
 
         let json = serde_json::to_string(entry).map_err(|e| {
-            io::Error::new(ErrorKind::Other, format!("JSON serialize error: {}", e))
+            io::Error::other(format!("JSON serialize error: {}", e))
         })?;
         writeln!(file, "{}", json)?;
 

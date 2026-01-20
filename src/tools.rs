@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{self, ErrorKind};
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::process::{Command, Stdio};
 
 /// Hook points where tools can register to be called
@@ -104,11 +104,10 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = path.metadata() {
-                if metadata.permissions().mode() & 0o111 == 0 {
+            if let Ok(metadata) = path.metadata()
+                && metadata.permissions().mode() & 0o111 == 0 {
                     continue; // Not executable
                 }
-            }
         }
 
         // Try to get schema from the tool
@@ -130,11 +129,10 @@ fn get_tool_schema(path: &PathBuf, verbose: bool) -> io::Result<Tool> {
     let output = Command::new(path)
         .arg("--schema")
         .output()
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to execute tool: {}", e)))?;
+        .map_err(|e| io::Error::other(format!("Failed to execute tool: {}", e)))?;
 
     if !output.status.success() {
-        return Err(io::Error::new(
-            ErrorKind::Other,
+        return Err(io::Error::other(
             format!(
                 "Tool returned error: {}",
                 String::from_utf8_lossy(&output.stderr)
@@ -240,8 +238,7 @@ pub fn execute_hook(
             .stderr(Stdio::inherit())
             .output()
             .map_err(|e| {
-                io::Error::new(
-                    ErrorKind::Other,
+                io::Error::other(
                     format!(
                         "Failed to execute hook {} on {}: {}",
                         hook.as_str(),
@@ -296,8 +293,7 @@ pub fn execute_tool(
 
     // Pass arguments via environment variable (frees stdin for user interaction)
     let json_str = serde_json::to_string(arguments).map_err(|e| {
-        io::Error::new(
-            ErrorKind::Other,
+        io::Error::other(
             format!("Failed to serialize arguments: {}", e),
         )
     })?;
@@ -310,11 +306,10 @@ pub fn execute_tool(
 
     let output = cmd
         .output()
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to execute tool: {}", e)))?;
+        .map_err(|e| io::Error::other(format!("Failed to execute tool: {}", e)))?;
 
     if !output.status.success() {
-        return Err(io::Error::new(
-            ErrorKind::Other,
+        return Err(io::Error::other(
             "Tool execution failed or was cancelled".to_string(),
         ));
     }
@@ -358,7 +353,7 @@ pub fn reflection_tool_to_api_format() -> serde_json::Value {
 
 /// Execute the built-in update_reflection tool
 pub fn execute_reflection_tool(
-    prompts_dir: &PathBuf,
+    prompts_dir: &Path,
     arguments: &serde_json::Value,
     character_limit: usize,
 ) -> io::Result<String> {

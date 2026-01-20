@@ -43,7 +43,7 @@ impl ContextState {
             .open(state_path)?;
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, self).map_err(|e| {
-            io::Error::new(ErrorKind::Other, format!("Failed to save state: {}", e))
+            io::Error::other(format!("Failed to save state: {}", e))
         })?;
         Ok(())
     }

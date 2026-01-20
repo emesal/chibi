@@ -138,8 +138,7 @@ Output ONLY the updated summary, no preamble."#,
         .send()
         .await
         .map_err(|e| {
-            io::Error::new(
-                ErrorKind::Other,
+            io::Error::other(
                 format!("Rolling compact request failed: {}", e),
             )
         })?;
@@ -150,15 +149,13 @@ Output ONLY the updated summary, no preamble."#,
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(io::Error::new(
-            ErrorKind::Other,
+        return Err(io::Error::other(
             format!("Rolling compact API error ({}): {}", status, body),
         ));
     }
 
     let json: serde_json::Value = response.json().await.map_err(|e| {
-        io::Error::new(
-            ErrorKind::Other,
+        io::Error::other(
             format!("Failed to parse rolling compact response: {}", e),
         )
     })?;
@@ -307,7 +304,7 @@ async fn compact_context_with_llm_internal(
         .body(request_body.to_string())
         .send()
         .await
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to send request: {}", e)))?;
+        .map_err(|e| io::Error::other(format!("Failed to send request: {}", e)))?;
 
     if response.status() != StatusCode::OK {
         let status = response.status();
@@ -315,14 +312,13 @@ async fn compact_context_with_llm_internal(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(io::Error::new(
-            ErrorKind::Other,
+        return Err(io::Error::other(
             format!("API error ({}): {}", status, body),
         ));
     }
 
     let json: serde_json::Value = response.json().await.map_err(|e| {
-        io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e))
+        io::Error::other(format!("Failed to parse response: {}", e))
     })?;
 
     let summary = json["choices"][0]["message"]["content"]
@@ -340,8 +336,7 @@ async fn compact_context_with_llm_internal(
         if verbose {
             eprintln!("[DEBUG] Full response: {}", json);
         }
-        return Err(io::Error::new(
-            ErrorKind::Other,
+        return Err(io::Error::other(
             "Empty summary received from LLM. This can happen with free-tier models. Try again or use a different model.",
         ));
     }
@@ -405,7 +400,7 @@ async fn compact_context_with_llm_internal(
         .body(request_body.to_string())
         .send()
         .await
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to send request: {}", e)))?;
+        .map_err(|e| io::Error::other(format!("Failed to send request: {}", e)))?;
 
     if response.status() != StatusCode::OK {
         let status = response.status();
@@ -413,14 +408,13 @@ async fn compact_context_with_llm_internal(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(io::Error::new(
-            ErrorKind::Other,
+        return Err(io::Error::other(
             format!("API error ({}): {}", status, body),
         ));
     }
 
     let json: serde_json::Value = response.json().await.map_err(|e| {
-        io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e))
+        io::Error::other(format!("Failed to parse response: {}", e))
     })?;
 
     let acknowledgment = json["choices"][0]["message"]["content"]
@@ -573,8 +567,8 @@ async fn send_prompt_with_depth(
 
     // Prepend any content from pre_system_prompt hooks
     for (hook_tool_name, result) in &pre_sys_hook_results {
-        if let Some(inject) = result.get("inject").and_then(|v| v.as_str()) {
-            if !inject.is_empty() {
+        if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
+            && !inject.is_empty() {
                 if verbose {
                     eprintln!(
                         "[Hook pre_system_prompt: {} injected content]",
@@ -583,7 +577,6 @@ async fn send_prompt_with_depth(
                 }
                 full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
             }
-        }
     }
 
     // Add username info at the start if not "user"
@@ -634,8 +627,8 @@ async fn send_prompt_with_depth(
 
     // Append any content from post_system_prompt hooks
     for (hook_tool_name, result) in &post_sys_hook_results {
-        if let Some(inject) = result.get("inject").and_then(|v| v.as_str()) {
-            if !inject.is_empty() {
+        if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
+            && !inject.is_empty() {
                 if verbose {
                     eprintln!(
                         "[Hook post_system_prompt: {} injected content]",
@@ -645,7 +638,6 @@ async fn send_prompt_with_depth(
                 full_system_prompt.push_str("\n\n");
                 full_system_prompt.push_str(inject);
             }
-        }
     }
 
     let mut messages: Vec<serde_json::Value> =
@@ -707,7 +699,7 @@ async fn send_prompt_with_depth(
             .send()
             .await
             .map_err(|e| {
-                io::Error::new(ErrorKind::Other, format!("Failed to send request: {}", e))
+                io::Error::other(format!("Failed to send request: {}", e))
             })?;
 
         if response.status() != StatusCode::OK {
@@ -716,8 +708,7 @@ async fn send_prompt_with_depth(
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(io::Error::new(
-                ErrorKind::Other,
+            return Err(io::Error::other(
                 format!("API error ({}): {}", status, body),
             ));
         }
@@ -733,31 +724,29 @@ async fn send_prompt_with_depth(
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result
-                .map_err(|e| io::Error::new(ErrorKind::Other, format!("Stream error: {}", e)))?;
+                .map_err(|e| io::Error::other(format!("Stream error: {}", e)))?;
             let chunk_str = std::str::from_utf8(&chunk)
-                .map_err(|e| io::Error::new(ErrorKind::Other, format!("UTF-8 error: {}", e)))?;
+                .map_err(|e| io::Error::other(format!("UTF-8 error: {}", e)))?;
 
             // Parse Server-Sent Events format
             for line in chunk_str.lines() {
-                if line.starts_with("data: ") {
-                    let data = &line[6..];
+                if let Some(data) = line.strip_prefix("data: ") {
                     if data == "[DONE]" {
                         continue;
                     }
 
                     let json: serde_json::Value = serde_json::from_str(data).map_err(|e| {
-                        io::Error::new(ErrorKind::Other, format!("JSON parse error: {}", e))
+                        io::Error::other(format!("JSON parse error: {}", e))
                     })?;
 
-                    if let Some(choices) = json["choices"].as_array() {
-                        if let Some(choice) = choices.get(0) {
-                            if let Some(delta) = choice.get("delta") {
+                    if let Some(choices) = json["choices"].as_array()
+                        && let Some(choice) = choices.first()
+                            && let Some(delta) = choice.get("delta") {
                                 // Handle regular content
                                 if let Some(content) = delta["content"].as_str() {
                                     if is_first_content {
                                         is_first_content = false;
-                                        if content.starts_with('\n') {
-                                            let remaining = &content[1..];
+                                        if let Some(remaining) = content.strip_prefix('\n') {
                                             if !remaining.is_empty() {
                                                 full_response.push_str(remaining);
                                                 stdout.write_all(remaining.as_bytes()).await?;
@@ -796,8 +785,6 @@ async fn send_prompt_with_depth(
                                     }
                                 }
                             }
-                        }
-                    }
                 }
             }
         }
@@ -919,7 +906,7 @@ async fn send_prompt_with_depth(
                                 let via = result
                                     .get("via")
                                     .and_then(|v| v.as_str())
-                                    .unwrap_or(&hook_tool_name);
+                                    .unwrap_or(hook_tool_name);
                                 delivered_via = Some(via.to_string());
                                 if verbose {
                                     eprintln!(
