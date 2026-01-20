@@ -584,4 +584,162 @@ mod tests {
         assert!(cli.verbose);
         assert_eq!(cli.prompt, vec!["run", "task"]);
     }
+
+    // =======================================================================
+    // Prompt parsing behavior
+    // Core rule: any argv string not starting with `-` begins the prompt
+    // =======================================================================
+
+    /// Core rule: a bare word immediately starts the prompt
+    #[test]
+    fn cli_bare_word_is_prompt() {
+        let cli = Cli::parse_from(&args("hello")).unwrap();
+        assert_eq!(cli.prompt, vec!["hello"]);
+    }
+
+    /// Multiple bare words all become prompt parts
+    #[test]
+    fn cli_multiple_words_are_prompt() {
+        let cli = Cli::parse_from(&args("explain this error")).unwrap();
+        assert_eq!(cli.prompt, vec!["explain", "this", "error"]);
+    }
+
+    /// README pattern: chibi "add a users table to this schema"
+    /// Words after a non-flag word continue the prompt
+    #[test]
+    fn cli_quoted_prompt_style() {
+        // In shell, quotes group words. Here we simulate the parsed result.
+        let a = vec![
+            "chibi".to_string(),
+            "add a users table to this schema".to_string(),
+        ];
+        let cli = Cli::parse_from(&a).unwrap();
+        assert_eq!(cli.prompt, vec!["add a users table to this schema"]);
+    }
+
+    /// Options can precede the prompt: chibi -v "hello"
+    #[test]
+    fn cli_options_before_prompt() {
+        let cli = Cli::parse_from(&args("-v hello")).unwrap();
+        assert!(cli.verbose);
+        assert_eq!(cli.prompt, vec!["hello"]);
+    }
+
+    /// Multiple options before prompt
+    #[test]
+    fn cli_multiple_options_before_prompt() {
+        let cli = Cli::parse_from(&args("-v -x hello world")).unwrap();
+        assert!(cli.verbose);
+        assert!(cli.no_reflection);
+        assert_eq!(cli.prompt, vec!["hello", "world"]);
+    }
+
+    /// Sub-context is an option, not a command - can have prompt
+    #[test]
+    fn cli_sub_context_allows_prompt() {
+        let cli = Cli::parse_from(&args("-S myctx hello world")).unwrap();
+        assert_eq!(cli.sub_context, Some("myctx".to_string()));
+        assert_eq!(cli.prompt, vec!["hello", "world"]);
+    }
+
+    /// Double-dash forces remaining args to be prompt (even if they look like flags)
+    #[test]
+    fn cli_double_dash_escapes_flags() {
+        let cli = Cli::parse_from(&args("-- -v --help")).unwrap();
+        assert_eq!(cli.prompt, vec!["-v", "--help"]);
+        assert!(!cli.verbose); // -v was NOT parsed as flag
+    }
+
+    /// ANTI-PATTERN: "chibi command [options]" should NOT be allowed.
+    /// If someone tries "chibi list" thinking it's a subcommand,
+    /// it should be treated as the prompt "list" sent to the LLM.
+    #[test]
+    fn cli_no_subcommand_pattern() {
+        // "chibi list" should parse "list" as a prompt, not a command
+        let cli = Cli::parse_from(&args("list")).unwrap();
+        assert_eq!(cli.prompt, vec!["list"]);
+        assert!(!cli.list); // NOT the -l flag
+    }
+
+    /// Similarly, "chibi help" is a prompt, not --help
+    #[test]
+    fn cli_help_word_is_prompt() {
+        let cli = Cli::parse_from(&args("help me understand rust")).unwrap();
+        assert_eq!(cli.prompt, vec!["help", "me", "understand", "rust"]);
+    }
+
+    /// "chibi version" is a prompt asking about versions, not --version
+    #[test]
+    fn cli_version_word_is_prompt() {
+        let cli = Cli::parse_from(&args("version")).unwrap();
+        assert_eq!(cli.prompt, vec!["version"]);
+    }
+
+    /// Commands require the dash prefix: -l not "list"
+    #[test]
+    fn cli_commands_need_dash() {
+        // This is the correct way to list contexts
+        let cli = Cli::parse_from(&args("-l")).unwrap();
+        assert!(cli.list);
+        assert!(cli.prompt.is_empty());
+    }
+
+    /// Prompt can contain words that look like they could be commands
+    #[test]
+    fn cli_prompt_can_contain_command_words() {
+        let cli = Cli::parse_from(&args("please delete the old files")).unwrap();
+        assert_eq!(cli.prompt, vec!["please", "delete", "the", "old", "files"]);
+        assert!(cli.delete.is_none()); // "delete" is part of prompt, not -d
+    }
+
+    /// Numbers in prompt work fine
+    #[test]
+    fn cli_numbers_in_prompt() {
+        let cli = Cli::parse_from(&args("what is 2 + 2")).unwrap();
+        assert_eq!(cli.prompt, vec!["what", "is", "2", "+", "2"]);
+    }
+
+    /// Special characters in prompt
+    #[test]
+    fn cli_special_chars_in_prompt() {
+        let a = vec![
+            "chibi".to_string(),
+            "what's".to_string(),
+            "this?".to_string(),
+        ];
+        let cli = Cli::parse_from(&a).unwrap();
+        assert_eq!(cli.prompt, vec!["what's", "this?"]);
+    }
+
+    /// Once prompt starts, everything else is prompt (even things that look like flags)
+    #[test]
+    fn cli_flags_after_prompt_are_prompt() {
+        let cli = Cli::parse_from(&args("hello -v world")).unwrap();
+        // Once "hello" started the prompt, "-v" and "world" are all prompt
+        assert_eq!(cli.prompt, vec!["hello", "-v", "world"]);
+        assert!(!cli.verbose); // -v was NOT parsed as a flag
+    }
+
+    /// Options with arguments work before prompt
+    #[test]
+    fn cli_option_args_before_prompt() {
+        let cli = Cli::parse_from(&args("-U alice hello")).unwrap();
+        assert_eq!(cli.temp_username, Some("alice".to_string()));
+        assert_eq!(cli.prompt, vec!["hello"]);
+    }
+
+    /// Empty prompt is valid (interactive mode)
+    #[test]
+    fn cli_empty_prompt_allowed() {
+        let cli = Cli::parse_from(&args("")).unwrap();
+        assert!(cli.prompt.is_empty());
+    }
+
+    /// Empty prompt with options is valid
+    #[test]
+    fn cli_options_only_no_prompt() {
+        let cli = Cli::parse_from(&args("-v")).unwrap();
+        assert!(cli.verbose);
+        assert!(cli.prompt.is_empty());
+    }
 }
