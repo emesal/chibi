@@ -1,3 +1,9 @@
+### more tests
+- test CLI parameter paradigm
+- tests for the example tools
+
+### separate tools repo
+- eventually
 
 ### workflow definition tools
 - use hooks to inject string into system prompt, making chibis aware they exist
