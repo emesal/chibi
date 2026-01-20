@@ -16,6 +16,9 @@ Prototype CLI tool for having conversations with AI models via OpenRouter. Chibi
 - **Cross-context access** - Read state from other contexts (for sub-agents)
 - **Piped input** - Accept prompts from stdin for scripting
 - **Unix philosophy** - Only LLM output goes to stdout, making it pipeable
+- **Per-context config** - Override model, API key, username per context (local.toml)
+- **Context locking** - Prevents concurrent access to the same context
+- **JSONL transcripts** - Machine-readable conversation logs with metadata
 
 ## Installation
 
@@ -700,7 +703,7 @@ Chibi stores data in `~/.chibi/`:
 |------|-------------|
 | `-s, --switch <name>` | Switch to a different context (`new` for auto-name, `new:prefix` for prefixed) |
 | `-S, --sub-context <name>` | Run in a context without changing global state (for sub-agents) |
-| `-l, --list` | List all contexts |
+| `-l, --list` | List all contexts (shows `[active]` or `[stale]` lock status) |
 | `-w, --which` | Show current context name |
 | `-d, --delete <name>` | Delete a context |
 | `-C, --clear` | Clear current context (saves to transcript) |
@@ -712,6 +715,8 @@ Chibi stores data in `~/.chibi/`:
 | `-e, --set-prompt <arg>` | Set system prompt (can combine with a prompt to send) |
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
 | `-x, --no-reflection` | Disable reflection for this invocation |
+| `-u, --username <name>` | Set username (persists to context's local.toml) |
+| `-U, --temp-username <name>` | Set username for this invocation only |
 | `-h, --help` | Show help message |
 | `-V, --version` | Show version |
 
@@ -835,6 +840,8 @@ chibi -- -v is not a flag here, it's part of my prompt
 
 ## Transcript File Format
 
+### Human-Readable (transcript.txt)
+
 The `transcript.txt` file stores conversation history in a format matching the LLM's context:
 
 ```
@@ -846,6 +853,47 @@ The `transcript.txt` file stores conversation history in a format matching the L
 
 [ASSISTANT]: Ownership is Rust's key feature...
 ```
+
+### Machine-Readable (transcript.jsonl)
+
+The `transcript.jsonl` file stores the same history in JSON Lines format, with additional metadata:
+
+```json
+{"id":"550e8400-e29b-41d4-a716-446655440000","timestamp":1705123456,"from":"alice","to":"default","content":"What is Rust?","entry_type":"message"}
+{"id":"550e8400-e29b-41d4-a716-446655440001","timestamp":1705123460,"from":"default","to":"user","content":"Rust is a systems programming language...","entry_type":"message"}
+{"id":"550e8400-e29b-41d4-a716-446655440002","timestamp":1705123465,"from":"default","to":"read_file","content":"{\"path\":\"Cargo.toml\"}","entry_type":"tool_call"}
+{"id":"550e8400-e29b-41d4-a716-446655440003","timestamp":1705123466,"from":"read_file","to":"default","content":"[package]\nname = \"chibi\"...","entry_type":"tool_result"}
+```
+
+Each entry contains:
+- `id` - Unique UUID for the entry
+- `timestamp` - Unix timestamp
+- `from` / `to` - Source and destination (username, context name, or tool name)
+- `content` - The message content or tool arguments/results
+- `entry_type` - One of: `message`, `tool_call`, `tool_result`, `compaction`
+
+## Context Locking
+
+When chibi is actively using a context, it creates a lock file (`.lock`) containing a Unix timestamp. A background thread updates this timestamp periodically (every `lock_heartbeat_seconds`, default 30).
+
+### Lock Status
+
+The `-l` flag shows lock status for each context:
+
+```bash
+$ chibi -l
+* default [active]    # Currently in use by a chibi process
+  coding [stale]      # Lock exists but process likely crashed
+  research            # No lock, not in use
+```
+
+- **`[active]`** - Lock file exists and was updated recently (within 1.5x heartbeat interval)
+- **`[stale]`** - Lock file exists but is old (process likely crashed)
+- No indicator - No lock file, context is free
+
+### Stale Lock Handling
+
+If you try to use a context with a stale lock, chibi will automatically clean it up and acquire a new lock. Active locks will block with an error message.
 
 ## Error Handling
 
@@ -878,6 +926,7 @@ cargo install --path .
 - `toml` - TOML parsing for config files
 - `dirs-next` - Cross-platform directory handling
 - `futures-util` - Stream utilities
+- `uuid` - Unique IDs for transcript entries
 
 ## License
 
