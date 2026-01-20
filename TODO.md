@@ -1,4 +1,4 @@
-### context lockfiles
+### context lockfiles ✓ DONE
 - each chibi uses a lockfile for its context
 - lockfiles are touched every 30 seconds while the chibi is running
   - the heartbeat can be changed in config.toml
@@ -13,7 +13,7 @@
 - lockfiles are acquired immediately upon the chibi starting, and kept until it exists
 - lockfiles prevent *writes* but does not prohibit reads
 
-### recursion
+### recursion ✓ DONE
 - recursion can be implemented as a noop tool
   - all tools return control to the LLM for another turn; tool calls are really just recursion
     with context modification. a noop tool skips the context modification.
@@ -28,18 +28,18 @@
   - we should check that it's possible to catch calls to the recurse tool with a hook
 - rename the agent tool to sub-agent
 
-### local.toml per-context overrides
+### local.toml per-context overrides ✓ DONE
 - exactly what it sounds like
 - features like context-specific username and model (see below) are put here
 - values in this file override the corresponding values in the main config.toml
 - hearbeat can not be overridden here
 - see separate config-plan.md for tentative implementation plan
 
-### Per-context models
+### Per-context models ✓ DONE
 - allow setting model per-context, the presets are just aliases. use local.toml
 - not setting the model = use the default model (mandatory 'model' variable in config.toml)
 
-### JSON transcripts
+### JSON transcripts ✓ DONE
 - let's make the full transcripts be JSON, and let them include all details
 - let's still make txt transcripts because appending is quick
 - every message/event needs a unique identifier (to avoid duplication issues for one)
@@ -54,18 +54,19 @@
       how to refer to each chibi
 - the JSON transcript will be the "source of truth" while the txt transcript is for the convenience of humans
 
+### Username ✓ DONE (part of inter-context communication)
+- setting in config.toml, default to 'user'
+- can be overridden by local.toml in the context's directory
+- command line option -u/--username to set it per-context
+- command line option -U/--temp-username to set it for just this invocation
+- the system prompt should make the LLM aware what the user is called,
+  and that there may be other speakers than the user
+
 ### Inter-context communication
 - a feature of the rust code? or a tool? i lean tool if it's solvable
 - how to inject the messages? inbox/outbox files that the rust code checks and passes on? something else?
 - contexts need a way to distinguish who's speaking
   - this will be reflected in the transcripts
-- username
-  - setting in config.toml, default to 'user'
-  - can be overridden by local.toml in the context's directory
-  - command line option -u/--username to set it per-context
-  - command line option -U/--temp-username to set it for just this invocation
-  - the system prompt should make the LLM aware what the user is called,
-    and that there may be other speakers than the user
 - let tools create context. a tool could ensure that a context is always created at startup if it doesn't exist.
   - this happens by the tool signalling the rust app that a context should be created
   - the tool can also specify the system prompt to assign to the context
