@@ -4,25 +4,18 @@ api_key = "your-openrouter-api-key-here"
 
 # Model to use
 # Common options:
-# - anthropic/claude-3.5-sonnet
+# - anthropic/claude-sonnet-4
 # - anthropic/claude-3.5-haiku
 # - openai/gpt-4o
 # - openai/gpt-4o-mini
 # - meta-llama/llama-3.1-70b-instruct
 #
-# Some free options
-# - meta-llama/llama-3.3-70b-instruct:free	(context: 131072)
-# - mistralai/devstral-2512:free		(context: 262144)
-# - nvidia/nemotron-3-nano-30b-a3b:free		(context: 256000)
-# - google/gemma-3-27b-it:free			(context: 131072)
-# - openai/gpt-oss-120b:free			(context: 131072)
-# - xiaomi/mimo-v2-flash:free			(context: 262144)
-# - google/gemini-2.0-flash-exp:free		(context: 1048576)
-# - qwen/qwen3-next-80b-a3b-instruct:free	(context: 262144)
+# See models.example.toml for free model options with context window sizes
 model = "xiaomi/mimo-v2-flash:free"
 
 # Context window limit (tokens)
-# This is used for calculating when to warn about approaching limits
+# Used for calculating when to warn about approaching limits
+# If using models.toml, the context_window from there takes precedence
 context_window_limit = 100000
 
 # Warning threshold percentage (0.0-100.0)
@@ -45,6 +38,14 @@ auto_compact_threshold = 80.0
 reflection_enabled = true
 reflection_character_limit = 10000
 
-# Maximum recursion depth for continue_processing tool
+# Maximum recursion depth for tool execution loops
 # Prevents runaway agent loops
 max_recursion_depth = 15
+
+# Default username shown to the LLM
+# Can be overridden per-context in local.toml or via -u/-U flags
+username = "user"
+
+# Context lock heartbeat interval (seconds)
+# Used to detect stale locks from crashed sessions
+lock_heartbeat_seconds = 30

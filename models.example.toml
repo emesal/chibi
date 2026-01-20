@@ -1,0 +1,43 @@
+# Model metadata
+# This file lets you specify context window sizes for models.
+# The keys should match the model names you use in config.toml.
+#
+# When you use a model, chibi checks if there's an entry here
+# and uses its context_window instead of config.toml's context_window_limit.
+
+# Example: If config.toml has model = "google/gemini-2.0-flash-exp:free"
+[models."google/gemini-2.0-flash-exp:free"]
+context_window = 1048576
+
+[models."anthropic/claude-sonnet-4"]
+context_window = 200000
+
+[models."anthropic/claude-3.5-haiku"]
+context_window = 200000
+
+[models."openai/gpt-4o"]
+context_window = 128000
+
+[models."openai/gpt-4o-mini"]
+context_window = 128000
+
+[models."meta-llama/llama-3.3-70b-instruct:free"]
+context_window = 131072
+
+[models."mistralai/devstral-2512:free"]
+context_window = 262144
+
+[models."nvidia/nemotron-3-nano-30b-a3b:free"]
+context_window = 256000
+
+[models."google/gemma-3-27b-it:free"]
+context_window = 131072
+
+[models."openai/gpt-oss-120b:free"]
+context_window = 131072
+
+[models."xiaomi/mimo-v2-flash:free"]
+context_window = 262144
+
+[models."qwen/qwen3-next-80b-a3b-instruct:free"]
+context_window = 262144
