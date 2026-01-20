@@ -1,8 +1,7 @@
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -11,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// A heartbeat thread keeps the lock fresh by updating the timestamp.
 pub struct ContextLock {
     lock_path: PathBuf,
-    stop_heartbeat: Arc<AtomicBool>,
+    stop_signal: Arc<(Mutex<bool>, Condvar)>,
     heartbeat_handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -41,21 +40,24 @@ impl ContextLock {
         // Create the lock file with current timestamp
         Self::touch(&lock_path)?;
 
-        // Start heartbeat thread
-        let stop_heartbeat = Arc::new(AtomicBool::new(false));
-        let stop_clone = Arc::clone(&stop_heartbeat);
+        // Start heartbeat thread with condvar for clean shutdown
+        let stop_signal = Arc::new((Mutex::new(false), Condvar::new()));
+        let stop_signal_clone = Arc::clone(&stop_signal);
         let lock_path_clone = lock_path.clone();
         let heartbeat_interval = Duration::from_secs(heartbeat_secs);
 
         let heartbeat_handle = thread::spawn(move || {
-            while !stop_clone.load(Ordering::Relaxed) {
-                thread::sleep(heartbeat_interval);
-                if stop_clone.load(Ordering::Relaxed) {
+            let (lock, cvar) = &*stop_signal_clone;
+            loop {
+                let guard = lock.lock().unwrap();
+                // Wait for heartbeat interval or until signaled to stop
+                let result = cvar.wait_timeout(guard, heartbeat_interval).unwrap();
+                if *result.0 {
+                    // Signaled to stop
                     break;
                 }
-                // Update the lock file timestamp
-                if let Err(_) = Self::touch(&lock_path_clone) {
-                    // If we can't touch the lock file, stop the heartbeat
+                // Timeout expired, update the lock file
+                if Self::touch(&lock_path_clone).is_err() {
                     break;
                 }
             }
@@ -63,7 +65,7 @@ impl ContextLock {
 
         Ok(ContextLock {
             lock_path,
-            stop_heartbeat,
+            stop_signal,
             heartbeat_handle: Some(heartbeat_handle),
         })
     }
@@ -121,8 +123,13 @@ impl ContextLock {
 
 impl Drop for ContextLock {
     fn drop(&mut self) {
-        // Signal heartbeat thread to stop
-        self.stop_heartbeat.store(true, Ordering::Relaxed);
+        // Signal heartbeat thread to stop and wake it immediately
+        let (lock, cvar) = &*self.stop_signal;
+        {
+            let mut stop = lock.lock().unwrap();
+            *stop = true;
+        }
+        cvar.notify_one();
 
         // Wait for heartbeat thread to finish
         if let Some(handle) = self.heartbeat_handle.take() {
