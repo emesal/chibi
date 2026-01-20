@@ -29,14 +29,14 @@ COFFEE_TABLE_DIR = CHIBI_DIR / "contexts" / COFFEE_TABLE_CONTEXT
 
 if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     print(json.dumps({
-        "name": "post_to_coffee_table",
-        "description": "Post a message to the coffee-table, a shared space where all contexts can leave notes for each other. Use this when you want to communicate something to other contexts or leave information that might be useful for future conversations.",
+        "name": "chat_at_coffee_table",
+        "description": "Post a message to the coffee-table, a shared space where all contexts can confer with each other. Use this when you want to communicate something to other contexts or leave information that might be useful for future conversations.",
         "parameters": {
             "type": "object",
             "properties": {
                 "message": {
                     "type": "string",
-                    "description": "The message to post to the coffee-table"
+                    "description": "The message to say at the coffee-table"
                 }
             },
             "required": ["message"]
@@ -147,7 +147,7 @@ if hook == "post_system_prompt":
         print(json.dumps({
             "inject": """--- INTER-CONTEXT COMMUNICATION ---
 You have access to a shared space called 'coffee-table' where you can:
-- Post messages using the post_to_coffee_table tool
+- Post messages using the chat_at_coffee_table tool
 - Send direct messages to specific contexts using send_message
 
 The coffee-table is a bulletin board visible to all contexts. Use it to leave notes, share discoveries, or communicate across conversations."""
@@ -168,4 +168,4 @@ print("This tool is meant to be installed in ~/.chibi/tools/")
 print("It will automatically create a coffee-table context and inject")
 print("awareness into all other contexts.")
 print()
-print('Usage as tool: post_to_coffee_table({"message": "your message"})')
+print('Usage as tool: chat_at_coffee_table({"message": "your message"})')
