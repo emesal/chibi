@@ -1,5 +1,12 @@
 use std::io::{self, ErrorKind};
 
+/// Direct plugin invocation from CLI
+#[derive(Debug)]
+pub struct PluginInvocation {
+    pub name: String,
+    pub args: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct Cli {
     pub switch: Option<String>,
@@ -18,6 +25,7 @@ pub struct Cli {
     pub no_reflection: bool,
     pub username: Option<String>,
     pub temp_username: Option<String>,
+    pub plugin: Option<PluginInvocation>,
     pub prompt: Vec<String>,
 }
 
@@ -45,6 +53,7 @@ impl Cli {
         let mut no_reflection = false;
         let mut username = None;
         let mut temp_username = None;
+        let mut plugin = None;
         let mut prompt = Vec::new();
         let mut i = 1;
         let mut is_prompt = false;
@@ -213,6 +222,24 @@ impl Cli {
                 continue;
             }
 
+            if arg == "-P" || arg == "--plugin" {
+                if i + 1 >= args.len() {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("{} requires a plugin name", arg),
+                    ));
+                }
+                let name = args[i + 1].clone();
+                // Everything after the plugin name becomes plugin args
+                let plugin_args: Vec<String> = args[i + 2..].to_vec();
+                plugin = Some(PluginInvocation {
+                    name,
+                    args: plugin_args,
+                });
+                // We've consumed all remaining args
+                break;
+            }
+
             if arg == "-h" || arg == "--help" {
                 Self::print_help();
                 std::process::exit(0);
@@ -254,6 +281,7 @@ impl Cli {
             rename.is_some(),
             history,
             show_prompt,
+            plugin.is_some(),
         ]
         .iter()
         .filter(|&&x| x)
@@ -293,6 +321,7 @@ impl Cli {
             no_reflection,
             username,
             temp_username,
+            plugin,
             prompt,
         })
     }
@@ -328,6 +357,7 @@ impl Cli {
         println!("  -x, --no-reflection       Disable reflection prompt for this invocation");
         println!("  -u, --username <NAME>     Set username (persists to context's local.toml)");
         println!("  -U, --temp-username <NAME> Set username for this invocation only");
+        println!("  -P, --plugin <NAME> [ARGS]  Run a plugin directly (bypasses LLM)");
         println!("  -h, --help                Show this help");
         println!("  -V, --version             Show version");
         println!();
@@ -347,6 +377,7 @@ impl Cli {
         println!("  chibi -r old-name new-name");
         println!("  chibi -e prompt.md          Set prompt from file");
         println!("  chibi -e 'You are helpful'  Set prompt directly");
+        println!("  chibi -P marketplace list   Run marketplace plugin directly");
     }
 }
 
@@ -806,5 +837,64 @@ mod tests {
         let cli = Cli::parse_from(&args("-v")).unwrap();
         assert!(cli.verbose);
         assert!(cli.prompt.is_empty());
+    }
+
+    // === Plugin invocation tests ===
+
+    #[test]
+    fn test_plugin_short() {
+        let cli = Cli::parse_from(&args("-P myplugin")).unwrap();
+        let invocation = cli.plugin.unwrap();
+        assert_eq!(invocation.name, "myplugin");
+        assert!(invocation.args.is_empty());
+    }
+
+    #[test]
+    fn test_plugin_long() {
+        let cli = Cli::parse_from(&args("--plugin myplugin")).unwrap();
+        let invocation = cli.plugin.unwrap();
+        assert_eq!(invocation.name, "myplugin");
+        assert!(invocation.args.is_empty());
+    }
+
+    #[test]
+    fn test_plugin_with_args() {
+        let cli = Cli::parse_from(&args("-P myplugin list --all")).unwrap();
+        let invocation = cli.plugin.unwrap();
+        assert_eq!(invocation.name, "myplugin");
+        assert_eq!(invocation.args, vec!["list", "--all"]);
+    }
+
+    #[test]
+    fn test_plugin_missing_name() {
+        let result = Cli::parse_from(&args("-P"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_plugin_is_exclusive() {
+        // -P should be exclusive with other commands
+        // Note: flags AFTER -P become plugin args, so we test flag BEFORE -P
+        let result = Cli::parse_from(&args("-l -P myplugin"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_plugin_captures_trailing_flags() {
+        // Everything after plugin name becomes plugin args, even things that look like flags
+        let cli = Cli::parse_from(&args("-P myplugin -l --verbose")).unwrap();
+        let invocation = cli.plugin.unwrap();
+        assert_eq!(invocation.name, "myplugin");
+        assert_eq!(invocation.args, vec!["-l", "--verbose"]);
+    }
+
+    #[test]
+    fn test_plugin_verbose_before() {
+        // Verbose flag before -P should work
+        let cli = Cli::parse_from(&args("-v -P myplugin arg1")).unwrap();
+        assert!(cli.verbose);
+        let invocation = cli.plugin.unwrap();
+        assert_eq!(invocation.name, "myplugin");
+        assert_eq!(invocation.args, vec!["arg1"]);
     }
 }

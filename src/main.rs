@@ -221,6 +221,20 @@ async fn main() -> io::Result<()> {
             &hook_data,
             verbose,
         );
+    } else if let Some(ref invocation) = cli.plugin {
+        // Direct plugin invocation via -P/--plugin
+        let tool = tools::find_tool(&tools, &invocation.name).ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::NotFound,
+                format!("Plugin '{}' not found", invocation.name),
+            )
+        })?;
+
+        // Pass args as a JSON object with an "args" array
+        let args_json = serde_json::json!({ "args": invocation.args });
+        let output = tools::execute_tool(tool, &args_json, verbose)?;
+        print!("{}", output);
+        return Ok(());
     } else if cli.list {
         let contexts = app.list_contexts();
         let current = &app.state.current_context;
