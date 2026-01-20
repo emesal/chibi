@@ -31,32 +31,39 @@ impl ContextState {
         self.current_context = name;
         Ok(())
     }
-    
+
     pub fn save(&self, state_path: &PathBuf) -> io::Result<()> {
         use std::fs::OpenOptions;
         use std::io::BufWriter;
-        
+
         let file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .open(state_path)?;
         let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, self)
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to save state: {}", e)))?;
+        serde_json::to_writer_pretty(writer, self).map_err(|e| {
+            io::Error::new(ErrorKind::Other, format!("Failed to save state: {}", e))
+        })?;
         Ok(())
     }
 }
 
 pub fn is_valid_context_name(name: &str) -> bool {
-    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 pub fn validate_context_name(name: &str) -> io::Result<()> {
     if !is_valid_context_name(name) {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
-            format!("Invalid context name '{}'. Names must be alphanumeric with dashes and underscores only.", name),
+            format!(
+                "Invalid context name '{}'. Names must be alphanumeric with dashes and underscores only.",
+                name
+            ),
         ));
     }
     Ok(())

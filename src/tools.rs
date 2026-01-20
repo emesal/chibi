@@ -19,10 +19,10 @@ pub enum HookPoint {
     PostRollingCompact,
     OnStart,
     OnEnd,
-    PreSystemPrompt,   // Can inject content before system prompt sections
-    PostSystemPrompt,  // Can inject content after all system prompt sections
-    PreSendMessage,    // Can intercept delivery (return {"delivered": true, "via": "..."})
-    PostSendMessage,   // Observe delivery (read-only)
+    PreSystemPrompt,  // Can inject content before system prompt sections
+    PostSystemPrompt, // Can inject content after all system prompt sections
+    PreSendMessage,   // Can intercept delivery (return {"delivered": true, "via": "..."})
+    PostSendMessage,  // Observe delivery (read-only)
 }
 
 impl HookPoint {
@@ -135,15 +135,26 @@ fn get_tool_schema(path: &PathBuf, verbose: bool) -> io::Result<Tool> {
     if !output.status.success() {
         return Err(io::Error::new(
             ErrorKind::Other,
-            format!("Tool returned error: {}", String::from_utf8_lossy(&output.stderr)),
+            format!(
+                "Tool returned error: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
         ));
     }
 
-    let schema_str = String::from_utf8(output.stdout)
-        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid UTF-8 in schema: {}", e)))?;
+    let schema_str = String::from_utf8(output.stdout).map_err(|e| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!("Invalid UTF-8 in schema: {}", e),
+        )
+    })?;
 
-    let schema: serde_json::Value = serde_json::from_str(&schema_str)
-        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid JSON schema: {}", e)))?;
+    let schema: serde_json::Value = serde_json::from_str(&schema_str).map_err(|e| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!("Invalid JSON schema: {}", e),
+        )
+    })?;
 
     let name = schema["name"]
         .as_str()
@@ -152,7 +163,9 @@ fn get_tool_schema(path: &PathBuf, verbose: bool) -> io::Result<Tool> {
 
     let description = schema["description"]
         .as_str()
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Schema missing 'description' field"))?
+        .ok_or_else(|| {
+            io::Error::new(ErrorKind::InvalidData, "Schema missing 'description' field")
+        })?
         .to_string();
 
     let parameters = schema["parameters"].clone();
@@ -229,7 +242,12 @@ pub fn execute_hook(
             .map_err(|e| {
                 io::Error::new(
                     ErrorKind::Other,
-                    format!("Failed to execute hook {} on {}: {}", hook.as_str(), tool.name, e),
+                    format!(
+                        "Failed to execute hook {} on {}: {}",
+                        hook.as_str(),
+                        tool.name,
+                        e
+                    ),
                 )
             })?;
 
@@ -253,9 +271,8 @@ pub fn execute_hook(
         }
 
         // Try to parse as JSON, otherwise wrap as string
-        let value: serde_json::Value = serde_json::from_str(trimmed).unwrap_or_else(|_| {
-            serde_json::Value::String(trimmed.to_string())
-        });
+        let value: serde_json::Value = serde_json::from_str(trimmed)
+            .unwrap_or_else(|_| serde_json::Value::String(trimmed.to_string()));
 
         results.push((tool.name.clone(), value));
     }
@@ -267,15 +284,23 @@ pub fn execute_hook(
 ///
 /// Tools receive arguments via CHIBI_TOOL_ARGS env var, leaving stdin free for user interaction.
 /// Tools also receive CHIBI_VERBOSE=1 env var when verbose mode is enabled.
-pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value, verbose: bool) -> io::Result<String> {
+pub fn execute_tool(
+    tool: &Tool,
+    arguments: &serde_json::Value,
+    verbose: bool,
+) -> io::Result<String> {
     let mut cmd = Command::new(&tool.path);
-    cmd.stdin(Stdio::inherit())   // Let tool read from user's terminal
+    cmd.stdin(Stdio::inherit()) // Let tool read from user's terminal
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit()); // Let tool's stderr go directly to terminal (for prompts)
 
     // Pass arguments via environment variable (frees stdin for user interaction)
-    let json_str = serde_json::to_string(arguments)
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to serialize arguments: {}", e)))?;
+    let json_str = serde_json::to_string(arguments).map_err(|e| {
+        io::Error::new(
+            ErrorKind::Other,
+            format!("Failed to serialize arguments: {}", e),
+        )
+    })?;
     cmd.env("CHIBI_TOOL_ARGS", json_str);
 
     // Pass verbosity to tool via environment variable
@@ -283,7 +308,8 @@ pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value, verbose: bool) -
         cmd.env("CHIBI_VERBOSE", "1");
     }
 
-    let output = cmd.output()
+    let output = cmd
+        .output()
         .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to execute tool: {}", e)))?;
 
     if !output.status.success() {
@@ -293,8 +319,12 @@ pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value, verbose: bool) -
         ));
     }
 
-    String::from_utf8(output.stdout)
-        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid UTF-8 in tool output: {}", e)))
+    String::from_utf8(output.stdout).map_err(|e| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!("Invalid UTF-8 in tool output: {}", e),
+        )
+    })
 }
 
 /// Find a tool by name
@@ -348,7 +378,10 @@ pub fn execute_reflection_tool(
     let reflection_path = prompts_dir.join("reflection.md");
     fs::write(&reflection_path, content)?;
 
-    Ok(format!("Reflection updated successfully ({} characters).", content.len()))
+    Ok(format!(
+        "Reflection updated successfully ({} characters).",
+        content.len()
+    ))
 }
 
 // --- Todos Tool ---
@@ -582,30 +615,57 @@ mod tests {
         let tool = reflection_tool_to_api_format();
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], REFLECTION_TOOL_NAME);
-        assert!(tool["function"]["description"].as_str().unwrap().contains("reflection"));
-        assert!(tool["function"]["parameters"]["required"].as_array().unwrap().contains(&serde_json::json!("content")));
+        assert!(
+            tool["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("reflection")
+        );
+        assert!(
+            tool["function"]["parameters"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("content"))
+        );
     }
 
     #[test]
     fn test_todos_tool_api_format() {
         let tool = todos_tool_to_api_format();
         assert_eq!(tool["function"]["name"], TODOS_TOOL_NAME);
-        assert!(tool["function"]["description"].as_str().unwrap().contains("todo"));
+        assert!(
+            tool["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("todo")
+        );
     }
 
     #[test]
     fn test_goals_tool_api_format() {
         let tool = goals_tool_to_api_format();
         assert_eq!(tool["function"]["name"], GOALS_TOOL_NAME);
-        assert!(tool["function"]["description"].as_str().unwrap().contains("goal"));
+        assert!(
+            tool["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("goal")
+        );
     }
 
     #[test]
     fn test_send_message_tool_api_format() {
         let tool = send_message_tool_to_api_format();
         assert_eq!(tool["function"]["name"], SEND_MESSAGE_TOOL_NAME);
-        assert!(tool["function"]["description"].as_str().unwrap().contains("message"));
-        let required = tool["function"]["parameters"]["required"].as_array().unwrap();
+        assert!(
+            tool["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("message")
+        );
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
         assert!(required.contains(&serde_json::json!("to")));
         assert!(required.contains(&serde_json::json!("content")));
     }

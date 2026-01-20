@@ -105,9 +105,14 @@ async fn main() -> io::Result<()> {
     // Load tools at startup
     let tools = tools::load_tools(&app.plugins_dir, verbose)?;
     if verbose && !tools.is_empty() {
-        eprintln!("[Loaded {} tool(s): {}]",
+        eprintln!(
+            "[Loaded {} tool(s): {}]",
             tools.len(),
-            tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
+            tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
 
@@ -125,7 +130,10 @@ async fn main() -> io::Result<()> {
             generate_new_context_name(&app, None)
         } else if let Some(prefix) = name.strip_prefix("new:") {
             if prefix.is_empty() {
-                return Err(io::Error::new(ErrorKind::InvalidInput, "Prefix cannot be empty in '-S new:prefix'"));
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "Prefix cannot be empty in '-S new:prefix'",
+                ));
             }
             generate_new_context_name(&app, Some(prefix))
         } else {
@@ -156,7 +164,12 @@ async fn main() -> io::Result<()> {
             "to_context": app.state.current_context,
             "is_sub_context": true,
         });
-        let _ = tools::execute_hook(&tools, tools::HookPoint::OnContextSwitch, &hook_data, verbose);
+        let _ = tools::execute_hook(
+            &tools,
+            tools::HookPoint::OnContextSwitch,
+            &hook_data,
+            verbose,
+        );
 
         // Note: we do NOT call app.save() here, so global state is unchanged
     }
@@ -167,7 +180,10 @@ async fn main() -> io::Result<()> {
             generate_new_context_name(&app, None)
         } else if let Some(prefix) = name.strip_prefix("new:") {
             if prefix.is_empty() {
-                return Err(io::Error::new(ErrorKind::InvalidInput, "Prefix cannot be empty in '-s new:prefix'"));
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "Prefix cannot be empty in '-s new:prefix'",
+                ));
             }
             generate_new_context_name(&app, Some(prefix))
         } else {
@@ -199,13 +215,19 @@ async fn main() -> io::Result<()> {
             "to_context": app.state.current_context,
             "is_sub_context": false,
         });
-        let _ = tools::execute_hook(&tools, tools::HookPoint::OnContextSwitch, &hook_data, verbose);
+        let _ = tools::execute_hook(
+            &tools,
+            tools::HookPoint::OnContextSwitch,
+            &hook_data,
+            verbose,
+        );
     } else if cli.list {
         let contexts = app.list_contexts();
         let current = &app.state.current_context;
         for name in contexts {
             let context_dir = app.context_dir(&name);
-            let status = lock::ContextLock::get_status(&context_dir, app.config.lock_heartbeat_seconds);
+            let status =
+                lock::ContextLock::get_status(&context_dir, app.config.lock_heartbeat_seconds);
             let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
             if &name == current {
                 println!("* {}{}", name, status_str);
@@ -250,7 +272,15 @@ async fn main() -> io::Result<()> {
         let messages: Vec<_> = if num == 0 {
             context.messages.iter().collect()
         } else {
-            context.messages.iter().rev().take(num).collect::<Vec<_>>().into_iter().rev().collect()
+            context
+                .messages
+                .iter()
+                .rev()
+                .take(num)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect()
         };
         for msg in messages {
             if msg.role == "system" {
@@ -281,7 +311,10 @@ async fn main() -> io::Result<()> {
             };
             app.set_system_prompt(&content)?;
             if verbose {
-                eprintln!("[System prompt set for context '{}']", app.state.current_context);
+                eprintln!(
+                    "[System prompt set for context '{}']",
+                    app.state.current_context
+                );
             }
         }
 
@@ -291,15 +324,15 @@ async fn main() -> io::Result<()> {
             local_config.username = Some(username.clone());
             app.save_local_config(&app.state.current_context, &local_config)?;
             if verbose {
-                eprintln!("[Username '{}' saved to context '{}']", username, app.state.current_context);
+                eprintln!(
+                    "[Username '{}' saved to context '{}']",
+                    username, app.state.current_context
+                );
             }
         }
 
         // Resolve the full configuration with CLI overrides
-        let resolved = app.resolve_config(
-            cli.username.as_deref(),
-            cli.temp_username.as_deref(),
-        )?;
+        let resolved = app.resolve_config(cli.username.as_deref(), cli.temp_username.as_deref())?;
 
         // Build prompt from args and/or stdin
         let stdin_is_pipe = !io::stdin().is_terminal();
@@ -327,7 +360,10 @@ async fn main() -> io::Result<()> {
             (false, None) => {
                 if had_set_prompt {
                     // -e was used alone, don't wait for interactive input
-                    println!("System prompt set for context '{}'", app.state.current_context);
+                    println!(
+                        "System prompt set for context '{}'",
+                        app.state.current_context
+                    );
                     return Ok(());
                 }
                 read_prompt_interactive()?
@@ -335,7 +371,10 @@ async fn main() -> io::Result<()> {
         };
 
         if prompt.trim().is_empty() {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Prompt cannot be empty",
+            ));
         }
 
         // Create the context if it doesn't exist

@@ -66,7 +66,10 @@ impl Cli {
 
             if arg == "-s" || arg == "--switch" {
                 if i + 1 >= args.len() {
-                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("{} requires an argument", arg),
+                    ));
                 }
                 switch = Some(args[i + 1].clone());
                 i += 2;
@@ -75,7 +78,10 @@ impl Cli {
 
             if arg == "-S" || arg == "--sub-context" {
                 if i + 1 >= args.len() {
-                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("{} requires an argument", arg),
+                    ));
                 }
                 sub_context = Some(args[i + 1].clone());
                 i += 2;
@@ -96,7 +102,10 @@ impl Cli {
 
             if arg == "-d" || arg == "--delete" {
                 if i + 1 >= args.len() {
-                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("{} requires an argument", arg),
+                    ));
                 }
                 delete = Some(args[i + 1].clone());
                 i += 2;
@@ -117,7 +126,10 @@ impl Cli {
 
             if arg == "-r" || arg == "--rename" {
                 if i + 2 >= args.len() {
-                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires two arguments", arg)));
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("{} requires two arguments", arg),
+                    ));
                 }
                 rename = Some((args[i + 1].clone(), args[i + 2].clone()));
                 i += 3;
@@ -132,10 +144,16 @@ impl Cli {
 
             if arg == "-n" || arg == "--num-messages" {
                 if i + 1 >= args.len() {
-                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("{} requires an argument", arg),
+                    ));
                 }
                 num_messages = Some(args[i + 1].parse().map_err(|_| {
-                    io::Error::new(ErrorKind::InvalidInput, format!("Invalid number: {}", args[i + 1]))
+                    io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("Invalid number: {}", args[i + 1]),
+                    )
                 })?);
                 i += 2;
                 continue;
@@ -149,7 +167,10 @@ impl Cli {
 
             if arg == "-e" || arg == "--set-prompt" {
                 if i + 1 >= args.len() {
-                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("{} requires an argument", arg),
+                    ));
                 }
                 set_prompt = Some(args[i + 1].clone());
                 i += 2;
@@ -170,7 +191,10 @@ impl Cli {
 
             if arg == "-u" || arg == "--username" {
                 if i + 1 >= args.len() {
-                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("{} requires an argument", arg),
+                    ));
                 }
                 username = Some(args[i + 1].clone());
                 i += 2;
@@ -179,7 +203,10 @@ impl Cli {
 
             if arg == "-U" || arg == "--temp-username" {
                 if i + 1 >= args.len() {
-                    return Err(io::Error::new(ErrorKind::InvalidInput, format!("{} requires an argument", arg)));
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("{} requires an argument", arg),
+                    ));
                 }
                 temp_username = Some(args[i + 1].clone());
                 i += 2;
@@ -198,7 +225,10 @@ impl Cli {
 
             // Check if it starts with a dash
             if arg.starts_with('-') {
-                return Err(io::Error::new(ErrorKind::InvalidInput, format!("Unknown option: {}", arg)));
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("Unknown option: {}", arg),
+                ));
             }
 
             // This is the start of the prompt
@@ -214,20 +244,36 @@ impl Cli {
 
         // Validate argument combinations
         // These are "exclusive" commands that can't be combined with prompts
-        let exclusive_commands = [switch.is_some(), list, which, delete.is_some(), clear, compact, rename.is_some(), history, show_prompt]
-            .iter()
-            .filter(|&&x| x)
-            .count();
+        let exclusive_commands = [
+            switch.is_some(),
+            list,
+            which,
+            delete.is_some(),
+            clear,
+            compact,
+            rename.is_some(),
+            history,
+            show_prompt,
+        ]
+        .iter()
+        .filter(|&&x| x)
+        .count();
 
         // set_prompt can be combined with a prompt (set prompt, then send message)
         let combinable_commands = set_prompt.is_some();
 
         if exclusive_commands > 1 || (exclusive_commands > 0 && combinable_commands) {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Only one command can be specified at a time"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Only one command can be specified at a time",
+            ));
         }
 
         if exclusive_commands > 0 && !prompt.is_empty() {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Cannot specify both a command and a prompt"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Cannot specify both a command and a prompt",
+            ));
         }
 
         Ok(Cli {
@@ -250,7 +296,7 @@ impl Cli {
             prompt,
         })
     }
-    
+
     pub fn print_help() {
         println!("chibi - A CLI tool for chatting with AI via OpenRouter");
         println!();
@@ -261,7 +307,9 @@ impl Cli {
         println!("Commands:");
         println!("  -s, --switch <NAME>       Switch to a different context (persistent)");
         println!("                            Use 'new' for auto-generated name (YYYYMMDD_HHMMSS)");
-        println!("                            Use 'new:prefix' for prefixed name (prefix_YYYYMMDD_HHMMSS)");
+        println!(
+            "                            Use 'new:prefix' for prefixed name (prefix_YYYYMMDD_HHMMSS)"
+        );
         println!("  -S, --sub-context <NAME>  Run in a context without changing global state");
         println!("                            Useful for sub-agents. Same 'new' syntax supported.");
         println!("  -l, --list                List all contexts");
@@ -285,7 +333,9 @@ impl Cli {
         println!();
         println!("Prompt input:");
         println!("  If arguments are provided after options, they are joined as the prompt.");
-        println!("  Use -- to force the rest to be a prompt (e.g., chibi -- -this starts with dash)");
+        println!(
+            "  Use -- to force the rest to be a prompt (e.g., chibi -- -this starts with dash)"
+        );
         println!("  If no arguments, read prompt from stdin (end with . on empty line)");
         println!("  Piped input: echo 'text' | chibi (can combine with arg prompt)");
         println!();
@@ -500,7 +550,12 @@ mod tests {
     fn test_switch_missing_arg() {
         let result = Cli::parse_from(&args("-s"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("requires an argument"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires an argument")
+        );
     }
 
     #[test]
@@ -513,7 +568,12 @@ mod tests {
     fn test_rename_missing_args() {
         let result = Cli::parse_from(&args("-r old"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("requires two arguments"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires two arguments")
+        );
     }
 
     #[test]
@@ -543,7 +603,12 @@ mod tests {
     fn test_command_with_prompt_error() {
         let result = Cli::parse_from(&args("-l hello"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Cannot specify both"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot specify both")
+        );
     }
 
     #[test]

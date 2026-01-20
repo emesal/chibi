@@ -1,5 +1,8 @@
 use crate::config::{Config, LocalConfig, ModelsConfig, ResolvedConfig};
-use crate::context::{Context, ContextState, InboxEntry, Message, TranscriptEntry, validate_context_name, now_timestamp};
+use crate::context::{
+    Context, ContextState, InboxEntry, Message, TranscriptEntry, now_timestamp,
+    validate_context_name,
+};
 use dirs_next::home_dir;
 use fs2::FileExt;
 use std::fs::{self, File, OpenOptions};
@@ -51,7 +54,8 @@ impl AppState {
     }
 
     pub fn load() -> io::Result<Self> {
-        let home = home_dir().ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Home directory not found"))?;
+        let home = home_dir()
+            .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Home directory not found"))?;
         let chibi_dir = home.join(".chibi");
         let contexts_dir = chibi_dir.join("contexts");
         let prompts_dir = chibi_dir.join("prompts");
@@ -69,34 +73,44 @@ impl AppState {
 
         let config: Config = if config_path.exists() {
             let content = fs::read_to_string(&config_path)?;
-            toml::from_str(&content)
-                .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse config: {}", e)))?
+            toml::from_str(&content).map_err(|e| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Failed to parse config: {}", e),
+                )
+            })?
         } else {
             return Err(io::Error::new(
                 ErrorKind::NotFound,
-                format!("Config file not found at {}. Please create config.toml with api_key, model, context_window_limit, and warn_threshold_percent", config_path.display()),
+                format!(
+                    "Config file not found at {}. Please create config.toml with api_key, model, context_window_limit, and warn_threshold_percent",
+                    config_path.display()
+                ),
             ));
         };
 
         // Load models.toml (optional)
         let models_config: ModelsConfig = if models_path.exists() {
             let content = fs::read_to_string(&models_path)?;
-            toml::from_str(&content)
-                .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse models.toml: {}", e)))?
+            toml::from_str(&content).map_err(|e| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Failed to parse models.toml: {}", e),
+                )
+            })?
         } else {
             ModelsConfig::default()
         };
 
         let state = if state_path.exists() {
             let file = File::open(&state_path)?;
-            serde_json::from_reader(BufReader::new(file))
-                .unwrap_or_else(|e| {
-                    eprintln!("[WARN] State file corrupted, resetting to defaults: {}", e);
-                    ContextState {
-                        contexts: Vec::new(),
-                        current_context: "default".to_string(),
-                    }
-                })
+            serde_json::from_reader(BufReader::new(file)).unwrap_or_else(|e| {
+                eprintln!("[WARN] State file corrupted, resetting to defaults: {}", e);
+                ContextState {
+                    contexts: Vec::new(),
+                    current_context: "default".to_string(),
+                }
+            })
         } else {
             ContextState {
                 contexts: Vec::new(),
@@ -115,19 +129,19 @@ impl AppState {
             plugins_dir,
         })
     }
-    
+
     pub fn save(&self) -> io::Result<()> {
         self.state.save(&self.state_path)
     }
-    
+
     pub fn context_dir(&self, name: &str) -> PathBuf {
         self.contexts_dir.join(name)
     }
-    
+
     pub fn context_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("context.json")
     }
-    
+
     pub fn transcript_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("transcript.txt")
     }
@@ -135,16 +149,20 @@ impl AppState {
     pub fn summary_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("summary.md")
     }
-    
+
     pub fn ensure_context_dir(&self, name: &str) -> io::Result<()> {
         let dir = self.context_dir(name);
         fs::create_dir_all(&dir)
     }
-    
+
     pub fn load_context(&self, name: &str) -> io::Result<Context> {
         let file = File::open(self.context_file(name))?;
-        let mut context: Context = serde_json::from_reader(BufReader::new(file))
-            .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse context '{}': {}", name, e)))?;
+        let mut context: Context = serde_json::from_reader(BufReader::new(file)).map_err(|e| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to parse context '{}': {}", name, e),
+            )
+        })?;
 
         // Load summary from separate file
         let summary_path = self.summary_file(name);
@@ -154,7 +172,7 @@ impl AppState {
 
         Ok(context)
     }
-    
+
     pub fn save_context(&self, context: &Context) -> io::Result<()> {
         self.ensure_context_dir(&context.name)?;
         let file = OpenOptions::new()
@@ -163,8 +181,9 @@ impl AppState {
             .truncate(true)
             .open(self.context_file(&context.name))?;
         let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, context)
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to save context: {}", e)))?;
+        serde_json::to_writer_pretty(writer, context).map_err(|e| {
+            io::Error::new(ErrorKind::Other, format!("Failed to save context: {}", e))
+        })?;
 
         // Save summary to separate file
         let summary_path = self.summary_file(&context.name);
@@ -177,7 +196,7 @@ impl AppState {
 
         Ok(())
     }
-    
+
     pub fn append_to_transcript(&self, context: &Context) -> io::Result<()> {
         self.ensure_context_dir(&context.name)?;
         let mut file = OpenOptions::new()
@@ -185,7 +204,7 @@ impl AppState {
             .create(true)
             .append(true)
             .open(self.transcript_file(&context.name))?;
-        
+
         for msg in &context.messages {
             // Skip system messages to avoid cluttering transcript with boilerplate
             if msg.role == "system" {
@@ -193,57 +212,56 @@ impl AppState {
             }
             writeln!(file, "[{}]: {}\n", msg.role.to_uppercase(), msg.content)?;
         }
-        
+
         Ok(())
     }
-    
+
     pub fn get_current_context(&self) -> io::Result<Context> {
-        self.load_context(&self.state.current_context)
-            .or_else(|e| {
-                if e.kind() == ErrorKind::NotFound {
-                    // Return empty context if it doesn't exist yet
-                    Ok(Context {
-                        name: self.state.current_context.clone(),
-                        messages: Vec::new(),
-                        created_at: now_timestamp(),
-                        updated_at: 0,
-                        summary: String::new(),
-                    })
-                } else {
-                    Err(e)
-                }
-            })
+        self.load_context(&self.state.current_context).or_else(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                // Return empty context if it doesn't exist yet
+                Ok(Context {
+                    name: self.state.current_context.clone(),
+                    messages: Vec::new(),
+                    created_at: now_timestamp(),
+                    updated_at: 0,
+                    summary: String::new(),
+                })
+            } else {
+                Err(e)
+            }
+        })
     }
-    
+
     pub fn save_current_context(&self, context: &Context) -> io::Result<()> {
         self.save_context(context)?;
-        
+
         // Ensure the context is tracked in state
         if !self.state.contexts.contains(&context.name) {
             let mut new_state = self.state.clone();
             new_state.contexts.push(context.name.clone());
             new_state.save(&self.state_path)?;
         }
-        
+
         Ok(())
     }
-    
+
     pub fn add_message(&self, context: &mut Context, role: String, content: String) {
         context.messages.push(Message { role, content });
         context.updated_at = now_timestamp();
     }
-    
+
     pub fn clear_context(&self) -> io::Result<()> {
         let context = self.get_current_context()?;
-        
+
         // Don't clear if already empty
         if context.messages.is_empty() {
             return Ok(());
         }
-        
+
         // Append to transcript before clearing
         self.append_to_transcript(&context)?;
-        
+
         // Create fresh context (preserving nothing - full clear)
         let new_context = Context {
             name: self.state.current_context.clone(),
@@ -261,10 +279,13 @@ impl AppState {
         if self.state.current_context == name {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
-                format!("Cannot delete the current context '{}'. Switch to another context first.", name),
+                format!(
+                    "Cannot delete the current context '{}'. Switch to another context first.",
+                    name
+                ),
             ));
         }
-        
+
         let dir = self.context_dir(name);
         if dir.exists() {
             fs::remove_dir_all(&dir)?;
@@ -277,48 +298,54 @@ impl AppState {
             Ok(false)
         }
     }
-    
+
     pub fn rename_context(&self, old_name: &str, new_name: &str) -> io::Result<()> {
         validate_context_name(new_name)?;
-        
+
         let old_dir = self.context_dir(old_name);
         let new_dir = self.context_dir(new_name);
-        
+
         if !old_dir.exists() {
             return Err(io::Error::new(
                 ErrorKind::NotFound,
                 format!("Context '{}' does not exist", old_name),
             ));
         }
-        
+
         if new_dir.exists() {
             return Err(io::Error::new(
                 ErrorKind::AlreadyExists,
                 format!("Context '{}' already exists", new_name),
             ));
         }
-        
+
         // Rename the directory
         fs::rename(&old_dir, &new_dir)?;
-        
+
         // Update context file name if needed
         let new_context_file = self.context_file(new_name);
         if new_context_file.exists() {
             let file = File::open(&new_context_file)?;
-            let mut context: Context = serde_json::from_reader(BufReader::new(file))
-                .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse context: {}", e)))?;
-            
+            let mut context: Context =
+                serde_json::from_reader(BufReader::new(file)).map_err(|e| {
+                    io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("Failed to parse context: {}", e),
+                    )
+                })?;
+
             context.name = new_name.to_string();
-            
+
             let file = OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true)
                 .open(&new_context_file)?;
-            serde_json::to_writer_pretty(BufWriter::new(file), &context)
-                .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to save context: {}", e)))?;
+            serde_json::to_writer_pretty(BufWriter::new(file), &context).map_err(|e| {
+                io::Error::new(ErrorKind::Other, format!("Failed to save context: {}", e))
+            })?;
         }
-        
+
         // Update state
         let mut new_state = self.state.clone();
         if new_state.current_context == old_name {
@@ -329,14 +356,14 @@ impl AppState {
             new_state.contexts.push(new_name.to_string());
         }
         new_state.save(&self.state_path)?;
-        
+
         Ok(())
     }
-    
+
     pub fn list_contexts(&self) -> Vec<String> {
         // Scan contexts directory
         let mut contexts = self.state.contexts.clone();
-        
+
         if let Ok(entries) = fs::read_dir(&self.contexts_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -345,22 +372,25 @@ impl AppState {
                 }
             }
         }
-        
+
         contexts.sort();
         contexts
     }
-    
+
     pub fn calculate_token_count(&self, messages: &[Message]) -> usize {
         // Rough estimation: 4 chars per token on average
-        messages.iter().map(|m| (m.content.len() + m.role.len()) / 4).sum()
+        messages
+            .iter()
+            .map(|m| (m.content.len() + m.role.len()) / 4)
+            .sum()
     }
-    
+
     pub fn should_warn(&self, messages: &[Message]) -> bool {
         let tokens = self.calculate_token_count(messages);
         let usage_percent = (tokens as f32 / self.config.context_window_limit as f32) * 100.0;
         usage_percent >= self.config.warn_threshold_percent
     }
-    
+
     pub fn remaining_tokens(&self, messages: &[Message]) -> usize {
         let tokens = self.calculate_token_count(messages);
         if tokens >= self.config.context_window_limit {
@@ -369,7 +399,7 @@ impl AppState {
             self.config.context_window_limit - tokens
         }
     }
-    
+
     pub fn load_prompt(&self, name: &str) -> io::Result<String> {
         let prompt_path = self.prompts_dir.join(format!("{}.md", name));
         if prompt_path.exists() {
@@ -497,19 +527,31 @@ impl AppState {
         let path = self.local_config_file(context_name);
         if path.exists() {
             let content = fs::read_to_string(&path)?;
-            toml::from_str(&content)
-                .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Failed to parse local.toml: {}", e)))
+            toml::from_str(&content).map_err(|e| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Failed to parse local.toml: {}", e),
+                )
+            })
         } else {
             Ok(LocalConfig::default())
         }
     }
 
     /// Save local config for a context
-    pub fn save_local_config(&self, context_name: &str, local_config: &LocalConfig) -> io::Result<()> {
+    pub fn save_local_config(
+        &self,
+        context_name: &str,
+        local_config: &LocalConfig,
+    ) -> io::Result<()> {
         self.ensure_context_dir(context_name)?;
         let path = self.local_config_file(context_name);
-        let content = toml::to_string_pretty(local_config)
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to serialize local.toml: {}", e)))?;
+        let content = toml::to_string_pretty(local_config).map_err(|e| {
+            io::Error::new(
+                ErrorKind::Other,
+                format!("Failed to serialize local.toml: {}", e),
+            )
+        })?;
         fs::write(&path, content)
     }
 
@@ -528,7 +570,10 @@ impl AppState {
 
     /// Get context window limit for a model (from models.toml if available)
     pub fn get_model_context_window(&self, model: &str) -> Option<usize> {
-        self.models_config.models.get(model).and_then(|m| m.context_window)
+        self.models_config
+            .models
+            .get(model)
+            .and_then(|m| m.context_window)
     }
 
     /// Resolve the full configuration, applying overrides in order:
@@ -609,8 +654,12 @@ impl AppState {
             .append(true)
             .open(&path)?;
 
-        let json = serde_json::to_string(entry)
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to serialize transcript entry: {}", e)))?;
+        let json = serde_json::to_string(entry).map_err(|e| {
+            io::Error::new(
+                ErrorKind::Other,
+                format!("Failed to serialize transcript entry: {}", e),
+            )
+        })?;
         writeln!(file, "{}", json)?;
         Ok(())
     }
@@ -696,9 +745,10 @@ impl AppState {
             .create(true)
             .append(true)
             .open(&inbox_path)?;
-        
-        let json = serde_json::to_string(entry)
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("JSON serialize error: {}", e)))?;
+
+        let json = serde_json::to_string(entry).map_err(|e| {
+            io::Error::new(ErrorKind::Other, format!("JSON serialize error: {}", e))
+        })?;
         writeln!(file, "{}", json)?;
 
         // Release lock
@@ -751,7 +801,6 @@ impl AppState {
         lock_file.unlock()?;
         Ok(entries)
     }
-
 }
 
 #[cfg(test)]
@@ -834,8 +883,14 @@ mod tests {
         let context = Context {
             name: "test-context".to_string(),
             messages: vec![
-                Message { role: "user".to_string(), content: "Hello".to_string() },
-                Message { role: "assistant".to_string(), content: "Hi there!".to_string() },
+                Message {
+                    role: "user".to_string(),
+                    content: "Hello".to_string(),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: "Hi there!".to_string(),
+                },
             ],
             created_at: 1234567890,
             updated_at: 1234567891,
@@ -904,7 +959,10 @@ mod tests {
         // Create a context
         let context = Context {
             name: "old-name".to_string(),
-            messages: vec![Message { role: "user".to_string(), content: "Hello".to_string() }],
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            }],
             created_at: 0,
             updated_at: 0,
             summary: String::new(),
@@ -985,7 +1043,12 @@ mod tests {
         // Try to delete current context
         let result = app.delete_context("default");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Cannot delete the current context"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot delete the current context")
+        );
     }
 
     #[test]
@@ -1008,7 +1071,10 @@ mod tests {
     fn test_calculate_token_count() {
         let (app, _temp) = create_test_app();
         let messages = vec![
-            Message { role: "user".to_string(), content: "Hello world!".to_string() }, // 4+12 = 16 chars / 4 = 4 tokens
+            Message {
+                role: "user".to_string(),
+                content: "Hello world!".to_string(),
+            }, // 4+12 = 16 chars / 4 = 4 tokens
         ];
         let count = app.calculate_token_count(&messages);
         assert_eq!(count, 4); // (4 + 12) / 4 = 4
@@ -1018,7 +1084,10 @@ mod tests {
     fn test_remaining_tokens() {
         let (app, _temp) = create_test_app();
         let messages = vec![
-            Message { role: "user".to_string(), content: "x".repeat(4000) }, // ~1000 tokens
+            Message {
+                role: "user".to_string(),
+                content: "x".repeat(4000),
+            }, // ~1000 tokens
         ];
         let remaining = app.remaining_tokens(&messages);
         // 8000 - ~1000 = ~7000
@@ -1031,11 +1100,17 @@ mod tests {
         let (app, _temp) = create_test_app();
 
         // Small message shouldn't warn
-        let small_messages = vec![Message { role: "user".to_string(), content: "Hello".to_string() }];
+        let small_messages = vec![Message {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+        }];
         assert!(!app.should_warn(&small_messages));
 
         // Large message should warn (above 75% of 8000 = 6000 tokens = ~24000 chars)
-        let large_messages = vec![Message { role: "user".to_string(), content: "x".repeat(30000) }];
+        let large_messages = vec![Message {
+            role: "user".to_string(),
+            content: "x".repeat(30000),
+        }];
         assert!(app.should_warn(&large_messages));
     }
 
@@ -1045,7 +1120,8 @@ mod tests {
     fn test_todos_save_and_load() {
         let (app, _temp) = create_test_app();
 
-        app.save_todos("default", "- [ ] Task 1\n- [x] Task 2").unwrap();
+        app.save_todos("default", "- [ ] Task 1\n- [x] Task 2")
+            .unwrap();
         let loaded = app.load_todos("default").unwrap();
         assert_eq!(loaded, "- [ ] Task 1\n- [x] Task 2");
     }
@@ -1061,7 +1137,8 @@ mod tests {
     fn test_goals_save_and_load() {
         let (app, _temp) = create_test_app();
 
-        app.save_goals("default", "Build something awesome").unwrap();
+        app.save_goals("default", "Build something awesome")
+            .unwrap();
         let loaded = app.load_goals("default").unwrap();
         assert_eq!(loaded, "Build something awesome");
     }
@@ -1144,7 +1221,8 @@ mod tests {
     fn test_set_and_load_system_prompt() {
         let (app, _temp) = create_test_app();
 
-        app.set_system_prompt("You are a helpful assistant.").unwrap();
+        app.set_system_prompt("You are a helpful assistant.")
+            .unwrap();
         let loaded = app.load_system_prompt().unwrap();
         assert_eq!(loaded, "You are a helpful assistant.");
     }

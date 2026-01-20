@@ -2,12 +2,12 @@ use crate::config::ResolvedConfig;
 use crate::context::{Context, InboxEntry, Message, now_timestamp};
 use crate::state::AppState;
 use crate::tools::{self, Tool};
-use uuid::Uuid;
 use futures_util::stream::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode};
 use std::io::{self, ErrorKind};
-use tokio::io::{stdout, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt, stdout};
+use uuid::Uuid;
 
 /// Rolling compaction: strips oldest messages and integrates them into the summary
 /// This is triggered automatically when context exceeds threshold
@@ -15,7 +15,11 @@ pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
     let mut context = app.get_current_context()?;
 
     // Skip system messages when counting
-    let non_system_count = context.messages.iter().filter(|m| m.role != "system").count();
+    let non_system_count = context
+        .messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .count();
 
     if non_system_count <= 4 {
         // Not enough messages to strip - too few to meaningfully compact
@@ -30,7 +34,12 @@ pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
         "non_system_count": non_system_count,
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PreRollingCompact, &hook_data, verbose);
+    let _ = tools::execute_hook(
+        &tools,
+        tools::HookPoint::PreRollingCompact,
+        &hook_data,
+        verbose,
+    );
 
     // Load goals and todos to guide compaction decisions
     let goals = app.load_current_goals()?;
@@ -40,7 +49,10 @@ pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
     let messages_to_strip = non_system_count / 2;
 
     if verbose {
-        eprintln!("[Rolling compaction: stripping {} oldest messages]", messages_to_strip);
+        eprintln!(
+            "[Rolling compaction: stripping {} oldest messages]",
+            messages_to_strip
+        );
     }
 
     // Collect messages to strip (oldest non-system messages)
@@ -87,10 +99,22 @@ Create an updated summary that:
 5. Maintains chronological awareness (what happened earlier vs later)
 
 Output ONLY the updated summary, no preamble."#,
-        if existing_summary.is_empty() { "(No existing summary)" } else { existing_summary },
+        if existing_summary.is_empty() {
+            "(No existing summary)"
+        } else {
+            existing_summary
+        },
         stripped_text,
-        if goals.is_empty() { String::new() } else { format!("\nCURRENT GOALS:\n{}\n", goals) },
-        if todos.is_empty() { String::new() } else { format!("\nCURRENT TODOS:\n{}\n", todos) },
+        if goals.is_empty() {
+            String::new()
+        } else {
+            format!("\nCURRENT GOALS:\n{}\n", goals)
+        },
+        if todos.is_empty() {
+            String::new()
+        } else {
+            format!("\nCURRENT TODOS:\n{}\n", todos)
+        },
     );
 
     let client = Client::new();
@@ -113,19 +137,31 @@ Output ONLY the updated summary, no preamble."#,
         .body(request_body.to_string())
         .send()
         .await
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Rolling compact request failed: {}", e)))?;
+        .map_err(|e| {
+            io::Error::new(
+                ErrorKind::Other,
+                format!("Rolling compact request failed: {}", e),
+            )
+        })?;
 
     if response.status() != StatusCode::OK {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         return Err(io::Error::new(
             ErrorKind::Other,
             format!("Rolling compact API error ({}): {}", status, body),
         ));
     }
 
-    let json: serde_json::Value = response.json().await
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to parse rolling compact response: {}", e)))?;
+    let json: serde_json::Value = response.json().await.map_err(|e| {
+        io::Error::new(
+            ErrorKind::Other,
+            format!("Failed to parse rolling compact response: {}", e),
+        )
+    })?;
 
     let new_summary = json["choices"][0]["message"]["content"]
         .as_str()
@@ -148,7 +184,10 @@ Output ONLY the updated summary, no preamble."#,
     app.save_current_context(&context)?;
 
     if verbose {
-        eprintln!("[Rolling compaction complete: {} messages remaining, summary updated]", context.messages.len());
+        eprintln!(
+            "[Rolling compaction complete: {} messages remaining, summary updated]",
+            context.messages.len()
+        );
     }
 
     // Execute post_rolling_compact hook
@@ -157,7 +196,12 @@ Output ONLY the updated summary, no preamble."#,
         "message_count": context.messages.len(),
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PostRollingCompact, &hook_data, verbose);
+    let _ = tools::execute_hook(
+        &tools,
+        tools::HookPoint::PostRollingCompact,
+        &hook_data,
+        verbose,
+    );
 
     Ok(())
 }
@@ -173,7 +217,11 @@ pub async fn compact_context_with_llm_manual(app: &AppState, verbose: bool) -> i
     compact_context_with_llm_internal(app, true, verbose).await
 }
 
-async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, verbose: bool) -> io::Result<()> {
+async fn compact_context_with_llm_internal(
+    app: &AppState,
+    print_message: bool,
+    verbose: bool,
+) -> io::Result<()> {
     let context = app.get_current_context()?;
 
     if context.messages.is_empty() {
@@ -203,7 +251,10 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
     app.append_to_transcript(&context)?;
 
     if print_message && verbose {
-        eprintln!("[Compacting] Messages: {} -> requesting summary...", context.messages.len());
+        eprintln!(
+            "[Compacting] Messages: {} -> requesting summary...",
+            context.messages.len()
+        );
     }
 
     let client = Client::new();
@@ -213,7 +264,9 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
     let default_compaction_prompt = "Please summarize the following conversation into a concise summary. Capture the key points, decisions, and context.";
     let compaction_prompt = if compaction_prompt.is_empty() {
         if verbose {
-            eprintln!("[WARN] No compaction prompt found at ~/.chibi/prompts/compaction.md. Using default.");
+            eprintln!(
+                "[WARN] No compaction prompt found at ~/.chibi/prompts/compaction.md. Using default."
+            );
         }
         default_compaction_prompt
     } else {
@@ -258,15 +311,19 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
 
     if response.status() != StatusCode::OK {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         return Err(io::Error::new(
             ErrorKind::Other,
             format!("API error ({}): {}", status, body),
         ));
     }
 
-    let json: serde_json::Value = response.json().await
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e)))?;
+    let json: serde_json::Value = response.json().await.map_err(|e| {
+        io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e))
+    })?;
 
     let summary = json["choices"][0]["message"]["content"]
         .as_str()
@@ -285,7 +342,7 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
         }
         return Err(io::Error::new(
             ErrorKind::Other,
-            "Empty summary received from LLM. This can happen with free-tier models. Try again or use a different model."
+            "Empty summary received from LLM. This can happen with free-tier models. Try again or use a different model.",
         ));
     }
 
@@ -352,15 +409,19 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
 
     if response.status() != StatusCode::OK {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         return Err(io::Error::new(
             ErrorKind::Other,
             format!("API error ({}): {}", status, body),
         ));
     }
 
-    let json: serde_json::Value = response.json().await
-        .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e)))?;
+    let json: serde_json::Value = response.json().await.map_err(|e| {
+        io::Error::new(ErrorKind::Other, format!("Failed to parse response: {}", e))
+    })?;
 
     let acknowledgment = json["choices"][0]["message"]["content"]
         .as_str()
@@ -390,13 +451,40 @@ async fn compact_context_with_llm_internal(app: &AppState, print_message: bool, 
     Ok(())
 }
 
-pub async fn send_prompt(app: &AppState, prompt: String, tools: &[Tool], verbose: bool, use_reflection: bool, resolved_config: &ResolvedConfig) -> io::Result<()> {
-    send_prompt_with_depth(app, prompt, tools, verbose, use_reflection, 0, resolved_config).await
+pub async fn send_prompt(
+    app: &AppState,
+    prompt: String,
+    tools: &[Tool],
+    verbose: bool,
+    use_reflection: bool,
+    resolved_config: &ResolvedConfig,
+) -> io::Result<()> {
+    send_prompt_with_depth(
+        app,
+        prompt,
+        tools,
+        verbose,
+        use_reflection,
+        0,
+        resolved_config,
+    )
+    .await
 }
 
-async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], verbose: bool, use_reflection: bool, recursion_depth: usize, resolved_config: &ResolvedConfig) -> io::Result<()> {
+async fn send_prompt_with_depth(
+    app: &AppState,
+    prompt: String,
+    tools: &[Tool],
+    verbose: bool,
+    use_reflection: bool,
+    recursion_depth: usize,
+    resolved_config: &ResolvedConfig,
+) -> io::Result<()> {
     if prompt.trim().is_empty() {
-        return Err(io::Error::new(ErrorKind::InvalidInput, "Prompt cannot be empty"));
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Prompt cannot be empty",
+        ));
     }
 
     let mut context = app.get_current_context()?;
@@ -408,7 +496,8 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         "context_name": context.name,
         "summary": context.summary,
     });
-    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data, verbose)?;
+    let hook_results =
+        tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data, verbose)?;
     for (tool_name, result) in hook_results {
         if let Some(modified) = result.get("prompt").and_then(|v| v.as_str()) {
             if verbose {
@@ -472,7 +561,12 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         "todos": todos,
         "goals": goals,
     });
-    let pre_sys_hook_results = tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data, verbose)?;
+    let pre_sys_hook_results = tools::execute_hook(
+        tools,
+        tools::HookPoint::PreSystemPrompt,
+        &pre_sys_hook_data,
+        verbose,
+    )?;
 
     // Build full system prompt with all components
     let mut full_system_prompt = system_prompt.clone();
@@ -482,7 +576,10 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str()) {
             if !inject.is_empty() {
                 if verbose {
-                    eprintln!("[Hook pre_system_prompt: {} injected content]", hook_tool_name);
+                    eprintln!(
+                        "[Hook pre_system_prompt: {} injected content]",
+                        hook_tool_name
+                    );
                 }
                 full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
             }
@@ -491,7 +588,10 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
 
     // Add username info at the start if not "user"
     if resolved_config.username != "user" {
-        full_system_prompt.push_str(&format!("\n\nThe user speaking to you is called: {}", resolved_config.username));
+        full_system_prompt.push_str(&format!(
+            "\n\nThe user speaking to you is called: {}",
+            resolved_config.username
+        ));
     }
 
     // Add summary if present
@@ -525,14 +625,22 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         "todos": todos,
         "goals": goals,
     });
-    let post_sys_hook_results = tools::execute_hook(tools, tools::HookPoint::PostSystemPrompt, &post_sys_hook_data, verbose)?;
+    let post_sys_hook_results = tools::execute_hook(
+        tools,
+        tools::HookPoint::PostSystemPrompt,
+        &post_sys_hook_data,
+        verbose,
+    )?;
 
     // Append any content from post_system_prompt hooks
     for (hook_tool_name, result) in &post_sys_hook_results {
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str()) {
             if !inject.is_empty() {
                 if verbose {
-                    eprintln!("[Hook post_system_prompt: {} injected content]", hook_tool_name);
+                    eprintln!(
+                        "[Hook post_system_prompt: {} injected content]",
+                        hook_tool_name
+                    );
                 }
                 full_system_prompt.push_str("\n\n");
                 full_system_prompt.push_str(inject);
@@ -540,14 +648,15 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         }
     }
 
-    let mut messages: Vec<serde_json::Value> = if !full_system_prompt.is_empty() && !context_has_system {
-        vec![serde_json::json!({
-            "role": "system",
-            "content": full_system_prompt,
-        })]
-    } else {
-        Vec::new()
-    };
+    let mut messages: Vec<serde_json::Value> =
+        if !full_system_prompt.is_empty() && !context_has_system {
+            vec![serde_json::json!({
+                "role": "system",
+                "content": full_system_prompt,
+            })]
+        } else {
+            Vec::new()
+        };
 
     // Add conversation messages
     for m in &context.messages {
@@ -597,11 +706,16 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
             .body(request_body.to_string())
             .send()
             .await
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("Failed to send request: {}", e)))?;
+            .map_err(|e| {
+                io::Error::new(ErrorKind::Other, format!("Failed to send request: {}", e))
+            })?;
 
         if response.status() != StatusCode::OK {
             let status = response.status();
-            let body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(io::Error::new(
                 ErrorKind::Other,
                 format!("API error ({}): {}", status, body),
@@ -618,7 +732,8 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         let mut has_tool_calls = false;
 
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| io::Error::new(ErrorKind::Other, format!("Stream error: {}", e)))?;
+            let chunk = chunk_result
+                .map_err(|e| io::Error::new(ErrorKind::Other, format!("Stream error: {}", e)))?;
             let chunk_str = std::str::from_utf8(&chunk)
                 .map_err(|e| io::Error::new(ErrorKind::Other, format!("UTF-8 error: {}", e)))?;
 
@@ -630,8 +745,9 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                         continue;
                     }
 
-                    let json: serde_json::Value = serde_json::from_str(data)
-                        .map_err(|e| io::Error::new(ErrorKind::Other, format!("JSON parse error: {}", e)))?;
+                    let json: serde_json::Value = serde_json::from_str(data).map_err(|e| {
+                        io::Error::new(ErrorKind::Other, format!("JSON parse error: {}", e))
+                    })?;
 
                     if let Some(choices) = json["choices"].as_array() {
                         if let Some(choice) = choices.get(0) {
@@ -713,8 +829,8 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                     eprintln!("[Tool: {}]", tc.name);
                 }
 
-                let mut args: serde_json::Value = serde_json::from_str(&tc.arguments)
-                    .unwrap_or(serde_json::json!({}));
+                let mut args: serde_json::Value =
+                    serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
                 // Check for recurse tool first (special handling - triggers recursion after this turn)
                 if let Some(note) = tools::check_recurse_signal(&tc.name, &args) {
@@ -729,11 +845,15 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                     "tool_name": tc.name,
                     "arguments": args,
                 });
-                let pre_hook_results = tools::execute_hook(tools, tools::HookPoint::PreTool, &pre_hook_data, verbose)?;
+                let pre_hook_results =
+                    tools::execute_hook(tools, tools::HookPoint::PreTool, &pre_hook_data, verbose)?;
                 for (hook_tool_name, result) in pre_hook_results {
                     if let Some(modified_args) = result.get("arguments") {
                         if verbose {
-                            eprintln!("[Hook pre_tool: {} modified arguments for {}]", hook_tool_name, tc.name);
+                            eprintln!(
+                                "[Hook pre_tool: {} modified arguments for {}]",
+                                hook_tool_name, tc.name
+                            );
                         }
                         args = modified_args.clone();
                     }
@@ -781,16 +901,31 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                             "content": content,
                             "context_name": context.name,
                         });
-                        let pre_hook_results = tools::execute_hook(tools, tools::HookPoint::PreSendMessage, &pre_hook_data, verbose)?;
+                        let pre_hook_results = tools::execute_hook(
+                            tools,
+                            tools::HookPoint::PreSendMessage,
+                            &pre_hook_data,
+                            verbose,
+                        )?;
 
                         // Check if any hook claimed delivery
                         let mut delivered_via: Option<String> = None;
                         for (hook_tool_name, result) in &pre_hook_results {
-                            if result.get("delivered").and_then(|v| v.as_bool()).unwrap_or(false) {
-                                let via = result.get("via").and_then(|v| v.as_str()).unwrap_or(&hook_tool_name);
+                            if result
+                                .get("delivered")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                            {
+                                let via = result
+                                    .get("via")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or(&hook_tool_name);
                                 delivered_via = Some(via.to_string());
                                 if verbose {
-                                    eprintln!("[Hook pre_send_message: {} intercepted delivery]", hook_tool_name);
+                                    eprintln!(
+                                        "[Hook pre_send_message: {} intercepted delivery]",
+                                        hook_tool_name
+                                    );
                                 }
                                 break;
                             }
@@ -822,7 +957,12 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                             "context_name": context.name,
                             "delivery_result": delivery_result,
                         });
-                        let _ = tools::execute_hook(tools, tools::HookPoint::PostSendMessage, &post_hook_data, verbose);
+                        let _ = tools::execute_hook(
+                            tools,
+                            tools::HookPoint::PostSendMessage,
+                            &post_hook_data,
+                            verbose,
+                        );
 
                         delivery_result
                     }
@@ -847,7 +987,12 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
                     "arguments": args,
                     "result": result,
                 });
-                let _ = tools::execute_hook(tools, tools::HookPoint::PostTool, &post_hook_data, verbose);
+                let _ = tools::execute_hook(
+                    tools,
+                    tools::HookPoint::PostTool,
+                    &post_hook_data,
+                    verbose,
+                );
 
                 messages.push(serde_json::json!({
                     "role": "tool",
@@ -887,15 +1032,33 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
         if should_recurse {
             let new_depth = recursion_depth + 1;
             if new_depth >= app.config.max_recursion_depth {
-                eprintln!("[Max recursion depth ({}) reached, stopping]", app.config.max_recursion_depth);
+                eprintln!(
+                    "[Max recursion depth ({}) reached, stopping]",
+                    app.config.max_recursion_depth
+                );
                 return Ok(());
             }
             if verbose {
-                eprintln!("[Continuing processing ({}/{}): {}]", new_depth, app.config.max_recursion_depth, recurse_note);
+                eprintln!(
+                    "[Continuing processing ({}/{}): {}]",
+                    new_depth, app.config.max_recursion_depth, recurse_note
+                );
             }
             // Recursively call send_prompt with the note as the new prompt
-            let continue_prompt = format!("[Continuing from previous round]\n\nNote to self: {}", recurse_note);
-            return Box::pin(send_prompt_with_depth(app, continue_prompt, tools, verbose, use_reflection, new_depth, resolved_config)).await;
+            let continue_prompt = format!(
+                "[Continuing from previous round]\n\nNote to self: {}",
+                recurse_note
+            );
+            return Box::pin(send_prompt_with_depth(
+                app,
+                continue_prompt,
+                tools,
+                verbose,
+                use_reflection,
+                new_depth,
+                resolved_config,
+            ))
+            .await;
         }
 
         return Ok(());

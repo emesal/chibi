@@ -233,7 +233,13 @@ mod tests {
         "#;
         let config: ModelsConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.models.len(), 2);
-        assert_eq!(config.models.get("gpt-4").unwrap().context_window, Some(128000));
-        assert_eq!(config.models.get("claude-3").unwrap().context_window, Some(200000));
+        assert_eq!(
+            config.models.get("gpt-4").unwrap().context_window,
+            Some(128000)
+        );
+        assert_eq!(
+            config.models.get("claude-3").unwrap().context_window,
+            Some(200000)
+        );
     }
 }
