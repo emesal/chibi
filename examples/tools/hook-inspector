@@ -30,7 +30,11 @@ if [[ "$1" == "--schema" ]]; then
     "pre_compact",
     "post_compact",
     "pre_rolling_compact",
-    "post_rolling_compact"
+    "post_rolling_compact",
+    "pre_system_prompt",
+    "post_system_prompt",
+    "pre_send_message",
+    "post_send_message"
   ]
 }
 EOF
