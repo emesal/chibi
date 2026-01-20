@@ -373,13 +373,13 @@ impl AppState {
         fs::write(&prompt_path, content)
     }
 
-    pub fn should_auto_compact(&self, context: &Context) -> bool {
-        if !self.config.auto_compact {
+    pub fn should_auto_compact(&self, context: &Context, resolved_config: &ResolvedConfig) -> bool {
+        if !resolved_config.auto_compact {
             return false;
         }
         let tokens = self.calculate_token_count(&context.messages);
-        let usage_percent = (tokens as f32 / self.config.context_window_limit as f32) * 100.0;
-        usage_percent >= self.config.auto_compact_threshold
+        let usage_percent = (tokens as f32 / resolved_config.context_window_limit as f32) * 100.0;
+        usage_percent >= resolved_config.auto_compact_threshold
     }
 
     /// Load the reflection prompt from ~/.chibi/prompts/reflection.md
@@ -522,12 +522,8 @@ impl AppState {
             base_url: self.config.base_url.clone(),
             auto_compact: self.config.auto_compact,
             auto_compact_threshold: self.config.auto_compact_threshold,
-            reflection_enabled: self.config.reflection_enabled,
-            reflection_character_limit: self.config.reflection_character_limit,
             max_recursion_depth: self.config.max_recursion_depth,
-            warn_threshold_percent: self.config.warn_threshold_percent,
             username: self.config.username.clone(),
-            lock_heartbeat_seconds: self.config.lock_heartbeat_seconds,
         };
 
         // Apply local config overrides

@@ -446,7 +446,7 @@ async fn send_prompt_with_depth(app: &AppState, prompt: String, tools: &[Tool], 
     }
 
     // Auto-compaction check
-    if app.should_auto_compact(&context) {
+    if app.should_auto_compact(&context, resolved_config) {
         return compact_context_with_llm(app, verbose).await;
     }
 

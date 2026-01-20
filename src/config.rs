@@ -94,10 +94,6 @@ pub struct ResolvedConfig {
     pub base_url: String,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
-    pub reflection_enabled: bool,
-    pub reflection_character_limit: usize,
     pub max_recursion_depth: usize,
-    pub warn_threshold_percent: f32,
     pub username: String,
-    pub lock_heartbeat_seconds: u64,
 }
