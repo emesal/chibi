@@ -675,8 +675,9 @@ Chibi stores data in `~/.chibi/`:
 | `-C, --clear` | Clear current context (saves to transcript) |
 | `-c, --compact` | Compact current context (saves to transcript) |
 | `-r, --rename <old> <new>` | Rename a context |
-| `-H, --history` | Show recent messages (default: 6) |
-| `-n, --num-messages <N>` | Number of messages to show (0 = all, implies -H) |
+| `-H, --history` | Show recent messages from current context (default: 6) |
+| `-L, --history-all` | Show messages from full transcript (current + archived) |
+| `-n, --num-messages <N>` | Number of messages (positive=last N, negative=first N, 0=all) |
 | `-p, --prompt` | Show system prompt for current context |
 | `-e, --set-prompt <arg>` | Set system prompt (can combine with a prompt to send) |
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |

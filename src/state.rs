@@ -647,6 +647,34 @@ impl AppState {
         Ok(())
     }
 
+    /// Read all entries from the JSONL transcript
+    pub fn read_jsonl_transcript(&self, context_name: &str) -> io::Result<Vec<TranscriptEntry>> {
+        let path = self.transcript_jsonl_file(context_name);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = fs::File::open(&path)?;
+        let reader = io::BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str(&line) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => {
+                    // Skip malformed lines but continue reading
+                    eprintln!("[WARN] Skipping malformed transcript line: {}", e);
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
     /// Create a transcript entry for a user message
     pub fn create_user_message_entry(&self, content: &str, username: &str) -> TranscriptEntry {
         TranscriptEntry {

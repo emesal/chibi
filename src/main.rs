@@ -283,24 +283,70 @@ async fn main() -> io::Result<()> {
     } else if cli.history {
         let context = app.get_current_context()?;
         let num = cli.num_messages.unwrap_or(6);
+
+        // Filter out system messages
+        let non_system: Vec<_> = context
+            .messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .collect();
+
         let messages: Vec<_> = if num == 0 {
-            context.messages.iter().collect()
-        } else {
-            context
-                .messages
-                .iter()
+            // All messages
+            non_system
+        } else if num > 0 {
+            // Last N messages
+            let n = num as usize;
+            non_system
+                .into_iter()
                 .rev()
-                .take(num)
+                .take(n)
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
                 .collect()
+        } else {
+            // First N messages (negative number)
+            let n = (-num) as usize;
+            non_system.into_iter().take(n).collect()
         };
+
         for msg in messages {
-            if msg.role == "system" {
-                continue;
-            }
             println!("[{}]: {}\n", msg.role.to_uppercase(), msg.content);
+        }
+    } else if cli.history_all {
+        // Read from transcript.jsonl (full history including archived)
+        let entries = app.read_jsonl_transcript(&app.state.current_context)?;
+        let num = cli.num_messages.unwrap_or(6);
+
+        // Filter to only message entries (not tool calls, etc.)
+        let messages: Vec<_> = entries
+            .iter()
+            .filter(|e| e.entry_type == "message")
+            .collect();
+
+        let selected: Vec<_> = if num == 0 {
+            // All messages
+            messages
+        } else if num > 0 {
+            // Last N messages
+            let n = num as usize;
+            messages
+                .into_iter()
+                .rev()
+                .take(n)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect()
+        } else {
+            // First N messages (negative number)
+            let n = (-num) as usize;
+            messages.into_iter().take(n).collect()
+        };
+
+        for entry in selected {
+            println!("[{}]: {}\n", entry.from.to_uppercase(), entry.content);
         }
     } else if cli.show_prompt {
         let prompt = app.load_system_prompt()?;

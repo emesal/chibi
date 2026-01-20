@@ -18,7 +18,8 @@ pub struct Cli {
     pub compact: bool,
     pub rename: Option<(String, String)>,
     pub history: bool,
-    pub num_messages: Option<usize>,
+    pub history_all: bool,
+    pub num_messages: Option<isize>,
     pub verbose: bool,
     pub show_prompt: bool,
     pub set_prompt: Option<String>,
@@ -46,7 +47,8 @@ impl Cli {
         let mut compact = false;
         let mut rename = None;
         let mut history = false;
-        let mut num_messages: Option<usize> = None;
+        let mut history_all = false;
+        let mut num_messages: Option<isize> = None;
         let mut verbose = false;
         let mut show_prompt = false;
         let mut set_prompt = None;
@@ -147,6 +149,12 @@ impl Cli {
 
             if arg == "-H" || arg == "--history" {
                 history = true;
+                i += 1;
+                continue;
+            }
+
+            if arg == "-L" || arg == "--history-all" {
+                history_all = true;
                 i += 1;
                 continue;
             }
@@ -264,8 +272,8 @@ impl Cli {
             i += 1;
         }
 
-        // -n implies -H
-        if num_messages.is_some() {
+        // -n implies -H (unless -L is specified)
+        if num_messages.is_some() && !history_all {
             history = true;
         }
 
@@ -280,6 +288,7 @@ impl Cli {
             compact,
             rename.is_some(),
             history,
+            history_all,
             show_prompt,
             plugin.is_some(),
         ]
@@ -314,6 +323,7 @@ impl Cli {
             compact,
             rename,
             history,
+            history_all,
             num_messages,
             verbose,
             show_prompt,
@@ -347,8 +357,16 @@ impl Cli {
         println!("  -C, --clear               Clear current context");
         println!("  -c, --compact             Compact current context");
         println!("  -r, --rename <OLD> <NEW>  Rename a context");
-        println!("  -H, --history             Show recent messages (default: 6)");
-        println!("  -n, --num-messages <N>    Number of messages to show (0 = all, implies -H)");
+        println!(
+            "  -H, --history             Show recent messages from current context (default: 6)"
+        );
+        println!(
+            "  -L, --history-all         Show messages from full transcript (current + archived)"
+        );
+        println!("  -n, --num-messages <N>    Number of messages to show (implies -H or -L)");
+        println!("                            Positive N: last N messages");
+        println!("                            Negative N: first N messages");
+        println!("                            Zero: all messages");
         println!("  -p, --prompt              Show system prompt for current context");
         println!("  -e, --set-prompt <ARG>    Set system prompt (file path or literal text)");
         println!();
@@ -488,10 +506,37 @@ mod tests {
     }
 
     #[test]
+    fn test_history_all_short() {
+        let cli = Cli::parse_from(&args("-L")).unwrap();
+        assert!(cli.history_all);
+    }
+
+    #[test]
+    fn test_history_all_long() {
+        let cli = Cli::parse_from(&args("--history-all")).unwrap();
+        assert!(cli.history_all);
+    }
+
+    #[test]
     fn test_num_messages() {
         let cli = Cli::parse_from(&args("-n 10")).unwrap();
         assert_eq!(cli.num_messages, Some(10));
         assert!(cli.history); // -n implies -H
+    }
+
+    #[test]
+    fn test_num_messages_negative() {
+        let cli = Cli::parse_from(&args("-n -5")).unwrap();
+        assert_eq!(cli.num_messages, Some(-5));
+        assert!(cli.history); // -n implies -H
+    }
+
+    #[test]
+    fn test_num_messages_with_history_all() {
+        let cli = Cli::parse_from(&args("-L -n 10")).unwrap();
+        assert_eq!(cli.num_messages, Some(10));
+        assert!(cli.history_all);
+        assert!(!cli.history); // -n with -L doesn't imply -H
     }
 
     #[test]
