@@ -1,6 +1,6 @@
 # chibi upgrade notes
 
-## 0.4.0 -> 0.4.1
+## 0.4.0 -> 0.4.1 (upcoming)
 - new context state format -> clear (0.3) or archive (0.4) contexts before upgrading to preserve history (see --help)
 
 ## 0.3.0 -> 0.4.0
