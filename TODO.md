@@ -1,11 +1,15 @@
+### per-context API
+- model can already be overridden
+
+### first-class group messaging
+- including remotely
+
 ### ability to invoke chibi with json instead of CLI parameters
-- send JSON on stdin
-- if supplying a prompt, include it in the JSON
+- see separate draft (file link here)
 
-### context.json -> context.jsonl
-- and make it exactly the same format as transcript.jsonl
-
-### include tool calls in context/transcript JSONL files
+### context.jsonl and transcript.jsonl written simultaneously
+- introduces some redundancy but simplifies for later when transcripts are elsewhere
+- tool calls aren't in the log, only tool results?
 
 ### command line option for inbox sweep
 - when invoked, do a sweep of all inboxes, waking any chibis with new messages and letting them handle them
@@ -26,5 +30,5 @@
 - this looks like a workflow definition tool
 
 ### Reasoning tokens
-- this is something we need to research and make use of:
+- need to research and make use of:
   https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#enable-reasoning-with-default-config
