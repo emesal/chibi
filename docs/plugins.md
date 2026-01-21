@@ -93,26 +93,29 @@ Plugins can register for lifecycle hooks by including a `hooks` array in the sch
 |------|------|-----------|
 | `on_start` | Chibi starts | `{current_context, verbose}` |
 | `on_end` | Chibi exits | `{current_context}` |
-| `pre_message` | Before sending user message to LLM | `{content, context_name}` |
-| `post_message` | After receiving LLM response | `{content, context_name}` |
+| `pre_message` | Before sending user message to LLM | `{prompt, context_name, summary}` |
+| `post_message` | After receiving LLM response | `{prompt, response, context_name}` |
 | `pre_tool` | Before executing a tool | `{tool_name, arguments}` |
 | `post_tool` | After tool execution | `{tool_name, arguments, result}` |
 | `on_context_switch` | Context changes | `{from_context, to_context, is_sub_context}` |
 | `pre_clear` | Before clearing context | `{context_name, message_count, summary}` |
 | `post_clear` | After clearing context | `{context_name}` |
-| `pre_compact` | Before manual compaction | `{context_name, message_count}` |
-| `post_compact` | After manual compaction | `{context_name}` |
+| `pre_compact` | Before manual compaction | `{context_name, message_count, summary}` |
+| `post_compact` | After manual compaction | `{context_name, message_count, summary}` |
 | `pre_rolling_compact` | Before auto-compaction | `{context_name, message_count, non_system_count, summary}` |
 | `post_rolling_compact` | After auto-compaction | `{context_name, message_count, messages_archived, summary}` |
-| `pre_system_prompt` | Building system prompt | `{context_name}` |
-| `post_system_prompt` | After system prompt built | `{context_name}` |
-| `pre_send_message` | Before inter-context message | `{from_context, to_context, content}` |
-| `post_send_message` | After inter-context message | `{from_context, to_context, content}` |
+| `pre_system_prompt` | Building system prompt | `{context_name, summary, todos, goals}` |
+| `post_system_prompt` | After system prompt built | `{context_name, summary, todos, goals}` |
+| `pre_send_message` | Before inter-context message | `{from, to, content, context_name}` |
+| `post_send_message` | After inter-context message | `{from, to, content, context_name, delivery_result}` |
 
 ### Hook Output
 
 Hooks can return JSON to stdout. For most hooks, this is informational. Some hooks have special behavior:
 
+- `pre_message`: Return `{"prompt": "text"}` to modify the user's prompt before sending to LLM
+- `pre_tool`: Return `{"block": true, "message": "reason"}` to prevent tool execution
+- `pre_tool`: Return `{"arguments": {...}}` to modify tool arguments before execution
 - `pre_system_prompt` / `post_system_prompt`: Return `{"inject": "text"}` to add content to the system prompt
 - `pre_send_message`: Return `{"delivered": true, "via": "..."}` to intercept message delivery
 
