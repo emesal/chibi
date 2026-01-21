@@ -1,0 +1,395 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pyyaml"]
+# ///
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+# Add lib to path
+PLUGIN_DIR = Path(__file__).parent
+sys.path.insert(0, str(PLUGIN_DIR / "lib"))
+
+from parser import parse_skill, list_skills
+from marketplace import install_skill, remove_skill, search_skills, list_available
+from state import get_active_skill, set_active_skill, clear_active_skill
+
+SKILLS_DIR = PLUGIN_DIR / "skills"
+
+def get_schema():
+    """Generate schema for all tools provided by this plugin."""
+    tools = []
+
+    # Core management tools
+    tools.append({
+        "name": "skill_marketplace",
+        "description": "Install, remove, search, or list Agent Skills from the marketplace",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["install", "remove", "search", "list", "list_installed"],
+                    "description": "Action to perform"
+                },
+                "skill_ref": {
+                    "type": "string",
+                    "description": "Skill reference (owner/name) for install/remove"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Search query for search action"
+                }
+            },
+            "required": ["action"]
+        }
+    })
+
+    tools.append({
+        "name": "read_skill_file",
+        "description": "Read a file from an installed skill's directory (scripts, references, etc.)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "skill": {
+                    "type": "string",
+                    "description": "Name of the installed skill"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Relative path to the file within the skill directory"
+                }
+            },
+            "required": ["skill", "path"]
+        }
+    })
+
+    tools.append({
+        "name": "run_skill_script",
+        "description": "Execute a script from an installed skill's directory (e.g., scripts/extract.py)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "skill": {
+                    "type": "string",
+                    "description": "Name of the installed skill"
+                },
+                "script": {
+                    "type": "string",
+                    "description": "Relative path to the script within the skill directory"
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Arguments to pass to the script (optional)"
+                },
+                "stdin": {
+                    "type": "string",
+                    "description": "Input to pass to the script via stdin (optional)"
+                }
+            },
+            "required": ["skill", "script"]
+        }
+    })
+
+    # One tool per installed skill
+    for skill in list_skills(SKILLS_DIR):
+        tools.append({
+            "name": f"skill_{skill.name}",
+            "description": skill.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "arguments": {
+                        "type": "string",
+                        "description": "Arguments to pass to the skill (optional)"
+                    }
+                }
+            }
+        })
+
+    # Register for hooks
+    if tools:
+        tools[0]["hooks"] = ["post_system_prompt", "pre_tool", "on_start"]
+
+    return tools
+
+def handle_hook():
+    """Handle hook invocations."""
+    hook = os.environ.get("CHIBI_HOOK", "")
+    hook_data = json.loads(os.environ.get("CHIBI_HOOK_DATA", "{}"))
+
+    if hook == "on_start":
+        # Clear any stale active skill state
+        clear_active_skill()
+        print("{}")
+
+    elif hook == "post_system_prompt":
+        # Inject skill index into system prompt
+        skills = list_skills(SKILLS_DIR)
+        if not skills:
+            print("{}")
+            return
+
+        index_lines = ["## Available Agent Skills", ""]
+        for skill in skills:
+            index_lines.append(f"- **{skill.name}**: {skill.description}")
+        index_lines.append("")
+        index_lines.append("Use skill_[name] tools to invoke a skill and receive detailed instructions.")
+
+        print(json.dumps({"inject": "\n".join(index_lines)}))
+
+    elif hook == "pre_tool":
+        tool_name = hook_data.get("tool_name", "")
+
+        # Track skill activation
+        if tool_name.startswith("skill_") and tool_name != "skill_marketplace":
+            skill_name = tool_name[6:]  # Remove "skill_" prefix
+            skill = parse_skill(SKILLS_DIR / skill_name / "SKILL.md")
+            if skill:
+                set_active_skill(skill_name, skill.allowed_tools)
+                print("{}")
+                return
+
+        # Enforce allowed-tools for active skill
+        active = get_active_skill()
+        if active and active.get("allowed_tools"):
+            allowed = active["allowed_tools"]
+            if not is_tool_allowed(tool_name, allowed):
+                print(json.dumps({
+                    "block": True,
+                    "message": f"Tool '{tool_name}' is not allowed while skill '{active['name']}' is active. Allowed tools: {allowed}"
+                }))
+                return
+
+        print("{}")
+
+    else:
+        print("{}")
+
+def is_tool_allowed(tool_name: str, allowed_tools: str) -> bool:
+    """Check if a tool is in the allowed-tools list."""
+    # Parse allowed-tools string
+    # Format: "Read, Grep, Bash(git:*)"
+    allowed_list = [t.strip() for t in allowed_tools.split(",")]
+
+    for allowed in allowed_list:
+        if "(" in allowed:
+            # Pattern match: Bash(git:*) matches Bash with git commands
+            base, pattern = allowed.split("(", 1)
+            pattern = pattern.rstrip(")")
+            if tool_name == base.strip():
+                # For now, allow if base matches
+                return True
+        else:
+            if tool_name == allowed.strip():
+                return True
+
+    return False
+
+def handle_tool_call():
+    """Handle tool invocations."""
+    args = json.loads(os.environ.get("CHIBI_TOOL_ARGS", "{}"))
+    tool_name = os.environ.get("CHIBI_TOOL_NAME", "")
+
+    if tool_name == "skill_marketplace":
+        handle_marketplace(args)
+    elif tool_name == "run_skill_script":
+        handle_run_skill_script(args)
+    elif tool_name == "read_skill_file":
+        handle_read_skill_file(args)
+    elif tool_name.startswith("skill_"):
+        handle_skill_invocation(tool_name, args)
+    else:
+        print("Error: Unknown tool")
+
+def handle_marketplace(args):
+    """Handle marketplace operations."""
+    action = args["action"]
+
+    if action == "install":
+        skill_ref = args.get("skill_ref", "")
+        if not skill_ref:
+            print("Error: skill_ref required for install")
+            return
+        result = install_skill(skill_ref, SKILLS_DIR)
+        print(result)
+
+    elif action == "remove":
+        skill_ref = args.get("skill_ref", "")
+        if not skill_ref:
+            print("Error: skill_ref required for remove")
+            return
+        result = remove_skill(skill_ref, SKILLS_DIR)
+        print(result)
+
+    elif action == "search":
+        query = args.get("query", "")
+        results = search_skills(query)
+        print(json.dumps(results, indent=2))
+
+    elif action == "list":
+        results = list_available()
+        print(json.dumps(results, indent=2))
+
+    elif action == "list_installed":
+        skills = list_skills(SKILLS_DIR)
+        installed = [{"name": s.name, "description": s.description} for s in skills]
+        print(json.dumps(installed, indent=2))
+
+def handle_read_skill_file(args):
+    """Read a file from a skill's directory."""
+    skill_name = args["skill"]
+    rel_path = args["path"]
+
+    # Security: prevent path traversal
+    skill_dir = SKILLS_DIR / skill_name
+    if not skill_dir.exists():
+        print(f"Error: Skill '{skill_name}' not found")
+        return
+
+    file_path = (skill_dir / rel_path).resolve()
+    if not str(file_path).startswith(str(skill_dir.resolve())):
+        print("Error: Path traversal not allowed")
+        return
+
+    if not file_path.exists():
+        print(f"Error: File not found: {rel_path}")
+        return
+
+    try:
+        content = file_path.read_text()
+        print(content)
+    except Exception as e:
+        print(f"Error reading file: {e}")
+
+def handle_run_skill_script(args):
+    """Execute a script from a skill's directory."""
+    skill_name = args["skill"]
+    script_path = args["script"]
+    script_args = args.get("args", [])
+    stdin_input = args.get("stdin")
+
+    # Security: validate and resolve path
+    skill_dir = SKILLS_DIR / skill_name
+    if not skill_dir.exists():
+        print(f"Error: Skill '{skill_name}' not found")
+        return
+
+    full_path = (skill_dir / script_path).resolve()
+    if not str(full_path).startswith(str(skill_dir.resolve())):
+        print("Error: Path traversal not allowed")
+        return
+
+    if not full_path.exists():
+        print(f"Error: Script not found: {script_path}")
+        return
+
+    # Check if executable
+    is_executable = os.access(full_path, os.X_OK)
+
+    # Execute the script
+    try:
+        # Determine how to run the script
+        if is_executable:
+            cmd = [str(full_path)] + script_args
+        else:
+            # Try to detect interpreter from shebang or extension
+            ext = full_path.suffix.lower()
+            if ext == ".py":
+                cmd = ["python3", str(full_path)] + script_args
+            elif ext == ".sh":
+                cmd = ["bash", str(full_path)] + script_args
+            elif ext == ".js":
+                cmd = ["node", str(full_path)] + script_args
+            else:
+                # Fall back to trying to execute directly
+                cmd = [str(full_path)] + script_args
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(skill_dir),
+            input=stdin_input,
+            timeout=120
+        )
+
+        output_parts = []
+        if result.stdout:
+            output_parts.append(result.stdout)
+        if result.stderr:
+            output_parts.append(f"[stderr]\n{result.stderr}")
+        if result.returncode != 0:
+            output_parts.append(f"[exit code: {result.returncode}]")
+
+        print("\n".join(output_parts) if output_parts else "(no output)")
+
+    except subprocess.TimeoutExpired:
+        print("Error: Script execution timed out (120s limit)")
+    except PermissionError:
+        print(f"Error: Permission denied executing script. Make sure it's executable: chmod +x {script_path}")
+    except Exception as e:
+        print(f"Error executing script: {e}")
+
+def handle_skill_invocation(tool_name: str, args: dict):
+    """Invoke a skill and return its instructions."""
+    if not tool_name.startswith("skill_"):
+        print("Error: Invalid skill tool name")
+        return
+
+    skill_name = tool_name[6:]
+    skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+
+    if not skill_path.exists():
+        print(f"Error: Skill '{skill_name}' not found")
+        return
+
+    skill = parse_skill(skill_path)
+    if not skill:
+        print(f"Error: Failed to parse skill '{skill_name}'")
+        return
+
+    # Return the skill body (instructions) as the tool result
+    arguments = args.get("arguments", "")
+
+    response_parts = [
+        f"# Skill: {skill.name}",
+        "",
+        skill.body,
+    ]
+
+    if arguments:
+        response_parts.extend([
+            "",
+            "## Arguments",
+            arguments
+        ])
+
+    # Include info about supporting files if they exist
+    skill_dir = SKILLS_DIR / skill_name
+    supporting_dirs = ["scripts", "references", "assets"]
+    existing_dirs = [d for d in supporting_dirs if (skill_dir / d).exists()]
+
+    if existing_dirs:
+        response_parts.extend([
+            "",
+            "## Supporting Files",
+            f"This skill has supporting files in: {', '.join(existing_dirs)}",
+            "- Use `read_skill_file` to read file contents",
+            "- Use `run_skill_script` to execute scripts"
+        ])
+
+    print("\n".join(response_parts))
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--schema":
+        print(json.dumps(get_schema()))
+    elif os.environ.get("CHIBI_HOOK"):
+        handle_hook()
+    else:
+        handle_tool_call()
