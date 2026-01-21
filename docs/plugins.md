@@ -70,6 +70,7 @@ When your plugin runs, chibi sets:
 | Variable | When | Contents |
 |----------|------|----------|
 | `CHIBI_TOOL_ARGS` | Tool call | JSON object with parameters |
+| `CHIBI_TOOL_NAME` | Tool call | Tool name (for multi-tool plugins) |
 | `CHIBI_HOOK` | Hook execution | Hook name (e.g., `on_start`) |
 | `CHIBI_HOOK_DATA` | Hook execution | JSON object with hook-specific data |
 | `CHIBI_VERBOSE` | Always (if `-v`) | Set to `1` when verbose mode is on |
@@ -248,7 +249,7 @@ CHIBI_TOOL_ARGS='{"name": "world"}' ./my_plugin
 
 Test hooks:
 ```bash
-CHIBI_HOOK="on_start" CHIBI_HOOK_DATA='{"current_context": "default"}' ./my_plugin
+CHIBI_HOOK="on_start" CHIBI_HOOK_DATA='{"current_context": "default", "verbose": true}' ./my_plugin
 ```
 
 ## Built-in Tools
