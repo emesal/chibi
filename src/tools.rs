@@ -94,29 +94,48 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
 
     for entry in entries.flatten() {
         let path = entry.path();
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
 
-        // Skip directories and non-executable files
-        if path.is_dir() {
+        // Skip .disabled entries
+        if file_name.ends_with(".disabled") {
             continue;
         }
+
+        // Determine the executable path
+        let exec_path = if path.is_dir() {
+            // Directory plugin: look for plugins/[name]/[name]
+            let inner = path.join(file_name);
+            if !inner.exists() || inner.is_dir() {
+                if verbose {
+                    eprintln!("[WARN] Plugin directory {:?} missing executable", file_name);
+                }
+                continue;
+            }
+            inner
+        } else {
+            path.clone()
+        };
 
         // Check if executable (on Unix)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = path.metadata()
+            if let Ok(metadata) = exec_path.metadata()
                 && metadata.permissions().mode() & 0o111 == 0
             {
                 continue; // Not executable
             }
         }
 
-        // Try to get schema from the tool
-        match get_tool_schema(&path, verbose) {
-            Ok(tool) => tools.push(tool),
+        // Try to get schema(s) from the tool
+        match get_tool_schemas(&exec_path, verbose) {
+            Ok(new_tools) => tools.extend(new_tools),
             Err(e) => {
                 if verbose {
-                    eprintln!("[WARN] Failed to load tool {:?}: {}", path.file_name(), e);
+                    eprintln!("[WARN] Failed to load tool {:?}: {}", exec_path.file_name(), e);
                 }
             }
         }
@@ -125,8 +144,9 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
     Ok(tools)
 }
 
-/// Get tool schema by calling it with --schema
-fn get_tool_schema(path: &PathBuf, verbose: bool) -> io::Result<Tool> {
+/// Get tool schema(s) by calling plugin with --schema
+/// Returns Vec<Tool> to support plugins that provide multiple tools
+fn get_tool_schemas(path: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
     let output = Command::new(path)
         .arg("--schema")
         .output()
@@ -153,6 +173,44 @@ fn get_tool_schema(path: &PathBuf, verbose: bool) -> io::Result<Tool> {
         )
     })?;
 
+    // Handle array of tools or single tool
+    let schemas: Vec<&serde_json::Value> = if let Some(arr) = schema.as_array() {
+        arr.iter().collect()
+    } else {
+        vec![&schema]
+    };
+
+    let mut tools = Vec::new();
+    for s in schemas {
+        match parse_single_tool_schema(s, path, verbose) {
+            Ok(tool) => tools.push(tool),
+            Err(e) => {
+                if verbose {
+                    eprintln!(
+                        "[WARN] Failed to parse tool in {:?}: {}",
+                        path.file_name(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    if tools.is_empty() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "No valid tools found in schema",
+        ));
+    }
+
+    Ok(tools)
+}
+
+fn parse_single_tool_schema(
+    schema: &serde_json::Value,
+    path: &PathBuf,
+    verbose: bool,
+) -> io::Result<Tool> {
     let name = schema["name"]
         .as_str()
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Schema missing 'name' field"))?
@@ -292,6 +350,9 @@ pub fn execute_tool(
     let json_str = serde_json::to_string(arguments)
         .map_err(|e| io::Error::other(format!("Failed to serialize arguments: {}", e)))?;
     cmd.env("CHIBI_TOOL_ARGS", json_str);
+
+    // Pass tool name for multi-tool plugins
+    cmd.env("CHIBI_TOOL_NAME", &tool.name);
 
     // Pass verbosity to tool via environment variable
     if verbose {

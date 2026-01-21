@@ -957,14 +957,40 @@ async fn send_prompt_with_depth(
                     // The tool result will be added below after normal tool execution
                 }
 
-                // Execute pre_tool hooks (can modify arguments)
+                // Execute pre_tool hooks (can modify arguments OR block execution)
                 let pre_hook_data = serde_json::json!({
                     "tool_name": tc.name,
                     "arguments": args,
                 });
                 let pre_hook_results =
                     tools::execute_hook(tools, tools::HookPoint::PreTool, &pre_hook_data, verbose)?;
+
+                let mut blocked = false;
+                let mut block_message = String::new();
+
                 for (hook_tool_name, result) in pre_hook_results {
+                    // Check for block signal first
+                    if result
+                        .get("block")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        blocked = true;
+                        block_message = result
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Tool call blocked by hook")
+                            .to_string();
+                        if verbose {
+                            eprintln!(
+                                "[Hook pre_tool: {} blocked {} - {}]",
+                                hook_tool_name, tc.name, block_message
+                            );
+                        }
+                        break;
+                    }
+
+                    // Check for argument modification
                     if let Some(modified_args) = result.get("arguments") {
                         if verbose {
                             eprintln!(
@@ -976,7 +1002,10 @@ async fn send_prompt_with_depth(
                     }
                 }
 
-                let result = if tc.name == tools::REFLECTION_TOOL_NAME && use_reflection {
+                // If blocked, skip execution and use block message as result
+                let result = if blocked {
+                    block_message
+                } else if tc.name == tools::REFLECTION_TOOL_NAME && use_reflection {
                     // Handle built-in reflection tool
                     match tools::execute_reflection_tool(
                         &app.prompts_dir,
