@@ -420,11 +420,91 @@ impl AppState {
         }
     }
 
-    /// Set a custom system prompt for the current context.
-    pub fn set_system_prompt(&self, content: &str) -> io::Result<()> {
-        self.ensure_context_dir(&self.state.current_context)?;
-        let prompt_path = self.context_prompt_file(&self.state.current_context);
+    /// Load the system prompt for a specific context.
+    pub fn load_system_prompt_for(&self, context_name: &str) -> io::Result<String> {
+        let context_prompt_path = self.context_prompt_file(context_name);
+        if context_prompt_path.exists() {
+            fs::read_to_string(&context_prompt_path)
+        } else {
+            // Fall back to default prompt
+            self.load_prompt("chibi")
+        }
+    }
+
+    /// Set a custom system prompt for a specific context.
+    pub fn set_system_prompt_for(&self, context_name: &str, content: &str) -> io::Result<()> {
+        self.ensure_context_dir(context_name)?;
+        let prompt_path = self.context_prompt_file(context_name);
         fs::write(&prompt_path, content)
+    }
+
+    /// Load the reflection content from ~/.chibi/prompts/reflection.md
+    pub fn load_reflection(&self) -> io::Result<String> {
+        self.load_reflection_prompt()
+    }
+
+    /// Save reflection content to ~/.chibi/prompts/reflection.md
+    pub fn save_reflection(&self, content: &str) -> io::Result<()> {
+        let reflection_path = self.prompts_dir.join("reflection.md");
+        fs::write(&reflection_path, content)
+    }
+
+    /// Load todos for a specific context (alias for load_todos)
+    pub fn load_todos_for(&self, context_name: &str) -> io::Result<String> {
+        self.load_todos(context_name)
+    }
+
+    /// Load goals for a specific context (alias for load_goals)
+    pub fn load_goals_for(&self, context_name: &str) -> io::Result<String> {
+        self.load_goals(context_name)
+    }
+
+    /// Clear a context by name (archive its history)
+    pub fn clear_context_by_name(&self, context_name: &str) -> io::Result<()> {
+        let context = self.load_context(context_name)?;
+
+        // Don't clear if already empty
+        if context.messages.is_empty() {
+            return Ok(());
+        }
+
+        // Append to transcript before clearing
+        self.ensure_context_dir(context_name)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.transcript_file(context_name))?;
+
+        for msg in &context.messages {
+            if msg.role == "system" {
+                continue;
+            }
+            writeln!(file, "[{}]: {}\n", msg.role.to_uppercase(), msg.content)?;
+        }
+
+        // Create fresh context
+        let new_context = Context {
+            name: context_name.to_string(),
+            messages: Vec::new(),
+            created_at: now_timestamp(),
+            updated_at: 0,
+            summary: String::new(),
+        };
+
+        self.save_context(&new_context)?;
+        Ok(())
+    }
+
+    /// Send a message to another context's inbox
+    pub fn send_inbox_message(&self, to_context: &str, message: &str) -> io::Result<()> {
+        let entry = InboxEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: self.state.current_context.clone(),
+            to: to_context.to_string(),
+            content: message.to_string(),
+        };
+        self.append_to_inbox(to_context, &entry)
     }
 
     pub fn should_auto_compact(&self, context: &Context, resolved_config: &ResolvedConfig) -> bool {
@@ -1211,7 +1291,7 @@ mod tests {
     fn test_set_and_load_system_prompt() {
         let (app, _temp) = create_test_app();
 
-        app.set_system_prompt("You are a helpful assistant.")
+        app.set_system_prompt_for(&app.state.current_context, "You are a helpful assistant.")
             .unwrap();
         let loaded = app.load_system_prompt().unwrap();
         assert_eq!(loaded, "You are a helpful assistant.");

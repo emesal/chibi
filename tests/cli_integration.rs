@@ -29,8 +29,9 @@ fn integration_help_flag() {
 
 #[test]
 fn integration_version_flag() {
+    // --version (no -V short form anymore)
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .arg("-V")
+        .arg("--version")
         .output()
         .expect("failed to run chibi");
 
@@ -40,22 +41,24 @@ fn integration_version_flag() {
 }
 
 #[test]
-fn integration_which_command() {
+fn integration_list_current_context() {
+    // -l now shows current context info
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .arg("-w")
+        .arg("-l")
         .output()
         .expect("failed to run chibi");
 
     assert!(output.status.success());
-    // Should output a context name (non-empty)
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.trim().is_empty());
+    // Should contain "Context:" showing current context info
+    assert!(stdout.contains("Context:"));
 }
 
 #[test]
-fn integration_list_command() {
+fn integration_list_contexts() {
+    // -L lists all contexts
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .arg("-l")
+        .arg("-L")
         .output()
         .expect("failed to run chibi");
 
@@ -75,27 +78,29 @@ fn integration_unknown_flag_fails() {
 }
 
 #[test]
-fn integration_exclusive_commands_fail() {
+fn integration_multiple_operations_can_combine() {
+    // In the new CLI design, multiple operations can combine
+    // -l and -L together should work (both execute, no error)
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args(["-l", "-w"])
+        .args(["-l", "-L"])
         .output()
         .expect("failed to run chibi");
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Only one command"));
+    // Both should execute (no_chibi implied)
+    assert!(output.status.success());
 }
 
 #[test]
-fn integration_command_with_prompt_fails() {
+fn integration_output_operations_dont_invoke_llm() {
+    // -L with a prompt argument should still work
+    // (the prompt is ignored when no_chibi is implied)
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args(["-l", "hello"])
+        .args(["-L", "hello"])
         .output()
         .expect("failed to run chibi");
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Cannot specify both"));
+    // Should succeed - -L implies no_chibi, so prompt is not sent
+    assert!(output.status.success());
 }
 
 // =============================================================================
@@ -103,15 +108,15 @@ fn integration_command_with_prompt_fails() {
 // These verify that bare words are treated as prompts, not subcommands
 // =============================================================================
 
-/// Verify "-l" lists contexts (the correct way to invoke the list command)
+/// Verify "-L" lists all contexts
 #[test]
-fn integration_dash_l_lists_contexts() {
+fn integration_dash_upper_l_lists_contexts() {
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .arg("-l")
+        .arg("-L")
         .output()
         .expect("failed to run chibi");
 
-    // -l should succeed and return quickly (no API call)
+    // -L should succeed and return quickly (no API call)
     assert!(output.status.success());
 }
 
@@ -149,4 +154,32 @@ fn integration_version_word_is_prompt() {
         !stdout.starts_with("chibi "),
         "Should not have treated 'version' as --version flag"
     );
+}
+
+/// Test -V is no longer a valid flag
+#[test]
+fn integration_short_v_version_is_invalid() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("-V")
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Unknown option"));
+}
+
+/// Test attached argument form (-Dname)
+#[test]
+fn integration_attached_arg_form() {
+    // -Dnonexistent should work as a valid form (even if context doesn't exist)
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("-Dnonexistent_test_context_12345")
+        .output()
+        .expect("failed to run chibi");
+
+    // Should succeed (context not found is not an error, just prints message)
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("not found"));
 }

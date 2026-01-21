@@ -151,10 +151,11 @@ print("This plugin only handles hooks")
 
 ## Direct Invocation
 
-Users can run plugins directly without the LLM using `-P`:
+Users can run plugins directly without the LLM using `-p` (plugin) or `-P` (call-tool):
 
 ```bash
-chibi -P myplugin arg1 arg2
+chibi -p myplugin arg1 arg2    # Run a plugin directly
+chibi -P update_todos '{"content": "..."}'  # Call any tool (plugin or built-in)
 ```
 
 The args are passed as `{"args": ["arg1", "arg2"]}` in `CHIBI_TOOL_ARGS`. Design your plugin to handle both LLM calls (structured parameters) and direct calls (args array) if needed:

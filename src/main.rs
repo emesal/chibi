@@ -6,7 +6,7 @@ mod lock;
 mod state;
 mod tools;
 
-use cli::Cli;
+use cli::{Cli, Inspectable};
 use context::{Context, now_timestamp};
 use state::AppState;
 use std::io::{self, BufRead, ErrorKind, IsTerminal};
@@ -66,7 +66,7 @@ fn read_prompt_from_pipe() -> io::Result<String> {
     Ok(input.trim().to_string())
 }
 
-/// Generate a unique context name for `-s new` or `-s new:prefix`
+/// Generate a unique context name for `-c new` or `-c new:prefix`
 /// Format: [prefix_]YYYYMMDD_HHMMSS[_N]
 fn generate_new_context_name(app: &AppState, prefix: Option<&str>) -> String {
     use chrono::Local;
@@ -94,13 +94,132 @@ fn generate_new_context_name(app: &AppState, prefix: Option<&str>) -> String {
     }
 }
 
+/// Resolve "new" or "new:prefix" context names
+fn resolve_context_name(app: &AppState, name: &str) -> io::Result<String> {
+    if name == "new" {
+        Ok(generate_new_context_name(app, None))
+    } else if let Some(prefix) = name.strip_prefix("new:") {
+        if prefix.is_empty() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Prefix cannot be empty in 'new:prefix'",
+            ));
+        }
+        Ok(generate_new_context_name(app, Some(prefix)))
+    } else {
+        Ok(name.to_string())
+    }
+}
+
+/// Display inspectable content for a context
+fn inspect_context(app: &AppState, context_name: &str, thing: &Inspectable) -> io::Result<()> {
+    match thing {
+        Inspectable::List => {
+            println!("Inspectable items:");
+            for name in Inspectable::all_names() {
+                println!("  {}", name);
+            }
+        }
+        Inspectable::SystemPrompt => {
+            let prompt = app.load_system_prompt_for(context_name)?;
+            if prompt.is_empty() {
+                println!("(no system prompt set)");
+            } else {
+                print!("{}", prompt);
+                if !prompt.ends_with('\n') {
+                    println!();
+                }
+            }
+        }
+        Inspectable::Reflection => {
+            let reflection = app.load_reflection()?;
+            if reflection.is_empty() {
+                println!("(no reflection set)");
+            } else {
+                print!("{}", reflection);
+                if !reflection.ends_with('\n') {
+                    println!();
+                }
+            }
+        }
+        Inspectable::Todos => {
+            let todos = app.load_todos_for(context_name)?;
+            if todos.is_empty() {
+                println!("(no todos)");
+            } else {
+                print!("{}", todos);
+                if !todos.ends_with('\n') {
+                    println!();
+                }
+            }
+        }
+        Inspectable::Goals => {
+            let goals = app.load_goals_for(context_name)?;
+            if goals.is_empty() {
+                println!("(no goals)");
+            } else {
+                print!("{}", goals);
+                if !goals.ends_with('\n') {
+                    println!();
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Show log entries for a context
+fn show_log(app: &AppState, context_name: &str, num: isize) -> io::Result<()> {
+    let entries = app.read_jsonl_transcript(context_name)?;
+
+    // Filter to only message entries
+    let messages: Vec<_> = entries
+        .iter()
+        .filter(|e| e.entry_type == "message")
+        .collect();
+
+    let selected: Vec<_> = if num == 0 {
+        messages
+    } else if num > 0 {
+        let n = num as usize;
+        messages
+            .into_iter()
+            .rev()
+            .take(n)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
+    } else {
+        let n = (-num) as usize;
+        messages.into_iter().take(n).collect()
+    };
+
+    for entry in selected {
+        println!("[{}]: {}\n", entry.from.to_uppercase(), entry.content);
+    }
+    Ok(())
+}
+
+/// Set system prompt for a context
+fn set_prompt_for_context(app: &AppState, context_name: &str, arg: &str, verbose: bool) -> io::Result<()> {
+    let content = if std::path::Path::new(arg).is_file() {
+        std::fs::read_to_string(arg)?
+    } else {
+        arg.to_string()
+    };
+    app.set_system_prompt_for(context_name, &content)?;
+    if verbose {
+        eprintln!("[System prompt set for context '{}']", context_name);
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let cli = Cli::parse()?;
     let verbose = cli.verbose;
-    // Reflection is enabled if: config allows it AND --no-reflection wasn't passed
     let mut app = AppState::load()?;
-    let use_reflection = app.config.reflection_enabled && !cli.no_reflection;
 
     // Load tools at startup
     let tools = tools::load_tools(&app.plugins_dir, verbose)?;
@@ -123,23 +242,12 @@ async fn main() -> io::Result<()> {
     });
     let _ = tools::execute_hook(&tools, tools::HookPoint::OnStart, &hook_data, verbose);
 
-    // Handle sub-context: use a different context for this invocation without changing global state
-    // This must be processed before other commands so the context is set up
-    if let Some(name) = &cli.sub_context {
-        let actual_name = if name == "new" {
-            generate_new_context_name(&app, None)
-        } else if let Some(prefix) = name.strip_prefix("new:") {
-            if prefix.is_empty() {
-                return Err(io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "Prefix cannot be empty in '-S new:prefix'",
-                ));
-            }
-            generate_new_context_name(&app, Some(prefix))
-        } else {
-            name.clone()
-        };
+    // Track if we did an action (for determining if we should continue to prompt)
+    let mut did_action = false;
 
+    // Handle transient context (-C): use a different context for this invocation
+    if let Some(ref name) = cli.transient_context {
+        let actual_name = resolve_context_name(&app, name)?;
         let prev_context = app.state.current_context.clone();
         // Switch context in memory only (don't save to state file)
         app.state.switch_context(actual_name)?;
@@ -155,14 +263,14 @@ async fn main() -> io::Result<()> {
             app.save_current_context(&new_context)?;
         }
         if verbose {
-            eprintln!("[Using sub-context: {}]", app.state.current_context);
+            eprintln!("[Using transient context: {}]", app.state.current_context);
         }
 
         // Execute on_context_switch hook
         let hook_data = serde_json::json!({
             "from_context": prev_context,
             "to_context": app.state.current_context,
-            "is_sub_context": true,
+            "is_transient": true,
         });
         let _ = tools::execute_hook(
             &tools,
@@ -170,26 +278,11 @@ async fn main() -> io::Result<()> {
             &hook_data,
             verbose,
         );
-
-        // Note: we do NOT call app.save() here, so global state is unchanged
     }
 
-    if let Some(name) = cli.switch {
-        // Handle `-s new` and `-s new:prefix` for auto-generated names
-        let actual_name = if name == "new" {
-            generate_new_context_name(&app, None)
-        } else if let Some(prefix) = name.strip_prefix("new:") {
-            if prefix.is_empty() {
-                return Err(io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "Prefix cannot be empty in '-s new:prefix'",
-                ));
-            }
-            generate_new_context_name(&app, Some(prefix))
-        } else {
-            name
-        };
-
+    // Handle persistent context switch (-c)
+    if let Some(ref name) = cli.switch_context {
+        let actual_name = resolve_context_name(&app, name)?;
         let prev_context = app.state.current_context.clone();
         app.state.switch_context(actual_name)?;
         // Create the context if it doesn't exist
@@ -204,7 +297,6 @@ async fn main() -> io::Result<()> {
             app.save_current_context(&new_context)?;
         }
         app.save()?;
-        // Print the new context name so user knows what was created
         if verbose {
             eprintln!("[Switched to context: {}]", app.state.current_context);
         }
@@ -213,7 +305,7 @@ async fn main() -> io::Result<()> {
         let hook_data = serde_json::json!({
             "from_context": prev_context,
             "to_context": app.state.current_context,
-            "is_sub_context": false,
+            "is_transient": false,
         });
         let _ = tools::execute_hook(
             &tools,
@@ -221,21 +313,140 @@ async fn main() -> io::Result<()> {
             &hook_data,
             verbose,
         );
-    } else if let Some(ref invocation) = cli.plugin {
-        // Direct plugin invocation via -P/--plugin
-        let tool = tools::find_tool(&tools, &invocation.name).ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::NotFound,
-                format!("Plugin '{}' not found", invocation.name),
-            )
-        })?;
+        did_action = true;
+    }
 
-        // Pass args as a JSON object with an "args" array
-        let args_json = serde_json::json!({ "args": invocation.args });
-        let output = tools::execute_tool(tool, &args_json, verbose)?;
-        print!("{}", output);
-        return Ok(());
-    } else if cli.list {
+    // Handle archive current history (-a)
+    if cli.archive_current_history {
+        let context = app.get_current_context()?;
+        let hook_data = serde_json::json!({
+            "context_name": context.name,
+            "message_count": context.messages.len(),
+            "summary": context.summary,
+        });
+        let _ = tools::execute_hook(&tools, tools::HookPoint::PreClear, &hook_data, verbose);
+
+        app.clear_context()?;
+        if verbose {
+            eprintln!("[Context archived (history saved to transcript)]");
+        }
+
+        let hook_data = serde_json::json!({
+            "context_name": app.state.current_context,
+        });
+        let _ = tools::execute_hook(&tools, tools::HookPoint::PostClear, &hook_data, verbose);
+        did_action = true;
+    }
+
+    // Handle archive other context's history (-A)
+    if let Some(ref ctx_name) = cli.archive_history {
+        app.clear_context_by_name(ctx_name)?;
+        println!("Context '{}' archived (history saved to transcript)", ctx_name);
+        did_action = true;
+    }
+
+    // Handle compact current context (-z)
+    if cli.compact_current_context {
+        api::compact_context_with_llm_manual(&app, verbose).await?;
+        did_action = true;
+    }
+
+    // Handle compact other context (-Z)
+    if let Some(ref ctx_name) = cli.compact_context {
+        api::compact_context_by_name(&app, ctx_name, verbose).await?;
+        println!("Context '{}' compacted", ctx_name);
+        did_action = true;
+    }
+
+    // Handle rename current context (-r)
+    if let Some(ref new_name) = cli.rename_current_context {
+        let old_name = app.state.current_context.clone();
+        app.rename_context(&old_name, new_name)?;
+        if verbose {
+            eprintln!("[Renamed context '{}' to '{}']", old_name, new_name);
+        }
+        did_action = true;
+    }
+
+    // Handle rename other context (-R)
+    if let Some((ref old_name, ref new_name)) = cli.rename_context {
+        app.rename_context(old_name, new_name)?;
+        println!("Renamed context '{}' to '{}'", old_name, new_name);
+        did_action = true;
+    }
+
+    // Handle set current system prompt (-y)
+    if let Some(ref arg) = cli.set_current_system_prompt {
+        set_prompt_for_context(&app, &app.state.current_context, arg, verbose)?;
+        did_action = true;
+    }
+
+    // Handle set other context's system prompt (-Y)
+    if let Some((ref ctx_name, ref arg)) = cli.set_system_prompt {
+        set_prompt_for_context(&app, ctx_name, arg, verbose)?;
+        println!("System prompt set for context '{}'", ctx_name);
+        did_action = true;
+    }
+
+    // Handle set persistent username (-u)
+    if let Some(ref username) = cli.set_username {
+        let mut local_config = app.load_local_config(&app.state.current_context)?;
+        local_config.username = Some(username.clone());
+        app.save_local_config(&app.state.current_context, &local_config)?;
+        if verbose {
+            eprintln!(
+                "[Username '{}' saved to context '{}']",
+                username, app.state.current_context
+            );
+        }
+        did_action = true;
+    }
+
+    // === Output-producing operations (these imply no_chibi) ===
+
+    // Handle list current context info (-l)
+    if cli.list_current_context {
+        let context_name = &app.state.current_context;
+        let context = app.get_current_context()?;
+        let context_dir = app.context_dir(context_name);
+        let status = lock::ContextLock::get_status(&context_dir, app.config.lock_heartbeat_seconds);
+        let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
+
+        println!("Context: {}{}", context_name, status_str);
+        println!("Messages: {}", context.messages.len());
+        if !context.summary.is_empty() {
+            println!("Summary: {}", context.summary.lines().next().unwrap_or(""));
+        }
+
+        // Show todos/goals if they exist
+        let todos = app.load_todos_for(context_name)?;
+        if !todos.is_empty() {
+            let todo_lines: Vec<_> = todos.lines().take(3).collect();
+            println!("Todos:");
+            for line in todo_lines {
+                println!("  {}", line);
+            }
+            if todos.lines().count() > 3 {
+                println!("  ...");
+            }
+        }
+
+        let goals = app.load_goals_for(context_name)?;
+        if !goals.is_empty() {
+            let goal_lines: Vec<_> = goals.lines().take(3).collect();
+            println!("Goals:");
+            for line in goal_lines {
+                println!("  {}", line);
+            }
+            if goals.lines().count() > 3 {
+                println!("  ...");
+            }
+        }
+        did_action = true;
+    }
+
+    // Handle list all contexts (-L)
+    if cli.list_contexts {
         let contexts = app.list_contexts();
         let current = &app.state.current_context;
         for name in contexts {
@@ -249,150 +460,159 @@ async fn main() -> io::Result<()> {
                 println!("  {}{}", name, status_str);
             }
         }
-    } else if cli.which {
-        println!("{}", app.state.current_context);
-    } else if let Some(name) = cli.delete {
+        did_action = true;
+    }
+
+    // Handle delete current context (-d)
+    if cli.delete_current_context {
+        let name = app.state.current_context.clone();
         match app.delete_context(&name) {
             Ok(true) => println!("Deleted context: {}", name),
             Ok(false) => println!("Context '{}' not found", name),
             Err(e) => return Err(e),
         }
-    } else if cli.clear {
-        // Execute pre_clear hook
-        let context = app.get_current_context()?;
-        let hook_data = serde_json::json!({
-            "context_name": context.name,
-            "message_count": context.messages.len(),
-            "summary": context.summary,
-        });
-        let _ = tools::execute_hook(&tools, tools::HookPoint::PreClear, &hook_data, verbose);
+        did_action = true;
+    }
 
-        app.clear_context()?;
-        println!("Context cleared (history saved to transcript)");
-
-        // Execute post_clear hook
-        let hook_data = serde_json::json!({
-            "context_name": app.state.current_context,
-        });
-        let _ = tools::execute_hook(&tools, tools::HookPoint::PostClear, &hook_data, verbose);
-    } else if cli.compact {
-        api::compact_context_with_llm_manual(&app, verbose).await?;
-    } else if let Some((old_name, new_name)) = cli.rename {
-        app.rename_context(&old_name, &new_name)?;
-        println!("Renamed context '{}' to '{}'", old_name, new_name);
-    } else if cli.history {
-        let context = app.get_current_context()?;
-        let num = cli.num_messages.unwrap_or(6);
-
-        // Filter out system messages
-        let non_system: Vec<_> = context
-            .messages
-            .iter()
-            .filter(|m| m.role != "system")
-            .collect();
-
-        let messages: Vec<_> = if num == 0 {
-            // All messages
-            non_system
-        } else if num > 0 {
-            // Last N messages
-            let n = num as usize;
-            non_system
-                .into_iter()
-                .rev()
-                .take(n)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect()
-        } else {
-            // First N messages (negative number)
-            let n = (-num) as usize;
-            non_system.into_iter().take(n).collect()
-        };
-
-        for msg in messages {
-            println!("[{}]: {}\n", msg.role.to_uppercase(), msg.content);
+    // Handle delete other context (-D)
+    if let Some(ref name) = cli.delete_context {
+        match app.delete_context(name) {
+            Ok(true) => println!("Deleted context: {}", name),
+            Ok(false) => println!("Context '{}' not found", name),
+            Err(e) => return Err(e),
         }
-    } else if cli.history_all {
-        // Read from transcript.jsonl (full history including archived)
-        let entries = app.read_jsonl_transcript(&app.state.current_context)?;
-        let num = cli.num_messages.unwrap_or(6);
+        did_action = true;
+    }
 
-        // Filter to only message entries (not tool calls, etc.)
-        let messages: Vec<_> = entries
-            .iter()
-            .filter(|e| e.entry_type == "message")
-            .collect();
+    // Handle show current log (-g)
+    if let Some(num) = cli.show_current_log {
+        show_log(&app, &app.state.current_context, num)?;
+        did_action = true;
+    }
 
-        let selected: Vec<_> = if num == 0 {
-            // All messages
-            messages
-        } else if num > 0 {
-            // Last N messages
-            let n = num as usize;
-            messages
-                .into_iter()
-                .rev()
-                .take(n)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect()
+    // Handle show other context's log (-G)
+    if let Some((ref ctx_name, num)) = cli.show_log {
+        show_log(&app, ctx_name, num)?;
+        did_action = true;
+    }
+
+    // Handle inspect current context (-n)
+    if let Some(ref thing) = cli.inspect_current {
+        inspect_context(&app, &app.state.current_context, thing)?;
+        did_action = true;
+    }
+
+    // Handle inspect other context (-N)
+    if let Some((ref ctx_name, ref thing)) = cli.inspect {
+        inspect_context(&app, ctx_name, thing)?;
+        did_action = true;
+    }
+
+    // Handle plugin invocation (-p)
+    if let Some(ref invocation) = cli.plugin {
+        let tool = tools::find_tool(&tools, &invocation.name).ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::NotFound,
+                format!("Plugin '{}' not found", invocation.name),
+            )
+        })?;
+        let args_json = serde_json::json!({ "args": invocation.args });
+        let output = tools::execute_tool(tool, &args_json, verbose)?;
+        print!("{}", output);
+        did_action = true;
+    }
+
+    // Handle call-tool (-P)
+    if let Some(ref invocation) = cli.call_tool {
+        // First look for a plugin, then look for built-in tools
+        let tool = tools::find_tool(&tools, &invocation.name);
+
+        if let Some(tool) = tool {
+            let args_json = serde_json::json!({ "args": invocation.args });
+            let output = tools::execute_tool(tool, &args_json, verbose)?;
+            print!("{}", output);
         } else {
-            // First N messages (negative number)
-            let n = (-num) as usize;
-            messages.into_iter().take(n).collect()
-        };
+            // Check for built-in tools
+            match invocation.name.as_str() {
+                "update_todos" | "update_goals" | "update_reflection" | "send_message" => {
+                    // Built-in tools expect JSON args
+                    let args_str = invocation.args.join(" ");
+                    let args_json: serde_json::Value = if args_str.is_empty() {
+                        serde_json::json!({})
+                    } else {
+                        serde_json::from_str(&args_str).map_err(|e| {
+                            io::Error::new(
+                                ErrorKind::InvalidInput,
+                                format!("Invalid JSON arguments: {}", e),
+                            )
+                        })?
+                    };
 
-        for entry in selected {
-            println!("[{}]: {}\n", entry.from.to_uppercase(), entry.content);
-        }
-    } else if cli.show_prompt {
-        let prompt = app.load_system_prompt()?;
-        if prompt.is_empty() {
-            println!("(no system prompt set)");
-        } else {
-            print!("{}", prompt);
-            // Add newline if the prompt doesn't end with one
-            if !prompt.ends_with('\n') {
-                println!();
+                    match invocation.name.as_str() {
+                        "update_todos" => {
+                            if let Some(content) = args_json.get("content").and_then(|v| v.as_str()) {
+                                app.save_current_todos(content)?;
+                                println!("Todos updated");
+                            } else {
+                                return Err(io::Error::new(
+                                    ErrorKind::InvalidInput,
+                                    "update_todos requires {\"content\": \"...\"}",
+                                ));
+                            }
+                        }
+                        "update_goals" => {
+                            if let Some(content) = args_json.get("content").and_then(|v| v.as_str()) {
+                                app.save_current_goals(content)?;
+                                println!("Goals updated");
+                            } else {
+                                return Err(io::Error::new(
+                                    ErrorKind::InvalidInput,
+                                    "update_goals requires {\"content\": \"...\"}",
+                                ));
+                            }
+                        }
+                        "update_reflection" => {
+                            if let Some(content) = args_json.get("content").and_then(|v| v.as_str()) {
+                                app.save_reflection(content)?;
+                                println!("Reflection updated");
+                            } else {
+                                return Err(io::Error::new(
+                                    ErrorKind::InvalidInput,
+                                    "update_reflection requires {\"content\": \"...\"}",
+                                ));
+                            }
+                        }
+                        "send_message" => {
+                            let to = args_json.get("to").and_then(|v| v.as_str()).ok_or_else(|| {
+                                io::Error::new(ErrorKind::InvalidInput, "send_message requires \"to\" field")
+                            })?;
+                            let message = args_json.get("message").and_then(|v| v.as_str()).ok_or_else(|| {
+                                io::Error::new(ErrorKind::InvalidInput, "send_message requires \"message\" field")
+                            })?;
+                            app.send_inbox_message(to, message)?;
+                            println!("Message sent to '{}'", to);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                _ => {
+                    return Err(io::Error::new(
+                        ErrorKind::NotFound,
+                        format!("Tool '{}' not found", invocation.name),
+                    ));
+                }
             }
         }
-    } else {
-        // Handle set_prompt if provided (can be combined with sending a prompt)
-        let had_set_prompt = cli.set_prompt.is_some();
-        if let Some(arg) = cli.set_prompt {
-            // Check if arg is a file path
-            let content = if std::path::Path::new(&arg).is_file() {
-                std::fs::read_to_string(&arg)?
-            } else {
-                arg
-            };
-            app.set_system_prompt(&content)?;
-            if verbose {
-                eprintln!(
-                    "[System prompt set for context '{}']",
-                    app.state.current_context
-                );
-            }
-        }
+        did_action = true;
+    }
 
-        // Handle -u (persistent username) - save to local.toml
-        if let Some(ref username) = cli.username {
-            let mut local_config = app.load_local_config(&app.state.current_context)?;
-            local_config.username = Some(username.clone());
-            app.save_local_config(&app.state.current_context, &local_config)?;
-            if verbose {
-                eprintln!(
-                    "[Username '{}' saved to context '{}']",
-                    username, app.state.current_context
-                );
-            }
-        }
+    // Now handle LLM invocation if should_invoke_llm() and we have a prompt
+    if cli.should_invoke_llm() {
+        // Resolve configuration
+        let resolved = app.resolve_config(cli.set_username.as_deref(), cli.transient_username.as_deref())?;
 
-        // Resolve the full configuration with CLI overrides
-        let resolved = app.resolve_config(cli.username.as_deref(), cli.temp_username.as_deref())?;
+        // Reflection is enabled by config (no longer a CLI flag)
+        let use_reflection = app.config.reflection_enabled;
 
         // Build prompt from args and/or stdin
         let stdin_is_pipe = !io::stdin().is_terminal();
@@ -403,7 +623,7 @@ async fn main() -> io::Result<()> {
         };
 
         let prompt = match (stdin_is_pipe, arg_prompt) {
-            // Piped input + arg prompt: concatenate (arg prompt first, then piped content)
+            // Piped input + arg prompt: concatenate
             (true, Some(arg)) => {
                 let piped = read_prompt_from_pipe()?;
                 if piped.is_empty() {
@@ -416,44 +636,42 @@ async fn main() -> io::Result<()> {
             (true, None) => read_prompt_from_pipe()?,
             // Arg prompt only
             (false, Some(arg)) => arg,
-            // Interactive: read from terminal (skip if -e was used without a prompt)
+            // Interactive: read from terminal (skip if we already did an action)
             (false, None) => {
-                if had_set_prompt {
-                    // -e was used alone, don't wait for interactive input
-                    println!(
-                        "System prompt set for context '{}'",
-                        app.state.current_context
-                    );
-                    return Ok(());
+                if did_action {
+                    // We already did something, don't wait for interactive input
+                    String::new()
+                } else {
+                    read_prompt_interactive()?
                 }
-                read_prompt_interactive()?
             }
         };
 
-        if prompt.trim().is_empty() {
+        if !prompt.trim().is_empty() {
+            // Create the context if it doesn't exist
+            if !app.context_dir(&app.state.current_context).exists() {
+                let new_context = Context {
+                    name: app.state.current_context.clone(),
+                    messages: Vec::new(),
+                    created_at: now_timestamp(),
+                    updated_at: 0,
+                    summary: String::new(),
+                };
+                app.save_current_context(&new_context)?;
+            }
+
+            // Acquire context lock
+            let context_dir = app.context_dir(&app.state.current_context);
+            let _lock = lock::ContextLock::acquire(&context_dir, app.config.lock_heartbeat_seconds)?;
+
+            api::send_prompt(&app, prompt, &tools, verbose, use_reflection, &resolved).await?;
+        } else if !did_action {
+            // No prompt and no action - this is an error
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
                 "Prompt cannot be empty",
             ));
         }
-
-        // Create the context if it doesn't exist
-        if !app.context_dir(&app.state.current_context).exists() {
-            let new_context = Context {
-                name: app.state.current_context.clone(),
-                messages: Vec::new(),
-                created_at: now_timestamp(),
-                updated_at: 0,
-                summary: String::new(),
-            };
-            app.save_current_context(&new_context)?;
-        }
-
-        // Acquire context lock (keeps lock alive via heartbeat until we're done)
-        let context_dir = app.context_dir(&app.state.current_context);
-        let _lock = lock::ContextLock::acquire(&context_dir, app.config.lock_heartbeat_seconds)?;
-
-        api::send_prompt(&app, prompt, &tools, verbose, use_reflection, &resolved).await?;
     }
 
     // Execute on_end hook

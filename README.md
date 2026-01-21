@@ -167,13 +167,13 @@ Each context can have its own system prompt, overriding the default:
 
 ```bash
 # View current context's system prompt
-chibi -p
+chibi -n system_prompt
 
 # Set a custom prompt for the current context (from text)
-chibi -e "You are a helpful coding assistant"
+chibi -y "You are a helpful coding assistant"
 
 # Set a custom prompt from a file
-chibi -e ~/prompts/coder.md
+chibi -y ~/prompts/coder.md
 ```
 
 When you set a custom prompt, it's stored in `~/.chibi/contexts/<name>/system_prompt.md`. If no custom prompt is set, the default from `~/.chibi/prompts/chibi.md` is used.
@@ -181,13 +181,13 @@ When you set a custom prompt, it's stored in `~/.chibi/contexts/<name>/system_pr
 This allows different contexts to have completely different personalities:
 
 ```bash
-chibi -s coding
-chibi -e "You are a senior software engineer. Be precise and technical."
+chibi -c coding
+chibi -y "You are a senior software engineer. Be precise and technical."
 
-chibi -s creative
-chibi -e "You are a creative writing assistant. Be imaginative and playful."
+chibi -c creative
+chibi -y "You are a creative writing assistant. Be imaginative and playful."
 
-chibi -s default  # Uses the default chibi.md prompt
+chibi -c default  # Uses the default chibi.md prompt
 ```
 
 ## Plugins
@@ -511,14 +511,7 @@ reflection_character_limit = 10000
 
 ### Disabling Reflection
 
-You can disable reflection for a single invocation:
-
-```bash
-chibi -x "Your prompt here"
-chibi --no-reflection "Your prompt here"
-```
-
-Or disable it permanently in `config.toml` by setting `reflection_enabled = false`.
+You can disable reflection permanently in `config.toml` by setting `reflection_enabled = false`.
 
 ### Use Cases
 
@@ -576,14 +569,14 @@ The LLM leaves itself a note about what to do next, then the conversation contin
 
 ### Sub-Agents
 
-Use the `-S` (sub-context) flag to spawn agents without affecting the global context state:
+Use the `-C` (transient-context) flag to spawn agents without affecting the global context state:
 
 ```bash
 # Run a task in another context (doesn't change your current context)
-chibi -S research "Find information about quantum computing"
+chibi -C research "Find information about quantum computing"
 
 # Set system prompt and send task in one command
-chibi -S coding -e "You are a code reviewer" "Review this function for bugs"
+chibi -C coding -y "You are a code reviewer" "Review this function for bugs"
 ```
 
 The `sub-agent` plugin provides a convenient wrapper for the LLM:
@@ -594,9 +587,9 @@ Main: [calls read_context with context_name: "research"]
 Main: "The sub-agent found: ..."
 ```
 
-The key difference between `-s` and `-S`:
-- `-s` (switch): Changes global context permanently
-- `-S` (sub-context): Uses context for this invocation only, global state unchanged
+The key difference between `-c` and `-C`:
+- `-c` (switch-context): Changes global context permanently
+- `-C` (transient-context): Uses context for this invocation only, global state unchanged
 
 ### Rolling Compaction
 
@@ -665,27 +658,64 @@ Chibi stores data in `~/.chibi/`:
 
 ## Command Reference
 
+Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context, UPPERCASE operates on a specified context.
+
+### Context Operations
+
 | Flag | Description |
 |------|-------------|
-| `-s, --switch <name>` | Switch to a different context (`new` for auto-name, `new:prefix` for prefixed) |
-| `-S, --sub-context <name>` | Run in a context without changing global state (for sub-agents) |
-| `-l, --list` | List all contexts (shows `[active]` or `[stale]` lock status) |
-| `-w, --which` | Show current context name |
-| `-d, --delete <name>` | Delete a context |
-| `-C, --clear` | Clear current context (saves to transcript) |
-| `-c, --compact` | Compact current context (saves to transcript) |
-| `-r, --rename <old> <new>` | Rename a context |
-| `-H, --history` | Show recent messages from current context (default: 6) |
-| `-L, --history-all` | Show messages from full transcript (current + archived) |
-| `-n, --num-messages <N>` | Number of messages (positive=last N, negative=first N, 0=all) |
-| `-p, --prompt` | Show system prompt for current context |
-| `-e, --set-prompt <arg>` | Set system prompt (can combine with a prompt to send) |
+| `-c, --switch-context <NAME>` | Switch to a context (persistent); `new` for auto-name, `new:prefix` for prefixed |
+| `-C, --transient-context <NAME>` | Use context for this invocation only (doesn't change global state) |
+| `-l, --list-current-context` | Show current context info (name, message count, todos, goals) |
+| `-L, --list-contexts` | List all contexts (shows `[active]` or `[stale]` lock status) |
+| `-d, --delete-current-context` | Delete the current context |
+| `-D, --delete-context <CTX>` | Delete a specified context |
+| `-a, --archive-current-history` | Archive current context history (saves to transcript) |
+| `-A, --archive-history <CTX>` | Archive specified context's history |
+| `-z, --compact-current-context` | Compact current context |
+| `-Z, --compact-context <CTX>` | Compact specified context |
+| `-r, --rename-current-context <NEW>` | Rename current context |
+| `-R, --rename-context <OLD> <NEW>` | Rename specified context |
+| `-g, --show-current-log <N>` | Show last N log entries from current context |
+| `-G, --show-log <CTX> <N>` | Show last N log entries from specified context |
+| `-n, --inspect-current <THING>` | Inspect current context (system_prompt, reflection, todos, goals, list) |
+| `-N, --inspect <CTX> <THING>` | Inspect specified context |
+| `-y, --set-current-system-prompt <PROMPT>` | Set system prompt for current context |
+| `-Y, --set-system-prompt <CTX> <PROMPT>` | Set system prompt for specified context |
+
+### Username Options
+
+| Flag | Description |
+|------|-------------|
+| `-u, --set-username <NAME>` | Set username (persists to context's local.toml) |
+| `-U, --transient-username <NAME>` | Set username for this invocation only |
+
+### Plugin/Tool Options
+
+| Flag | Description |
+|------|-------------|
+| `-p, --plugin <NAME> [ARGS...]` | Run a plugin directly |
+| `-P, --call-tool <TOOL> [ARGS...]` | Call a tool directly (plugin or built-in) |
+
+### Control Flags
+
+| Flag | Description |
+|------|-------------|
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
-| `-x, --no-reflection` | Disable reflection for this invocation |
-| `-u, --username <name>` | Set username (persists to context's local.toml) |
-| `-U, --temp-username <name>` | Set username for this invocation only |
+| `-x, --no-chibi` | Don't invoke the LLM |
+| `-X, --force-chibi` | Force LLM invocation (overrides implied -x) |
 | `-h, --help` | Show help message |
-| `-V, --version` | Show version |
+| `--version` | Show version |
+
+### Flag Behavior
+
+Some flags imply `--no-chibi` (output-producing or other-context operations):
+`-l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -p, -P`
+
+These flags can be combined with a prompt (execute then invoke LLM):
+`-c, -C, -a, -z, -r, -y, -u, -U, -v`
+
+Use `-X/--force-chibi` to override implied `--no-chibi` and invoke LLM after operations.
 
 ## Output Philosophy
 
@@ -728,43 +758,43 @@ Explain the following concepts:
 
 ```bash
 # Switch to a context (creates if needed)
-chibi -s rust-learning
+chibi -c rust-learning
 
 # Create a new auto-named context (e.g., 20240115_143022)
-chibi -s new
+chibi -c new
 
 # Create a prefixed auto-named context (e.g., bugfix_20240115_143022)
-chibi -s new:bugfix
+chibi -c new:bugfix
 
 # Continue conversation
 chibi Can you give me an example?
 
 # List all contexts
+chibi -L
+
+# Show current context info
 chibi -l
 
-# Check current context
-chibi -w
-
-# Clear context (preserves transcript)
-chibi -C
+# Archive context (preserves transcript)
+chibi -a
 
 # Delete a context
-chibi -d old-project
+chibi -D old-project
 ```
 
 ### Using Custom Prompts
 
 ```bash
 # Create a coding-focused context
-chibi -s coding
-chibi -e "You are a senior engineer. Be precise and technical."
+chibi -c coding
+chibi -y "You are a senior engineer. Be precise and technical."
 
 # View the prompt
-chibi -p
+chibi -n system_prompt
 
 # Create a creative context
-chibi -s stories
-chibi -e ~/prompts/storyteller.md
+chibi -c stories
+chibi -y ~/prompts/storyteller.md
 ```
 
 ### Using Tools
@@ -845,10 +875,10 @@ When chibi is actively using a context, it creates a lock file (`.lock`) contain
 
 ### Lock Status
 
-The `-l` flag shows lock status for each context:
+The `-L` flag shows lock status for each context:
 
 ```bash
-$ chibi -l
+$ chibi -L
 * default [active]    # Currently in use by a chibi process
   coding [stale]      # Lock exists but process likely crashed
   research            # No lock, not in use

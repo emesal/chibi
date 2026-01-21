@@ -341,6 +341,61 @@ pub async fn compact_context_with_llm_manual(app: &AppState, verbose: bool) -> i
     compact_context_with_llm_internal(app, true, verbose).await
 }
 
+/// Compact a specific context by name (for -Z flag)
+pub async fn compact_context_by_name(app: &AppState, context_name: &str, verbose: bool) -> io::Result<()> {
+    // Load the context
+    let context = app.load_context(context_name)?;
+
+    if context.messages.is_empty() {
+        if verbose {
+            eprintln!("[Context '{}' is already empty]", context_name);
+        }
+        return Ok(());
+    }
+
+    if context.messages.len() <= 2 {
+        if verbose {
+            eprintln!("[Context '{}' is already compact (2 or fewer messages)]", context_name);
+        }
+        return Ok(());
+    }
+
+    // For compacting other contexts, we'll do a simple clear + save summary
+    // (full LLM compaction would require more significant refactoring)
+    // Archive the messages to transcript
+    app.ensure_context_dir(context_name)?;
+    let transcript_path = app.transcript_file(context_name);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&transcript_path)?;
+
+    for msg in &context.messages {
+        if msg.role == "system" {
+            continue;
+        }
+        use std::io::Write;
+        writeln!(file, "[{}]: {}\n", msg.role.to_uppercase(), msg.content)?;
+    }
+
+    // Create fresh context preserving summary
+    let new_context = Context {
+        name: context_name.to_string(),
+        messages: Vec::new(),
+        created_at: context.created_at,
+        updated_at: now_timestamp(),
+        summary: context.summary,
+    };
+
+    app.save_context(&new_context)?;
+
+    if verbose {
+        eprintln!("[Context '{}' compacted: {} messages archived]", context_name, context.messages.len());
+    }
+
+    Ok(())
+}
+
 async fn compact_context_with_llm_internal(
     app: &AppState,
     print_message: bool,
