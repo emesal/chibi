@@ -1,5 +1,6 @@
 use crate::config::ResolvedConfig;
 use crate::context::{Context, InboxEntry, Message, now_timestamp};
+use crate::output::OutputHandler;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
@@ -636,7 +637,9 @@ pub async fn send_prompt(
     verbose: bool,
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
+    json_output: bool,
 ) -> io::Result<()> {
+    let output = OutputHandler::new(json_output);
     send_prompt_with_depth(
         app,
         prompt,
@@ -645,6 +648,7 @@ pub async fn send_prompt(
         use_reflection,
         0,
         resolved_config,
+        &output,
     )
     .await
 }
@@ -657,6 +661,7 @@ async fn send_prompt_with_depth(
     use_reflection: bool,
     recursion_depth: usize,
     resolved_config: &ResolvedConfig,
+    output: &OutputHandler,
 ) -> io::Result<()> {
     if prompt.trim().is_empty() {
         return Err(io::Error::new(
@@ -694,9 +699,7 @@ async fn send_prompt_with_depth(
         }
         inbox_content.push_str("--- END INBOX ---\n\n");
         final_prompt = format!("{}{}", inbox_content, final_prompt);
-        if verbose {
-            eprintln!("[Inbox: {} message(s) injected]", inbox_messages.len());
-        }
+        output.diagnostic(&format!("[Inbox: {} message(s) injected]", inbox_messages.len()), verbose);
     }
 
     // Add user message to in-memory context
@@ -705,11 +708,12 @@ async fn send_prompt_with_depth(
     // Append user message to context.jsonl (append-only)
     let user_entry = app.create_user_message_entry(&final_prompt, &resolved_config.username);
     app.append_to_jsonl_transcript(&user_entry)?;
+    output.emit(&user_entry)?;
 
     // Check if we need to warn about context window
-    if app.should_warn(&context.messages) && verbose {
+    if app.should_warn(&context.messages) {
         let remaining = app.remaining_tokens(&context.messages);
-        eprintln!("[Context window warning: {} tokens remaining]", remaining);
+        output.diagnostic(&format!("[Context window warning: {} tokens remaining]", remaining), verbose);
     }
 
     // Auto-compaction check
@@ -754,12 +758,7 @@ async fn send_prompt_with_depth(
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
             && !inject.is_empty()
         {
-            if verbose {
-                eprintln!(
-                    "[Hook pre_system_prompt: {} injected content]",
-                    hook_tool_name
-                );
-            }
+            output.diagnostic(&format!("[Hook pre_system_prompt: {} injected content]", hook_tool_name), verbose);
             full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
         }
     }
@@ -815,12 +814,7 @@ async fn send_prompt_with_depth(
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
             && !inject.is_empty()
         {
-            if verbose {
-                eprintln!(
-                    "[Hook post_system_prompt: {} injected content]",
-                    hook_tool_name
-                );
-            }
+            output.diagnostic(&format!("[Hook post_system_prompt: {} injected content]", hook_tool_name), verbose);
             full_system_prompt.push_str("\n\n");
             full_system_prompt.push_str(inject);
         }
@@ -902,6 +896,7 @@ async fn send_prompt_with_depth(
         let mut stdout = stdout();
         let mut full_response = String::new();
         let mut is_first_content = true;
+        let json_mode = output.is_json_mode();
 
         // Tool call accumulation
         let mut tool_calls: Vec<ToolCallAccumulator> = Vec::new();
@@ -934,16 +929,22 @@ async fn send_prompt_with_depth(
                                 if let Some(remaining) = content.strip_prefix('\n') {
                                     if !remaining.is_empty() {
                                         full_response.push_str(remaining);
-                                        stdout.write_all(remaining.as_bytes()).await?;
-                                        stdout.flush().await?;
+                                        // Only stream in normal mode
+                                        if !json_mode {
+                                            stdout.write_all(remaining.as_bytes()).await?;
+                                            stdout.flush().await?;
+                                        }
                                     }
                                     continue;
                                 }
                             }
 
                             full_response.push_str(content);
-                            stdout.write_all(content.as_bytes()).await?;
-                            stdout.flush().await?;
+                            // Only stream in normal mode
+                            if !json_mode {
+                                stdout.write_all(content.as_bytes()).await?;
+                                stdout.flush().await?;
+                            }
                         }
 
                         // Handle tool calls
@@ -997,9 +998,7 @@ async fn send_prompt_with_depth(
 
             // Execute each tool and add results
             for tc in &tool_calls {
-                if verbose {
-                    eprintln!("[Tool: {}]", tc.name);
-                }
+                output.diagnostic(&format!("[Tool: {}]", tc.name), verbose);
 
                 let mut args: serde_json::Value =
                     serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
@@ -1036,29 +1035,25 @@ async fn send_prompt_with_depth(
                             .and_then(|v| v.as_str())
                             .unwrap_or("Tool call blocked by hook")
                             .to_string();
-                        if verbose {
-                            eprintln!(
-                                "[Hook pre_tool: {} blocked {} - {}]",
-                                hook_tool_name, tc.name, block_message
-                            );
-                        }
+                        output.diagnostic(
+                            &format!("[Hook pre_tool: {} blocked {} - {}]", hook_tool_name, tc.name, block_message),
+                            verbose,
+                        );
                         break;
                     }
 
                     // Check for argument modification
                     if let Some(modified_args) = result.get("arguments") {
-                        if verbose {
-                            eprintln!(
-                                "[Hook pre_tool: {} modified arguments for {}]",
-                                hook_tool_name, tc.name
-                            );
-                        }
+                        output.diagnostic(
+                            &format!("[Hook pre_tool: {} modified arguments for {}]", hook_tool_name, tc.name),
+                            verbose,
+                        );
                         args = modified_args.clone();
                     }
                 }
 
                 // If blocked, skip execution and use block message as result
-                let result = if blocked {
+                let tool_result = if blocked {
                     block_message
                 } else if tc.name == tools::REFLECTION_TOOL_NAME && use_reflection {
                     // Handle built-in reflection tool
@@ -1067,7 +1062,7 @@ async fn send_prompt_with_depth(
                         &args,
                         app.config.reflection_character_limit,
                     ) {
-                        Ok(output) => output,
+                        Ok(r) => r,
                         Err(e) => format!("Error: {}", e),
                     }
                 } else if tc.name == tools::TODOS_TOOL_NAME {
@@ -1111,23 +1106,21 @@ async fn send_prompt_with_depth(
 
                         // Check if any hook claimed delivery
                         let mut delivered_via: Option<String> = None;
-                        for (hook_tool_name, result) in &pre_hook_results {
-                            if result
+                        for (hook_tool_name, hook_result) in &pre_hook_results {
+                            if hook_result
                                 .get("delivered")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false)
                             {
-                                let via = result
+                                let via = hook_result
                                     .get("via")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or(hook_tool_name);
                                 delivered_via = Some(via.to_string());
-                                if verbose {
-                                    eprintln!(
-                                        "[Hook pre_send_message: {} intercepted delivery]",
-                                        hook_tool_name
-                                    );
-                                }
+                                output.diagnostic(
+                                    &format!("[Hook pre_send_message: {} intercepted delivery]", hook_tool_name),
+                                    verbose,
+                                );
                                 break;
                             }
                         }
@@ -1169,7 +1162,7 @@ async fn send_prompt_with_depth(
                     }
                 } else if let Some(tool) = tools::find_tool(tools, &tc.name) {
                     match tools::execute_tool(tool, &args, verbose) {
-                        Ok(output) => output,
+                        Ok(r) => r,
                         Err(e) => format!("Error: {}", e),
                     }
                 } else {
@@ -1179,14 +1172,17 @@ async fn send_prompt_with_depth(
                 // Log tool call and result to context.jsonl
                 let tool_call_entry = app.create_tool_call_entry(&tc.name, &tc.arguments);
                 app.append_to_jsonl_transcript(&tool_call_entry)?;
-                let tool_result_entry = app.create_tool_result_entry(&tc.name, &result);
+                output.emit(&tool_call_entry)?;
+
+                let tool_result_entry = app.create_tool_result_entry(&tc.name, &tool_result);
                 app.append_to_jsonl_transcript(&tool_result_entry)?;
+                output.emit(&tool_result_entry)?;
 
                 // Execute post_tool hooks (observe only)
                 let post_hook_data = serde_json::json!({
                     "tool_name": tc.name,
                     "arguments": args,
-                    "result": result,
+                    "result": tool_result,
                 });
                 let _ = tools::execute_hook(
                     tools,
@@ -1198,7 +1194,7 @@ async fn send_prompt_with_depth(
                 messages.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": result,
+                    "content": tool_result,
                 }));
             }
 
@@ -1213,6 +1209,7 @@ async fn send_prompt_with_depth(
         // Append assistant message to context.jsonl (append-only, no full rewrite)
         let assistant_entry = app.create_assistant_message_entry(&full_response);
         app.append_to_jsonl_transcript(&assistant_entry)?;
+        output.emit(&assistant_entry)?;
 
         // Execute post_message hooks (observe only)
         let hook_data = serde_json::json!({
@@ -1222,29 +1219,27 @@ async fn send_prompt_with_depth(
         });
         let _ = tools::execute_hook(tools, tools::HookPoint::PostMessage, &hook_data, verbose);
 
-        if app.should_warn(&context.messages) && verbose {
+        if app.should_warn(&context.messages) {
             let remaining = app.remaining_tokens(&context.messages);
-            eprintln!("[Context window warning: {} tokens remaining]", remaining);
+            output.diagnostic(&format!("[Context window warning: {} tokens remaining]", remaining), verbose);
         }
 
-        println!();
+        output.newline();
 
         // Check if we should recurse (continue_processing was called)
         if should_recurse {
             let new_depth = recursion_depth + 1;
             if new_depth >= app.config.max_recursion_depth {
-                eprintln!(
+                output.diagnostic_always(&format!(
                     "[Max recursion depth ({}) reached, stopping]",
                     app.config.max_recursion_depth
-                );
+                ));
                 return Ok(());
             }
-            if verbose {
-                eprintln!(
-                    "[Continuing processing ({}/{}): {}]",
-                    new_depth, app.config.max_recursion_depth, recurse_note
-                );
-            }
+            output.diagnostic(
+                &format!("[Continuing processing ({}/{}): {}]", new_depth, app.config.max_recursion_depth, recurse_note),
+                verbose,
+            );
             // Recursively call send_prompt with the note as the new prompt
             let continue_prompt = format!(
                 "[Continuing from previous round]\n\nNote to self: {}",
@@ -1258,6 +1253,7 @@ async fn send_prompt_with_depth(
                 use_reflection,
                 new_depth,
                 resolved_config,
+                output,
             ))
             .await;
         }

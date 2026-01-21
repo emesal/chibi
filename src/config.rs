@@ -74,7 +74,11 @@ pub struct LocalConfig {
     pub base_url: Option<String>,
     pub username: Option<String>,
     pub auto_compact: Option<bool>,
+    pub auto_compact_threshold: Option<f32>,
     pub max_recursion_depth: Option<usize>,
+    pub warn_threshold_percent: Option<f32>,
+    pub context_window_limit: Option<usize>,
+    pub reflection_enabled: Option<bool>,
 }
 
 /// Model metadata from ~/.chibi/models.toml
@@ -97,11 +101,119 @@ pub struct ResolvedConfig {
     pub api_key: String,
     pub model: String,
     pub context_window_limit: usize,
+    pub warn_threshold_percent: f32,
     pub base_url: String,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
     pub max_recursion_depth: usize,
     pub username: String,
+    pub reflection_enabled: bool,
+}
+
+use crate::input::PartialRuntimeConfig;
+
+impl Config {
+    /// Resolve configuration with runtime overrides.
+    ///
+    /// Priority order (highest to lowest):
+    /// 1. Runtime overrides (from CLI flags or JSON input)
+    /// 2. Local config (per-context)
+    /// 3. Global config (config.toml)
+    /// 4. Model metadata (for context_window_limit)
+    /// 5. Defaults
+    pub fn resolve_with_runtime(
+        &self,
+        runtime: &PartialRuntimeConfig,
+        local: &LocalConfig,
+        models: &ModelsConfig,
+    ) -> ResolvedConfig {
+        let mut resolved = ResolvedConfig {
+            // Start with global config values
+            api_key: self.api_key.clone(),
+            model: self.model.clone(),
+            context_window_limit: self.context_window_limit,
+            warn_threshold_percent: self.warn_threshold_percent,
+            base_url: self.base_url.clone(),
+            auto_compact: self.auto_compact,
+            auto_compact_threshold: self.auto_compact_threshold,
+            max_recursion_depth: self.max_recursion_depth,
+            username: self.username.clone(),
+            reflection_enabled: self.reflection_enabled,
+        };
+
+        // Layer 2: Local config overrides
+        if let Some(ref v) = local.api_key {
+            resolved.api_key = v.clone();
+        }
+        if let Some(ref v) = local.model {
+            resolved.model = v.clone();
+        }
+        if let Some(ref v) = local.base_url {
+            resolved.base_url = v.clone();
+        }
+        if let Some(v) = local.context_window_limit {
+            resolved.context_window_limit = v;
+        }
+        if let Some(v) = local.warn_threshold_percent {
+            resolved.warn_threshold_percent = v;
+        }
+        if let Some(v) = local.auto_compact {
+            resolved.auto_compact = v;
+        }
+        if let Some(v) = local.auto_compact_threshold {
+            resolved.auto_compact_threshold = v;
+        }
+        if let Some(v) = local.max_recursion_depth {
+            resolved.max_recursion_depth = v;
+        }
+        if let Some(ref v) = local.username {
+            resolved.username = v.clone();
+        }
+        if let Some(v) = local.reflection_enabled {
+            resolved.reflection_enabled = v;
+        }
+
+        // Layer 3: Runtime overrides (highest priority)
+        if let Some(ref v) = runtime.api_key {
+            resolved.api_key = v.clone();
+        }
+        if let Some(ref v) = runtime.model {
+            resolved.model = v.clone();
+        }
+        if let Some(ref v) = runtime.base_url {
+            resolved.base_url = v.clone();
+        }
+        if let Some(v) = runtime.context_window_limit {
+            resolved.context_window_limit = v;
+        }
+        if let Some(v) = runtime.warn_threshold_percent {
+            resolved.warn_threshold_percent = v;
+        }
+        if let Some(v) = runtime.auto_compact {
+            resolved.auto_compact = v;
+        }
+        if let Some(v) = runtime.auto_compact_threshold {
+            resolved.auto_compact_threshold = v;
+        }
+        if let Some(v) = runtime.max_recursion_depth {
+            resolved.max_recursion_depth = v;
+        }
+        if let Some(v) = runtime.reflection_enabled {
+            resolved.reflection_enabled = v;
+        }
+
+        // Layer 4: Model metadata for context_window (only if not overridden)
+        // This is applied after runtime since we want explicit overrides to win
+        if runtime.context_window_limit.is_none() && local.context_window_limit.is_none() {
+            if let Some(meta) = models.models.get(&resolved.model) {
+                if let Some(window) = meta.context_window {
+                    resolved.context_window_limit = window;
+                }
+            }
+        }
+
+        resolved
+    }
 }
 
 #[cfg(test)]
@@ -252,5 +364,136 @@ mod tests {
             config.models.get("claude-3").unwrap().context_window,
             Some(200000)
         );
+    }
+
+    // Helper to create a test config
+    fn make_test_config() -> Config {
+        Config {
+            api_key: "global-key".to_string(),
+            model: "gpt-4".to_string(),
+            context_window_limit: 8000,
+            warn_threshold_percent: 75.0,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            base_url: DEFAULT_API_URL.to_string(),
+            reflection_enabled: true,
+            reflection_character_limit: 10000,
+            max_recursion_depth: 15,
+            username: "user".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+        }
+    }
+
+    #[test]
+    fn test_resolve_with_runtime_defaults() {
+        let config = make_test_config();
+        let local = LocalConfig::default();
+        let models = ModelsConfig::default();
+        let runtime = PartialRuntimeConfig::default();
+
+        let resolved = config.resolve_with_runtime(&runtime, &local, &models);
+
+        assert_eq!(resolved.api_key, "global-key");
+        assert_eq!(resolved.model, "gpt-4");
+        assert_eq!(resolved.context_window_limit, 8000);
+        assert_eq!(resolved.warn_threshold_percent, 75.0);
+        assert!(!resolved.auto_compact);
+        assert!(resolved.reflection_enabled);
+    }
+
+    #[test]
+    fn test_resolve_with_runtime_local_overrides() {
+        let config = make_test_config();
+        let local = LocalConfig {
+            model: Some("claude-3".to_string()),
+            username: Some("localuser".to_string()),
+            auto_compact: Some(true),
+            ..Default::default()
+        };
+        let models = ModelsConfig::default();
+        let runtime = PartialRuntimeConfig::default();
+
+        let resolved = config.resolve_with_runtime(&runtime, &local, &models);
+
+        assert_eq!(resolved.api_key, "global-key"); // unchanged
+        assert_eq!(resolved.model, "claude-3"); // local override
+        assert_eq!(resolved.username, "localuser"); // local override
+        assert!(resolved.auto_compact); // local override
+    }
+
+    #[test]
+    fn test_resolve_with_runtime_runtime_overrides() {
+        let config = make_test_config();
+        let local = LocalConfig {
+            model: Some("claude-3".to_string()),
+            ..Default::default()
+        };
+        let models = ModelsConfig::default();
+        let runtime = PartialRuntimeConfig {
+            model: Some("gpt-4-turbo".to_string()),
+            auto_compact: Some(true),
+            ..Default::default()
+        };
+
+        let resolved = config.resolve_with_runtime(&runtime, &local, &models);
+
+        // Runtime should win over local
+        assert_eq!(resolved.model, "gpt-4-turbo");
+        assert!(resolved.auto_compact);
+    }
+
+    #[test]
+    fn test_resolve_with_runtime_model_metadata() {
+        let config = make_test_config();
+        let local = LocalConfig::default();
+        let mut models = ModelsConfig::default();
+        models.models.insert("gpt-4".to_string(), ModelMetadata {
+            context_window: Some(128000),
+        });
+        let runtime = PartialRuntimeConfig::default();
+
+        let resolved = config.resolve_with_runtime(&runtime, &local, &models);
+
+        // Model metadata should set context_window_limit
+        assert_eq!(resolved.context_window_limit, 128000);
+    }
+
+    #[test]
+    fn test_resolve_with_runtime_explicit_window_overrides_metadata() {
+        let config = make_test_config();
+        let local = LocalConfig {
+            context_window_limit: Some(16000),
+            ..Default::default()
+        };
+        let mut models = ModelsConfig::default();
+        models.models.insert("gpt-4".to_string(), ModelMetadata {
+            context_window: Some(128000),
+        });
+        let runtime = PartialRuntimeConfig::default();
+
+        let resolved = config.resolve_with_runtime(&runtime, &local, &models);
+
+        // Explicit local override should win over model metadata
+        assert_eq!(resolved.context_window_limit, 16000);
+    }
+
+    #[test]
+    fn test_resolve_with_runtime_priority_chain() {
+        let config = make_test_config();
+        let local = LocalConfig {
+            warn_threshold_percent: Some(60.0),
+            ..Default::default()
+        };
+        let models = ModelsConfig::default();
+        let runtime = PartialRuntimeConfig {
+            warn_threshold_percent: Some(50.0),
+            ..Default::default()
+        };
+
+        let resolved = config.resolve_with_runtime(&runtime, &local, &models);
+
+        // Runtime (50.0) should win over local (60.0) should win over global (75.0)
+        assert_eq!(resolved.warn_threshold_percent, 50.0);
     }
 }
