@@ -1,3 +1,8 @@
+### context.json -> context.jsonl
+- and make it exactly the same format as transcript.jsonl
+
+### include tool calls in context/transcript JSONL files
+
 ### command line option for inbox sweep
 - when invoked, do a sweep of all inboxes, waking any chibis with new messages and letting them handle them
 
