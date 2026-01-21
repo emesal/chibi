@@ -2,11 +2,13 @@ mod api;
 mod cli;
 mod config;
 mod context;
+mod input;
+mod json_input;
 mod lock;
 mod state;
 mod tools;
 
-use cli::{Cli, Inspectable};
+use cli::Inspectable;
 use context::{Context, now_timestamp};
 use state::AppState;
 use std::io::{self, BufRead, ErrorKind, IsTerminal};
@@ -258,7 +260,7 @@ fn set_prompt_for_context(app: &AppState, context_name: &str, arg: &str, verbose
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let cli = Cli::parse()?;
+    let cli = cli::parse()?;
     let verbose = cli.verbose;
     let mut app = AppState::load()?;
 

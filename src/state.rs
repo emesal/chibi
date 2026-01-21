@@ -869,11 +869,13 @@ impl AppState {
             api_key: self.config.api_key.clone(),
             model: self.config.model.clone(),
             context_window_limit: self.config.context_window_limit,
+            warn_threshold_percent: self.config.warn_threshold_percent,
             base_url: self.config.base_url.clone(),
             auto_compact: self.config.auto_compact,
             auto_compact_threshold: self.config.auto_compact_threshold,
             max_recursion_depth: self.config.max_recursion_depth,
             username: self.config.username.clone(),
+            reflection_enabled: self.config.reflection_enabled,
         };
 
         // Apply local config overrides
@@ -886,14 +888,26 @@ impl AppState {
         if let Some(ref base_url) = local.base_url {
             resolved.base_url = base_url.clone();
         }
+        if let Some(context_window_limit) = local.context_window_limit {
+            resolved.context_window_limit = context_window_limit;
+        }
+        if let Some(warn_threshold_percent) = local.warn_threshold_percent {
+            resolved.warn_threshold_percent = warn_threshold_percent;
+        }
         if let Some(auto_compact) = local.auto_compact {
             resolved.auto_compact = auto_compact;
+        }
+        if let Some(auto_compact_threshold) = local.auto_compact_threshold {
+            resolved.auto_compact_threshold = auto_compact_threshold;
         }
         if let Some(max_recursion_depth) = local.max_recursion_depth {
             resolved.max_recursion_depth = max_recursion_depth;
         }
         if let Some(ref username) = local.username {
             resolved.username = username.clone();
+        }
+        if let Some(reflection_enabled) = local.reflection_enabled {
+            resolved.reflection_enabled = reflection_enabled;
         }
 
         // Apply CLI overrides (highest priority)
@@ -1398,11 +1412,9 @@ mod tests {
 
         let local = LocalConfig {
             model: Some("custom-model".to_string()),
-            api_key: None,
-            base_url: None,
             username: Some("alice".to_string()),
             auto_compact: Some(true),
-            max_recursion_depth: None,
+            ..Default::default()
         };
 
         app.save_local_config("default", &local).unwrap();
@@ -1497,11 +1509,9 @@ mod tests {
         // Set local config
         let local = LocalConfig {
             model: Some("local-model".to_string()),
-            api_key: None,
-            base_url: None,
             username: Some("localuser".to_string()),
             auto_compact: Some(true),
-            max_recursion_depth: None,
+            ..Default::default()
         };
         app.save_local_config("default", &local).unwrap();
 
@@ -1517,12 +1527,8 @@ mod tests {
 
         // Set local config
         let local = LocalConfig {
-            model: None,
-            api_key: None,
-            base_url: None,
             username: Some("localuser".to_string()),
-            auto_compact: None,
-            max_recursion_depth: None,
+            ..Default::default()
         };
         app.save_local_config("default", &local).unwrap();
 
