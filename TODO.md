@@ -1,3 +1,7 @@
+### ability to invoke chibi with json instead of CLI parameters
+- send JSON on stdin
+- if supplying a prompt, include it in the JSON
+
 ### context.json -> context.jsonl
 - and make it exactly the same format as transcript.jsonl
 
