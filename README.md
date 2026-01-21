@@ -352,6 +352,204 @@ chibi -v "Read my Cargo.toml"
 # stdout: <LLM response about the file>
 ```
 
+
+## Agent Skills
+
+Chibi includes built-in support for [Agent Skills](https://agentskills.io), a portable standard for giving AI agents domain-specific expertise. Skills are directories containing a `SKILL.md` file with YAML frontmatter (metadata) and markdown body (instructions).
+
+The `agent-skills` plugin provides:
+- **Skill discovery and installation** from GitHub marketplaces
+- **Progressive disclosure** of specialized knowledge via skill invocation
+- **Tool restriction enforcement** via `allowed-tools` field
+- **Multi-tool plugin support** (one plugin provides multiple tools)
+
+### How Agent Skills Work
+
+Agent Skills differ from regular plugins:
+- **Plugins** provide executable tools that the LLM can call
+- **Skills** provide specialized knowledge and instructions that guide the LLM's behavior
+
+When a skill is invoked:
+1. The LLM calls `skill_[name]` (e.g., `skill_pdf-processing`)
+2. The skill's SKILL.md content is returned as the tool result
+3. If the skill declares `allowed-tools`, those restrictions are enforced
+4. The skill remains active until another skill is invoked or the session ends
+
+### Installing Skills
+
+Skills are installed from GitHub repositories:
+
+```bash
+# Install a skill (example - adjust to actual repository)
+chibi
+> Use the skill_marketplace tool to install a skill:
+{
+  "action": "install",
+  "skill_ref": "anthropics/pdf-processing"
+}
+
+# List installed skills
+{
+  "action": "list_installed"
+}
+```
+
+Skills are stored in `~/.chibi/plugins/agent-skills/skills/[skill-name]/`.
+
+### Skill Structure
+
+A valid skill directory contains:
+
+```
+my-skill/
+├── SKILL.md              # Required: YAML frontmatter + instructions
+├── scripts/              # Optional: Helper scripts
+│   └── extract.py
+├── references/           # Optional: Reference documents
+│   └── api-docs.md
+└── assets/              # Optional: Data files
+    └── config.json
+```
+
+### SKILL.md Format
+
+```markdown
+---
+name: pdf-processing
+description: Extract and analyze PDF documents
+allowed-tools: Read, run_skill_script
+license: MIT
+---
+
+# PDF Processing Skill
+
+This skill helps you extract and analyze PDF documents.
+
+## Instructions
+
+When this skill is activated, you can:
+
+1. Use `run_skill_script` to execute `scripts/extract.py`
+2. Use `Read` to examine extracted text
+3. Analyze the content and provide insights
+
+## Tool Restrictions
+
+While this skill is active, you can ONLY use:
+- `Read` - to examine files
+- `run_skill_script` - to run helper scripts
+
+Other tools will be blocked.
+```
+
+### Skill Metadata Fields
+
+**Required:**
+- `name` - Lowercase alphanumeric with hyphens, max 64 chars
+- `description` - Plain text description, max 1024 chars
+
+**Optional:**
+- `allowed-tools` - Comma-separated list of allowed tools (enforced by pre_tool hook)
+- `license` - License identifier (e.g., "MIT", "Apache-2.0")
+- `compatibility` - Compatibility notes or version requirements
+- `metadata` - Additional custom metadata
+
+### Built-in Tools for Agent Skills
+
+The `agent-skills` plugin provides these tools:
+
+| Tool | Description |
+|------|-------------|
+| `skill_marketplace` | Install, remove, search, or list skills |
+| `read_skill_file` | Read files from a skill's directory (scripts, references, etc.) |
+| `run_skill_script` | Execute scripts from a skill's directory with arguments/stdin |
+| `skill_[name]` | One tool per installed skill - invokes the skill |
+
+### Skill Invocation Example
+
+```bash
+# The LLM invokes a skill
+chibi "I need to process a PDF"
+```
+
+Internally:
+1. LLM calls `skill_pdf-processing`
+2. Plugin returns the SKILL.md content
+3. LLM receives detailed instructions
+4. `allowed-tools: Read, run_skill_script` is enforced
+5. LLM can only use those two tools until another skill is invoked
+
+### Supporting Files
+
+Skills can include helper scripts:
+
+```bash
+# The LLM can read skill files
+{
+  "skill": "pdf-processing",
+  "path": "scripts/extract.py"
+}
+
+# Or execute them
+{
+  "skill": "pdf-processing",
+  "script": "scripts/extract.py",
+  "args": ["input.pdf", "output.txt"],
+  "stdin": "optional input data"
+}
+```
+
+Scripts run with:
+- Working directory: the skill directory
+- Timeout: 120 seconds
+- Auto-detection of interpreter (Python, Bash, Node)
+- Path traversal protection
+
+### Security Considerations
+
+- Skill names validated against spec (alphanumeric + hyphens only)
+- Path traversal prevented in `read_skill_file` and `run_skill_script`
+- Scripts run sandboxed to skill directory
+- `allowed-tools` is enforced via `pre_tool` hook
+- Script execution has 120s timeout
+- Marketplace installs are git clones (verify source trustworthiness)
+
+### Creating Your Own Skills
+
+To create a skill:
+
+1. Create a directory in `~/.chibi/plugins/agent-skills/skills/my-skill/`
+2. Add a `SKILL.md` file with YAML frontmatter
+3. Optionally add `scripts/`, `references/`, or `assets/` directories
+4. The skill will automatically appear as `skill_my-skill`
+
+Example minimal skill:
+
+```bash
+mkdir -p ~/.chibi/plugins/agent-skills/skills/example-skill
+cat > ~/.chibi/plugins/agent-skills/skills/example-skill/SKILL.md << 'EOF'
+---
+name: example-skill
+description: A simple example skill
+---
+
+# Example Skill
+
+This is an example skill. When invoked, follow these instructions:
+
+1. Greet the user
+2. Explain what you can do
+3. Ask how you can help
+EOF
+```
+
+### Limitations
+
+- Skills are for instructions/knowledge, not executable logic
+- Scripts timeout after 120 seconds
+- Marketplace search/list not yet implemented (use GitHub directly)
+- One active skill at a time (invoking another clears the previous)
+
 ## Hooks
 
 Chibi supports a hooks system that allows tools to register for lifecycle events. Tools can observe events or modify data as it flows through the system.
