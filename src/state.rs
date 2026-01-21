@@ -1,6 +1,6 @@
 use crate::config::{Config, LocalConfig, ModelsConfig, ResolvedConfig};
 use crate::context::{
-    Context, ContextState, InboxEntry, Message, TranscriptEntry, now_timestamp,
+    Context, ContextMeta, ContextState, InboxEntry, Message, TranscriptEntry, now_timestamp,
     validate_context_name,
 };
 use dirs_next::home_dir;
@@ -140,11 +140,26 @@ impl AppState {
     }
 
     pub fn context_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("context.jsonl")
+    }
+
+    /// Path to the old context.json format (for migration)
+    fn context_file_old(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("context.json")
     }
 
+    /// Path to context metadata file
+    pub fn context_meta_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("context_meta.json")
+    }
+
+    /// Path to the transcript archive file (for compaction)
+    pub fn transcript_archive_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("transcript_archive.jsonl")
+    }
+
     pub fn transcript_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript.txt")
+        self.context_dir(name).join("transcript.md")
     }
 
     pub fn summary_file(&self, name: &str) -> PathBuf {
@@ -157,33 +172,246 @@ impl AppState {
     }
 
     pub fn load_context(&self, name: &str) -> io::Result<Context> {
-        let file = File::open(self.context_file(name))?;
-        let mut context: Context = serde_json::from_reader(BufReader::new(file)).map_err(|e| {
-            io::Error::new(
-                ErrorKind::InvalidData,
-                format!("Failed to parse context '{}': {}", name, e),
-            )
-        })?;
+        let context_jsonl = self.context_file(name);
+        let context_json_old = self.context_file_old(name);
+
+        // Try to load from new JSONL format first
+        if context_jsonl.exists() {
+            return self.load_context_from_jsonl(name);
+        }
+
+        // Check if old format exists and migrate
+        if context_json_old.exists() {
+            return self.migrate_and_load_context(name);
+        }
+
+        // Neither exists - return not found error
+        Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("Context '{}' not found", name),
+        ))
+    }
+
+    /// Load context from the new JSONL format
+    fn load_context_from_jsonl(&self, name: &str) -> io::Result<Context> {
+        let entries = self.read_context_entries(name)?;
+        let meta = self.load_context_meta(name)?;
 
         // Load summary from separate file
         let summary_path = self.summary_file(name);
-        if summary_path.exists() {
-            context.summary = fs::read_to_string(&summary_path)?;
-        }
+        let summary = if summary_path.exists() {
+            fs::read_to_string(&summary_path)?
+        } else {
+            String::new()
+        };
 
-        Ok(context)
+        // Convert entries to messages for backwards compatibility with existing code
+        let messages = self.entries_to_messages(&entries);
+
+        // Get updated_at from the last entry timestamp, or created_at if empty
+        let updated_at = entries.last().map(|e| e.timestamp).unwrap_or(meta.created_at);
+
+        Ok(Context {
+            name: name.to_string(),
+            messages,
+            created_at: meta.created_at,
+            updated_at,
+            summary,
+        })
     }
 
-    pub fn save_context(&self, context: &Context) -> io::Result<()> {
-        self.ensure_context_dir(&context.name)?;
+    /// Migrate from old context.json format to new context.jsonl format
+    fn migrate_and_load_context(&self, name: &str) -> io::Result<Context> {
+        let old_path = self.context_file_old(name);
+        let file = File::open(&old_path)?;
+        let old_context: Context = serde_json::from_reader(BufReader::new(file)).map_err(|e| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!("Failed to parse old context '{}': {}", name, e),
+            )
+        })?;
+
+        // Save metadata
+        let meta = ContextMeta {
+            created_at: old_context.created_at,
+        };
+        self.save_context_meta(name, &meta)?;
+
+        // Convert messages to entries and save to JSONL
+        let entries = self.messages_to_entries(&old_context.messages, name);
+        self.write_context_entries(name, &entries)?;
+
+        // Load summary from separate file (keep it there)
+        let summary_path = self.summary_file(name);
+        let summary = if summary_path.exists() {
+            fs::read_to_string(&summary_path)?
+        } else {
+            old_context.summary.clone()
+        };
+
+        // If summary was in old context but not in file, save it
+        if !old_context.summary.is_empty() && !summary_path.exists() {
+            fs::write(&summary_path, &old_context.summary)?;
+        }
+
+        // Remove old context.json file
+        fs::remove_file(&old_path)?;
+
+        Ok(Context {
+            name: name.to_string(),
+            messages: old_context.messages,
+            created_at: old_context.created_at,
+            updated_at: old_context.updated_at,
+            summary,
+        })
+    }
+
+    /// Read entries from context.jsonl
+    pub fn read_context_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
+        let path = self.context_file(name);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = File::open(&path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str(&line) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => {
+                    eprintln!("[WARN] Skipping malformed context entry: {}", e);
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// Write entries to context.jsonl (full rewrite)
+    pub fn write_context_entries(&self, name: &str, entries: &[TranscriptEntry]) -> io::Result<()> {
+        self.ensure_context_dir(name)?;
+        let path = self.context_file(name);
         let file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(self.context_file(&context.name))?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, context)
-            .map_err(|e| io::Error::other(format!("Failed to save context: {}", e)))?;
+            .open(&path)?;
+        let mut writer = BufWriter::new(file);
+
+        for entry in entries {
+            let json = serde_json::to_string(entry)
+                .map_err(|e| io::Error::other(format!("Failed to serialize entry: {}", e)))?;
+            writeln!(writer, "{}", json)?;
+        }
+
+        Ok(())
+    }
+
+    /// Append a single entry to context.jsonl
+    pub fn append_context_entry(&self, name: &str, entry: &TranscriptEntry) -> io::Result<()> {
+        self.ensure_context_dir(name)?;
+        let path = self.context_file(name);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+
+        let json = serde_json::to_string(entry)
+            .map_err(|e| io::Error::other(format!("Failed to serialize entry: {}", e)))?;
+        writeln!(file, "{}", json)?;
+        Ok(())
+    }
+
+    /// Load context metadata
+    fn load_context_meta(&self, name: &str) -> io::Result<ContextMeta> {
+        let path = self.context_meta_file(name);
+        if path.exists() {
+            let file = File::open(&path)?;
+            serde_json::from_reader(BufReader::new(file)).map_err(|e| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Failed to parse context meta: {}", e),
+                )
+            })
+        } else {
+            Ok(ContextMeta::default())
+        }
+    }
+
+    /// Save context metadata
+    fn save_context_meta(&self, name: &str, meta: &ContextMeta) -> io::Result<()> {
+        self.ensure_context_dir(name)?;
+        let path = self.context_meta_file(name);
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+        serde_json::to_writer_pretty(BufWriter::new(file), meta)
+            .map_err(|e| io::Error::other(format!("Failed to save context meta: {}", e)))
+    }
+
+    /// Convert transcript entries to messages (for backwards compat)
+    fn entries_to_messages(&self, entries: &[TranscriptEntry]) -> Vec<Message> {
+        entries
+            .iter()
+            .filter(|e| e.entry_type == "message")
+            .map(|e| {
+                let role = if e.to == "user" {
+                    "assistant".to_string()
+                } else {
+                    "user".to_string()
+                };
+                Message {
+                    id: e.id.clone(),
+                    role,
+                    content: e.content.clone(),
+                }
+            })
+            .collect()
+    }
+
+    /// Convert messages to transcript entries (for migration)
+    fn messages_to_entries(&self, messages: &[Message], context_name: &str) -> Vec<TranscriptEntry> {
+        messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .map(|m| {
+                let (from, to) = if m.role == "assistant" {
+                    (context_name.to_string(), "user".to_string())
+                } else {
+                    ("user".to_string(), context_name.to_string())
+                };
+                TranscriptEntry {
+                    id: m.id.clone(),
+                    timestamp: now_timestamp(),
+                    from,
+                    to,
+                    content: m.content.clone(),
+                    entry_type: "message".to_string(),
+                }
+            })
+            .collect()
+    }
+
+    pub fn save_context(&self, context: &Context) -> io::Result<()> {
+        self.ensure_context_dir(&context.name)?;
+
+        // Save metadata (created_at)
+        let meta = ContextMeta {
+            created_at: context.created_at,
+        };
+        self.save_context_meta(&context.name, &meta)?;
+
+        // Convert messages to entries and write to JSONL
+        let entries = self.messages_to_entries(&context.messages, &context.name);
+        self.write_context_entries(&context.name, &entries)?;
 
         // Save summary to separate file
         let summary_path = self.summary_file(&context.name);
@@ -318,31 +546,8 @@ impl AppState {
             ));
         }
 
-        // Rename the directory
+        // Rename the directory (context name is derived from directory, no file updates needed)
         fs::rename(&old_dir, &new_dir)?;
-
-        // Update context file name if needed
-        let new_context_file = self.context_file(new_name);
-        if new_context_file.exists() {
-            let file = File::open(&new_context_file)?;
-            let mut context: Context =
-                serde_json::from_reader(BufReader::new(file)).map_err(|e| {
-                    io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("Failed to parse context: {}", e),
-                    )
-                })?;
-
-            context.name = new_name.to_string();
-
-            let file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&new_context_file)?;
-            serde_json::to_writer_pretty(BufWriter::new(file), &context)
-                .map_err(|e| io::Error::other(format!("Failed to save context: {}", e)))?;
-        }
 
         // Update state
         let mut new_state = self.state.clone();
@@ -709,50 +914,14 @@ impl AppState {
         Ok(resolved)
     }
 
-    /// Get the path to the JSONL transcript file
-    pub fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript.jsonl")
-    }
-
-    /// Append an entry to the JSONL transcript
+    /// Append an entry to the context (context.jsonl) - this replaces append_to_jsonl_transcript
     pub fn append_to_jsonl_transcript(&self, entry: &TranscriptEntry) -> io::Result<()> {
-        self.ensure_context_dir(&self.state.current_context)?;
-        let path = self.transcript_jsonl_file(&self.state.current_context);
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-
-        let json = serde_json::to_string(entry).map_err(|e| {
-            io::Error::other(format!("Failed to serialize transcript entry: {}", e))
-        })?;
-        writeln!(file, "{}", json)?;
-        Ok(())
+        self.append_context_entry(&self.state.current_context, entry)
     }
 
-    /// Read all entries from the JSONL transcript
+    /// Read all entries from the context file (context.jsonl) - unified with transcript
     pub fn read_jsonl_transcript(&self, context_name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        let path = self.transcript_jsonl_file(context_name);
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let file = fs::File::open(&path)?;
-        let reader = io::BufReader::new(file);
-        let mut entries = Vec::new();
-
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str(&line) {
-                Ok(entry) => entries.push(entry),
-                Err(e) => {
-                    // Skip malformed lines but continue reading
-                    eprintln!("[WARN] Skipping malformed transcript line: {}", e);
-                }
-            }
-        }
-
-        Ok(entries)
+        self.read_context_entries(context_name)
     }
 
     /// Create a transcript entry for a user message
@@ -933,7 +1102,7 @@ mod tests {
     fn test_context_file() {
         let (app, _temp) = create_test_app();
         let file = app.context_file("mycontext");
-        assert!(file.ends_with("contexts/mycontext/context.json"));
+        assert!(file.ends_with("contexts/mycontext/context.jsonl"));
     }
 
     #[test]

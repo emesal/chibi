@@ -699,12 +699,12 @@ async fn send_prompt_with_depth(
         }
     }
 
-    // Add user message
+    // Add user message to in-memory context
     app.add_message(&mut context, "user".to_string(), final_prompt.clone());
 
-    // Log user message to JSONL transcript
+    // Append user message to context.jsonl (append-only)
     let user_entry = app.create_user_message_entry(&final_prompt, &resolved_config.username);
-    let _ = app.append_to_jsonl_transcript(&user_entry);
+    app.append_to_jsonl_transcript(&user_entry)?;
 
     // Check if we need to warn about context window
     if app.should_warn(&context.messages) && verbose {
@@ -1176,11 +1176,11 @@ async fn send_prompt_with_depth(
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
 
-                // Log tool call and result to JSONL transcript
+                // Log tool call and result to context.jsonl
                 let tool_call_entry = app.create_tool_call_entry(&tc.name, &tc.arguments);
-                let _ = app.append_to_jsonl_transcript(&tool_call_entry);
+                app.append_to_jsonl_transcript(&tool_call_entry)?;
                 let tool_result_entry = app.create_tool_result_entry(&tc.name, &result);
-                let _ = app.append_to_jsonl_transcript(&tool_result_entry);
+                app.append_to_jsonl_transcript(&tool_result_entry)?;
 
                 // Execute post_tool hooks (observe only)
                 let post_hook_data = serde_json::json!({
@@ -1207,12 +1207,12 @@ async fn send_prompt_with_depth(
         }
 
         // No tool calls - we have a final response
+        // Update in-memory context for this session
         app.add_message(&mut context, "assistant".to_string(), full_response.clone());
-        app.save_current_context(&context)?;
 
-        // Log assistant message to JSONL transcript
+        // Append assistant message to context.jsonl (append-only, no full rewrite)
         let assistant_entry = app.create_assistant_message_entry(&full_response);
-        let _ = app.append_to_jsonl_transcript(&assistant_entry);
+        app.append_to_jsonl_transcript(&assistant_entry)?;
 
         // Execute post_message hooks (observe only)
         let hook_data = serde_json::json!({

@@ -94,8 +94,8 @@ pub fn now_timestamp() -> u64 {
         .as_secs()
 }
 
-/// Entry for JSONL transcript file
-#[derive(Debug, Serialize, Deserialize)]
+/// Entry for JSONL transcript file (now also context.jsonl)
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptEntry {
     pub id: String,
     pub timestamp: u64,
@@ -103,6 +103,109 @@ pub struct TranscriptEntry {
     pub to: String,
     pub content: String,
     pub entry_type: String, // "message", "tool_call", "tool_result", "compaction"
+}
+
+/// Metadata for context (stored in context_meta.json)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContextMeta {
+    pub created_at: u64,
+}
+
+impl Default for ContextMeta {
+    fn default() -> Self {
+        Self {
+            created_at: now_timestamp(),
+        }
+    }
+}
+
+/// Convert a slice of TranscriptEntries to API message format for LLM calls.
+/// Filters to only messages and tool calls/results, converting to the appropriate role format.
+///
+/// The entries are processed in order. Tool calls are batched together and emitted
+/// as a single assistant message with tool_calls, followed by individual tool results.
+pub fn entries_to_api_messages(entries: &[TranscriptEntry]) -> Vec<serde_json::Value> {
+    let mut messages: Vec<serde_json::Value> = Vec::new();
+    let mut i = 0;
+
+    while i < entries.len() {
+        let entry = &entries[i];
+
+        match entry.entry_type.as_str() {
+            "message" => {
+                // Determine role based on 'from' field
+                // If 'to' is "user", it's an assistant message
+                // Otherwise it's a user message
+                let role = if entry.to == "user" {
+                    "assistant"
+                } else {
+                    "user"
+                };
+
+                messages.push(serde_json::json!({
+                    "role": role,
+                    "content": entry.content,
+                }));
+                i += 1;
+            }
+            "tool_call" => {
+                // Collect consecutive tool calls
+                let mut tool_calls: Vec<&TranscriptEntry> = Vec::new();
+                while i < entries.len() && entries[i].entry_type == "tool_call" {
+                    tool_calls.push(&entries[i]);
+                    i += 1;
+                }
+
+                // Emit assistant message with tool_calls
+                let tool_calls_json: Vec<serde_json::Value> = tool_calls
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.to,
+                                "arguments": tc.content,
+                            }
+                        })
+                    })
+                    .collect();
+
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "tool_calls": tool_calls_json,
+                }));
+
+                // Now collect consecutive tool results (should match the tool calls)
+                for tc in &tool_calls {
+                    // Find the matching result (should be immediately following, but search to be safe)
+                    if i < entries.len() && entries[i].entry_type == "tool_result" {
+                        messages.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": entries[i].content,
+                        }));
+                        i += 1;
+                    }
+                }
+            }
+            "tool_result" => {
+                // Orphan tool result (shouldn't happen normally, but handle gracefully)
+                // Skip it
+                i += 1;
+            }
+            "compaction" => {
+                // Compaction markers are informational, skip them in API messages
+                i += 1;
+            }
+            _ => {
+                // Unknown type, skip
+                i += 1;
+            }
+        }
+    }
+
+    messages
 }
 
 /// Entry for inbox.jsonl file - messages from other contexts

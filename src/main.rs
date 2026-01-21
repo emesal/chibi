@@ -169,21 +169,18 @@ fn inspect_context(app: &AppState, context_name: &str, thing: &Inspectable) -> i
 }
 
 /// Show log entries for a context
-fn show_log(app: &AppState, context_name: &str, num: isize) -> io::Result<()> {
+/// - Without verbose: shows messages, with condensed tool call summaries
+/// - With verbose: shows all entries with full content
+fn show_log(app: &AppState, context_name: &str, num: isize, verbose: bool) -> io::Result<()> {
     let entries = app.read_jsonl_transcript(context_name)?;
 
-    // Filter to only message entries
-    let messages: Vec<_> = entries
-        .iter()
-        .filter(|e| e.entry_type == "message")
-        .collect();
-
+    // Select entries based on num parameter
     let selected: Vec<_> = if num == 0 {
-        messages
+        entries.iter().collect()
     } else if num > 0 {
         let n = num as usize;
-        messages
-            .into_iter()
+        entries
+            .iter()
             .rev()
             .take(n)
             .collect::<Vec<_>>()
@@ -192,11 +189,55 @@ fn show_log(app: &AppState, context_name: &str, num: isize) -> io::Result<()> {
             .collect()
     } else {
         let n = (-num) as usize;
-        messages.into_iter().take(n).collect()
+        entries.iter().take(n).collect()
     };
 
     for entry in selected {
-        println!("[{}]: {}\n", entry.from.to_uppercase(), entry.content);
+        match entry.entry_type.as_str() {
+            "message" => {
+                println!("[{}]: {}\n", entry.from.to_uppercase(), entry.content);
+            }
+            "tool_call" => {
+                if verbose {
+                    // Full tool call display
+                    println!("[TOOL CALL: {}]\n{}\n", entry.to, entry.content);
+                } else {
+                    // Condensed: show tool name and truncated args
+                    let args_preview = if entry.content.len() > 60 {
+                        format!("{}...", &entry.content[..60])
+                    } else {
+                        entry.content.clone()
+                    };
+                    println!("[TOOL: {}] {}", entry.to, args_preview);
+                }
+            }
+            "tool_result" => {
+                if verbose {
+                    // Full tool result display
+                    println!("[TOOL RESULT: {}]\n{}\n", entry.from, entry.content);
+                } else {
+                    // Condensed: show size
+                    let size = entry.content.len();
+                    let size_str = if size > 1024 {
+                        format!("{:.1}kb", size as f64 / 1024.0)
+                    } else {
+                        format!("{}b", size)
+                    };
+                    println!("  → {}", size_str);
+                }
+            }
+            "compaction" => {
+                if verbose {
+                    println!("[COMPACTION]: {}\n", entry.content);
+                }
+                // Non-verbose: skip compaction markers
+            }
+            _ => {
+                if verbose {
+                    println!("[{}]: {}\n", entry.entry_type.to_uppercase(), entry.content);
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -317,7 +358,7 @@ async fn main() -> io::Result<()> {
     }
 
     // Handle archive current history (-a)
-    if cli.archive_current_history {
+    if cli.archive_current_context {
         let context = app.get_current_context()?;
         let hook_data = serde_json::json!({
             "context_name": context.name,
@@ -339,7 +380,7 @@ async fn main() -> io::Result<()> {
     }
 
     // Handle archive other context's history (-A)
-    if let Some(ref ctx_name) = cli.archive_history {
+    if let Some(ref ctx_name) = cli.archive_context {
         app.clear_context_by_name(ctx_name)?;
         println!("Context '{}' archived (history saved to transcript)", ctx_name);
         did_action = true;
@@ -486,13 +527,13 @@ async fn main() -> io::Result<()> {
 
     // Handle show current log (-g)
     if let Some(num) = cli.show_current_log {
-        show_log(&app, &app.state.current_context, num)?;
+        show_log(&app, &app.state.current_context, num, verbose)?;
         did_action = true;
     }
 
     // Handle show other context's log (-G)
     if let Some((ref ctx_name, num)) = cli.show_log {
-        show_log(&app, ctx_name, num)?;
+        show_log(&app, ctx_name, num, verbose)?;
         did_action = true;
     }
 

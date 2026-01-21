@@ -70,15 +70,34 @@ Key hooks: `on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `pos
 │   └── continuation.md     # Post-compaction instructions
 ├── plugins/                 # Plugin scripts (provide tools for LLM)
 └── contexts/<name>/
-    ├── context.json        # Messages array
+    ├── context.jsonl       # Conversation entries (JSONL, append-only)
+    ├── context_meta.json   # Context metadata (created_at timestamp)
     ├── local.toml          # Per-context config overrides
     ├── summary.md          # Conversation summary
-    ├── transcript.txt      # Human-readable history
-    ├── transcript.jsonl    # Machine-readable history
+    ├── transcript.md       # Human-readable history (for archiving)
+    ├── transcript_archive.jsonl  # Archived entries (from compaction)
     ├── todos.md            # Current todos
     ├── goals.md            # Current goals
     ├── inbox.jsonl         # Messages from other contexts
-    └── prompt.md           # Context-specific system prompt
+    └── system_prompt.md    # Context-specific system prompt
+```
+
+### Context Entry Format (context.jsonl)
+
+Each line is a JSON object with these fields:
+- `id`: Unique identifier (UUID)
+- `timestamp`: Unix timestamp
+- `from`: Source (username, context name, or tool name)
+- `to`: Destination (context name, "user", or tool name)
+- `content`: Message content or tool arguments/results
+- `entry_type`: One of "message", "tool_call", "tool_result", "compaction"
+
+Example:
+```jsonl
+{"id":"uuid1","timestamp":1234567890,"from":"alice","to":"default","content":"Hello","entry_type":"message"}
+{"id":"uuid2","timestamp":1234567891,"from":"default","to":"read_file","content":"{\"path\":\"Cargo.toml\"}","entry_type":"tool_call"}
+{"id":"uuid3","timestamp":1234567892,"from":"read_file","to":"default","content":"[package]...","entry_type":"tool_result"}
+{"id":"uuid4","timestamp":1234567893,"from":"default","to":"user","content":"Here's the file...","entry_type":"message"}
 ```
 
 ### Example Plugin Pattern (Python with uv)

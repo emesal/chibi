@@ -43,8 +43,8 @@ pub struct Cli {
     pub list_contexts: bool,                  // -L / --list-contexts
     pub delete_current_context: bool,         // -d / --delete-current-context
     pub delete_context: Option<String>,       // -D / --delete-context
-    pub archive_current_history: bool,        // -a / --archive-current-history
-    pub archive_history: Option<String>,      // -A / --archive-history
+    pub archive_current_context: bool,        // -a / --archive-current-context
+    pub archive_context: Option<String>,      // -A / --archive-context
     pub compact_current_context: bool,        // -z / --compact-current-context
     pub compact_context: Option<String>,      // -Z / --compact-context
     pub rename_current_context: Option<String>,        // -r / --rename-current-context <NEW>
@@ -131,8 +131,8 @@ impl Cli {
             list_contexts: false,
             delete_current_context: false,
             delete_context: None,
-            archive_current_history: false,
-            archive_history: None,
+            archive_current_context: false,
+            archive_context: None,
             compact_current_context: false,
             compact_context: None,
             rename_current_context: None,
@@ -210,16 +210,16 @@ impl Cli {
                 continue;
             }
 
-            // -a / --archive-current-history
-            if arg == "-a" || arg == "--archive-current-history" {
-                cli.archive_current_history = true;
+            // -a / --archive-current-context
+            if arg == "-a" || arg == "--archive-current-context" {
+                cli.archive_current_context = true;
                 i += 1;
                 continue;
             }
 
-            // -A / --archive-history <CONTEXT>
-            if let Some(val) = Self::parse_single_arg_flag(args, &mut i, 'A', "--archive-history")? {
-                cli.archive_history = Some(val);
+            // -A / --archive-context <CONTEXT>
+            if let Some(val) = Self::parse_single_arg_flag(args, &mut i, 'A', "--archive-context")? {
+                cli.archive_context = Some(val);
                 continue;
             }
 
@@ -426,7 +426,7 @@ impl Cli {
             || cli.list_contexts
             || cli.delete_current_context
             || cli.delete_context.is_some()
-            || cli.archive_history.is_some()
+            || cli.archive_context.is_some()
             || cli.compact_context.is_some()
             || cli.rename_context.is_some()
             || cli.show_current_log.is_some()
@@ -470,8 +470,8 @@ impl Cli {
         println!("  -L, --list-contexts             List all contexts");
         println!("  -d, --delete-current-context    Delete current context");
         println!("  -D, --delete-context <CTX>      Delete specified context");
-        println!("  -a, --archive-current-history   Archive current context history");
-        println!("  -A, --archive-history <CTX>     Archive specified context history");
+        println!("  -a, --archive-current-context   Archive current context context");
+        println!("  -A, --archive-context <CTX>     Archive specified context context");
         println!("  -z, --compact-current-context   Compact current context");
         println!("  -Z, --compact-context <CTX>     Compact specified context");
         println!("  -r, --rename-current-context <NEW>    Rename current context");
@@ -524,7 +524,7 @@ impl Cli {
         println!("  chibi -g 10                     Show last 10 log entries");
         println!("  chibi -x -c test                Switch context without LLM");
         println!("  chibi -X -L                     List contexts then invoke LLM");
-        println!("  chibi -a hello                  Archive history, then send prompt");
+        println!("  chibi -a hello                  Archive context, then send prompt");
     }
 }
 
@@ -669,30 +669,30 @@ mod tests {
     // === Archive tests ===
 
     #[test]
-    fn test_archive_current_history_short() {
+    fn test_archive_current_context_short() {
         let cli = Cli::parse_from(&args("-a")).unwrap();
-        assert!(cli.archive_current_history);
+        assert!(cli.archive_current_context);
         assert!(!cli.no_chibi); // combinable
     }
 
     #[test]
-    fn test_archive_current_history_with_prompt() {
+    fn test_archive_current_context_with_prompt() {
         let cli = Cli::parse_from(&args("-a hello")).unwrap();
-        assert!(cli.archive_current_history);
+        assert!(cli.archive_current_context);
         assert_eq!(cli.prompt, vec!["hello"]);
     }
 
     #[test]
-    fn test_archive_history_short() {
+    fn test_archive_context_short() {
         let cli = Cli::parse_from(&args("-A other")).unwrap();
-        assert_eq!(cli.archive_history, Some("other".to_string()));
+        assert_eq!(cli.archive_context, Some("other".to_string()));
         assert!(cli.no_chibi); // implied (operates on other context)
     }
 
     #[test]
-    fn test_archive_history_attached() {
+    fn test_archive_context_attached() {
         let cli = Cli::parse_from(&args("-Aother")).unwrap();
-        assert_eq!(cli.archive_history, Some("other".to_string()));
+        assert_eq!(cli.archive_context, Some("other".to_string()));
     }
 
     // === Compact tests ===
