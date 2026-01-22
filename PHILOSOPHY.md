@@ -8,7 +8,7 @@
 - **Consistent CLI:** Any argv string not beginning with `-` is interpreted as the start of the prompt (can be forced with `--`)
 - **Do one thing well**: Focused on LLM conversations without overreaching
 
-### 2. Extensibility Over Safety Rails
+### 2. Plugin System: Extensibility Over Safety Rails
 - **Zero restrictions on plugins**: Plugins receive full trust from the framework
 - **User responsibility**: "You are expected to understand the plugins you install" (README.md)
 - **Plugins self-govern**: Each plugin handles its own safety (e.g., `run_command` asks for confirmation, plugins check `CHIBI_VERBOSE`)
@@ -41,10 +41,12 @@
 
 | Value | Manifestation |
 |--------|---------------|
+| **Integrity** | Aim for a lean, flexible, secure and well structured core binary |
+| **Simplicity** | Avoid over-engineering, use crates and other well-tested code before building our own |
 | **Reliability** | Context locks with heartbeat, transcript preservation before destructive ops |
 | **Transparency** | Streaming output, verbose mode, all data in plain text/JSON files |
 | **Flexibility** | Plugins register themselves via JSON schema, hooks inject into system prompts |
-| **User Control** | Manual compaction (`-c`), context switching (`-s`), custom prompts per context |
+| **User Control** | Internals are exposed via CLI and file system |
 | **Incremental Growth** | Features added via plugins, not built-in bloat |
 | **Performance** | Streaming responses, async Rust, minimal runtime overhead |
 
