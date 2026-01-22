@@ -1075,29 +1075,14 @@ async fn send_prompt_with_depth(
                 // If blocked, skip execution and use block message as result
                 let tool_result = if blocked {
                     block_message
-                } else if tc.name == tools::REFLECTION_TOOL_NAME && use_reflection {
-                    // Handle built-in reflection tool
-                    match tools::execute_reflection_tool(
-                        &app.prompts_dir,
-                        &args,
-                        app.config.reflection_character_limit,
-                    ) {
+                } else if tc.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
+                    // Reflection tool called but reflection is disabled
+                    "Error: Reflection tool is not enabled".to_string()
+                } else if let Some(builtin_result) = tools::execute_builtin_tool(app, &tc.name, &args) {
+                    // Handle built-in tools (todos, goals, reflection)
+                    match builtin_result {
                         Ok(r) => r,
                         Err(e) => format!("Error: {}", e),
-                    }
-                } else if tc.name == tools::TODOS_TOOL_NAME {
-                    // Handle built-in todos tool
-                    let content = args["content"].as_str().unwrap_or("");
-                    match app.save_current_todos(content) {
-                        Ok(()) => format!("Todos updated ({} characters).", content.len()),
-                        Err(e) => format!("Error saving todos: {}", e),
-                    }
-                } else if tc.name == tools::GOALS_TOOL_NAME {
-                    // Handle built-in goals tool
-                    let content = args["content"].as_str().unwrap_or("");
-                    match app.save_current_goals(content) {
-                        Ok(()) => format!("Goals updated ({} characters).", content.len()),
-                        Err(e) => format!("Error saving goals: {}", e),
                     }
                 } else if tc.name == tools::SEND_MESSAGE_TOOL_NAME {
                     // Handle built-in send_message tool

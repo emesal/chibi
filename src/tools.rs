@@ -1,3 +1,4 @@
+use crate::state::AppState;
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -392,6 +393,49 @@ pub fn execute_reflection_tool(
         "Reflection updated successfully ({} characters).",
         content.len()
     ))
+}
+
+/// Execute a built-in tool by name.
+/// Returns Some(result) if the tool exists and was executed, None if not a built-in tool.
+///
+/// Note: When called from api.rs, send_message is handled separately to support
+/// hook integration. This function provides a basic send_message implementation
+/// for CLI usage (main.rs).
+pub fn execute_builtin_tool(
+    app: &AppState,
+    tool_name: &str,
+    args: &serde_json::Value,
+) -> Option<io::Result<String>> {
+    match tool_name {
+        TODOS_TOOL_NAME => {
+            let content = args.get("content").and_then(|v| v.as_str())?;
+            Some(
+                app.save_current_todos(content)
+                    .map(|_| format!("Todos updated ({} characters).", content.len())),
+            )
+        }
+        GOALS_TOOL_NAME => {
+            let content = args.get("content").and_then(|v| v.as_str())?;
+            Some(
+                app.save_current_goals(content)
+                    .map(|_| format!("Goals updated ({} characters).", content.len())),
+            )
+        }
+        REFLECTION_TOOL_NAME => Some(execute_reflection_tool(
+            &app.prompts_dir,
+            args,
+            app.config.reflection_character_limit,
+        )),
+        SEND_MESSAGE_TOOL_NAME => {
+            let to = args.get("to").and_then(|v| v.as_str())?;
+            let content = args.get("content").and_then(|v| v.as_str())?;
+            Some(
+                app.send_inbox_message(to, content)
+                    .map(|_| format!("Message sent to '{}'", to)),
+            )
+        }
+        _ => None,
+    }
 }
 
 // --- Todos Tool ---

@@ -438,93 +438,33 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::CallTool { name, args } => {
-            if let Some(tool) = tools::find_tool(tools, name) {
-                let args_json = serde_json::json!({ "args": args });
-                let result = tools::execute_tool(tool, &args_json, verbose)?;
-                output.emit_result(&result);
+            // Parse args - either JSON string or empty
+            let args_str = args.join(" ");
+            let args_json: serde_json::Value = if args_str.is_empty() {
+                serde_json::json!({})
             } else {
-                // Check for built-in tools
-                let args_str = args.join(" ");
-                let args_json: serde_json::Value = if args_str.is_empty() {
-                    serde_json::json!({})
+                serde_json::from_str(&args_str).map_err(|e| {
+                    io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("Invalid JSON arguments: {}", e),
+                    )
+                })?
+            };
+
+            // Try built-in tools first, then plugins
+            let result =
+                if let Some(builtin_result) = tools::execute_builtin_tool(app, name, &args_json) {
+                    builtin_result?
+                } else if let Some(tool) = tools::find_tool(tools, name) {
+                    tools::execute_tool(tool, &args_json, verbose)?
                 } else {
-                    serde_json::from_str(&args_str).map_err(|e| {
-                        io::Error::new(
-                            ErrorKind::InvalidInput,
-                            format!("Invalid JSON arguments: {}", e),
-                        )
-                    })?
+                    return Err(io::Error::new(
+                        ErrorKind::NotFound,
+                        format!("Tool '{}' not found", name),
+                    ));
                 };
-                match name.as_str() {
-                    "update_todos" => {
-                        let content = args_json
-                            .get("content")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                io::Error::new(
-                                    ErrorKind::InvalidInput,
-                                    "update_todos requires {\"content\": \"...\"}",
-                                )
-                            })?;
-                        app.save_current_todos(content)?;
-                        output.emit_result("Todos updated");
-                    }
-                    "update_goals" => {
-                        let content = args_json
-                            .get("content")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                io::Error::new(
-                                    ErrorKind::InvalidInput,
-                                    "update_goals requires {\"content\": \"...\"}",
-                                )
-                            })?;
-                        app.save_current_goals(content)?;
-                        output.emit_result("Goals updated");
-                    }
-                    "update_reflection" => {
-                        let content = args_json
-                            .get("content")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                io::Error::new(
-                                    ErrorKind::InvalidInput,
-                                    "update_reflection requires {\"content\": \"...\"}",
-                                )
-                            })?;
-                        app.save_reflection(content)?;
-                        output.emit_result("Reflection updated");
-                    }
-                    "send_message" => {
-                        let to = args_json
-                            .get("to")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                io::Error::new(
-                                    ErrorKind::InvalidInput,
-                                    "send_message requires \"to\" field",
-                                )
-                            })?;
-                        let message = args_json
-                            .get("message")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                io::Error::new(
-                                    ErrorKind::InvalidInput,
-                                    "send_message requires \"message\" field",
-                                )
-                            })?;
-                        app.send_inbox_message(to, message)?;
-                        output.emit_result(&format!("Message sent to '{}'", to));
-                    }
-                    _ => {
-                        return Err(io::Error::new(
-                            ErrorKind::NotFound,
-                            format!("Tool '{}' not found", name),
-                        ));
-                    }
-                }
-            }
+
+            output.emit_result(&result);
             did_action = true;
         }
         Command::SendPrompt { prompt } => {

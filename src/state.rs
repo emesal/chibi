@@ -635,12 +635,6 @@ impl AppState {
         self.load_reflection_prompt()
     }
 
-    /// Save reflection content to ~/.chibi/prompts/reflection.md
-    pub fn save_reflection(&self, content: &str) -> io::Result<()> {
-        let reflection_path = self.prompts_dir.join("reflection.md");
-        fs::write(&reflection_path, content)
-    }
-
     /// Load todos for a specific context (alias for load_todos)
     pub fn load_todos_for(&self, context_name: &str) -> io::Result<String> {
         self.load_todos(context_name)
