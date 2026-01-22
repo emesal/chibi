@@ -24,7 +24,7 @@ fn default_reflection_character_limit() -> usize {
 }
 
 fn default_max_recursion_depth() -> usize {
-    15
+    30
 }
 
 fn default_lock_heartbeat_seconds() -> u64 {
@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_default_max_recursion_depth() {
-        assert_eq!(default_max_recursion_depth(), 15);
+        assert_eq!(default_max_recursion_depth(), 30);
     }
 
     #[test]
@@ -282,7 +282,7 @@ mod tests {
         assert!(!config.auto_compact);
         assert!((config.auto_compact_threshold - 80.0).abs() < f32::EPSILON);
         assert!(config.reflection_enabled);
-        assert_eq!(config.max_recursion_depth, 15);
+        assert_eq!(config.max_recursion_depth, 30);
         assert_eq!(config.username, "user");
     }
 
