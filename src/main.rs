@@ -14,62 +14,7 @@ use context::Context;
 use input::{ChibiInput, Command, ContextSelection, UsernameOverride};
 use output::OutputHandler;
 use state::AppState;
-use std::io::{self, BufRead, ErrorKind, IsTerminal, Read};
-
-/// Read prompt interactively from terminal (dot on empty line terminates)
-fn read_prompt_interactive() -> io::Result<String> {
-    let stdin = io::stdin();
-    let mut stdin_lock = stdin.lock();
-    let mut buffer = String::new();
-    let mut prompt = String::new();
-    let mut first = true;
-
-    loop {
-        buffer.clear();
-        let bytes_read = stdin_lock.read_line(&mut buffer)?;
-
-        // EOF (Ctrl+D)
-        if bytes_read == 0 {
-            break;
-        }
-
-        // Remove trailing newline
-        if buffer.ends_with('\n') {
-            buffer.pop();
-            if buffer.ends_with('\r') {
-                buffer.pop();
-            }
-        }
-
-        // Check for termination: a single dot on a line
-        if buffer.trim() == "." {
-            break;
-        }
-
-        if !first {
-            prompt.push(' ');
-        }
-        prompt.push_str(&buffer);
-        first = false;
-    }
-
-    Ok(prompt)
-}
-
-/// Read prompt from piped stdin (reads until EOF)
-fn read_prompt_from_pipe() -> io::Result<String> {
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    // Read all remaining lines
-    let stdin = io::stdin();
-    for line in stdin.lock().lines() {
-        input.push('\n');
-        input.push_str(&line?);
-    }
-
-    Ok(input.trim().to_string())
-}
+use std::io::{self, ErrorKind, Read};
 
 /// Generate a unique context name for `-c new` or `-c new:prefix`
 /// Format: [prefix_]YYYYMMDD_HHMMSS[_N]
@@ -580,8 +525,7 @@ async fn main() -> io::Result<()> {
     }
 
     // CLI mode: parse to ChibiInput and use unified execution
-    let parsed = cli::parse()?;
-    let mut input = parsed.input;
+    let input = cli::parse()?;
     let verbose = input.flags.verbose;
     let mut app = AppState::load()?;
 
@@ -597,38 +541,6 @@ async fn main() -> io::Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-    }
-
-    // Check if we need to handle stdin prompt (CLI-specific behavior)
-    // This happens when there's no command that produces output and we might need
-    // to read from stdin or interactive input
-    let should_read_prompt = !input.flags.no_chibi && matches!(input.command, Command::NoOp);
-
-    if should_read_prompt {
-        let stdin_is_pipe = !io::stdin().is_terminal();
-        let arg_prompt = if parsed.prompt_args.is_empty() {
-            None
-        } else {
-            Some(parsed.prompt_args.join(" "))
-        };
-
-        let prompt = match (stdin_is_pipe, arg_prompt) {
-            // Piped input + arg prompt: concatenate
-            (true, Some(arg)) => {
-                let piped = read_prompt_from_pipe()?;
-                if piped.is_empty() { arg } else { format!("{}\n\n{}", arg, piped) }
-            }
-            // Piped input only
-            (true, None) => read_prompt_from_pipe()?,
-            // Arg prompt only
-            (false, Some(arg)) => arg,
-            // Interactive: read from terminal
-            (false, None) => read_prompt_interactive()?,
-        };
-
-        if !prompt.trim().is_empty() {
-            input.command = Command::SendPrompt { prompt };
-        }
     }
 
     // Use OutputHandler for CLI mode (non-JSON output)

@@ -5,7 +5,7 @@
 
 use crate::input::{ChibiInput, Command, ContextSelection, Flags, UsernameOverride};
 use clap::Parser;
-use std::io::{self, ErrorKind};
+use std::io::{self, BufRead, ErrorKind, IsTerminal};
 
 /// Direct plugin invocation from CLI
 #[derive(Debug, Clone)]
@@ -448,17 +448,63 @@ fn expand_attached_args(args: &[String]) -> Vec<String> {
     result
 }
 
-/// Result of parsing CLI arguments
-#[derive(Debug)]
-pub struct ParseResult {
-    /// The unified input
-    pub input: ChibiInput,
-    /// Raw prompt arguments (for stdin combination in CLI mode)
-    pub prompt_args: Vec<String>,
+/// Read prompt interactively from terminal (dot on empty line terminates)
+fn read_prompt_interactive() -> io::Result<String> {
+    let stdin = io::stdin();
+    let mut stdin_lock = stdin.lock();
+    let mut buffer = String::new();
+    let mut prompt = String::new();
+    let mut first = true;
+
+    loop {
+        buffer.clear();
+        let bytes_read = stdin_lock.read_line(&mut buffer)?;
+
+        // EOF (Ctrl+D)
+        if bytes_read == 0 {
+            break;
+        }
+
+        // Remove trailing newline
+        if buffer.ends_with('\n') {
+            buffer.pop();
+            if buffer.ends_with('\r') {
+                buffer.pop();
+            }
+        }
+
+        // Check for termination: a single dot on a line
+        if buffer.trim() == "." {
+            break;
+        }
+
+        if !first {
+            prompt.push(' ');
+        }
+        prompt.push_str(&buffer);
+        first = false;
+    }
+
+    Ok(prompt)
+}
+
+/// Read prompt from piped stdin (reads until EOF)
+fn read_prompt_from_pipe() -> io::Result<String> {
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    // Read all remaining lines
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        input.push('\n');
+        input.push_str(&line?);
+    }
+
+    Ok(input.trim().to_string())
 }
 
 /// Parse CLI arguments and return unified ChibiInput
-pub fn parse() -> io::Result<ParseResult> {
+pub fn parse() -> io::Result<ChibiInput> {
     let cli = Cli::parse_args()?;
 
     // Handle help and version early
@@ -471,11 +517,45 @@ pub fn parse() -> io::Result<ParseResult> {
         std::process::exit(0);
     }
 
-    let input = cli.to_input()?;
-    Ok(ParseResult {
-        input,
-        prompt_args: cli.prompt.clone(),
-    })
+    let mut input = cli.to_input()?;
+
+    // Handle stdin prompt reading (CLI-specific behavior)
+    // This happens when there's no command that produces output and we might need
+    // to read from stdin or interactive input
+    let should_read_prompt = !input.flags.no_chibi && matches!(input.command, Command::NoOp);
+
+    if should_read_prompt {
+        let stdin_is_pipe = !io::stdin().is_terminal();
+        let arg_prompt = if cli.prompt.is_empty() {
+            None
+        } else {
+            Some(cli.prompt.join(" "))
+        };
+
+        let prompt = match (stdin_is_pipe, arg_prompt) {
+            // Piped input + arg prompt: concatenate
+            (true, Some(arg)) => {
+                let piped = read_prompt_from_pipe()?;
+                if piped.is_empty() {
+                    arg
+                } else {
+                    format!("{}\n\n{}", arg, piped)
+                }
+            }
+            // Piped input only
+            (true, None) => read_prompt_from_pipe()?,
+            // Arg prompt only
+            (false, Some(arg)) => arg,
+            // Interactive: read from terminal
+            (false, None) => read_prompt_interactive()?,
+        };
+
+        if !prompt.trim().is_empty() {
+            input.command = Command::SendPrompt { prompt };
+        }
+    }
+
+    Ok(input)
 }
 
 #[cfg(test)]
