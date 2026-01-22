@@ -2,6 +2,7 @@ mod api;
 mod cli;
 mod config;
 mod context;
+mod inbox;
 mod input;
 mod json_input;
 mod llm;
