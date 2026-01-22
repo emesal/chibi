@@ -827,8 +827,11 @@ async fn send_prompt_with_depth(
         Vec::new()
     };
 
-    // Add conversation messages
+    // Add conversation messages (skip system messages as they're already included via full_system_prompt)
     for m in &context.messages {
+        if m.role == "system" {
+            continue;
+        }
         messages.push(serde_json::json!({
             "role": m.role,
             "content": m.content,
