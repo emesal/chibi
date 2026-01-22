@@ -4,13 +4,6 @@
 ### first-class group messaging
 - including remotely
 
-### ability to invoke chibi with json instead of CLI parameters
-- see separate draft (file link here)
-
-### context.jsonl and transcript.jsonl written simultaneously
-- introduces some redundancy but simplifies for later when transcripts are elsewhere
-- tool calls aren't in the log, only tool results?
-
 ### command line option for inbox sweep
 - when invoked, do a sweep of all inboxes, waking any chibis with new messages and letting them handle them
 
