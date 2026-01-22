@@ -752,8 +752,6 @@ async fn send_prompt_with_depth(
     let goals = app.load_current_goals()?;
     let summary = &context.summary;
 
-    let context_has_system = context.messages.iter().any(|m| m.role == "system");
-
     // Execute pre_system_prompt hook - can inject content before system prompt sections
     let pre_sys_hook_data = serde_json::json!({
         "context_name": context.name,
@@ -850,15 +848,14 @@ async fn send_prompt_with_depth(
         }
     }
 
-    let mut messages: Vec<serde_json::Value> =
-        if !full_system_prompt.is_empty() && !context_has_system {
-            vec![serde_json::json!({
-                "role": "system",
-                "content": full_system_prompt,
-            })]
-        } else {
-            Vec::new()
-        };
+    let mut messages: Vec<serde_json::Value> = if !full_system_prompt.is_empty() {
+        vec![serde_json::json!({
+            "role": "system",
+            "content": full_system_prompt,
+        })]
+    } else {
+        Vec::new()
+    };
 
     // Add conversation messages
     for m in &context.messages {
