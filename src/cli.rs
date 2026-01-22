@@ -3,7 +3,7 @@
 //! This module handles parsing command-line arguments and converting them
 //! to the unified `ChibiInput` format.
 
-use crate::input::{ChibiInput, Command, ContextSelection, Flags, PartialRuntimeConfig, UsernameOverride};
+use crate::input::{ChibiInput, Command, ContextSelection, Flags, UsernameOverride};
 use clap::Parser;
 use std::io::{self, ErrorKind};
 
@@ -402,11 +402,9 @@ impl Cli {
             verbose: self.verbose,
             json_output: self.json_output,
             no_chibi,
-            force_chibi: self.force_chibi,
         };
 
         Ok(ChibiInput {
-            config: PartialRuntimeConfig::default(),
             command,
             flags,
             context,
@@ -766,7 +764,7 @@ mod tests {
     #[test]
     fn test_force_chibi_short() {
         let input = parse_input("-X").unwrap();
-        assert!(input.flags.force_chibi);
+        // force_chibi is handled during parsing, not stored in flags
         assert!(!input.flags.no_chibi);
     }
 
@@ -774,7 +772,7 @@ mod tests {
     fn test_force_chibi_overrides_implied() {
         let input = parse_input("-X -L").unwrap();
         assert!(matches!(input.command, Command::ListContexts));
-        assert!(input.flags.force_chibi);
+        // force_chibi overrides the implied no_chibi from -L
         assert!(!input.flags.no_chibi);
     }
 

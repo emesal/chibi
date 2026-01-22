@@ -160,12 +160,6 @@ pub struct ToolArgs {
 }
 
 impl JsonInput {
-    /// Parse JSON from a reader (typically stdin)
-    pub fn from_reader<R: io::Read>(reader: R) -> io::Result<Self> {
-        serde_json::from_reader(reader)
-            .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid JSON: {}", e)))
-    }
-
     /// Parse JSON from a string
     pub fn from_str(s: &str) -> io::Result<Self> {
         serde_json::from_str(s)
@@ -357,11 +351,9 @@ impl JsonInput {
             verbose: self.verbose.unwrap_or(false),
             json_output: self.json_output.unwrap_or(false),
             no_chibi,
-            force_chibi,
         };
 
         Ok(ChibiInput {
-            config,
             command,
             flags,
             context,
@@ -493,8 +485,8 @@ mod tests {
         let json = r#"{"list_contexts": true, "force_chibi": true}"#;
         let input = JsonInput::from_str(json).unwrap();
         let chibi_input = input.to_input().unwrap();
-        assert!(!chibi_input.flags.no_chibi); // force_chibi wins
-        assert!(chibi_input.flags.force_chibi);
+        // force_chibi overrides the implied no_chibi from list_contexts
+        assert!(!chibi_input.flags.no_chibi);
     }
 
     #[test]
@@ -525,6 +517,8 @@ mod tests {
 
     #[test]
     fn test_partial_runtime_config() {
+        // Note: Runtime config fields are parsed but no longer stored in ChibiInput
+        // This test verifies the JSON still parses without error
         let json = r#"{
             "prompt": "test",
             "api_key": "sk-test",
@@ -535,10 +529,8 @@ mod tests {
         let input = JsonInput::from_str(json).unwrap();
         let chibi_input = input.to_input().unwrap();
 
-        assert_eq!(chibi_input.config.api_key, Some("sk-test".to_string()));
-        assert_eq!(chibi_input.config.model, Some("gpt-4".to_string()));
-        assert_eq!(chibi_input.config.context_window_limit, Some(16000));
-        assert_eq!(chibi_input.config.auto_compact, Some(true));
+        // The command should be parsed correctly
+        assert!(matches!(chibi_input.command, Command::SendPrompt { ref prompt } if prompt == "test"));
     }
 
     #[test]

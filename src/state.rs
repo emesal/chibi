@@ -153,11 +153,6 @@ impl AppState {
         self.context_dir(name).join("context_meta.json")
     }
 
-    /// Path to the transcript archive file (for compaction)
-    pub fn transcript_archive_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript_archive.jsonl")
-    }
-
     pub fn transcript_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("transcript.md")
     }

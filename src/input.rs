@@ -57,8 +57,6 @@ pub struct Flags {
     pub json_output: bool,
     /// Don't invoke the LLM (-x)
     pub no_chibi: bool,
-    /// Force LLM invocation (-X)
-    pub force_chibi: bool,
 }
 
 /// Context selection mode
@@ -121,8 +119,6 @@ pub struct PartialRuntimeConfig {
 /// This is the main type that represents a fully parsed user request
 #[derive(Debug, Clone)]
 pub struct ChibiInput {
-    /// Runtime config overrides
-    pub config: PartialRuntimeConfig,
     /// The command to execute
     pub command: Command,
     /// Behavioral flags
@@ -136,47 +132,11 @@ pub struct ChibiInput {
 impl Default for ChibiInput {
     fn default() -> Self {
         Self {
-            config: PartialRuntimeConfig::default(),
             command: Command::NoOp,
             flags: Flags::default(),
             context: ContextSelection::Current,
             username_override: None,
         }
-    }
-}
-
-impl ChibiInput {
-    /// Check if this input should invoke the LLM
-    pub fn should_invoke_llm(&self) -> bool {
-        if self.flags.force_chibi {
-            return true;
-        }
-        if self.flags.no_chibi {
-            return false;
-        }
-        // SendPrompt is the only command that invokes the LLM
-        matches!(self.command, Command::SendPrompt { .. })
-    }
-
-    /// Check if this is a command that produces output and implies no_chibi
-    pub fn implies_no_chibi(&self) -> bool {
-        matches!(
-            self.command,
-            Command::ListContexts
-                | Command::ListCurrentContext
-                | Command::DeleteContext { .. }
-                | Command::RenameContext { old: Some(_), .. }
-                | Command::ShowLog { .. }
-                | Command::Inspect { .. }
-                | Command::SetSystemPrompt {
-                    context: Some(_),
-                    ..
-                }
-                | Command::RunPlugin { .. }
-                | Command::CallTool { .. }
-                | Command::ShowHelp
-                | Command::ShowVersion
-        )
     }
 }
 
@@ -191,77 +151,6 @@ mod tests {
         assert!(!input.flags.verbose);
         assert!(!input.flags.json_output);
         assert!(matches!(input.context, ContextSelection::Current));
-    }
-
-    #[test]
-    fn test_should_invoke_llm_prompt() {
-        let input = ChibiInput {
-            command: Command::SendPrompt {
-                prompt: "hello".to_string(),
-            },
-            ..Default::default()
-        };
-        assert!(input.should_invoke_llm());
-    }
-
-    #[test]
-    fn test_should_invoke_llm_noop() {
-        let input = ChibiInput::default();
-        assert!(!input.should_invoke_llm());
-    }
-
-    #[test]
-    fn test_should_invoke_llm_no_chibi_flag() {
-        let mut input = ChibiInput {
-            command: Command::SendPrompt {
-                prompt: "hello".to_string(),
-            },
-            ..Default::default()
-        };
-        input.flags.no_chibi = true;
-        assert!(!input.should_invoke_llm());
-    }
-
-    #[test]
-    fn test_should_invoke_llm_force_chibi() {
-        let mut input = ChibiInput {
-            command: Command::ListContexts,
-            ..Default::default()
-        };
-        input.flags.force_chibi = true;
-        assert!(input.should_invoke_llm());
-    }
-
-    #[test]
-    fn test_implies_no_chibi() {
-        assert!(ChibiInput {
-            command: Command::ListContexts,
-            ..Default::default()
-        }
-        .implies_no_chibi());
-
-        assert!(ChibiInput {
-            command: Command::ShowLog {
-                context: None,
-                count: 10
-            },
-            ..Default::default()
-        }
-        .implies_no_chibi());
-
-        assert!(!ChibiInput {
-            command: Command::SendPrompt {
-                prompt: "hello".to_string()
-            },
-            ..Default::default()
-        }
-        .implies_no_chibi());
-
-        assert!(!ChibiInput {
-            command: Command::ArchiveContext { name: None },
-            ..Default::default()
-        }
-        .implies_no_chibi());
     }
 
     #[test]

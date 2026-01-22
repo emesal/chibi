@@ -92,28 +92,6 @@ impl OutputHandler {
         }
     }
 
-    /// Stream text to stdout (normal mode only).
-    ///
-    /// In JSON mode, this is a no-op - use `emit()` to output complete entries.
-    /// In normal mode, this prints text without a newline and flushes.
-    pub fn stream(&self, content: &str) -> io::Result<()> {
-        if !self.json_mode {
-            print!("{}", content);
-            io::stdout().flush()?;
-        }
-        Ok(())
-    }
-
-    /// Print a line to stdout (normal mode only).
-    ///
-    /// In JSON mode, this is a no-op.
-    /// In normal mode, this prints a line with newline.
-    pub fn println(&self, content: &str) {
-        if !self.json_mode {
-            println!("{}", content);
-        }
-    }
-
     /// Print an empty line (normal mode only).
     pub fn newline(&self) {
         if !self.json_mode {
@@ -143,27 +121,6 @@ impl OutputHandler {
         }
     }
 
-    /// Emit an error entry.
-    ///
-    /// In JSON mode, this outputs a JSONL entry with type "error".
-    /// In normal mode, this prints to stderr.
-    pub fn emit_error(&self, message: &str) {
-        if self.json_mode {
-            let entry = TranscriptEntry {
-                id: Uuid::new_v4().to_string(),
-                timestamp: now_timestamp(),
-                from: "system".to_string(),
-                to: "user".to_string(),
-                content: message.to_string(),
-                entry_type: "error".to_string(),
-            };
-            if let Ok(json) = serde_json::to_string(&entry) {
-                eprintln!("{}", json);
-            }
-        } else {
-            eprintln!("Error: {}", message);
-        }
-    }
 }
 
 #[cfg(test)]
