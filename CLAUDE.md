@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## General
+
+Chibi is currently in early development with no backwards compatibility to maintain. The current goal is a lean, flexible, secure and solid core architecture which can support rapid growth without causing unnecessary maintenance debt and other headaches down the line. Legacy code can be removed and instructions for manual migration added to upgrade notes. Aim for a structure that prevents code duplication and other bloat. Self-documenting code is good. Now is the time to refactor since the cost will be much higher in the future.
+
+
 ## Build Commands
 
 ```bash
