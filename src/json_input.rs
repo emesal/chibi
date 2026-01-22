@@ -4,9 +4,7 @@
 //! to the unified `ChibiInput` format.
 
 use crate::cli::Inspectable;
-use crate::input::{
-    ChibiInput, Command, ContextSelection, Flags, PartialRuntimeConfig, UsernameOverride,
-};
+use crate::input::{ChibiInput, Command, ContextSelection, Flags, UsernameOverride};
 use serde::Deserialize;
 use std::io::{self, ErrorKind};
 
@@ -86,27 +84,6 @@ pub struct JsonInput {
     pub help: Option<bool>,
     /// Show version (returns version as output)
     pub version: Option<bool>,
-
-    // === Runtime config overrides ===
-    /// API key override
-    pub api_key: Option<String>,
-    /// Model override
-    pub model: Option<String>,
-    /// Base URL override
-    pub base_url: Option<String>,
-    /// Context window limit override
-    pub context_window_limit: Option<usize>,
-    /// Warning threshold percentage override
-    pub warn_threshold_percent: Option<f32>,
-    /// Auto-compact enabled override
-    pub auto_compact: Option<bool>,
-    /// Auto-compact threshold override
-    pub auto_compact_threshold: Option<f32>,
-    /// Max recursion depth override
-    pub max_recursion_depth: Option<usize>,
-    /// Reflection enabled override
-    pub reflection_enabled: Option<bool>,
-    // NOTE: reflection_character_limit intentionally omitted for security
 }
 
 /// Arguments for rename_context operation
@@ -160,12 +137,6 @@ pub struct ToolArgs {
 }
 
 impl JsonInput {
-    /// Parse JSON from a reader (typically stdin)
-    pub fn from_reader<R: io::Read>(reader: R) -> io::Result<Self> {
-        serde_json::from_reader(reader)
-            .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid JSON: {}", e)))
-    }
-
     /// Parse JSON from a string
     pub fn from_str(s: &str) -> io::Result<Self> {
         serde_json::from_str(s)
@@ -203,19 +174,6 @@ impl JsonInput {
             Some(UsernameOverride::Persistent(name.clone()))
         } else {
             None
-        };
-
-        // Build partial runtime config from JSON fields
-        let config = PartialRuntimeConfig {
-            api_key: self.api_key.clone(),
-            model: self.model.clone(),
-            base_url: self.base_url.clone(),
-            context_window_limit: self.context_window_limit,
-            warn_threshold_percent: self.warn_threshold_percent,
-            auto_compact: self.auto_compact,
-            auto_compact_threshold: self.auto_compact_threshold,
-            max_recursion_depth: self.max_recursion_depth,
-            reflection_enabled: self.reflection_enabled,
         };
 
         // Determine command - check operations in priority order
@@ -357,11 +315,9 @@ impl JsonInput {
             verbose: self.verbose.unwrap_or(false),
             json_output: self.json_output.unwrap_or(false),
             no_chibi,
-            force_chibi,
         };
 
         Ok(ChibiInput {
-            config,
             command,
             flags,
             context,
@@ -382,14 +338,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_with_config_overrides() {
+    fn test_parse_with_verbose_flag() {
         let json = r#"{
             "prompt": "test",
-            "model": "gpt-4-turbo",
             "verbose": true
         }"#;
         let input = JsonInput::from_str(json).unwrap();
-        assert_eq!(input.model, Some("gpt-4-turbo".to_string()));
         assert_eq!(input.verbose, Some(true));
     }
 
@@ -493,8 +447,8 @@ mod tests {
         let json = r#"{"list_contexts": true, "force_chibi": true}"#;
         let input = JsonInput::from_str(json).unwrap();
         let chibi_input = input.to_input().unwrap();
-        assert!(!chibi_input.flags.no_chibi); // force_chibi wins
-        assert!(chibi_input.flags.force_chibi);
+        // force_chibi overrides the implied no_chibi from list_contexts
+        assert!(!chibi_input.flags.no_chibi);
     }
 
     #[test]
@@ -524,21 +478,13 @@ mod tests {
     }
 
     #[test]
-    fn test_partial_runtime_config() {
-        let json = r#"{
-            "prompt": "test",
-            "api_key": "sk-test",
-            "model": "gpt-4",
-            "context_window_limit": 16000,
-            "auto_compact": true
-        }"#;
+    fn test_prompt_command_parsing() {
+        let json = r#"{"prompt": "test"}"#;
         let input = JsonInput::from_str(json).unwrap();
         let chibi_input = input.to_input().unwrap();
 
-        assert_eq!(chibi_input.config.api_key, Some("sk-test".to_string()));
-        assert_eq!(chibi_input.config.model, Some("gpt-4".to_string()));
-        assert_eq!(chibi_input.config.context_window_limit, Some(16000));
-        assert_eq!(chibi_input.config.auto_compact, Some(true));
+        // The command should be parsed correctly
+        assert!(matches!(chibi_input.command, Command::SendPrompt { ref prompt } if prompt == "test"));
     }
 
     #[test]
