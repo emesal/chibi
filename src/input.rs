@@ -26,7 +26,10 @@ pub enum Command {
     /// Rename a context (-r/-R)
     RenameContext { old: Option<String>, new: String },
     /// Show log entries (-g/-G)
-    ShowLog { context: Option<String>, count: isize },
+    ShowLog {
+        context: Option<String>,
+        count: isize,
+    },
     /// Inspect something (-n/-N)
     Inspect {
         context: Option<String>,

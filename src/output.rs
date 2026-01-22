@@ -3,7 +3,7 @@
 //! This module provides `OutputHandler` which handles outputting
 //! transcript entries and diagnostics in either plain text or JSONL format.
 
-use crate::context::{now_timestamp, TranscriptEntry};
+use crate::context::{TranscriptEntry, now_timestamp};
 use std::io::{self, Write};
 use uuid::Uuid;
 
@@ -120,7 +120,6 @@ impl OutputHandler {
             println!("{}", content);
         }
     }
-
 }
 
 #[cfg(test)]
@@ -182,5 +181,4 @@ mod tests {
         // Should not panic
         handler.diagnostic("Test message", true);
     }
-
 }

@@ -204,7 +204,10 @@ impl AppState {
         let messages = self.entries_to_messages(&entries);
 
         // Get updated_at from the last entry timestamp, or created_at if empty
-        let updated_at = entries.last().map(|e| e.timestamp).unwrap_or(meta.created_at);
+        let updated_at = entries
+            .last()
+            .map(|e| e.timestamp)
+            .unwrap_or(meta.created_at);
 
         Ok(Context {
             name: name.to_string(),
@@ -312,10 +315,7 @@ impl AppState {
     pub fn append_context_entry(&self, name: &str, entry: &TranscriptEntry) -> io::Result<()> {
         self.ensure_context_dir(name)?;
         let path = self.context_file(name);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
         let json = serde_json::to_string(entry)
             .map_err(|e| io::Error::other(format!("Failed to serialize entry: {}", e)))?;
@@ -373,7 +373,11 @@ impl AppState {
     }
 
     /// Convert messages to transcript entries (for migration)
-    fn messages_to_entries(&self, messages: &[Message], context_name: &str) -> Vec<TranscriptEntry> {
+    fn messages_to_entries(
+        &self,
+        messages: &[Message],
+        context_name: &str,
+    ) -> Vec<TranscriptEntry> {
         messages
             .iter()
             .filter(|m| m.role != "system")

@@ -110,7 +110,6 @@ pub struct ResolvedConfig {
     pub reflection_enabled: bool,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +259,4 @@ mod tests {
             Some(200000)
         );
     }
-
 }

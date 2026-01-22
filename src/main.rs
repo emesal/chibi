@@ -194,7 +194,12 @@ fn show_log(app: &AppState, context_name: &str, num: isize, verbose: bool) -> io
 }
 
 /// Set system prompt for a context
-fn set_prompt_for_context(app: &AppState, context_name: &str, arg: &str, verbose: bool) -> io::Result<()> {
+fn set_prompt_for_context(
+    app: &AppState,
+    context_name: &str,
+    arg: &str,
+    verbose: bool,
+) -> io::Result<()> {
     let content = if std::path::Path::new(arg).is_file() {
         std::fs::read_to_string(arg)?
     } else {
@@ -238,13 +243,21 @@ async fn execute_from_input(
                 let new_context = Context::new(app.state.current_context.clone());
                 app.save_current_context(&new_context)?;
             }
-            output.diagnostic(&format!("[Using transient context: {}]", app.state.current_context), verbose);
+            output.diagnostic(
+                &format!("[Using transient context: {}]", app.state.current_context),
+                verbose,
+            );
             let hook_data = serde_json::json!({
                 "from_context": prev_context,
                 "to_context": app.state.current_context,
                 "is_transient": true,
             });
-            let _ = tools::execute_hook(tools, tools::HookPoint::OnContextSwitch, &hook_data, verbose);
+            let _ = tools::execute_hook(
+                tools,
+                tools::HookPoint::OnContextSwitch,
+                &hook_data,
+                verbose,
+            );
         }
         ContextSelection::Switch { name, persistent } => {
             let actual_name = resolve_context_name(app, name)?;
@@ -257,13 +270,21 @@ async fn execute_from_input(
             if *persistent {
                 app.save()?;
             }
-            output.diagnostic(&format!("[Switched to context: {}]", app.state.current_context), verbose);
+            output.diagnostic(
+                &format!("[Switched to context: {}]", app.state.current_context),
+                verbose,
+            );
             let hook_data = serde_json::json!({
                 "from_context": prev_context,
                 "to_context": app.state.current_context,
                 "is_transient": !persistent,
             });
-            let _ = tools::execute_hook(tools, tools::HookPoint::OnContextSwitch, &hook_data, verbose);
+            let _ = tools::execute_hook(
+                tools,
+                tools::HookPoint::OnContextSwitch,
+                &hook_data,
+                verbose,
+            );
             did_action = true;
         }
     }
@@ -275,7 +296,13 @@ async fn execute_from_input(
                 let mut local_config = app.load_local_config(&app.state.current_context)?;
                 local_config.username = Some(username.clone());
                 app.save_local_config(&app.state.current_context, &local_config)?;
-                output.diagnostic(&format!("[Username '{}' saved to context '{}']", username, app.state.current_context), verbose);
+                output.diagnostic(
+                    &format!(
+                        "[Username '{}' saved to context '{}']",
+                        username, app.state.current_context
+                    ),
+                    verbose,
+                );
                 did_action = true;
             }
             UsernameOverride::Transient(_) => {
@@ -297,7 +324,8 @@ async fn execute_from_input(
             let current = &app.state.current_context;
             for name in contexts {
                 let context_dir = app.context_dir(&name);
-                let status = lock::ContextLock::get_status(&context_dir, app.config.lock_heartbeat_seconds);
+                let status =
+                    lock::ContextLock::get_status(&context_dir, app.config.lock_heartbeat_seconds);
                 let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
                 if &name == current {
                     output.emit_result(&format!("* {}{}", name, status_str));
@@ -311,17 +339,23 @@ async fn execute_from_input(
             let context_name = &app.state.current_context;
             let context = app.get_current_context()?;
             let context_dir = app.context_dir(context_name);
-            let status = lock::ContextLock::get_status(&context_dir, app.config.lock_heartbeat_seconds);
+            let status =
+                lock::ContextLock::get_status(&context_dir, app.config.lock_heartbeat_seconds);
             let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
             output.emit_result(&format!("Context: {}{}", context_name, status_str));
             output.emit_result(&format!("Messages: {}", context.messages.len()));
             if !context.summary.is_empty() {
-                output.emit_result(&format!("Summary: {}", context.summary.lines().next().unwrap_or("")));
+                output.emit_result(&format!(
+                    "Summary: {}",
+                    context.summary.lines().next().unwrap_or("")
+                ));
             }
             did_action = true;
         }
         Command::DeleteContext { name } => {
-            let ctx_name = name.clone().unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = name
+                .clone()
+                .unwrap_or_else(|| app.state.current_context.clone());
             match app.delete_context(&ctx_name) {
                 Ok(true) => output.emit_result(&format!("Deleted context: {}", ctx_name)),
                 Ok(false) => output.emit_result(&format!("Context '{}' not found", ctx_name)),
@@ -330,7 +364,9 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::ArchiveContext { name } => {
-            let ctx_name = name.clone().unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = name
+                .clone()
+                .unwrap_or_else(|| app.state.current_context.clone());
             if name.is_none() {
                 let context = app.get_current_context()?;
                 let hook_data = serde_json::json!({
@@ -343,11 +379,15 @@ async fn execute_from_input(
                 let hook_data = serde_json::json!({
                     "context_name": app.state.current_context,
                 });
-                let _ = tools::execute_hook(tools, tools::HookPoint::PostClear, &hook_data, verbose);
+                let _ =
+                    tools::execute_hook(tools, tools::HookPoint::PostClear, &hook_data, verbose);
             } else {
                 app.clear_context_by_name(&ctx_name)?;
             }
-            output.emit_result(&format!("Context '{}' archived (history saved to transcript)", ctx_name));
+            output.emit_result(&format!(
+                "Context '{}' archived (history saved to transcript)",
+                ctx_name
+            ));
             did_action = true;
         }
         Command::CompactContext { name } => {
@@ -360,23 +400,31 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::RenameContext { old, new } => {
-            let old_name = old.clone().unwrap_or_else(|| app.state.current_context.clone());
+            let old_name = old
+                .clone()
+                .unwrap_or_else(|| app.state.current_context.clone());
             app.rename_context(&old_name, new)?;
             output.emit_result(&format!("Renamed context '{}' to '{}'", old_name, new));
             did_action = true;
         }
         Command::ShowLog { context, count } => {
-            let ctx_name = context.clone().unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = context
+                .clone()
+                .unwrap_or_else(|| app.state.current_context.clone());
             show_log(app, &ctx_name, *count, verbose)?;
             did_action = true;
         }
         Command::Inspect { context, thing } => {
-            let ctx_name = context.clone().unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = context
+                .clone()
+                .unwrap_or_else(|| app.state.current_context.clone());
             inspect_context(app, &ctx_name, thing)?;
             did_action = true;
         }
         Command::SetSystemPrompt { context, prompt } => {
-            let ctx_name = context.clone().unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = context
+                .clone()
+                .unwrap_or_else(|| app.state.current_context.clone());
             set_prompt_for_context(app, &ctx_name, prompt, verbose)?;
             did_action = true;
         }
@@ -401,43 +449,79 @@ async fn execute_from_input(
                     serde_json::json!({})
                 } else {
                     serde_json::from_str(&args_str).map_err(|e| {
-                        io::Error::new(ErrorKind::InvalidInput, format!("Invalid JSON arguments: {}", e))
+                        io::Error::new(
+                            ErrorKind::InvalidInput,
+                            format!("Invalid JSON arguments: {}", e),
+                        )
                     })?
                 };
                 match name.as_str() {
                     "update_todos" => {
-                        let content = args_json.get("content").and_then(|v| v.as_str()).ok_or_else(|| {
-                            io::Error::new(ErrorKind::InvalidInput, "update_todos requires {\"content\": \"...\"}")
-                        })?;
+                        let content = args_json
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    ErrorKind::InvalidInput,
+                                    "update_todos requires {\"content\": \"...\"}",
+                                )
+                            })?;
                         app.save_current_todos(content)?;
                         output.emit_result("Todos updated");
                     }
                     "update_goals" => {
-                        let content = args_json.get("content").and_then(|v| v.as_str()).ok_or_else(|| {
-                            io::Error::new(ErrorKind::InvalidInput, "update_goals requires {\"content\": \"...\"}")
-                        })?;
+                        let content = args_json
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    ErrorKind::InvalidInput,
+                                    "update_goals requires {\"content\": \"...\"}",
+                                )
+                            })?;
                         app.save_current_goals(content)?;
                         output.emit_result("Goals updated");
                     }
                     "update_reflection" => {
-                        let content = args_json.get("content").and_then(|v| v.as_str()).ok_or_else(|| {
-                            io::Error::new(ErrorKind::InvalidInput, "update_reflection requires {\"content\": \"...\"}")
-                        })?;
+                        let content = args_json
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    ErrorKind::InvalidInput,
+                                    "update_reflection requires {\"content\": \"...\"}",
+                                )
+                            })?;
                         app.save_reflection(content)?;
                         output.emit_result("Reflection updated");
                     }
                     "send_message" => {
-                        let to = args_json.get("to").and_then(|v| v.as_str()).ok_or_else(|| {
-                            io::Error::new(ErrorKind::InvalidInput, "send_message requires \"to\" field")
-                        })?;
-                        let message = args_json.get("message").and_then(|v| v.as_str()).ok_or_else(|| {
-                            io::Error::new(ErrorKind::InvalidInput, "send_message requires \"message\" field")
-                        })?;
+                        let to = args_json
+                            .get("to")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    ErrorKind::InvalidInput,
+                                    "send_message requires \"to\" field",
+                                )
+                            })?;
+                        let message = args_json
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    ErrorKind::InvalidInput,
+                                    "send_message requires \"message\" field",
+                                )
+                            })?;
                         app.send_inbox_message(to, message)?;
                         output.emit_result(&format!("Message sent to '{}'", to));
                     }
                     _ => {
-                        return Err(io::Error::new(ErrorKind::NotFound, format!("Tool '{}' not found", name)));
+                        return Err(io::Error::new(
+                            ErrorKind::NotFound,
+                            format!("Tool '{}' not found", name),
+                        ));
                     }
                 }
             }
@@ -461,9 +545,19 @@ async fn execute_from_input(
 
             // Acquire context lock
             let context_dir = app.context_dir(&app.state.current_context);
-            let _lock = lock::ContextLock::acquire(&context_dir, app.config.lock_heartbeat_seconds)?;
+            let _lock =
+                lock::ContextLock::acquire(&context_dir, app.config.lock_heartbeat_seconds)?;
 
-            api::send_prompt(app, prompt.clone(), tools, verbose, use_reflection, &resolved, json_output).await?;
+            api::send_prompt(
+                app,
+                prompt.clone(),
+                tools,
+                verbose,
+                use_reflection,
+                &resolved,
+                json_output,
+            )
+            .await?;
             did_action = true;
         }
         Command::NoOp => {
@@ -479,7 +573,10 @@ async fn execute_from_input(
 
     // Check for no action and no prompt
     if !did_action && matches!(input.command, Command::NoOp) {
-        return Err(io::Error::new(ErrorKind::InvalidInput, "No operation specified"));
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "No operation specified",
+        ));
     }
 
     Ok(())
@@ -518,7 +615,10 @@ async fn main() -> io::Result<()> {
         let mut app = AppState::load()?;
 
         let tools = tools::load_tools(&app.plugins_dir, input.flags.verbose)?;
-        output.diagnostic(&format!("[Loaded {} tool(s)]", tools.len()), input.flags.verbose);
+        output.diagnostic(
+            &format!("[Loaded {} tool(s)]", tools.len()),
+            input.flags.verbose,
+        );
 
         return execute_from_input(input, &mut app, &tools, &output).await;
     }

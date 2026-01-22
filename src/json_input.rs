@@ -72,7 +72,9 @@ mod tests {
     fn test_parse_simple_prompt() {
         let json = r#"{"command": {"send_prompt": {"prompt": "Hello, world!"}}}"#;
         let input = from_str(json).unwrap();
-        assert!(matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "Hello, world!"));
+        assert!(
+            matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "Hello, world!")
+        );
     }
 
     #[test]
@@ -155,7 +157,10 @@ mod tests {
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.command,
-            Command::ShowLog { context: None, count: 5 }
+            Command::ShowLog {
+                context: None,
+                count: 5
+            }
         ));
     }
 
@@ -165,7 +170,10 @@ mod tests {
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.command,
-            Command::Inspect { context: None, thing: Inspectable::Todos }
+            Command::Inspect {
+                context: None,
+                thing: Inspectable::Todos
+            }
         ));
     }
 
@@ -335,9 +343,15 @@ mod tests {
             "username_override": {"transient": "alice"}
         }"#;
         let input = from_str(json).unwrap();
-        assert!(matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "hello world"));
+        assert!(
+            matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "hello world")
+        );
         assert!(input.flags.verbose);
-        assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding"));
-        assert!(matches!(input.username_override, Some(UsernameOverride::Transient(ref u)) if u == "alice"));
+        assert!(
+            matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding")
+        );
+        assert!(
+            matches!(input.username_override, Some(UsernameOverride::Transient(ref u)) if u == "alice")
+        );
     }
 }

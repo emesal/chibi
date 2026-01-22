@@ -344,7 +344,11 @@ pub async fn compact_context_with_llm_manual(app: &AppState, verbose: bool) -> i
 }
 
 /// Compact a specific context by name (for -Z flag)
-pub async fn compact_context_by_name(app: &AppState, context_name: &str, verbose: bool) -> io::Result<()> {
+pub async fn compact_context_by_name(
+    app: &AppState,
+    context_name: &str,
+    verbose: bool,
+) -> io::Result<()> {
     // Load the context
     let context = app.load_context(context_name)?;
 
@@ -357,7 +361,10 @@ pub async fn compact_context_by_name(app: &AppState, context_name: &str, verbose
 
     if context.messages.len() <= 2 {
         if verbose {
-            eprintln!("[Context '{}' is already compact (2 or fewer messages)]", context_name);
+            eprintln!(
+                "[Context '{}' is already compact (2 or fewer messages)]",
+                context_name
+            );
         }
         return Ok(());
     }
@@ -392,7 +399,11 @@ pub async fn compact_context_by_name(app: &AppState, context_name: &str, verbose
     app.save_context(&new_context)?;
 
     if verbose {
-        eprintln!("[Context '{}' compacted: {} messages archived]", context_name, context.messages.len());
+        eprintln!(
+            "[Context '{}' compacted: {} messages archived]",
+            context_name,
+            context.messages.len()
+        );
     }
 
     Ok(())
@@ -700,7 +711,10 @@ async fn send_prompt_with_depth(
         }
         inbox_content.push_str("--- END INBOX ---\n\n");
         final_prompt = format!("{}{}", inbox_content, final_prompt);
-        output.diagnostic(&format!("[Inbox: {} message(s) injected]", inbox_messages.len()), verbose);
+        output.diagnostic(
+            &format!("[Inbox: {} message(s) injected]", inbox_messages.len()),
+            verbose,
+        );
     }
 
     // Add user message to in-memory context
@@ -714,7 +728,10 @@ async fn send_prompt_with_depth(
     // Check if we need to warn about context window
     if app.should_warn(&context.messages) {
         let remaining = app.remaining_tokens(&context.messages);
-        output.diagnostic(&format!("[Context window warning: {} tokens remaining]", remaining), verbose);
+        output.diagnostic(
+            &format!("[Context window warning: {} tokens remaining]", remaining),
+            verbose,
+        );
     }
 
     // Auto-compaction check
@@ -759,7 +776,13 @@ async fn send_prompt_with_depth(
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
             && !inject.is_empty()
         {
-            output.diagnostic(&format!("[Hook pre_system_prompt: {} injected content]", hook_tool_name), verbose);
+            output.diagnostic(
+                &format!(
+                    "[Hook pre_system_prompt: {} injected content]",
+                    hook_tool_name
+                ),
+                verbose,
+            );
             full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
         }
     }
@@ -815,7 +838,13 @@ async fn send_prompt_with_depth(
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
             && !inject.is_empty()
         {
-            output.diagnostic(&format!("[Hook post_system_prompt: {} injected content]", hook_tool_name), verbose);
+            output.diagnostic(
+                &format!(
+                    "[Hook post_system_prompt: {} injected content]",
+                    hook_tool_name
+                ),
+                verbose,
+            );
             full_system_prompt.push_str("\n\n");
             full_system_prompt.push_str(inject);
         }
@@ -1021,7 +1050,10 @@ async fn send_prompt_with_depth(
                             .unwrap_or("Tool call blocked by hook")
                             .to_string();
                         output.diagnostic(
-                            &format!("[Hook pre_tool: {} blocked {} - {}]", hook_tool_name, tc.name, block_message),
+                            &format!(
+                                "[Hook pre_tool: {} blocked {} - {}]",
+                                hook_tool_name, tc.name, block_message
+                            ),
                             verbose,
                         );
                         break;
@@ -1030,7 +1062,10 @@ async fn send_prompt_with_depth(
                     // Check for argument modification
                     if let Some(modified_args) = result.get("arguments") {
                         output.diagnostic(
-                            &format!("[Hook pre_tool: {} modified arguments for {}]", hook_tool_name, tc.name),
+                            &format!(
+                                "[Hook pre_tool: {} modified arguments for {}]",
+                                hook_tool_name, tc.name
+                            ),
                             verbose,
                         );
                         args = modified_args.clone();
@@ -1103,7 +1138,10 @@ async fn send_prompt_with_depth(
                                     .unwrap_or(hook_tool_name);
                                 delivered_via = Some(via.to_string());
                                 output.diagnostic(
-                                    &format!("[Hook pre_send_message: {} intercepted delivery]", hook_tool_name),
+                                    &format!(
+                                        "[Hook pre_send_message: {} intercepted delivery]",
+                                        hook_tool_name
+                                    ),
                                     verbose,
                                 );
                                 break;
@@ -1206,7 +1244,10 @@ async fn send_prompt_with_depth(
 
         if app.should_warn(&context.messages) {
             let remaining = app.remaining_tokens(&context.messages);
-            output.diagnostic(&format!("[Context window warning: {} tokens remaining]", remaining), verbose);
+            output.diagnostic(
+                &format!("[Context window warning: {} tokens remaining]", remaining),
+                verbose,
+            );
         }
 
         output.newline();
@@ -1222,7 +1263,10 @@ async fn send_prompt_with_depth(
                 return Ok(());
             }
             output.diagnostic(
-                &format!("[Continuing processing ({}/{}): {}]", new_depth, app.config.max_recursion_depth, recurse_note),
+                &format!(
+                    "[Continuing processing ({}/{}): {}]",
+                    new_depth, app.config.max_recursion_depth, recurse_note
+                ),
                 verbose,
             );
             // Recursively call send_prompt with the note as the new prompt
@@ -1246,5 +1290,3 @@ async fn send_prompt_with_depth(
         return Ok(());
     }
 }
-
-

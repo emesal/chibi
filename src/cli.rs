@@ -54,13 +54,22 @@ impl Inspectable {
 )]
 pub struct Cli {
     // === Context operations ===
-
     /// Switch to context (persistent). Use 'new' for auto-generated name, 'new:prefix' for prefixed
-    #[arg(short = 'c', long = "switch-context", value_name = "NAME", allow_hyphen_values = true)]
+    #[arg(
+        short = 'c',
+        long = "switch-context",
+        value_name = "NAME",
+        allow_hyphen_values = true
+    )]
     pub switch_context: Option<String>,
 
     /// Use context for this invocation only
-    #[arg(short = 'C', long = "transient-context", value_name = "NAME", allow_hyphen_values = true)]
+    #[arg(
+        short = 'C',
+        long = "transient-context",
+        value_name = "NAME",
+        allow_hyphen_values = true
+    )]
     pub transient_context: Option<String>,
 
     /// Show current context info
@@ -76,7 +85,12 @@ pub struct Cli {
     pub delete_current_context: bool,
 
     /// Delete specified context
-    #[arg(short = 'D', long = "delete-context", value_name = "CTX", allow_hyphen_values = true)]
+    #[arg(
+        short = 'D',
+        long = "delete-context",
+        value_name = "CTX",
+        allow_hyphen_values = true
+    )]
     pub delete_context: Option<String>,
 
     /// Archive current context (clear history, save to transcript)
@@ -84,7 +98,12 @@ pub struct Cli {
     pub archive_current_context: bool,
 
     /// Archive specified context
-    #[arg(short = 'A', long = "archive-context", value_name = "CTX", allow_hyphen_values = true)]
+    #[arg(
+        short = 'A',
+        long = "archive-context",
+        value_name = "CTX",
+        allow_hyphen_values = true
+    )]
     pub archive_context: Option<String>,
 
     /// Compact current context (summarize and clear)
@@ -92,11 +111,21 @@ pub struct Cli {
     pub compact_current_context: bool,
 
     /// Compact specified context
-    #[arg(short = 'Z', long = "compact-context", value_name = "CTX", allow_hyphen_values = true)]
+    #[arg(
+        short = 'Z',
+        long = "compact-context",
+        value_name = "CTX",
+        allow_hyphen_values = true
+    )]
     pub compact_context: Option<String>,
 
     /// Rename current context
-    #[arg(short = 'r', long = "rename-current-context", value_name = "NEW", allow_hyphen_values = true)]
+    #[arg(
+        short = 'r',
+        long = "rename-current-context",
+        value_name = "NEW",
+        allow_hyphen_values = true
+    )]
     pub rename_current_context: Option<String>,
 
     /// Rename specified context (requires OLD and NEW args)
@@ -104,7 +133,12 @@ pub struct Cli {
     pub rename_context: Option<Vec<String>>,
 
     /// Show last N log entries (current context). Use negative for first N
-    #[arg(short = 'g', long = "show-current-log", value_name = "N", allow_hyphen_values = true)]
+    #[arg(
+        short = 'g',
+        long = "show-current-log",
+        value_name = "N",
+        allow_hyphen_values = true
+    )]
     pub show_current_log: Option<isize>,
 
     /// Show last N log entries (requires CTX and N)
@@ -120,7 +154,12 @@ pub struct Cli {
     pub inspect: Option<Vec<String>>,
 
     /// Set system prompt for current context (file path or content)
-    #[arg(short = 'y', long = "set-current-system-prompt", value_name = "PROMPT", allow_hyphen_values = true)]
+    #[arg(
+        short = 'y',
+        long = "set-current-system-prompt",
+        value_name = "PROMPT",
+        allow_hyphen_values = true
+    )]
     pub set_current_system_prompt: Option<String>,
 
     /// Set system prompt for specified context (requires CTX and PROMPT)
@@ -128,18 +167,26 @@ pub struct Cli {
     pub set_system_prompt: Option<Vec<String>>,
 
     // === Username options ===
-
     /// Set username (persists to local.toml)
-    #[arg(short = 'u', long = "set-username", value_name = "NAME", allow_hyphen_values = true)]
+    #[arg(
+        short = 'u',
+        long = "set-username",
+        value_name = "NAME",
+        allow_hyphen_values = true
+    )]
     pub set_username: Option<String>,
 
     /// Set username for this invocation only
-    #[arg(short = 'U', long = "transient-username", value_name = "NAME", allow_hyphen_values = true)]
+    #[arg(
+        short = 'U',
+        long = "transient-username",
+        value_name = "NAME",
+        allow_hyphen_values = true
+    )]
     pub transient_username: Option<String>,
 
     // === Plugin/tool options ===
     // Note: These are handled specially because they consume all remaining args
-
     /// Run a plugin directly (-p NAME [ARGS...])
     #[arg(short = 'p', long = "plugin", value_name = "NAME", num_args = 1.., allow_hyphen_values = true)]
     pub plugin: Option<Vec<String>>,
@@ -149,7 +196,6 @@ pub struct Cli {
     pub call_tool: Option<Vec<String>>,
 
     // === Control flags ===
-
     /// Show extra info (tools loaded, etc.)
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
@@ -163,7 +209,6 @@ pub struct Cli {
     pub force_chibi: bool,
 
     // === JSON modes ===
-
     /// Read input as JSON from stdin (exclusive with config flags)
     #[arg(long = "json-config")]
     pub json_config: bool,
@@ -173,7 +218,6 @@ pub struct Cli {
     pub json_output: bool,
 
     // === Help and version ===
-
     /// Show help
     #[arg(short = 'h', long = "help")]
     pub help: bool,
@@ -248,7 +292,11 @@ impl Cli {
             Some(Inspectable::from_str(s).ok_or_else(|| {
                 io::Error::new(
                     ErrorKind::InvalidInput,
-                    format!("Unknown inspectable: {}. Valid options: {:?}", s, Inspectable::all_names()),
+                    format!(
+                        "Unknown inspectable: {}. Valid options: {:?}",
+                        s,
+                        Inspectable::all_names()
+                    ),
                 )
             })?)
         } else {
@@ -262,7 +310,11 @@ impl Cli {
                     Inspectable::from_str(&v[1]).ok_or_else(|| {
                         io::Error::new(
                             ErrorKind::InvalidInput,
-                            format!("Unknown inspectable: {}. Valid options: {:?}", v[1], Inspectable::all_names()),
+                            format!(
+                                "Unknown inspectable: {}. Valid options: {:?}",
+                                v[1],
+                                Inspectable::all_names()
+                            ),
                         )
                     })?,
                 ))
@@ -342,7 +394,10 @@ impl Cli {
         let context = if let Some(ref name) = self.transient_context {
             ContextSelection::Transient { name: name.clone() }
         } else if let Some(ref name) = self.switch_context {
-            ContextSelection::Switch { name: name.clone(), persistent: true }
+            ContextSelection::Switch {
+                name: name.clone(),
+                persistent: true,
+            }
         } else {
             ContextSelection::Current
         };
@@ -358,7 +413,9 @@ impl Cli {
 
         // Determine command
         let command = if !self.prompt.is_empty() && !no_chibi {
-            Command::SendPrompt { prompt: self.prompt.join(" ") }
+            Command::SendPrompt {
+                prompt: self.prompt.join(" "),
+            }
         } else if self.list_contexts {
             Command::ListContexts
         } else if self.list_current_context {
@@ -366,35 +423,71 @@ impl Cli {
         } else if self.delete_current_context {
             Command::DeleteContext { name: None }
         } else if let Some(ref name) = self.delete_context {
-            Command::DeleteContext { name: Some(name.clone()) }
+            Command::DeleteContext {
+                name: Some(name.clone()),
+            }
         } else if self.archive_current_context {
             Command::ArchiveContext { name: None }
         } else if let Some(ref name) = self.archive_context {
-            Command::ArchiveContext { name: Some(name.clone()) }
+            Command::ArchiveContext {
+                name: Some(name.clone()),
+            }
         } else if self.compact_current_context {
             Command::CompactContext { name: None }
         } else if let Some(ref name) = self.compact_context {
-            Command::CompactContext { name: Some(name.clone()) }
+            Command::CompactContext {
+                name: Some(name.clone()),
+            }
         } else if let Some(ref new_name) = self.rename_current_context {
-            Command::RenameContext { old: None, new: new_name.clone() }
+            Command::RenameContext {
+                old: None,
+                new: new_name.clone(),
+            }
         } else if let Some((ref old, ref new)) = rename_context {
-            Command::RenameContext { old: Some(old.clone()), new: new.clone() }
+            Command::RenameContext {
+                old: Some(old.clone()),
+                new: new.clone(),
+            }
         } else if let Some(count) = self.show_current_log {
-            Command::ShowLog { context: None, count }
+            Command::ShowLog {
+                context: None,
+                count,
+            }
         } else if let Some((ref ctx, count)) = show_log {
-            Command::ShowLog { context: Some(ctx.clone()), count }
+            Command::ShowLog {
+                context: Some(ctx.clone()),
+                count,
+            }
         } else if let Some(ref thing) = inspect_current {
-            Command::Inspect { context: None, thing: thing.clone() }
+            Command::Inspect {
+                context: None,
+                thing: thing.clone(),
+            }
         } else if let Some((ref ctx, ref thing)) = inspect {
-            Command::Inspect { context: Some(ctx.clone()), thing: thing.clone() }
+            Command::Inspect {
+                context: Some(ctx.clone()),
+                thing: thing.clone(),
+            }
         } else if let Some(ref prompt_val) = self.set_current_system_prompt {
-            Command::SetSystemPrompt { context: None, prompt: prompt_val.clone() }
+            Command::SetSystemPrompt {
+                context: None,
+                prompt: prompt_val.clone(),
+            }
         } else if let Some((ref ctx, ref prompt_val)) = set_system_prompt {
-            Command::SetSystemPrompt { context: Some(ctx.clone()), prompt: prompt_val.clone() }
+            Command::SetSystemPrompt {
+                context: Some(ctx.clone()),
+                prompt: prompt_val.clone(),
+            }
         } else if let Some(ref invocation) = plugin {
-            Command::RunPlugin { name: invocation.name.clone(), args: invocation.args.clone() }
+            Command::RunPlugin {
+                name: invocation.name.clone(),
+                args: invocation.args.clone(),
+            }
         } else if let Some(ref invocation) = call_tool {
-            Command::CallTool { name: invocation.name.clone(), args: invocation.args.clone() }
+            Command::CallTool {
+                name: invocation.name.clone(),
+                args: invocation.args.clone(),
+            }
         } else {
             Command::NoOp
         };
@@ -434,7 +527,10 @@ fn expand_attached_args(args: &[String]) -> Vec<String> {
         if arg.len() > 2
             && arg.starts_with('-')
             && !arg.starts_with("--")
-            && arg.chars().nth(1).map_or(false, |c| ATTACHED_FLAGS.contains(&c))
+            && arg
+                .chars()
+                .nth(1)
+                .map_or(false, |c| ATTACHED_FLAGS.contains(&c))
         {
             // Split into -X and value
             let flag = format!("-{}", arg.chars().nth(1).unwrap());
@@ -602,27 +698,37 @@ mod tests {
     #[test]
     fn test_switch_context_short() {
         let input = parse_input("-c coding").unwrap();
-        assert!(matches!(input.context, ContextSelection::Switch { ref name, persistent: true } if name == "coding"));
+        assert!(
+            matches!(input.context, ContextSelection::Switch { ref name, persistent: true } if name == "coding")
+        );
         assert!(!input.flags.no_chibi); // combinable, not implied
     }
 
     #[test]
     fn test_switch_context_long() {
         let input = parse_input("--switch-context coding").unwrap();
-        assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding"));
+        assert!(
+            matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding")
+        );
     }
 
     #[test]
     fn test_switch_context_attached() {
         let input = parse_input("-ccoding").unwrap();
-        assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding"));
+        assert!(
+            matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding")
+        );
     }
 
     #[test]
     fn test_switch_context_with_prompt() {
         let input = parse_input("-c coding hello world").unwrap();
-        assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding"));
-        assert!(matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "hello world"));
+        assert!(
+            matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding")
+        );
+        assert!(
+            matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "hello world")
+        );
     }
 
     // === Transient context tests ===
@@ -630,14 +736,20 @@ mod tests {
     #[test]
     fn test_transient_context_short() {
         let input = parse_input("-C temp").unwrap();
-        assert!(matches!(input.context, ContextSelection::Transient { ref name } if name == "temp"));
+        assert!(
+            matches!(input.context, ContextSelection::Transient { ref name } if name == "temp")
+        );
     }
 
     #[test]
     fn test_transient_context_with_prompt() {
         let input = parse_input("-C agent run task").unwrap();
-        assert!(matches!(input.context, ContextSelection::Transient { ref name } if name == "agent"));
-        assert!(matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "run task"));
+        assert!(
+            matches!(input.context, ContextSelection::Transient { ref name } if name == "agent")
+        );
+        assert!(
+            matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "run task")
+        );
     }
 
     // === List tests ===
@@ -661,21 +773,28 @@ mod tests {
     #[test]
     fn test_delete_current_context_short() {
         let input = parse_input("-d").unwrap();
-        assert!(matches!(input.command, Command::DeleteContext { name: None }));
+        assert!(matches!(
+            input.command,
+            Command::DeleteContext { name: None }
+        ));
         assert!(input.flags.no_chibi);
     }
 
     #[test]
     fn test_delete_context_short() {
         let input = parse_input("-D old-context").unwrap();
-        assert!(matches!(input.command, Command::DeleteContext { ref name } if *name == Some("old-context".to_string())));
+        assert!(
+            matches!(input.command, Command::DeleteContext { ref name } if *name == Some("old-context".to_string()))
+        );
         assert!(input.flags.no_chibi);
     }
 
     #[test]
     fn test_delete_context_attached() {
         let input = parse_input("-Dold-context").unwrap();
-        assert!(matches!(input.command, Command::DeleteContext { ref name } if *name == Some("old-context".to_string())));
+        assert!(
+            matches!(input.command, Command::DeleteContext { ref name } if *name == Some("old-context".to_string()))
+        );
     }
 
     // === Archive tests ===
@@ -683,14 +802,19 @@ mod tests {
     #[test]
     fn test_archive_current_context_short() {
         let input = parse_input("-a").unwrap();
-        assert!(matches!(input.command, Command::ArchiveContext { name: None }));
+        assert!(matches!(
+            input.command,
+            Command::ArchiveContext { name: None }
+        ));
         assert!(!input.flags.no_chibi); // combinable
     }
 
     #[test]
     fn test_archive_context_short() {
         let input = parse_input("-A other").unwrap();
-        assert!(matches!(input.command, Command::ArchiveContext { ref name } if *name == Some("other".to_string())));
+        assert!(
+            matches!(input.command, Command::ArchiveContext { ref name } if *name == Some("other".to_string()))
+        );
         assert!(input.flags.no_chibi);
     }
 
@@ -699,14 +823,19 @@ mod tests {
     #[test]
     fn test_compact_current_context_short() {
         let input = parse_input("-z").unwrap();
-        assert!(matches!(input.command, Command::CompactContext { name: None }));
+        assert!(matches!(
+            input.command,
+            Command::CompactContext { name: None }
+        ));
         assert!(!input.flags.no_chibi); // combinable
     }
 
     #[test]
     fn test_compact_context_short() {
         let input = parse_input("-Z other").unwrap();
-        assert!(matches!(input.command, Command::CompactContext { ref name } if *name == Some("other".to_string())));
+        assert!(
+            matches!(input.command, Command::CompactContext { ref name } if *name == Some("other".to_string()))
+        );
         assert!(input.flags.no_chibi);
     }
 
@@ -715,14 +844,18 @@ mod tests {
     #[test]
     fn test_rename_current_context_short() {
         let input = parse_input("-r newname").unwrap();
-        assert!(matches!(input.command, Command::RenameContext { old: None, ref new } if new == "newname"));
+        assert!(
+            matches!(input.command, Command::RenameContext { old: None, ref new } if new == "newname")
+        );
         assert!(!input.flags.no_chibi); // combinable
     }
 
     #[test]
     fn test_rename_context_short() {
         let input = parse_input("-R old new").unwrap();
-        assert!(matches!(input.command, Command::RenameContext { ref old, ref new } if *old == Some("old".to_string()) && new == "new"));
+        assert!(
+            matches!(input.command, Command::RenameContext { ref old, ref new } if *old == Some("old".to_string()) && new == "new")
+        );
         assert!(input.flags.no_chibi);
     }
 
@@ -731,20 +864,34 @@ mod tests {
     #[test]
     fn test_show_current_log_short() {
         let input = parse_input("-g 10").unwrap();
-        assert!(matches!(input.command, Command::ShowLog { context: None, count: 10 }));
+        assert!(matches!(
+            input.command,
+            Command::ShowLog {
+                context: None,
+                count: 10
+            }
+        ));
         assert!(input.flags.no_chibi);
     }
 
     #[test]
     fn test_show_current_log_negative() {
         let input = parse_input("-g -5").unwrap();
-        assert!(matches!(input.command, Command::ShowLog { context: None, count: -5 }));
+        assert!(matches!(
+            input.command,
+            Command::ShowLog {
+                context: None,
+                count: -5
+            }
+        ));
     }
 
     #[test]
     fn test_show_log_short() {
         let input = parse_input("-G other 10").unwrap();
-        assert!(matches!(input.command, Command::ShowLog { ref context, count: 10 } if *context == Some("other".to_string())));
+        assert!(
+            matches!(input.command, Command::ShowLog { ref context, count: 10 } if *context == Some("other".to_string()))
+        );
         assert!(input.flags.no_chibi);
     }
 
@@ -753,7 +900,9 @@ mod tests {
     #[test]
     fn test_inspect_current_system_prompt() {
         let input = parse_input("-n system_prompt").unwrap();
-        assert!(matches!(input.command, Command::Inspect { context: None, ref thing } if *thing == Inspectable::SystemPrompt));
+        assert!(
+            matches!(input.command, Command::Inspect { context: None, ref thing } if *thing == Inspectable::SystemPrompt)
+        );
         assert!(input.flags.no_chibi);
     }
 
@@ -761,14 +910,21 @@ mod tests {
     fn test_inspect_current_invalid() {
         let result = parse_input("-n invalid");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown inspectable"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown inspectable")
+        );
     }
 
     #[test]
     fn test_inspect_other() {
         let input = parse_input("-N other todos").unwrap();
-        assert!(matches!(input.command, Command::Inspect { ref context, ref thing }
-            if *context == Some("other".to_string()) && *thing == Inspectable::Todos));
+        assert!(
+            matches!(input.command, Command::Inspect { ref context, ref thing }
+            if *context == Some("other".to_string()) && *thing == Inspectable::Todos)
+        );
         assert!(input.flags.no_chibi);
     }
 
@@ -777,15 +933,19 @@ mod tests {
     #[test]
     fn test_set_current_system_prompt_short() {
         let input = parse_input("-y prompt.md").unwrap();
-        assert!(matches!(input.command, Command::SetSystemPrompt { context: None, ref prompt } if prompt == "prompt.md"));
+        assert!(
+            matches!(input.command, Command::SetSystemPrompt { context: None, ref prompt } if prompt == "prompt.md")
+        );
         assert!(!input.flags.no_chibi); // combinable
     }
 
     #[test]
     fn test_set_system_prompt_short() {
         let input = parse_input("-Y other prompt.md").unwrap();
-        assert!(matches!(input.command, Command::SetSystemPrompt { ref context, ref prompt }
-            if *context == Some("other".to_string()) && prompt == "prompt.md"));
+        assert!(
+            matches!(input.command, Command::SetSystemPrompt { ref context, ref prompt }
+            if *context == Some("other".to_string()) && prompt == "prompt.md")
+        );
         assert!(input.flags.no_chibi);
     }
 
@@ -794,13 +954,17 @@ mod tests {
     #[test]
     fn test_set_username_short() {
         let input = parse_input("-u alice").unwrap();
-        assert!(matches!(input.username_override, Some(UsernameOverride::Persistent(ref u)) if u == "alice"));
+        assert!(
+            matches!(input.username_override, Some(UsernameOverride::Persistent(ref u)) if u == "alice")
+        );
     }
 
     #[test]
     fn test_transient_username_short() {
         let input = parse_input("-U bob").unwrap();
-        assert!(matches!(input.username_override, Some(UsernameOverride::Transient(ref u)) if u == "bob"));
+        assert!(
+            matches!(input.username_override, Some(UsernameOverride::Transient(ref u)) if u == "bob")
+        );
     }
 
     // === Plugin/tool tests ===
@@ -808,23 +972,29 @@ mod tests {
     #[test]
     fn test_plugin_short() {
         let input = parse_input("-p myplugin").unwrap();
-        assert!(matches!(input.command, Command::RunPlugin { ref name, ref args }
-            if name == "myplugin" && args.is_empty()));
+        assert!(
+            matches!(input.command, Command::RunPlugin { ref name, ref args }
+            if name == "myplugin" && args.is_empty())
+        );
         assert!(input.flags.no_chibi);
     }
 
     #[test]
     fn test_plugin_with_args() {
         let input = parse_input("-p myplugin list --all").unwrap();
-        assert!(matches!(input.command, Command::RunPlugin { ref name, ref args }
-            if name == "myplugin" && args == &["list", "--all"]));
+        assert!(
+            matches!(input.command, Command::RunPlugin { ref name, ref args }
+            if name == "myplugin" && args == &["list", "--all"])
+        );
     }
 
     #[test]
     fn test_call_tool_short() {
         let input = parse_input("-P update_todos").unwrap();
-        assert!(matches!(input.command, Command::CallTool { ref name, ref args }
-            if name == "update_todos" && args.is_empty()));
+        assert!(
+            matches!(input.command, Command::CallTool { ref name, ref args }
+            if name == "update_todos" && args.is_empty())
+        );
         assert!(input.flags.no_chibi);
     }
 
@@ -898,13 +1068,17 @@ mod tests {
     #[test]
     fn test_switch_context_new() {
         let input = parse_input("-c new").unwrap();
-        assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "new"));
+        assert!(
+            matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "new")
+        );
     }
 
     #[test]
     fn test_switch_context_new_with_prefix() {
         let input = parse_input("-c new:myproject").unwrap();
-        assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "new:myproject"));
+        assert!(
+            matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "new:myproject")
+        );
     }
 
     // === Prompt parsing behavior ===
@@ -949,15 +1123,19 @@ mod tests {
     #[test]
     fn test_plugin_captures_trailing_flags() {
         let input = parse_input("-p myplugin -l --verbose").unwrap();
-        assert!(matches!(input.command, Command::RunPlugin { ref name, ref args }
-            if name == "myplugin" && args == &["-l", "--verbose"]));
+        assert!(
+            matches!(input.command, Command::RunPlugin { ref name, ref args }
+            if name == "myplugin" && args == &["-l", "--verbose"])
+        );
     }
 
     #[test]
     fn test_plugin_verbose_before() {
         let input = parse_input("-v -p myplugin arg1").unwrap();
         assert!(input.flags.verbose);
-        assert!(matches!(input.command, Command::RunPlugin { ref name, ref args }
-            if name == "myplugin" && args == &["arg1"]));
+        assert!(
+            matches!(input.command, Command::RunPlugin { ref name, ref args }
+            if name == "myplugin" && args == &["arg1"])
+        );
     }
 }

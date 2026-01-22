@@ -49,10 +49,7 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
 
     for entry in entries.flatten() {
         let path = entry.path();
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         // Skip .disabled entries
         if file_name.ends_with(".disabled") {
@@ -90,7 +87,11 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
             Ok(new_tools) => tools.extend(new_tools),
             Err(e) => {
                 if verbose {
-                    eprintln!("[WARN] Failed to load tool {:?}: {}", exec_path.file_name(), e);
+                    eprintln!(
+                        "[WARN] Failed to load tool {:?}: {}",
+                        exec_path.file_name(),
+                        e
+                    );
                 }
             }
         }
