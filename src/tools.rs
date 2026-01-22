@@ -2,9 +2,11 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use strum::{AsRefStr, EnumString};
 
 /// Hook points where tools can register to be called
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, AsRefStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum HookPoint {
     PreMessage,
     PostMessage,
@@ -23,53 +25,6 @@ pub enum HookPoint {
     PostSystemPrompt, // Can inject content after all system prompt sections
     PreSendMessage,   // Can intercept delivery (return {"delivered": true, "via": "..."})
     PostSendMessage,  // Observe delivery (read-only)
-}
-
-impl HookPoint {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "pre_message" => Some(Self::PreMessage),
-            "post_message" => Some(Self::PostMessage),
-            "pre_tool" => Some(Self::PreTool),
-            "post_tool" => Some(Self::PostTool),
-            "on_context_switch" => Some(Self::OnContextSwitch),
-            "pre_clear" => Some(Self::PreClear),
-            "post_clear" => Some(Self::PostClear),
-            "pre_compact" => Some(Self::PreCompact),
-            "post_compact" => Some(Self::PostCompact),
-            "pre_rolling_compact" => Some(Self::PreRollingCompact),
-            "post_rolling_compact" => Some(Self::PostRollingCompact),
-            "on_start" => Some(Self::OnStart),
-            "on_end" => Some(Self::OnEnd),
-            "pre_system_prompt" => Some(Self::PreSystemPrompt),
-            "post_system_prompt" => Some(Self::PostSystemPrompt),
-            "pre_send_message" => Some(Self::PreSendMessage),
-            "post_send_message" => Some(Self::PostSendMessage),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::PreMessage => "pre_message",
-            Self::PostMessage => "post_message",
-            Self::PreTool => "pre_tool",
-            Self::PostTool => "post_tool",
-            Self::OnContextSwitch => "on_context_switch",
-            Self::PreClear => "pre_clear",
-            Self::PostClear => "post_clear",
-            Self::PreCompact => "pre_compact",
-            Self::PostCompact => "post_compact",
-            Self::PreRollingCompact => "pre_rolling_compact",
-            Self::PostRollingCompact => "post_rolling_compact",
-            Self::OnStart => "on_start",
-            Self::OnEnd => "on_end",
-            Self::PreSystemPrompt => "pre_system_prompt",
-            Self::PostSystemPrompt => "post_system_prompt",
-            Self::PreSendMessage => "pre_send_message",
-            Self::PostSendMessage => "post_send_message",
-        }
-    }
 }
 
 /// Represents a tool that can be called by the LLM
@@ -231,11 +186,15 @@ fn parse_single_tool_schema(
             .iter()
             .filter_map(|v| {
                 let hook_str = v.as_str()?;
-                let hook = HookPoint::from_str(hook_str);
-                if hook.is_none() && verbose {
-                    eprintln!("[WARN] Unknown hook '{}' in tool '{}'", hook_str, name);
+                match hook_str.parse::<HookPoint>() {
+                    Ok(hook) => Some(hook),
+                    Err(_) => {
+                        if verbose {
+                            eprintln!("[WARN] Unknown hook '{}' in tool '{}'", hook_str, name);
+                        }
+                        None
+                    }
                 }
-                hook
             })
             .collect()
     } else {
@@ -284,11 +243,11 @@ pub fn execute_hook(
         }
 
         if verbose {
-            eprintln!("[Hook {}: {}]", hook.as_str(), tool.name);
+            eprintln!("[Hook {}: {}]", hook.as_ref(), tool.name);
         }
 
         let output = Command::new(&tool.path)
-            .env("CHIBI_HOOK", hook.as_str())
+            .env("CHIBI_HOOK", hook.as_ref())
             .env("CHIBI_HOOK_DATA", data.to_string())
             .env_remove("CHIBI_TOOL_ARGS") // Clear tool args to avoid confusion
             .stdout(Stdio::piped())
@@ -297,7 +256,7 @@ pub fn execute_hook(
             .map_err(|e| {
                 io::Error::other(format!(
                     "Failed to execute hook {} on {}: {}",
-                    hook.as_str(),
+                    hook.as_ref(),
                     tool.name,
                     e
                 ))
@@ -307,7 +266,7 @@ pub fn execute_hook(
             if verbose {
                 eprintln!(
                     "[WARN] Hook {} on {} failed (exit code {:?})",
-                    hook.as_str(),
+                    hook.as_ref(),
                     tool.name,
                     output.status.code()
                 );
@@ -559,32 +518,32 @@ mod tests {
     #[test]
     fn test_hook_point_from_str_valid() {
         for (s, expected) in ALL_HOOKS {
-            let result = HookPoint::from_str(s);
-            assert!(result.is_some(), "from_str failed for '{}'", s);
+            let result = s.parse::<HookPoint>();
+            assert!(result.is_ok(), "parse failed for '{}'", s);
             assert_eq!(result.unwrap(), *expected);
         }
     }
 
     #[test]
     fn test_hook_point_from_str_invalid() {
-        assert!(HookPoint::from_str("").is_none());
-        assert!(HookPoint::from_str("unknown").is_none());
-        assert!(HookPoint::from_str("PreMessage").is_none()); // wrong case
-        assert!(HookPoint::from_str("pre-message").is_none()); // wrong separator
+        assert!("".parse::<HookPoint>().is_err());
+        assert!("unknown".parse::<HookPoint>().is_err());
+        assert!("PreMessage".parse::<HookPoint>().is_err()); // wrong case
+        assert!("pre-message".parse::<HookPoint>().is_err()); // wrong separator
     }
 
     #[test]
     fn test_hook_point_as_str() {
         for (expected_str, hook) in ALL_HOOKS {
-            assert_eq!(hook.as_str(), *expected_str);
+            assert_eq!(hook.as_ref(), *expected_str);
         }
     }
 
     #[test]
     fn test_hook_point_round_trip() {
         for (s, _) in ALL_HOOKS {
-            let hook = HookPoint::from_str(s).unwrap();
-            assert_eq!(hook.as_str(), *s);
+            let hook = s.parse::<HookPoint>().unwrap();
+            assert_eq!(hook.as_ref(), *s);
         }
     }
 
