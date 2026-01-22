@@ -38,6 +38,19 @@ pub struct Context {
     pub summary: String,
 }
 
+impl Context {
+    /// Create a new empty context with the given name
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            messages: Vec::new(),
+            created_at: now_timestamp(),
+            updated_at: 0,
+            summary: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContextState {
     pub contexts: Vec<String>,

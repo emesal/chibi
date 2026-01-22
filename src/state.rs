@@ -447,13 +447,7 @@ impl AppState {
         self.load_context(&self.state.current_context).or_else(|e| {
             if e.kind() == ErrorKind::NotFound {
                 // Return empty context if it doesn't exist yet
-                Ok(Context {
-                    name: self.state.current_context.clone(),
-                    messages: Vec::new(),
-                    created_at: now_timestamp(),
-                    updated_at: 0,
-                    summary: String::new(),
-                })
+                Ok(Context::new(self.state.current_context.clone()))
             } else {
                 Err(e)
             }
@@ -490,13 +484,7 @@ impl AppState {
         self.append_to_transcript(&context)?;
 
         // Create fresh context (preserving nothing - full clear)
-        let new_context = Context {
-            name: self.state.current_context.clone(),
-            messages: Vec::new(),
-            created_at: now_timestamp(),
-            updated_at: 0,
-            summary: String::new(),
-        };
+        let new_context = Context::new(self.state.current_context.clone());
 
         self.save_current_context(&new_context)?;
         Ok(())
@@ -688,13 +676,7 @@ impl AppState {
         }
 
         // Create fresh context
-        let new_context = Context {
-            name: context_name.to_string(),
-            messages: Vec::new(),
-            created_at: now_timestamp(),
-            updated_at: 0,
-            summary: String::new(),
-        };
+        let new_context = Context::new(context_name);
 
         self.save_context(&new_context)?;
         Ok(())
