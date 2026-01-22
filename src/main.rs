@@ -492,23 +492,21 @@ async fn main() -> io::Result<()> {
     let cli_json_output = args.iter().any(|a| a == "--json-output");
 
     if is_json_config {
-        // JSON mode: read from stdin
+        // JSON mode: read from stdin and parse directly to ChibiInput
         let mut json_str = String::new();
         io::stdin().read_to_string(&mut json_str)?;
 
-        let json_input = json_input::JsonInput::from_str(&json_str)?;
+        let mut input = json_input::from_str(&json_str)?;
 
         // Handle help and version early
-        if json_input.is_help() {
+        if matches!(input.command, Command::ShowHelp) {
             cli::Cli::print_help();
             return Ok(());
         }
-        if json_input.is_version() {
+        if matches!(input.command, Command::ShowVersion) {
             println!("chibi {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
-
-        let mut input = json_input.to_input()?;
 
         // CLI --json-output flag also sets json_output mode
         if cli_json_output {

@@ -5,9 +5,11 @@
 //! or JSON input.
 
 use crate::cli::Inspectable;
+use serde::{Deserialize, Serialize};
 
 /// What operation to perform (mutually exclusive commands)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Command {
     /// Send a prompt to the LLM
     SendPrompt { prompt: String },
@@ -48,18 +50,22 @@ pub enum Command {
 }
 
 /// Behavioral modifiers (flags that affect how commands run)
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Flags {
     /// Show verbose output (-v)
+    #[serde(default)]
     pub verbose: bool,
     /// Output in JSON format (--json-output)
+    #[serde(default)]
     pub json_output: bool,
     /// Don't invoke the LLM (-x)
+    #[serde(default)]
     pub no_chibi: bool,
 }
 
 /// Context selection mode
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContextSelection {
     /// Use the current context (no switch)
     Current,
@@ -67,10 +73,15 @@ pub enum ContextSelection {
     Switch {
         name: String,
         /// Whether to persist the switch to state.json
+        #[serde(default = "default_true")]
         persistent: bool,
     },
     /// Use a context transiently (-C)
     Transient { name: String },
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for ContextSelection {
@@ -80,7 +91,8 @@ impl Default for ContextSelection {
 }
 
 /// Username override mode
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum UsernameOverride {
     /// Persistent username (-u): saves to local.toml
     Persistent(String),
@@ -90,15 +102,18 @@ pub enum UsernameOverride {
 
 /// Unified input from CLI or JSON
 /// This is the main type that represents a fully parsed user request
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChibiInput {
     /// The command to execute
     pub command: Command,
     /// Behavioral flags
+    #[serde(default)]
     pub flags: Flags,
     /// Context selection
+    #[serde(default)]
     pub context: ContextSelection,
     /// Optional username override
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username_override: Option<UsernameOverride>,
 }
 
