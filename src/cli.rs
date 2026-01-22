@@ -3,7 +3,7 @@
 //! This module handles parsing command-line arguments and converting them
 //! to the unified `ChibiInput` format.
 
-use crate::input::{ChibiInput, Command, ContextSelection, Flags, UsernameOverride};
+use crate::input::{ChibiInput, Command, ContextSelection, DebugKey, Flags, UsernameOverride};
 use clap::Parser;
 use std::io::{self, BufRead, ErrorKind, IsTerminal};
 
@@ -216,6 +216,11 @@ pub struct Cli {
     /// Output in JSONL format
     #[arg(long = "json-output")]
     pub json_output: bool,
+
+    // === Debug options ===
+    /// Enable debug features (request-log, all)
+    #[arg(long = "debug", value_name = "KEY")]
+    pub debug: Option<String>,
 
     // === Help and version ===
     /// Show help
@@ -492,10 +497,14 @@ impl Cli {
             Command::NoOp
         };
 
+        // Parse debug key
+        let debug = self.debug.as_ref().and_then(|s| DebugKey::from_str(s));
+
         let flags = Flags {
             verbose: self.verbose,
             json_output: self.json_output,
             no_chibi,
+            debug,
         };
 
         Ok(ChibiInput {

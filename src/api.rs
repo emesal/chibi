@@ -1,5 +1,6 @@
 use crate::config::ResolvedConfig;
 use crate::context::{Context, InboxEntry, Message, now_timestamp};
+use crate::input::DebugKey;
 use crate::llm;
 use crate::output::OutputHandler;
 use crate::state::AppState;
@@ -7,9 +8,34 @@ use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode};
-use std::io::{self, ErrorKind};
+use std::fs::OpenOptions;
+use std::io::{self, ErrorKind, Write};
 use tokio::io::{AsyncWriteExt, stdout};
 use uuid::Uuid;
+
+/// Log an API request to requests.jsonl if debug logging is enabled
+fn log_request_if_enabled(
+    app: &AppState,
+    debug: Option<&DebugKey>,
+    request_body: &serde_json::Value,
+) {
+    let should_log = matches!(debug, Some(DebugKey::RequestLog) | Some(DebugKey::All));
+    if !should_log {
+        return;
+    }
+
+    let log_entry = serde_json::json!({
+        "timestamp": now_timestamp(),
+        "request": request_body,
+    });
+
+    let log_path = app.context_dir(&app.state.current_context).join("requests.jsonl");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+        if let Ok(json) = serde_json::to_string(&log_entry) {
+            let _ = writeln!(file, "{}", json);
+        }
+    }
+}
 
 /// Rolling compaction: strips messages and integrates them into the summary
 /// This is triggered automatically when context exceeds threshold
@@ -300,11 +326,18 @@ Output ONLY the updated summary, no preamble."#,
         .collect();
 
     // Update context with new summary and remaining messages
-    context.summary = new_summary;
+    context.summary = new_summary.clone();
     context.messages = remaining_messages;
     context.updated_at = now_timestamp();
 
-    // Save updated context
+    // Write compaction anchor to transcript (authoritative log)
+    let compaction_anchor = app.create_compaction_anchor(&context.name, &new_summary);
+    app.append_to_transcript(&context.name, &compaction_anchor)?;
+
+    // Mark context dirty so it rebuilds with new anchor on next load
+    app.mark_context_dirty(&context.name)?;
+
+    // Save updated context (summary.md, context_meta.json, etc.)
     app.save_current_context(&context)?;
 
     if verbose {
@@ -369,23 +402,20 @@ pub async fn compact_context_by_name(
         return Ok(());
     }
 
-    // For compacting other contexts, we'll do a simple clear + save summary
-    // (full LLM compaction would require more significant refactoring)
-    // Archive the messages to transcript
-    app.ensure_context_dir(context_name)?;
-    let transcript_path = app.transcript_file(context_name);
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&transcript_path)?;
+    // Archive to transcript.md for human readability
+    app.append_to_transcript_md(&context)?;
 
-    for msg in &context.messages {
-        if msg.role == "system" {
-            continue;
-        }
-        use std::io::Write;
-        writeln!(file, "[{}]: {}\n", msg.role.to_uppercase(), msg.content)?;
-    }
+    // Write compaction anchor to transcript.jsonl
+    // For non-current contexts without LLM, we use a simple "archived" summary
+    let simple_summary = format!(
+        "Context compacted. {} messages archived to transcript.",
+        context.messages.len()
+    );
+    let compaction_anchor = app.create_compaction_anchor(context_name, &simple_summary);
+    app.append_to_transcript(context_name, &compaction_anchor)?;
+
+    // Mark context dirty so it rebuilds with new anchor on next load
+    app.mark_context_dirty(context_name)?;
 
     // Create fresh context preserving summary
     let new_context = Context {
@@ -439,8 +469,8 @@ async fn compact_context_with_llm_internal(
     });
     let _ = tools::execute_hook(&tools, tools::HookPoint::PreCompact, &hook_data, verbose);
 
-    // Append to transcript before compacting
-    app.append_to_transcript(&context)?;
+    // Append to transcript.md before compacting (for archival)
+    app.append_to_transcript_md(&context)?;
 
     if print_message && verbose {
         eprintln!(
@@ -624,6 +654,13 @@ async fn compact_context_with_llm_internal(
         .messages
         .push(Message::new("assistant", acknowledgment));
 
+    // Write compaction anchor to transcript (authoritative log)
+    let compaction_anchor = app.create_compaction_anchor(&new_context.name, &summary);
+    app.append_to_transcript(&new_context.name, &compaction_anchor)?;
+
+    // Mark context dirty so it rebuilds with new anchor on next load
+    app.mark_context_dirty(&new_context.name)?;
+
     // Save the new context
     app.save_current_context(&new_context)?;
 
@@ -650,6 +687,7 @@ pub async fn send_prompt(
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
     json_output: bool,
+    debug: Option<&DebugKey>,
 ) -> io::Result<()> {
     let output = OutputHandler::new(json_output);
     send_prompt_with_depth(
@@ -661,6 +699,7 @@ pub async fn send_prompt(
         0,
         resolved_config,
         &output,
+        debug,
     )
     .await
 }
@@ -674,6 +713,7 @@ async fn send_prompt_with_depth(
     recursion_depth: usize,
     resolved_config: &ResolvedConfig,
     output: &OutputHandler,
+    debug: Option<&DebugKey>,
 ) -> io::Result<()> {
     if prompt.trim().is_empty() {
         return Err(io::Error::new(
@@ -720,9 +760,9 @@ async fn send_prompt_with_depth(
     // Add user message to in-memory context
     app.add_message(&mut context, "user".to_string(), final_prompt.clone());
 
-    // Append user message to context.jsonl (append-only)
+    // Append user message to both transcript.jsonl and context.jsonl (tandem write)
     let user_entry = app.create_user_message_entry(&final_prompt, &resolved_config.username);
-    app.append_to_jsonl_transcript(&user_entry)?;
+    app.append_to_current_transcript_and_context(&user_entry)?;
     output.emit(&user_entry)?;
 
     // Check if we need to warn about context window
@@ -899,6 +939,9 @@ async fn send_prompt_with_depth(
 
     // Tool call loop - keep going until we get a final text response
     loop {
+        // Log request if debug logging is enabled
+        log_request_if_enabled(app, debug, &request_body);
+
         let response = llm::send_streaming_request(
             &app.config.base_url,
             &app.config.api_key,
@@ -1177,13 +1220,13 @@ async fn send_prompt_with_depth(
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
 
-                // Log tool call and result to context.jsonl
+                // Log tool call and result to both transcript.jsonl and context.jsonl
                 let tool_call_entry = app.create_tool_call_entry(&tc.name, &tc.arguments);
-                app.append_to_jsonl_transcript(&tool_call_entry)?;
+                app.append_to_current_transcript_and_context(&tool_call_entry)?;
                 output.emit(&tool_call_entry)?;
 
                 let tool_result_entry = app.create_tool_result_entry(&tc.name, &tool_result);
-                app.append_to_jsonl_transcript(&tool_result_entry)?;
+                app.append_to_current_transcript_and_context(&tool_result_entry)?;
                 output.emit(&tool_result_entry)?;
 
                 // Execute post_tool hooks (observe only)
@@ -1214,9 +1257,9 @@ async fn send_prompt_with_depth(
         // Update in-memory context for this session
         app.add_message(&mut context, "assistant".to_string(), full_response.clone());
 
-        // Append assistant message to context.jsonl (append-only, no full rewrite)
+        // Append assistant message to both transcript.jsonl and context.jsonl (tandem write)
         let assistant_entry = app.create_assistant_message_entry(&full_response);
-        app.append_to_jsonl_transcript(&assistant_entry)?;
+        app.append_to_current_transcript_and_context(&assistant_entry)?;
         output.emit(&assistant_entry)?;
 
         // Execute post_message hooks (observe only)
@@ -1268,6 +1311,7 @@ async fn send_prompt_with_depth(
                 new_depth,
                 resolved_config,
                 output,
+                debug,
             ))
             .await;
         }

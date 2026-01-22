@@ -52,6 +52,26 @@ pub enum Command {
     NoOp,
 }
 
+/// Debug feature keys
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DebugKey {
+    /// Log all API requests to requests.jsonl
+    RequestLog,
+    /// Enable all debug features
+    All,
+}
+
+impl DebugKey {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "request-log" | "request_log" => Some(DebugKey::RequestLog),
+            "all" => Some(DebugKey::All),
+            _ => None,
+        }
+    }
+}
+
 /// Behavioral modifiers (flags that affect how commands run)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Flags {
@@ -64,6 +84,9 @@ pub struct Flags {
     /// Don't invoke the LLM (-x)
     #[serde(default)]
     pub no_chibi: bool,
+    /// Debug feature to enable
+    #[serde(default)]
+    pub debug: Option<DebugKey>,
 }
 
 /// Context selection mode

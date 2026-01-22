@@ -107,6 +107,22 @@ pub fn now_timestamp() -> u64 {
         .as_secs()
 }
 
+// Entry type constants
+pub const ENTRY_TYPE_MESSAGE: &str = "message";
+pub const ENTRY_TYPE_TOOL_CALL: &str = "tool_call";
+pub const ENTRY_TYPE_TOOL_RESULT: &str = "tool_result";
+
+// Anchor entry types (context.jsonl[0])
+pub const ENTRY_TYPE_CONTEXT_CREATED: &str = "context_created";
+pub const ENTRY_TYPE_COMPACTION: &str = "compaction";
+pub const ENTRY_TYPE_ARCHIVAL: &str = "archival";
+
+// System prompt entry type (context.jsonl[1])
+pub const ENTRY_TYPE_SYSTEM_PROMPT: &str = "system_prompt";
+
+// Change event (transcript only)
+pub const ENTRY_TYPE_SYSTEM_PROMPT_CHANGED: &str = "system_prompt_changed";
+
 /// Entry for JSONL transcript file (now also context.jsonl)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptEntry {
@@ -115,7 +131,60 @@ pub struct TranscriptEntry {
     pub from: String,
     pub to: String,
     pub content: String,
-    pub entry_type: String, // "message", "tool_call", "tool_result", "compaction"
+    pub entry_type: String,
+    /// Optional metadata for anchor entries (summary, hash, etc.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<EntryMetadata>,
+}
+
+impl TranscriptEntry {
+    /// Create a new transcript entry with auto-generated ID and current timestamp
+    #[allow(dead_code)]
+    pub fn new(from: impl Into<String>, to: impl Into<String>, content: impl Into<String>, entry_type: impl Into<String>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: from.into(),
+            to: to.into(),
+            content: content.into(),
+            entry_type: entry_type.into(),
+            metadata: None,
+        }
+    }
+
+    /// Create a new transcript entry with metadata
+    #[allow(dead_code)]
+    pub fn with_metadata(
+        from: impl Into<String>,
+        to: impl Into<String>,
+        content: impl Into<String>,
+        entry_type: impl Into<String>,
+        metadata: EntryMetadata,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: from.into(),
+            to: to.into(),
+            content: content.into(),
+            entry_type: entry_type.into(),
+            metadata: Some(metadata),
+        }
+    }
+}
+
+/// Metadata for special entries (anchors, system prompts)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntryMetadata {
+    /// Summary content for compaction anchors
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// SHA256 hash for system prompt entries
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    /// Reference to the transcript entry ID this anchor corresponds to
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript_anchor_id: Option<String>,
 }
 
 /// Metadata for context (stored in context_meta.json)

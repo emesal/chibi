@@ -62,6 +62,7 @@ impl OutputHandler {
                 to: "user".to_string(),
                 content: message.to_string(),
                 entry_type: "diagnostic".to_string(),
+                metadata: None,
             };
             if let Ok(json) = serde_json::to_string(&entry) {
                 eprintln!("{}", json);
@@ -83,6 +84,7 @@ impl OutputHandler {
                 to: "user".to_string(),
                 content: message.to_string(),
                 entry_type: "diagnostic".to_string(),
+                metadata: None,
             };
             if let Ok(json) = serde_json::to_string(&entry) {
                 eprintln!("{}", json);
@@ -112,6 +114,7 @@ impl OutputHandler {
                 to: "user".to_string(),
                 content: content.to_string(),
                 entry_type: "result".to_string(),
+                metadata: None,
             };
             if let Ok(json) = serde_json::to_string(&entry) {
                 println!("{}", json);
@@ -148,6 +151,7 @@ mod tests {
             to: "assistant".to_string(),
             content: "Hello".to_string(),
             entry_type: "message".to_string(),
+            metadata: None,
         };
         // Should not panic
         let _ = handler.emit(&entry);
@@ -163,6 +167,7 @@ mod tests {
             to: "assistant".to_string(),
             content: "Hello".to_string(),
             entry_type: "message".to_string(),
+            metadata: None,
         };
         // Should not panic (no-op in normal mode)
         let _ = handler.emit(&entry);

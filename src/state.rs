@@ -152,8 +152,26 @@ impl AppState {
         self.context_dir(name).join("context_meta.json")
     }
 
-    pub fn transcript_file(&self, name: &str) -> PathBuf {
+    /// Path to human-readable transcript (transcript.md)
+    pub fn transcript_md_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("transcript.md")
+    }
+
+    /// Alias for transcript_md_file (backwards compatibility)
+    pub fn transcript_file(&self, name: &str) -> PathBuf {
+        self.transcript_md_file(name)
+    }
+
+    /// Path to JSONL transcript (transcript.jsonl) - the authoritative log
+    pub fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("transcript.jsonl")
+    }
+
+    /// Path to dirty context marker file (.dirty)
+    /// A "dirty" context has a stale prefix (anchor + system prompt) that needs rebuilding.
+    /// A "clean" context has a valid prefix that caches well.
+    pub fn dirty_marker_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join(".dirty")
     }
 
     pub fn summary_file(&self, name: &str) -> PathBuf {
@@ -163,6 +181,42 @@ impl AppState {
     pub fn ensure_context_dir(&self, name: &str) -> io::Result<()> {
         let dir = self.context_dir(name);
         fs::create_dir_all(&dir)
+    }
+
+    // === Context Dirty/Clean State ===
+    //
+    // A context is "clean" when its context.jsonl prefix (anchor + system prompt entries)
+    // matches the current state and caches well. A context becomes "dirty" when something
+    // changes that requires rebuilding the prefix (e.g., system prompt change, compaction).
+    // The .dirty marker file indicates a dirty context that needs rebuilding on next load.
+
+    /// Check if the context is dirty (needs prefix rebuild)
+    pub fn is_context_dirty(&self, name: &str) -> bool {
+        self.dirty_marker_file(name).exists()
+    }
+
+    /// Mark the context as dirty (triggers rebuild on next load)
+    pub fn mark_context_dirty(&self, name: &str) -> io::Result<()> {
+        self.ensure_context_dir(name)?;
+        let marker_path = self.dirty_marker_file(name);
+        fs::write(&marker_path, "")
+    }
+
+    /// Mark the context as clean (remove dirty marker after rebuild)
+    pub fn mark_context_clean(&self, name: &str) -> io::Result<()> {
+        let marker_path = self.dirty_marker_file(name);
+        if marker_path.exists() {
+            fs::remove_file(&marker_path)?;
+        }
+        Ok(())
+    }
+
+    /// Compute SHA256 hash of system prompt content
+    pub fn compute_system_prompt_hash(&self, content: &str) -> String {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("{:x}", hasher.finalize())
     }
 
     pub fn load_context(&self, name: &str) -> io::Result<Context> {
@@ -188,6 +242,12 @@ impl AppState {
 
     /// Load context from the new JSONL format
     fn load_context_from_jsonl(&self, name: &str) -> io::Result<Context> {
+        // Check if prefix is invalidated and rebuild if needed
+        if self.is_context_dirty(name) {
+            self.rebuild_context_from_transcript(name)?;
+            self.mark_context_clean(name)?;
+        }
+
         let entries = self.read_context_entries(name)?;
         let meta = self.load_context_meta(name)?;
 
@@ -215,6 +275,121 @@ impl AppState {
             updated_at,
             summary,
         })
+    }
+
+    /// Rebuild context.jsonl from transcript.jsonl
+    /// This creates a fresh context.jsonl with:
+    /// - [0] anchor entry (context_created or latest compaction/archival from transcript)
+    /// - [1] system_prompt entry with current content and hash
+    /// - [2..] entries from transcript since the anchor
+    pub fn rebuild_context_from_transcript(&self, name: &str) -> io::Result<()> {
+        use crate::context::{
+            EntryMetadata, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION, ENTRY_TYPE_CONTEXT_CREATED,
+            ENTRY_TYPE_SYSTEM_PROMPT,
+        };
+
+        // Read transcript entries
+        let transcript_entries = self.read_transcript_entries(name)?;
+
+        // Find the most recent anchor in the transcript
+        let anchor_index = transcript_entries
+            .iter()
+            .rposition(|e| {
+                e.entry_type == ENTRY_TYPE_CONTEXT_CREATED
+                    || e.entry_type == ENTRY_TYPE_COMPACTION
+                    || e.entry_type == ENTRY_TYPE_ARCHIVAL
+            });
+
+        // Determine anchor entry and entries to include
+        let (anchor_entry, entries_after_anchor) = match anchor_index {
+            Some(idx) => {
+                // Use existing anchor from transcript
+                let anchor = transcript_entries[idx].clone();
+                let entries: Vec<_> = transcript_entries[idx + 1..]
+                    .iter()
+                    .filter(|e| {
+                        // Exclude system_prompt_changed events from context
+                        e.entry_type != crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED
+                    })
+                    .cloned()
+                    .collect();
+                (anchor, entries)
+            }
+            None => {
+                // No anchor found, create context_created anchor
+                let meta = self.load_context_meta(name).unwrap_or_default();
+                let anchor = TranscriptEntry {
+                    id: Uuid::new_v4().to_string(),
+                    timestamp: meta.created_at,
+                    from: "system".to_string(),
+                    to: name.to_string(),
+                    content: "Context created".to_string(),
+                    entry_type: ENTRY_TYPE_CONTEXT_CREATED.to_string(),
+                    metadata: None,
+                };
+                // Include all transcript entries (excluding system_prompt_changed)
+                let entries: Vec<_> = transcript_entries
+                    .iter()
+                    .filter(|e| e.entry_type != crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED)
+                    .cloned()
+                    .collect();
+                (anchor, entries)
+            }
+        };
+
+        // Load current system prompt and compute hash
+        let system_prompt_content = self.load_system_prompt_for(name)?;
+        let system_prompt_hash = self.compute_system_prompt_hash(&system_prompt_content);
+
+        let system_prompt_entry = TranscriptEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: "system".to_string(),
+            to: name.to_string(),
+            content: system_prompt_content,
+            entry_type: ENTRY_TYPE_SYSTEM_PROMPT.to_string(),
+            metadata: Some(EntryMetadata {
+                summary: None,
+                hash: Some(system_prompt_hash),
+                transcript_anchor_id: Some(anchor_entry.id.clone()),
+            }),
+        };
+
+        // Build the complete context entries: anchor + system_prompt + conversation entries
+        let mut context_entries = vec![anchor_entry, system_prompt_entry];
+        context_entries.extend(entries_after_anchor);
+
+        // Write to context.jsonl (full rewrite)
+        self.write_context_entries(name, &context_entries)?;
+
+        Ok(())
+    }
+
+    /// Read all entries from transcript.jsonl
+    pub fn read_transcript_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
+        let path = self.transcript_jsonl_file(name);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = File::open(&path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str(&line) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => {
+                    eprintln!("[WARN] Skipping malformed transcript entry: {}", e);
+                }
+            }
+        }
+
+        Ok(entries)
     }
 
     /// Migrate from old context.json format to new context.jsonl format
@@ -355,7 +530,7 @@ impl AppState {
     fn entries_to_messages(&self, entries: &[TranscriptEntry]) -> Vec<Message> {
         entries
             .iter()
-            .filter(|e| e.entry_type == "message")
+            .filter(|e| e.entry_type == crate::context::ENTRY_TYPE_MESSAGE)
             .map(|e| {
                 let role = if e.to == "user" {
                     "assistant".to_string()
@@ -392,7 +567,8 @@ impl AppState {
                     from,
                     to,
                     content: m.content.clone(),
-                    entry_type: "message".to_string(),
+                    entry_type: crate::context::ENTRY_TYPE_MESSAGE.to_string(),
+                    metadata: None,
                 }
             })
             .collect()
@@ -401,13 +577,33 @@ impl AppState {
     pub fn save_context(&self, context: &Context) -> io::Result<()> {
         self.ensure_context_dir(&context.name)?;
 
+        // Check if this is a brand new context (no transcript.jsonl exists yet)
+        let transcript_path = self.transcript_jsonl_file(&context.name);
+        let is_new_context = !transcript_path.exists();
+
         // Save metadata (created_at)
         let meta = ContextMeta {
             created_at: context.created_at,
         };
         self.save_context_meta(&context.name, &meta)?;
 
+        // For brand new contexts, write context_created anchor to transcript.
+        // Don't mark dirty - new contexts don't need a rebuild since they're being
+        // created fresh. The anchor is just for transcript history.
+        if is_new_context {
+            let anchor = self.create_context_created_anchor(&context.name);
+            self.append_to_transcript(&context.name, &anchor)?;
+
+            // Also write the initial messages to transcript so they're preserved
+            let entries = self.messages_to_entries(&context.messages, &context.name);
+            for entry in &entries {
+                self.append_to_transcript(&context.name, entry)?;
+            }
+        }
+
         // Convert messages to entries and write to JSONL
+        // Note: This is a full rewrite. If context is dirty, the next load will rebuild
+        // with proper anchor + system_prompt prefix from transcript.
         let entries = self.messages_to_entries(&context.messages, &context.name);
         self.write_context_entries(&context.name, &entries)?;
 
@@ -423,12 +619,13 @@ impl AppState {
         Ok(())
     }
 
-    pub fn append_to_transcript(&self, context: &Context) -> io::Result<()> {
+    /// Append all context messages to human-readable transcript.md
+    pub fn append_to_transcript_md(&self, context: &Context) -> io::Result<()> {
         self.ensure_context_dir(&context.name)?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.transcript_file(&context.name))?;
+            .open(self.transcript_md_file(&context.name))?;
 
         for msg in &context.messages {
             // Skip system messages to avoid cluttering transcript with boilerplate
@@ -439,6 +636,33 @@ impl AppState {
         }
 
         Ok(())
+    }
+
+    /// Append a single entry to transcript.jsonl (the authoritative log)
+    pub fn append_to_transcript(&self, context_name: &str, entry: &TranscriptEntry) -> io::Result<()> {
+        self.ensure_context_dir(context_name)?;
+        let path = self.transcript_jsonl_file(context_name);
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+
+        let json = serde_json::to_string(entry)
+            .map_err(|e| io::Error::other(format!("Failed to serialize transcript entry: {}", e)))?;
+        writeln!(file, "{}", json)?;
+        Ok(())
+    }
+
+    /// Append an entry to both transcript.jsonl and context.jsonl (tandem write)
+    /// This is the primary method for recording new events during normal operation.
+    pub fn append_to_transcript_and_context(&self, context_name: &str, entry: &TranscriptEntry) -> io::Result<()> {
+        // Write to authoritative transcript first
+        self.append_to_transcript(context_name, entry)?;
+        // Then append to context (LLM window)
+        self.append_context_entry(context_name, entry)?;
+        Ok(())
+    }
+
+    /// Append an entry to both transcript and context for the current context
+    pub fn append_to_current_transcript_and_context(&self, entry: &TranscriptEntry) -> io::Result<()> {
+        self.append_to_transcript_and_context(&self.state.current_context, entry)
     }
 
     pub fn get_current_context(&self) -> io::Result<Context> {
@@ -478,8 +702,15 @@ impl AppState {
             return Ok(());
         }
 
-        // Append to transcript before clearing
-        self.append_to_transcript(&context)?;
+        // Append to transcript.md before clearing (for human-readable archival)
+        self.append_to_transcript_md(&context)?;
+
+        // Write archival anchor to transcript.jsonl
+        let archival_anchor = self.create_archival_anchor(&context.name);
+        self.append_to_transcript(&context.name, &archival_anchor)?;
+
+        // Mark context dirty so it rebuilds with new anchor on next load
+        self.mark_context_dirty(&context.name)?;
 
         // Create fresh context (preserving nothing - full clear)
         let new_context = Context::new(self.state.current_context.clone());
@@ -623,10 +854,46 @@ impl AppState {
     }
 
     /// Set a custom system prompt for a specific context.
+    /// This also logs a system_prompt_changed event to transcript and invalidates the prefix.
     pub fn set_system_prompt_for(&self, context_name: &str, content: &str) -> io::Result<()> {
+        use crate::context::{EntryMetadata, ENTRY_TYPE_SYSTEM_PROMPT_CHANGED};
+
         self.ensure_context_dir(context_name)?;
         let prompt_path = self.context_prompt_file(context_name);
-        fs::write(&prompt_path, content)
+
+        // Check if content actually changed
+        let old_content = if prompt_path.exists() {
+            fs::read_to_string(&prompt_path).ok()
+        } else {
+            None
+        };
+
+        fs::write(&prompt_path, content)?;
+
+        // Only log change and invalidate if content actually changed
+        if old_content.as_deref() != Some(content) {
+            // Log system_prompt_changed event to transcript
+            let hash = self.compute_system_prompt_hash(content);
+            let entry = TranscriptEntry {
+                id: Uuid::new_v4().to_string(),
+                timestamp: now_timestamp(),
+                from: "system".to_string(),
+                to: context_name.to_string(),
+                content: "System prompt updated".to_string(),
+                entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
+                metadata: Some(EntryMetadata {
+                    summary: None,
+                    hash: Some(hash),
+                    transcript_anchor_id: None,
+                }),
+            };
+            self.append_to_transcript(context_name, &entry)?;
+
+            // Invalidate prefix so context.jsonl will be rebuilt on next load
+            self.mark_context_dirty(context_name)?;
+        }
+
+        Ok(())
     }
 
     /// Load the reflection content from ~/.chibi/prompts/reflection.md
@@ -890,11 +1157,6 @@ impl AppState {
         Ok(resolved)
     }
 
-    /// Append an entry to the context (context.jsonl) - this replaces append_to_jsonl_transcript
-    pub fn append_to_jsonl_transcript(&self, entry: &TranscriptEntry) -> io::Result<()> {
-        self.append_context_entry(&self.state.current_context, entry)
-    }
-
     /// Read all entries from the context file (context.jsonl) - unified with transcript
     pub fn read_jsonl_transcript(&self, context_name: &str) -> io::Result<Vec<TranscriptEntry>> {
         self.read_context_entries(context_name)
@@ -908,7 +1170,8 @@ impl AppState {
             from: username.to_string(),
             to: self.state.current_context.clone(),
             content: content.to_string(),
-            entry_type: "message".to_string(),
+            entry_type: crate::context::ENTRY_TYPE_MESSAGE.to_string(),
+            metadata: None,
         }
     }
 
@@ -920,7 +1183,8 @@ impl AppState {
             from: self.state.current_context.clone(),
             to: "user".to_string(),
             content: content.to_string(),
-            entry_type: "message".to_string(),
+            entry_type: crate::context::ENTRY_TYPE_MESSAGE.to_string(),
+            metadata: None,
         }
     }
 
@@ -932,7 +1196,8 @@ impl AppState {
             from: self.state.current_context.clone(),
             to: tool_name.to_string(),
             content: arguments.to_string(),
-            entry_type: "tool_call".to_string(),
+            entry_type: crate::context::ENTRY_TYPE_TOOL_CALL.to_string(),
+            metadata: None,
         }
     }
 
@@ -944,7 +1209,56 @@ impl AppState {
             from: tool_name.to_string(),
             to: self.state.current_context.clone(),
             content: result.to_string(),
-            entry_type: "tool_result".to_string(),
+            entry_type: crate::context::ENTRY_TYPE_TOOL_RESULT.to_string(),
+            metadata: None,
+        }
+    }
+
+    // === Anchor Entry Creation ===
+
+    /// Create a context_created anchor entry
+    pub fn create_context_created_anchor(&self, context_name: &str) -> TranscriptEntry {
+        use crate::context::ENTRY_TYPE_CONTEXT_CREATED;
+        TranscriptEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: "system".to_string(),
+            to: context_name.to_string(),
+            content: "Context created".to_string(),
+            entry_type: ENTRY_TYPE_CONTEXT_CREATED.to_string(),
+            metadata: None,
+        }
+    }
+
+    /// Create a compaction anchor entry with summary
+    pub fn create_compaction_anchor(&self, context_name: &str, summary: &str) -> TranscriptEntry {
+        use crate::context::{EntryMetadata, ENTRY_TYPE_COMPACTION};
+        TranscriptEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: "system".to_string(),
+            to: context_name.to_string(),
+            content: "Context compacted".to_string(),
+            entry_type: ENTRY_TYPE_COMPACTION.to_string(),
+            metadata: Some(EntryMetadata {
+                summary: Some(summary.to_string()),
+                hash: None,
+                transcript_anchor_id: None,
+            }),
+        }
+    }
+
+    /// Create an archival anchor entry
+    pub fn create_archival_anchor(&self, context_name: &str) -> TranscriptEntry {
+        use crate::context::ENTRY_TYPE_ARCHIVAL;
+        TranscriptEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: "system".to_string(),
+            to: context_name.to_string(),
+            content: "Context archived/cleared".to_string(),
+            entry_type: ENTRY_TYPE_ARCHIVAL.to_string(),
+            metadata: None,
         }
     }
 
@@ -1424,7 +1738,7 @@ mod tests {
         assert_eq!(entry.from, "alice");
         assert_eq!(entry.to, "default");
         assert_eq!(entry.content, "Hello");
-        assert_eq!(entry.entry_type, "message");
+        assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
     }
 
     #[test]
@@ -1435,7 +1749,7 @@ mod tests {
         assert_eq!(entry.from, "default");
         assert_eq!(entry.to, "user");
         assert_eq!(entry.content, "Hi there!");
-        assert_eq!(entry.entry_type, "message");
+        assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
     }
 
     #[test]
@@ -1445,7 +1759,7 @@ mod tests {
 
         assert_eq!(entry.from, "default");
         assert_eq!(entry.to, "web_search");
-        assert_eq!(entry.entry_type, "tool_call");
+        assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_TOOL_CALL);
     }
 
     #[test]
@@ -1455,6 +1769,6 @@ mod tests {
 
         assert_eq!(entry.from, "web_search");
         assert_eq!(entry.to, "default");
-        assert_eq!(entry.entry_type, "tool_result");
+        assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_TOOL_RESULT);
     }
 }
