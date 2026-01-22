@@ -58,6 +58,8 @@ pub enum Command {
 pub enum DebugKey {
     /// Log all API requests to requests.jsonl
     RequestLog,
+    /// Log response metadata (usage stats, model info) to response_meta.jsonl
+    ResponseMeta,
     /// Enable all debug features
     All,
 }
@@ -66,6 +68,7 @@ impl DebugKey {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "request-log" | "request_log" => Some(DebugKey::RequestLog),
+            "response-meta" | "response_meta" => Some(DebugKey::ResponseMeta),
             "all" => Some(DebugKey::All),
             _ => None,
         }

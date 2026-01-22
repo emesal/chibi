@@ -32,3 +32,6 @@
 ### Reasoning tokens
 - need to research and make use of:
   https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#enable-reasoning-with-default-config
+
+### TODO in api.rs
+- line 42. Integrate (currently dead) function log_response_meta_if_enabled() with the streaming response parser to capture usage stats
