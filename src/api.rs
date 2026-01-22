@@ -1,5 +1,6 @@
 use crate::config::ResolvedConfig;
 use crate::context::{Context, InboxEntry, Message, now_timestamp};
+use crate::llm;
 use crate::output::OutputHandler;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
@@ -867,30 +868,14 @@ async fn send_prompt_with_depth(
     let mut should_recurse = false;
     let mut recurse_note = String::new();
 
-    let client = Client::new();
-
     // Tool call loop - keep going until we get a final text response
     loop {
-        let response = client
-            .post(&app.config.base_url)
-            .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
-            .header(CONTENT_TYPE, "application/json")
-            .body(request_body.to_string())
-            .send()
-            .await
-            .map_err(|e| io::Error::other(format!("Failed to send request: {}", e)))?;
-
-        if response.status() != StatusCode::OK {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(io::Error::other(format!(
-                "API error ({}): {}",
-                status, body
-            )));
-        }
+        let response = llm::send_streaming_request(
+            &app.config.base_url,
+            &app.config.api_key,
+            request_body.clone(),
+        )
+        .await?;
 
         let mut stream = response.bytes_stream();
         let mut stdout = stdout();
@@ -899,7 +884,7 @@ async fn send_prompt_with_depth(
         let json_mode = output.is_json_mode();
 
         // Tool call accumulation
-        let mut tool_calls: Vec<ToolCallAccumulator> = Vec::new();
+        let mut tool_calls: Vec<llm::ToolCallAccumulator> = Vec::new();
         let mut has_tool_calls = false;
 
         while let Some(chunk_result) = stream.next().await {
@@ -954,7 +939,7 @@ async fn send_prompt_with_depth(
                                 let index = tc["index"].as_u64().unwrap_or(0) as usize;
 
                                 while tool_calls.len() <= index {
-                                    tool_calls.push(ToolCallAccumulator::default());
+                                    tool_calls.push(llm::ToolCallAccumulator::default());
                                 }
 
                                 if let Some(id) = tc["id"].as_str() {
@@ -1262,9 +1247,4 @@ async fn send_prompt_with_depth(
     }
 }
 
-#[derive(Default)]
-struct ToolCallAccumulator {
-    id: String,
-    name: String,
-    arguments: String,
-}
+

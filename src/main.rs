@@ -4,6 +4,7 @@ mod config;
 mod context;
 mod input;
 mod json_input;
+mod llm;
 mod lock;
 mod output;
 mod state;
