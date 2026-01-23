@@ -65,7 +65,7 @@ chibi -v "Read my Cargo.toml"
 <div align="center">
     <img src="docs/images/explain_this.jpeg" width="80%" style="margin: 2em; padding: 1em; border: 2pt solid #999; border-radius: 0.5em;">
     <br>
-    <em>Soon you will chibis scurrying in all your pipes!</em>
+    <em>Soon chibis will be scurrying in all your pipes!</em>
 </div>
 
 ## Documentation
