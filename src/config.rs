@@ -7,7 +7,7 @@ pub const DEFAULT_API_URL: &str = "https://openrouter.ai/api/v1/chat/completions
 // API Parameters Types
 // ============================================================================
 
-/// Reasoning effort level for models that support it (e.g., OpenAI o3)
+/// Reasoning effort level for models that support it (e.g., OpenAI o3, Grok)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
@@ -23,12 +23,57 @@ pub enum ReasoningEffort {
 impl ReasoningEffort {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ReasoningEffort::XHigh => "x-high",
+            ReasoningEffort::XHigh => "xhigh",
             ReasoningEffort::High => "high",
             ReasoningEffort::Medium => "medium",
             ReasoningEffort::Low => "low",
             ReasoningEffort::Minimal => "minimal",
             ReasoningEffort::None => "none",
+        }
+    }
+}
+
+/// Reasoning configuration for models that support extended thinking
+/// Either `effort` OR `max_tokens` should be set, not both (mutually exclusive)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReasoningConfig {
+    /// Effort level (mutually exclusive with max_tokens)
+    /// Supported by: OpenAI o1/o3/GPT-5 series, Grok models
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ReasoningEffort>,
+
+    /// Maximum tokens for reasoning (mutually exclusive with effort)
+    /// Supported by: Gemini thinking models, Anthropic, some Qwen models
+    /// Anthropic: min 1024, max 128000
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<usize>,
+
+    /// Exclude reasoning from response (model still reasons internally)
+    /// Default: false
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<bool>,
+
+    /// Explicitly enable reasoning (defaults to medium effort if true)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+impl ReasoningConfig {
+    /// Check if this config has any values set
+    pub fn is_empty(&self) -> bool {
+        self.effort.is_none()
+            && self.max_tokens.is_none()
+            && self.exclude.is_none()
+            && self.enabled.is_none()
+    }
+
+    /// Merge with another ReasoningConfig, where `other` takes precedence
+    pub fn merge_with(&self, other: &ReasoningConfig) -> ReasoningConfig {
+        ReasoningConfig {
+            effort: other.effort.or(self.effort),
+            max_tokens: other.max_tokens.or(self.max_tokens),
+            exclude: other.exclude.or(self.exclude),
+            enabled: other.enabled.or(self.enabled),
         }
     }
 }
@@ -79,9 +124,10 @@ pub struct ApiParams {
     /// Enable prompt caching (default: true, mainly for Anthropic models)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_caching: Option<bool>,
-    /// Reasoning effort level for models that support it
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Reasoning configuration (effort, max_tokens, exclude, enabled)
+    /// Use either `reasoning.effort` OR `reasoning.max_tokens`, not both
+    #[serde(default, skip_serializing_if = "ReasoningConfig::is_empty")]
+    pub reasoning: ReasoningConfig,
 
     // Generation control
     /// Sampling temperature (0.0 to 2.0)
@@ -127,7 +173,10 @@ impl ApiParams {
     pub fn defaults() -> Self {
         Self {
             prompt_caching: Some(true),
-            reasoning_effort: Some(ReasoningEffort::Medium),
+            reasoning: ReasoningConfig {
+                effort: Some(ReasoningEffort::Medium),
+                ..Default::default()
+            },
             parallel_tool_calls: Some(true),
             temperature: None,
             max_tokens: None,
@@ -145,7 +194,7 @@ impl ApiParams {
     pub fn merge_with(&self, other: &ApiParams) -> ApiParams {
         ApiParams {
             prompt_caching: other.prompt_caching.or(self.prompt_caching),
-            reasoning_effort: other.reasoning_effort.or(self.reasoning_effort),
+            reasoning: self.reasoning.merge_with(&other.reasoning),
             temperature: other.temperature.or(self.temperature),
             max_tokens: other.max_tokens.or(self.max_tokens),
             top_p: other.top_p.or(self.top_p),
@@ -437,7 +486,7 @@ mod tests {
     fn test_api_params_defaults() {
         let defaults = ApiParams::defaults();
         assert_eq!(defaults.prompt_caching, Some(true));
-        assert_eq!(defaults.reasoning_effort, Some(ReasoningEffort::Medium));
+        assert_eq!(defaults.reasoning.effort, Some(ReasoningEffort::Medium));
         assert_eq!(defaults.parallel_tool_calls, Some(true));
         assert!(defaults.temperature.is_none());
         assert!(defaults.max_tokens.is_none());
@@ -474,13 +523,15 @@ mod tests {
             temperature = 0.7
             max_tokens = 2000
             prompt_caching = false
-            reasoning_effort = "high"
+
+            [reasoning]
+            effort = "high"
         "#;
         let params: ApiParams = toml::from_str(toml_str).unwrap();
         assert_eq!(params.temperature, Some(0.7));
         assert_eq!(params.max_tokens, Some(2000));
         assert_eq!(params.prompt_caching, Some(false));
-        assert_eq!(params.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(params.reasoning.effort, Some(ReasoningEffort::High));
     }
 
     #[test]
@@ -507,13 +558,15 @@ mod tests {
 
             [api]
             temperature = 0.3
-            reasoning_effort = "high"
+
+            [api.reasoning]
+            effort = "high"
         "#;
         let local: LocalConfig = toml::from_str(toml_str).unwrap();
         assert!(local.api.is_some());
         let api = local.api.unwrap();
         assert_eq!(api.temperature, Some(0.3));
-        assert_eq!(api.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(api.reasoning.effort, Some(ReasoningEffort::High));
     }
 
     #[test]
@@ -523,19 +576,50 @@ mod tests {
             context_window = 200000
 
             [models."openai/o3".api]
-            reasoning_effort = "high"
             max_tokens = 8000
+
+            [models."openai/o3".api.reasoning]
+            effort = "high"
         "#;
         let config: ModelsConfig = toml::from_str(toml_str).unwrap();
         let o3 = config.models.get("openai/o3").unwrap();
         assert_eq!(o3.context_window, Some(200000));
-        assert_eq!(o3.api.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(o3.api.reasoning.effort, Some(ReasoningEffort::High));
         assert_eq!(o3.api.max_tokens, Some(8000));
     }
 
     #[test]
+    fn test_reasoning_config_with_max_tokens() {
+        let toml_str = r#"
+            max_tokens = 4000
+            exclude = true
+        "#;
+        let config: ReasoningConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.max_tokens, Some(4000));
+        assert_eq!(config.exclude, Some(true));
+        assert!(config.effort.is_none());
+    }
+
+    #[test]
+    fn test_reasoning_config_merge() {
+        let base = ReasoningConfig {
+            effort: Some(ReasoningEffort::Medium),
+            exclude: Some(false),
+            ..Default::default()
+        };
+        let override_cfg = ReasoningConfig {
+            effort: Some(ReasoningEffort::High),
+            ..Default::default()
+        };
+
+        let merged = base.merge_with(&override_cfg);
+        assert_eq!(merged.effort, Some(ReasoningEffort::High));
+        assert_eq!(merged.exclude, Some(false)); // base preserved
+    }
+
+    #[test]
     fn test_reasoning_effort_serialization() {
-        assert_eq!(ReasoningEffort::XHigh.as_str(), "x-high");
+        assert_eq!(ReasoningEffort::XHigh.as_str(), "xhigh");
         assert_eq!(ReasoningEffort::High.as_str(), "high");
         assert_eq!(ReasoningEffort::Medium.as_str(), "medium");
         assert_eq!(ReasoningEffort::Low.as_str(), "low");

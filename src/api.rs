@@ -39,8 +39,6 @@ fn log_request_if_enabled(
 }
 
 /// Log response metadata to response_meta.jsonl if debug logging is enabled
-/// TODO: Integrate this with the streaming response parser to capture usage stats
-#[allow(dead_code)]
 fn log_response_meta_if_enabled(
     app: &AppState,
     debug: Option<&DebugKey>,
@@ -154,9 +152,23 @@ fn build_request_body(
         body["response_format"] = serde_json::to_value(format).unwrap_or(json!(null));
     }
 
-    // Reasoning effort (OpenRouter-specific, for models like o3)
-    if let Some(ref effort) = api.reasoning_effort {
-        body["reasoning"] = json!({ "effort": effort.as_str() });
+    // Reasoning configuration (OpenRouter-specific)
+    // Either effort OR max_tokens can be set, plus optional exclude/enabled
+    if !api.reasoning.is_empty() {
+        let mut reasoning_obj = json!({});
+        if let Some(ref effort) = api.reasoning.effort {
+            reasoning_obj["effort"] = json!(effort.as_str());
+        }
+        if let Some(max_tokens) = api.reasoning.max_tokens {
+            reasoning_obj["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(exclude) = api.reasoning.exclude {
+            reasoning_obj["exclude"] = json!(exclude);
+        }
+        if let Some(enabled) = api.reasoning.enabled {
+            reasoning_obj["enabled"] = json!(enabled);
+        }
+        body["reasoning"] = reasoning_obj;
     }
 
     body
@@ -1067,6 +1079,9 @@ async fn send_prompt_with_depth(
         let mut tool_calls: Vec<llm::ToolCallAccumulator> = Vec::new();
         let mut has_tool_calls = false;
 
+        // Response metadata accumulation (usage stats, model info)
+        let mut response_meta: Option<serde_json::Value> = None;
+
         while let Some(chunk_result) = stream.next().await {
             let chunk =
                 chunk_result.map_err(|e| io::Error::other(format!("Stream error: {}", e)))?;
@@ -1082,6 +1097,25 @@ async fn send_prompt_with_depth(
 
                     let json: serde_json::Value = serde_json::from_str(data)
                         .map_err(|e| io::Error::other(format!("JSON parse error: {}", e)))?;
+
+                    // Capture response metadata (usage stats, model, id)
+                    // These typically appear in all chunks or the final chunk
+                    if json.get("usage").is_some()
+                        || json.get("model").is_some()
+                        || json.get("id").is_some()
+                    {
+                        let mut meta = response_meta.take().unwrap_or(json!({}));
+                        if let Some(usage) = json.get("usage") {
+                            meta["usage"] = usage.clone();
+                        }
+                        if let Some(model) = json.get("model") {
+                            meta["model"] = model.clone();
+                        }
+                        if let Some(id) = json.get("id") {
+                            meta["id"] = id.clone();
+                        }
+                        response_meta = Some(meta);
+                    }
 
                     if let Some(choices) = json["choices"].as_array()
                         && let Some(choice) = choices.first()
@@ -1138,6 +1172,11 @@ async fn send_prompt_with_depth(
                     }
                 }
             }
+        }
+
+        // Log response metadata if debug logging is enabled
+        if let Some(ref meta) = response_meta {
+            log_response_meta_if_enabled(app, debug, meta);
         }
 
         // If we have tool calls, execute them and continue the loop

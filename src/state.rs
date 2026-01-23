@@ -1072,14 +1072,6 @@ impl AppState {
         }
     }
 
-    /// Get context window limit for a model (from models.toml if available)
-    pub fn get_model_context_window(&self, model: &str) -> Option<usize> {
-        self.models_config
-            .models
-            .get(model)
-            .and_then(|m| m.context_window)
-    }
-
     /// Resolve the full configuration, applying overrides in order:
     /// 1. CLI flags (passed as parameters)
     /// 2. Context-local config (local.toml)
