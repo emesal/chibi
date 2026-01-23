@@ -692,11 +692,18 @@ impl AppState {
             name: context_name.to_string(),
             messages: Vec::new(),
             created_at: now_timestamp(),
-            updated_at: 0,
+            updated_at: now_timestamp(),  // Mark as updated (like clear_context does)
             summary: String::new(),
         };
 
         self.save_context(&new_context)?;
+
+        // Ensure the context is tracked in state (like clear_context does via save_current_context)
+        if !self.state.contexts.contains(&new_context.name) {
+            let mut new_state = self.state.clone();
+            new_state.contexts.push(new_context.name.clone());
+            new_state.save(&self.state_path)?;
+        }
         Ok(())
     }
 
