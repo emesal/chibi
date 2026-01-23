@@ -1,3 +1,10 @@
+### -d an -D should require y/N confirmation (disable via config)
+- consider s/delete/destroy/ for clarity
+
+### change max_recursion_limit default to 30 in PR #8 documentation
+
+### -n / --inspect flags should map to the config object
+
 ### per-context API
 - model can already be overridden
 
