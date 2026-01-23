@@ -3,7 +3,7 @@
 CLI tool for conversing with AI models via OpenRouter. Maintains conversation state across invocations for coherent multi-turn conversations directly from your terminal.
 
 <div align="center">
-    <img src="docs/images/cutethulu.svg" width="62%" style="margin: 1em; padding: 0.5em; border: 1pt solid gray;">o
+    <img src="docs/images/cutethulu.svg" width="62%" style="margin: 1em; padding: 0.5em; border: 1pt solid gray; border-radius: 0.5em;">
     <br>
     <em>Cutethulu, lead dev of chibi</em>
 </div>
@@ -62,7 +62,11 @@ chibi -c research "Find info about X"
 chibi -v "Read my Cargo.toml"
 ```
 
-![Chibi in all the tubes!](docs/images/explain_this.jpeg)
+<div align="center">
+    <img src="docs/images/explain_this.jpeg" width="62%" style="margin: 1em; padding: 0.5em; border: 1pt solid gray; border-radius: 0.5em;">
+    <br>
+    <em>Have chibis scurrying in all your pipes!</em>
+</div>
 
 ## Documentation
 
