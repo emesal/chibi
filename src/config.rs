@@ -199,7 +199,10 @@ impl ApiParams {
             max_tokens: other.max_tokens.or(self.max_tokens),
             top_p: other.top_p.or(self.top_p),
             stop: other.stop.clone().or_else(|| self.stop.clone()),
-            tool_choice: other.tool_choice.clone().or_else(|| self.tool_choice.clone()),
+            tool_choice: other
+                .tool_choice
+                .clone()
+                .or_else(|| self.tool_choice.clone()),
             parallel_tool_calls: other.parallel_tool_calls.or(self.parallel_tool_calls),
             frequency_penalty: other.frequency_penalty.or(self.frequency_penalty),
             presence_penalty: other.presence_penalty.or(self.presence_penalty),

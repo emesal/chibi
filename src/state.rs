@@ -213,7 +213,7 @@ impl AppState {
 
     /// Compute SHA256 hash of system prompt content
     pub fn compute_system_prompt_hash(&self, content: &str) -> String {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
         format!("{:x}", hasher.finalize())
@@ -284,21 +284,19 @@ impl AppState {
     /// - [2..] entries from transcript since the anchor
     pub fn rebuild_context_from_transcript(&self, name: &str) -> io::Result<()> {
         use crate::context::{
-            EntryMetadata, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION, ENTRY_TYPE_CONTEXT_CREATED,
-            ENTRY_TYPE_SYSTEM_PROMPT,
+            ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION, ENTRY_TYPE_CONTEXT_CREATED,
+            ENTRY_TYPE_SYSTEM_PROMPT, EntryMetadata,
         };
 
         // Read transcript entries
         let transcript_entries = self.read_transcript_entries(name)?;
 
         // Find the most recent anchor in the transcript
-        let anchor_index = transcript_entries
-            .iter()
-            .rposition(|e| {
-                e.entry_type == ENTRY_TYPE_CONTEXT_CREATED
-                    || e.entry_type == ENTRY_TYPE_COMPACTION
-                    || e.entry_type == ENTRY_TYPE_ARCHIVAL
-            });
+        let anchor_index = transcript_entries.iter().rposition(|e| {
+            e.entry_type == ENTRY_TYPE_CONTEXT_CREATED
+                || e.entry_type == ENTRY_TYPE_COMPACTION
+                || e.entry_type == ENTRY_TYPE_ARCHIVAL
+        });
 
         // Determine anchor entry and entries to include
         let (anchor_entry, entries_after_anchor) = match anchor_index {
@@ -639,20 +637,29 @@ impl AppState {
     }
 
     /// Append a single entry to transcript.jsonl (the authoritative log)
-    pub fn append_to_transcript(&self, context_name: &str, entry: &TranscriptEntry) -> io::Result<()> {
+    pub fn append_to_transcript(
+        &self,
+        context_name: &str,
+        entry: &TranscriptEntry,
+    ) -> io::Result<()> {
         self.ensure_context_dir(context_name)?;
         let path = self.transcript_jsonl_file(context_name);
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
-        let json = serde_json::to_string(entry)
-            .map_err(|e| io::Error::other(format!("Failed to serialize transcript entry: {}", e)))?;
+        let json = serde_json::to_string(entry).map_err(|e| {
+            io::Error::other(format!("Failed to serialize transcript entry: {}", e))
+        })?;
         writeln!(file, "{}", json)?;
         Ok(())
     }
 
     /// Append an entry to both transcript.jsonl and context.jsonl (tandem write)
     /// This is the primary method for recording new events during normal operation.
-    pub fn append_to_transcript_and_context(&self, context_name: &str, entry: &TranscriptEntry) -> io::Result<()> {
+    pub fn append_to_transcript_and_context(
+        &self,
+        context_name: &str,
+        entry: &TranscriptEntry,
+    ) -> io::Result<()> {
         // Write to authoritative transcript first
         self.append_to_transcript(context_name, entry)?;
         // Then append to context (LLM window)
@@ -661,7 +668,10 @@ impl AppState {
     }
 
     /// Append an entry to both transcript and context for the current context
-    pub fn append_to_current_transcript_and_context(&self, entry: &TranscriptEntry) -> io::Result<()> {
+    pub fn append_to_current_transcript_and_context(
+        &self,
+        entry: &TranscriptEntry,
+    ) -> io::Result<()> {
         self.append_to_transcript_and_context(&self.state.current_context, entry)
     }
 
@@ -856,7 +866,7 @@ impl AppState {
     /// Set a custom system prompt for a specific context.
     /// This also logs a system_prompt_changed event to transcript and invalidates the prefix.
     pub fn set_system_prompt_for(&self, context_name: &str, content: &str) -> io::Result<()> {
-        use crate::context::{EntryMetadata, ENTRY_TYPE_SYSTEM_PROMPT_CHANGED};
+        use crate::context::{ENTRY_TYPE_SYSTEM_PROMPT_CHANGED, EntryMetadata};
 
         self.ensure_context_dir(context_name)?;
         let prompt_path = self.context_prompt_file(context_name);
@@ -1248,7 +1258,7 @@ impl AppState {
 
     /// Create a compaction anchor entry with summary
     pub fn create_compaction_anchor(&self, context_name: &str, summary: &str) -> TranscriptEntry {
-        use crate::context::{EntryMetadata, ENTRY_TYPE_COMPACTION};
+        use crate::context::{ENTRY_TYPE_COMPACTION, EntryMetadata};
         TranscriptEntry {
             id: Uuid::new_v4().to_string(),
             timestamp: now_timestamp(),
@@ -1277,7 +1287,6 @@ impl AppState {
             metadata: None,
         }
     }
-
 }
 
 #[cfg(test)]

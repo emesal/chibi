@@ -68,7 +68,9 @@ fn log_request_if_enabled(
         "request": request_body,
     });
 
-    let log_path = app.context_dir(&app.state.current_context).join("requests.jsonl");
+    let log_path = app
+        .context_dir(&app.state.current_context)
+        .join("requests.jsonl");
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path)
         && let Ok(json) = serde_json::to_string(&log_entry)
     {
@@ -1075,8 +1077,7 @@ async fn send_prompt_with_depth(
     }
 
     // Build request with tools and API params from resolved config
-    let mut request_body =
-        build_request_body(resolved_config, &messages, Some(&all_tools), true);
+    let mut request_body = build_request_body(resolved_config, &messages, Some(&all_tools), true);
 
     // Track if we should recurse (continue_processing was called)
     let mut should_recurse = false;
@@ -1299,7 +1300,9 @@ async fn send_prompt_with_depth(
                 } else if tc.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
                     // Reflection tool called but reflection is disabled
                     "Error: Reflection tool is not enabled".to_string()
-                } else if let Some(builtin_result) = tools::execute_builtin_tool(app, &tc.name, &args) {
+                } else if let Some(builtin_result) =
+                    tools::execute_builtin_tool(app, &tc.name, &args)
+                {
                     // Handle built-in tools (todos, goals, reflection)
                     match builtin_result {
                         Ok(r) => r,

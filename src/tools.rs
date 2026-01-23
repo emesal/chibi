@@ -91,10 +91,7 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
             }
             Err(e) => {
                 if verbose {
-                    eprintln!(
-                        "[WARN] Cannot verify plugin path {:?}: {}",
-                        exec_path, e
-                    );
+                    eprintln!("[WARN] Cannot verify plugin path {:?}: {}", exec_path, e);
                 }
                 continue;
             }

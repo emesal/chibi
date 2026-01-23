@@ -114,7 +114,6 @@ fn default_true() -> bool {
     true
 }
 
-
 /// Username override mode
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

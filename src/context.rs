@@ -140,7 +140,12 @@ pub struct TranscriptEntry {
 impl TranscriptEntry {
     /// Create a new transcript entry with auto-generated ID and current timestamp
     #[allow(dead_code)]
-    pub fn new(from: impl Into<String>, to: impl Into<String>, content: impl Into<String>, entry_type: impl Into<String>) -> Self {
+    pub fn new(
+        from: impl Into<String>,
+        to: impl Into<String>,
+        content: impl Into<String>,
+        entry_type: impl Into<String>,
+    ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: now_timestamp(),
