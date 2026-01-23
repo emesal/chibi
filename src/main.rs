@@ -396,7 +396,9 @@ async fn execute_from_input(
                 api::compact_context_by_name(app, ctx_name, verbose).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
-                api::compact_context_with_llm_manual(app, verbose).await?;
+                // Compute resolved config for the current context
+                let resolved = app.resolve_config(None, None)?;
+                api::compact_context_with_llm_manual(app, &resolved, verbose).await?;
             }
             did_action = true;
         }

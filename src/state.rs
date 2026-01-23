@@ -1,4 +1,4 @@
-use crate::config::{Config, LocalConfig, ModelsConfig, ResolvedConfig};
+use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig};
 use crate::context::{
     Context, ContextMeta, ContextState, Message, TranscriptEntry, now_timestamp,
     validate_context_name,
@@ -1072,14 +1072,6 @@ impl AppState {
         }
     }
 
-    /// Get context window limit for a model (from models.toml if available)
-    pub fn get_model_context_window(&self, model: &str) -> Option<usize> {
-        self.models_config
-            .models
-            .get(model)
-            .and_then(|m| m.context_window)
-    }
-
     /// Resolve the full configuration, applying overrides in order:
     /// 1. CLI flags (passed as parameters)
     /// 2. Context-local config (local.toml)
@@ -1093,6 +1085,10 @@ impl AppState {
     ) -> io::Result<ResolvedConfig> {
         let local = self.load_local_config(&self.state.current_context)?;
 
+        // Start with defaults, then merge global config
+        let mut api_params = ApiParams::defaults();
+        api_params = api_params.merge_with(&self.config.api);
+
         // Start with global config values
         let mut resolved = ResolvedConfig {
             api_key: self.config.api_key.clone(),
@@ -1105,6 +1101,7 @@ impl AppState {
             max_recursion_depth: self.config.max_recursion_depth,
             username: self.config.username.clone(),
             reflection_enabled: self.config.reflection_enabled,
+            api: api_params,
         };
 
         // Apply local config overrides
@@ -1139,6 +1136,11 @@ impl AppState {
             resolved.reflection_enabled = reflection_enabled;
         }
 
+        // Apply context-level API params (Layer 3)
+        if let Some(ref local_api) = local.api {
+            resolved.api = resolved.api.merge_with(local_api);
+        }
+
         // Apply CLI overrides (highest priority)
         // Note: -u (persistent) should have been saved to local.toml before calling this
         // -U (temp) overrides for this invocation only
@@ -1148,10 +1150,24 @@ impl AppState {
             resolved.username = username.to_string();
         }
 
-        // Resolve model name and potentially override context window
+        // Resolve model name and potentially override context window + API params
         resolved.model = self.resolve_model_name(&resolved.model);
-        if let Some(context_window) = self.get_model_context_window(&resolved.model) {
-            resolved.context_window_limit = context_window;
+        if let Some(model_meta) = self.models_config.models.get(&resolved.model) {
+            // Apply model-level API params (Layer 2 - after global, before context)
+            // Note: We merge model params before context params because context should override model
+            // But we do this after context-level override for the rest of config, so we need to
+            // re-merge context params on top
+            let model_api = resolved.api.merge_with(&model_meta.api);
+            // Re-apply context-level API params on top of model params
+            resolved.api = if let Some(ref local_api) = local.api {
+                model_api.merge_with(local_api)
+            } else {
+                model_api
+            };
+
+            if let Some(context_window) = model_meta.context_window {
+                resolved.context_window_limit = context_window;
+            }
         }
 
         Ok(resolved)
@@ -1287,6 +1303,7 @@ mod tests {
             username: "testuser".to_string(),
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
+            api: ApiParams::default(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)

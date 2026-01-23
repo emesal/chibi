@@ -3,6 +3,7 @@
 //! This module handles HTTP requests to OpenRouter/compatible APIs,
 //! streaming response parsing, and raw message formatting.
 
+use crate::config::ResolvedConfig;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode};
 use std::io;
@@ -19,15 +20,14 @@ pub struct ToolCallAccumulator {
 ///
 /// Returns the raw response bytes stream for parsing
 pub async fn send_streaming_request(
-    base_url: &str,
-    api_key: &str,
+    config: &ResolvedConfig,
     request_body: serde_json::Value,
 ) -> io::Result<reqwest::Response> {
     let client = Client::new();
 
     let response = client
-        .post(base_url)
-        .header(AUTHORIZATION, format!("Bearer {}", api_key))
+        .post(&config.base_url)
+        .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
         .header(CONTENT_TYPE, "application/json")
         .body(request_body.to_string())
         .send()
