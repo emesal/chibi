@@ -3,7 +3,8 @@
 CLI tool for conversing with AI models via OpenRouter. Maintains conversation state across invocations for coherent multi-turn conversations directly from your terminal.
 
 <div align="center">
-    <img src="docs/images/cutethulu.svg" width="300" style="margin: 10px; border: 1pt solid gray;">
+    <img src="docs/images/cutethulu.svg" width="62%" style="margin: 1em; padding: 0.5em; border: 1pt solid gray;">o
+    <br>
     <em>Cutethulu, lead dev of chibi</em>
 </div>
 
