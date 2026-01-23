@@ -46,6 +46,9 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
         return Ok(tools);
     }
 
+    // Canonicalize plugins directory for path traversal protection
+    let plugins_dir_canonical = plugins_dir.canonicalize()?;
+
     let entries = fs::read_dir(plugins_dir)?;
 
     for entry in entries.flatten() {
@@ -71,6 +74,31 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
         } else {
             path.clone()
         };
+
+        // Security: Verify the executable path is within the plugins directory
+        // This prevents symlink attacks that could escape the plugins directory
+        match exec_path.canonicalize() {
+            Ok(canonical_exec) => {
+                if !canonical_exec.starts_with(&plugins_dir_canonical) {
+                    if verbose {
+                        eprintln!(
+                            "[WARN] Skipping plugin outside plugins directory: {:?}",
+                            exec_path
+                        );
+                    }
+                    continue;
+                }
+            }
+            Err(e) => {
+                if verbose {
+                    eprintln!(
+                        "[WARN] Cannot verify plugin path {:?}: {}",
+                        exec_path, e
+                    );
+                }
+                continue;
+            }
+        }
 
         // Check if executable (on Unix)
         #[cfg(unix)]
@@ -165,7 +193,7 @@ fn get_tool_schemas(path: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
 
 fn parse_single_tool_schema(
     schema: &serde_json::Value,
-    path: &PathBuf,
+    path: &Path,
     verbose: bool,
 ) -> io::Result<Tool> {
     let name = schema["name"]
@@ -207,7 +235,7 @@ fn parse_single_tool_schema(
         name,
         description,
         parameters,
-        path: path.clone(),
+        path: path.to_path_buf(),
         hooks,
     })
 }

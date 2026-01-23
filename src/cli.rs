@@ -284,7 +284,7 @@ impl Cli {
                 if msg.contains("unexpected argument") || msg.contains("invalid value") {
                     Err(io::Error::new(ErrorKind::InvalidInput, msg))
                 } else {
-                    Err(io::Error::new(ErrorKind::Other, msg))
+                    Err(io::Error::other(msg))
                 }
             }
         }
@@ -410,10 +410,10 @@ impl Cli {
         // Determine username override
         let username_override = if let Some(ref name) = self.transient_username {
             Some(UsernameOverride::Transient(name.clone()))
-        } else if let Some(ref name) = self.set_username {
-            Some(UsernameOverride::Persistent(name.clone()))
         } else {
-            None
+            self.set_username
+                .as_ref()
+                .map(|name| UsernameOverride::Persistent(name.clone()))
         };
 
         // Determine command
@@ -533,22 +533,22 @@ fn expand_attached_args(args: &[String]) -> Vec<String> {
 
     for arg in args {
         // Check if this is a short flag with attached value (e.g., -Dname)
-        if arg.len() > 2
-            && arg.starts_with('-')
-            && !arg.starts_with("--")
-            && arg
-                .chars()
-                .nth(1)
-                .map_or(false, |c| ATTACHED_FLAGS.contains(&c))
-        {
-            // Split into -X and value
-            let flag = format!("-{}", arg.chars().nth(1).unwrap());
-            let value = arg[2..].to_string();
-            result.push(flag);
-            result.push(value);
-        } else {
-            result.push(arg.clone());
+        // Use char_indices for safe UTF-8 handling
+        if arg.starts_with('-') && !arg.starts_with("--") {
+            let mut chars = arg.char_indices().skip(1); // Skip the leading '-'
+            if let Some((_, flag_char)) = chars.next()
+                && ATTACHED_FLAGS.contains(&flag_char)
+                && let Some((value_start, _)) = chars.next()
+            {
+                // Split into -X and value
+                let flag = format!("-{}", flag_char);
+                let value = arg[value_start..].to_string();
+                result.push(flag);
+                result.push(value);
+                continue;
+            }
         }
+        result.push(arg.clone());
     }
 
     result

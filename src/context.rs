@@ -103,7 +103,7 @@ pub fn validate_context_name(name: &str) -> io::Result<()> {
 pub fn now_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(std::time::Duration::ZERO)
         .as_secs()
 }
 

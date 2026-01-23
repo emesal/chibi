@@ -93,10 +93,11 @@ pub struct Flags {
 }
 
 /// Context selection mode
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextSelection {
     /// Use the current context (no switch)
+    #[default]
     Current,
     /// Switch to a named context (-c)
     Switch {
@@ -113,11 +114,6 @@ fn default_true() -> bool {
     true
 }
 
-impl Default for ContextSelection {
-    fn default() -> Self {
-        Self::Current
-    }
-}
 
 /// Username override mode
 #[derive(Debug, Clone, Serialize, Deserialize)]

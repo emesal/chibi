@@ -14,6 +14,19 @@ use std::io::{self, ErrorKind, Write};
 use tokio::io::{AsyncWriteExt, stdout};
 use uuid::Uuid;
 
+/// Maximum number of simultaneous tool calls allowed (prevents memory exhaustion from malicious responses)
+const MAX_TOOL_CALLS: usize = 100;
+
+/// Safely extract content from an API response's first choice.
+/// Returns None if the response is malformed or empty.
+fn extract_choice_content(json: &serde_json::Value) -> Option<&str> {
+    json.get("choices")?
+        .get(0)?
+        .get("message")?
+        .get("content")?
+        .as_str()
+}
+
 /// Log an API request to requests.jsonl if debug logging is enabled
 fn log_request_if_enabled(
     app: &AppState,
@@ -31,10 +44,10 @@ fn log_request_if_enabled(
     });
 
     let log_path = app.context_dir(&app.state.current_context).join("requests.jsonl");
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
-        if let Ok(json) = serde_json::to_string(&log_entry) {
-            let _ = writeln!(file, "{}", json);
-        }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path)
+        && let Ok(json) = serde_json::to_string(&log_entry)
+    {
+        let _ = writeln!(file, "{}", json);
     }
 }
 
@@ -57,10 +70,10 @@ fn log_response_meta_if_enabled(
     let log_path = app
         .context_dir(&app.state.current_context)
         .join("response_meta.jsonl");
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
-        if let Ok(json) = serde_json::to_string(&log_entry) {
-            let _ = writeln!(file, "{}", json);
-        }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path)
+        && let Ok(json) = serde_json::to_string(&log_entry)
+    {
+        let _ = writeln!(file, "{}", json);
     }
 }
 
@@ -78,10 +91,10 @@ fn build_request_body(
     });
 
     // Add tools if provided
-    if let Some(tools) = tools {
-        if !tools.is_empty() {
-            body["tools"] = json!(tools);
-        }
+    if let Some(tools) = tools
+        && !tools.is_empty()
+    {
+        body["tools"] = json!(tools);
     }
 
     // Apply API parameters from resolved config
@@ -295,9 +308,7 @@ No explanation, just the JSON array."#,
         Ok(response) if response.status() == StatusCode::OK => {
             match response.json::<serde_json::Value>().await {
                 Ok(json) => {
-                    let content = json["choices"][0]["message"]["content"]
-                        .as_str()
-                        .unwrap_or("[]");
+                    let content = extract_choice_content(&json).unwrap_or("[]");
                     // Try to parse as JSON array
                     serde_json::from_str(content).unwrap_or_else(|_| {
                         // Try to extract JSON array from response if wrapped in other text
@@ -430,10 +441,7 @@ Output ONLY the updated summary, no preamble."#,
         io::Error::other(format!("Failed to parse rolling compact response: {}", e))
     })?;
 
-    let new_summary = json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let new_summary = extract_choice_content(&json).unwrap_or("").to_string();
 
     if new_summary.is_empty() {
         if verbose {
@@ -684,9 +692,11 @@ async fn compact_context_with_llm_internal(
         .await
         .map_err(|e| io::Error::other(format!("Failed to parse response: {}", e)))?;
 
-    let summary = json["choices"][0]["message"]["content"]
-        .as_str()
-        .or_else(|| json["choices"][0]["content"].as_str())
+    let summary = extract_choice_content(&json)
+        .or_else(|| {
+            // Fallback: try alternative response structure
+            json.get("choices")?.get(0)?.get("content")?.as_str()
+        })
         .unwrap_or_else(|| {
             if verbose {
                 eprintln!("[DEBUG] Response structure: {}", json);
@@ -777,10 +787,7 @@ async fn compact_context_with_llm_internal(
         .await
         .map_err(|e| io::Error::other(format!("Failed to parse response: {}", e)))?;
 
-    let acknowledgment = json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let acknowledgment = extract_choice_content(&json).unwrap_or("").to_string();
 
     new_context
         .messages
@@ -1151,6 +1158,17 @@ async fn send_prompt_with_depth(
                             has_tool_calls = true;
                             for tc in tc_array {
                                 let index = tc["index"].as_u64().unwrap_or(0) as usize;
+
+                                // Prevent memory exhaustion from malicious API responses
+                                if index >= MAX_TOOL_CALLS {
+                                    if verbose {
+                                        eprintln!(
+                                            "[WARN] Tool call index {} exceeds limit {}, skipping",
+                                            index, MAX_TOOL_CALLS
+                                        );
+                                    }
+                                    continue;
+                                }
 
                                 while tool_calls.len() <= index {
                                     tool_calls.push(llm::ToolCallAccumulator::default());
