@@ -176,6 +176,70 @@ impl TranscriptEntry {
             metadata: Some(metadata),
         }
     }
+
+    /// Create a builder for constructing transcript entries
+    pub fn builder() -> TranscriptEntryBuilder {
+        TranscriptEntryBuilder::default()
+    }
+}
+
+/// Builder for creating TranscriptEntry instances with a fluent API.
+/// All fields have sensible defaults: auto-generated ID, current timestamp,
+/// empty strings for from/to/content, and "message" for entry_type.
+#[derive(Default)]
+pub struct TranscriptEntryBuilder {
+    from: Option<String>,
+    to: Option<String>,
+    content: Option<String>,
+    entry_type: Option<String>,
+    metadata: Option<EntryMetadata>,
+}
+
+impl TranscriptEntryBuilder {
+    /// Set the source/sender of the entry
+    pub fn from(mut self, from: impl Into<String>) -> Self {
+        self.from = Some(from.into());
+        self
+    }
+
+    /// Set the destination/recipient of the entry
+    pub fn to(mut self, to: impl Into<String>) -> Self {
+        self.to = Some(to.into());
+        self
+    }
+
+    /// Set the content of the entry
+    pub fn content(mut self, content: impl Into<String>) -> Self {
+        self.content = Some(content.into());
+        self
+    }
+
+    /// Set the entry type (e.g., "message", "tool_call", "tool_result")
+    pub fn entry_type(mut self, entry_type: impl Into<String>) -> Self {
+        self.entry_type = Some(entry_type.into());
+        self
+    }
+
+    /// Set metadata for the entry
+    pub fn metadata(mut self, metadata: EntryMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Build the TranscriptEntry with auto-generated ID and current timestamp
+    pub fn build(self) -> TranscriptEntry {
+        TranscriptEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: self.from.unwrap_or_default(),
+            to: self.to.unwrap_or_default(),
+            content: self.content.unwrap_or_default(),
+            entry_type: self
+                .entry_type
+                .unwrap_or_else(|| ENTRY_TYPE_MESSAGE.to_string()),
+            metadata: self.metadata,
+        }
+    }
 }
 
 /// Metadata for special entries (anchors, system prompts)

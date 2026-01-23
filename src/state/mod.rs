@@ -1,11 +1,28 @@
+//! Application state management.
+//!
+//! This module manages all persistent state for chibi:
+//! - Context files and directories
+//! - Configuration loading and resolution
+//! - Transcript and inbox operations
+
+// Submodules - utilities extracted for better organization
+// Future refactoring can migrate more functionality into these modules
+mod entries;
+mod jsonl;
+mod paths;
+
+// Re-export submodule items for internal use
+use jsonl::read_jsonl_file;
+
 use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig};
 use crate::context::{
-    Context, ContextMeta, ContextState, Message, TranscriptEntry, now_timestamp,
-    validate_context_name,
+    Context, ContextMeta, ContextState, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION,
+    ENTRY_TYPE_CONTEXT_CREATED, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
+    EntryMetadata, Message, TranscriptEntry, now_timestamp, validate_context_name,
 };
 use dirs_next::home_dir;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, BufWriter, ErrorKind, Write};
+use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -365,29 +382,7 @@ impl AppState {
 
     /// Read all entries from transcript.jsonl
     pub fn read_transcript_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        let path = self.transcript_jsonl_file(name);
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let file = File::open(&path)?;
-        let reader = BufReader::new(file);
-        let mut entries = Vec::new();
-
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str(&line) {
-                Ok(entry) => entries.push(entry),
-                Err(e) => {
-                    eprintln!("[WARN] Skipping malformed transcript entry: {}", e);
-                }
-            }
-        }
-
-        Ok(entries)
+        read_jsonl_file(&self.transcript_jsonl_file(name), "transcript")
     }
 
     /// Migrate from old context.json format to new context.jsonl format
@@ -438,29 +433,7 @@ impl AppState {
 
     /// Read entries from context.jsonl
     pub fn read_context_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        let path = self.context_file(name);
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let file = File::open(&path)?;
-        let reader = BufReader::new(file);
-        let mut entries = Vec::new();
-
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str(&line) {
-                Ok(entry) => entries.push(entry),
-                Err(e) => {
-                    eprintln!("[WARN] Skipping malformed context entry: {}", e);
-                }
-            }
-        }
-
-        Ok(entries)
+        read_jsonl_file(&self.context_file(name), "context")
     }
 
     /// Write entries to context.jsonl (full rewrite)
@@ -1188,104 +1161,96 @@ impl AppState {
         self.read_context_entries(context_name)
     }
 
+    // === Entry Creation ===
+    // These methods create transcript entries using the builder pattern.
+    // Each method encapsulates context-specific logic (from/to derivation).
+
     /// Create a transcript entry for a user message
     pub fn create_user_message_entry(&self, content: &str, username: &str) -> TranscriptEntry {
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: username.to_string(),
-            to: self.state.current_context.clone(),
-            content: content.to_string(),
-            entry_type: crate::context::ENTRY_TYPE_MESSAGE.to_string(),
-            metadata: None,
-        }
+        TranscriptEntry::builder()
+            .from(username)
+            .to(&self.state.current_context)
+            .content(content)
+            .entry_type(ENTRY_TYPE_MESSAGE)
+            .build()
     }
 
     /// Create a transcript entry for an assistant message
     pub fn create_assistant_message_entry(&self, content: &str) -> TranscriptEntry {
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: self.state.current_context.clone(),
-            to: "user".to_string(),
-            content: content.to_string(),
-            entry_type: crate::context::ENTRY_TYPE_MESSAGE.to_string(),
-            metadata: None,
-        }
+        TranscriptEntry::builder()
+            .from(&self.state.current_context)
+            .to("user")
+            .content(content)
+            .entry_type(ENTRY_TYPE_MESSAGE)
+            .build()
     }
 
     /// Create a transcript entry for a tool call
     pub fn create_tool_call_entry(&self, tool_name: &str, arguments: &str) -> TranscriptEntry {
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: self.state.current_context.clone(),
-            to: tool_name.to_string(),
-            content: arguments.to_string(),
-            entry_type: crate::context::ENTRY_TYPE_TOOL_CALL.to_string(),
-            metadata: None,
-        }
+        TranscriptEntry::builder()
+            .from(&self.state.current_context)
+            .to(tool_name)
+            .content(arguments)
+            .entry_type(ENTRY_TYPE_TOOL_CALL)
+            .build()
     }
 
     /// Create a transcript entry for a tool result
     pub fn create_tool_result_entry(&self, tool_name: &str, result: &str) -> TranscriptEntry {
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: tool_name.to_string(),
-            to: self.state.current_context.clone(),
-            content: result.to_string(),
-            entry_type: crate::context::ENTRY_TYPE_TOOL_RESULT.to_string(),
-            metadata: None,
-        }
+        TranscriptEntry::builder()
+            .from(tool_name)
+            .to(&self.state.current_context)
+            .content(result)
+            .entry_type(ENTRY_TYPE_TOOL_RESULT)
+            .build()
     }
 
     // === Anchor Entry Creation ===
 
     /// Create a context_created anchor entry
     pub fn create_context_created_anchor(&self, context_name: &str) -> TranscriptEntry {
-        use crate::context::ENTRY_TYPE_CONTEXT_CREATED;
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: "system".to_string(),
-            to: context_name.to_string(),
-            content: "Context created".to_string(),
-            entry_type: ENTRY_TYPE_CONTEXT_CREATED.to_string(),
-            metadata: None,
-        }
+        TranscriptEntry::builder()
+            .from("system")
+            .to(context_name)
+            .content("Context created")
+            .entry_type(ENTRY_TYPE_CONTEXT_CREATED)
+            .build()
     }
 
     /// Create a compaction anchor entry with summary
     pub fn create_compaction_anchor(&self, context_name: &str, summary: &str) -> TranscriptEntry {
-        use crate::context::{ENTRY_TYPE_COMPACTION, EntryMetadata};
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: "system".to_string(),
-            to: context_name.to_string(),
-            content: "Context compacted".to_string(),
-            entry_type: ENTRY_TYPE_COMPACTION.to_string(),
-            metadata: Some(EntryMetadata {
+        TranscriptEntry::builder()
+            .from("system")
+            .to(context_name)
+            .content("Context compacted")
+            .entry_type(ENTRY_TYPE_COMPACTION)
+            .metadata(EntryMetadata {
                 summary: Some(summary.to_string()),
                 hash: None,
                 transcript_anchor_id: None,
-            }),
-        }
+            })
+            .build()
     }
 
     /// Create an archival anchor entry
     pub fn create_archival_anchor(&self, context_name: &str) -> TranscriptEntry {
-        use crate::context::ENTRY_TYPE_ARCHIVAL;
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: "system".to_string(),
-            to: context_name.to_string(),
-            content: "Context archived/cleared".to_string(),
-            entry_type: ENTRY_TYPE_ARCHIVAL.to_string(),
-            metadata: None,
-        }
+        TranscriptEntry::builder()
+            .from("system")
+            .to(context_name)
+            .content("Context archived/cleared")
+            .entry_type(ENTRY_TYPE_ARCHIVAL)
+            .build()
+    }
+
+    // === Compaction Finalization ===
+
+    /// Finalize a compaction operation by writing the anchor to transcript and marking dirty.
+    /// This is the common final step for all compaction operations (rolling, manual, by-name).
+    pub fn finalize_compaction(&self, context_name: &str, summary: &str) -> io::Result<()> {
+        let compaction_anchor = self.create_compaction_anchor(context_name, summary);
+        self.append_to_transcript(context_name, &compaction_anchor)?;
+        self.mark_context_dirty(context_name)?;
+        Ok(())
     }
 }
 
