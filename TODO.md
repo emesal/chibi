@@ -4,13 +4,6 @@
 ### first-class group messaging
 - including remotely
 
-### ability to invoke chibi with json instead of CLI parameters
-- see separate draft (file link here)
-
-### context.jsonl and transcript.jsonl written simultaneously
-- introduces some redundancy but simplifies for later when transcripts are elsewhere
-- tool calls aren't in the log, only tool results?
-
 ### command line option for inbox sweep
 - when invoked, do a sweep of all inboxes, waking any chibis with new messages and letting them handle them
 
@@ -28,10 +21,3 @@
   - "implement X with rigorous security"
 - agents have instructions on cooperative work + coffee-table discussion
 - this looks like a workflow definition tool
-
-### Reasoning tokens
-- need to research and make use of:
-  https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#enable-reasoning-with-default-config
-
-### TODO in api.rs
-- line 42. Integrate (currently dead) function log_response_meta_if_enabled() with the streaming response parser to capture usage stats
