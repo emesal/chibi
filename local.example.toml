@@ -1,0 +1,76 @@
+# =============================================================================
+# Per-Context Configuration
+# =============================================================================
+# This file overrides global settings for a specific context.
+# Copy to: ~/.chibi/contexts/<context-name>/local.toml
+#
+# For example, to configure the "coding" context:
+#   ~/.chibi/contexts/coding/local.toml
+#
+# Settings here take precedence over config.toml but can be overridden by CLI flags.
+# See docs/configuration.md for the full configuration reference.
+
+# =============================================================================
+# Model & API
+# =============================================================================
+
+# Override model for this context
+# model = "openai/o3"
+
+# Override API key (useful for different providers or billing)
+# api_key = "sk-different-key"
+
+# Override base URL (for different API endpoints)
+# base_url = "https://api.openai.com/v1/chat/completions"
+
+# =============================================================================
+# Context Window
+# =============================================================================
+
+# Override context window limit
+# context_window_limit = 128000
+
+# Override warning threshold
+# warn_threshold_percent = 90.0
+
+# =============================================================================
+# Compaction
+# =============================================================================
+
+# Enable auto-compaction for this context
+# auto_compact = true
+
+# Override compaction threshold
+# auto_compact_threshold = 85.0
+
+# =============================================================================
+# Identity
+# =============================================================================
+
+# Override username for this context
+# username = "alice"
+
+# =============================================================================
+# Features
+# =============================================================================
+
+# Disable reflection for this context
+# reflection_enabled = false
+
+# Override recursion depth
+# max_recursion_depth = 25
+
+# =============================================================================
+# API Parameters
+# =============================================================================
+# Override generation parameters for this context.
+
+# [api]
+# temperature = 0.3
+# max_tokens = 8000
+# top_p = 0.95
+
+# [api.reasoning]
+# effort = "high"
+# OR for token-based reasoning:
+# max_tokens = 32000
