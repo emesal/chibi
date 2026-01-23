@@ -1,5 +1,6 @@
-use crate::config::ResolvedConfig;
+use crate::config::{ResolvedConfig, ToolChoice, ToolChoiceMode};
 use crate::context::{Context, InboxEntry, Message, now_timestamp};
+use crate::input::DebugKey;
 use crate::llm;
 use crate::output::OutputHandler;
 use crate::state::AppState;
@@ -7,14 +8,180 @@ use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode};
-use std::io::{self, ErrorKind};
+use serde_json::json;
+use std::fs::OpenOptions;
+use std::io::{self, ErrorKind, Write};
 use tokio::io::{AsyncWriteExt, stdout};
 use uuid::Uuid;
+
+/// Log an API request to requests.jsonl if debug logging is enabled
+fn log_request_if_enabled(
+    app: &AppState,
+    debug: Option<&DebugKey>,
+    request_body: &serde_json::Value,
+) {
+    let should_log = matches!(debug, Some(DebugKey::RequestLog) | Some(DebugKey::All));
+    if !should_log {
+        return;
+    }
+
+    let log_entry = json!({
+        "timestamp": now_timestamp(),
+        "request": request_body,
+    });
+
+    let log_path = app.context_dir(&app.state.current_context).join("requests.jsonl");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+        if let Ok(json) = serde_json::to_string(&log_entry) {
+            let _ = writeln!(file, "{}", json);
+        }
+    }
+}
+
+/// Log response metadata to response_meta.jsonl if debug logging is enabled
+fn log_response_meta_if_enabled(
+    app: &AppState,
+    debug: Option<&DebugKey>,
+    response_meta: &serde_json::Value,
+) {
+    let should_log = matches!(debug, Some(DebugKey::ResponseMeta) | Some(DebugKey::All));
+    if !should_log {
+        return;
+    }
+
+    let log_entry = json!({
+        "timestamp": now_timestamp(),
+        "response": response_meta,
+    });
+
+    let log_path = app
+        .context_dir(&app.state.current_context)
+        .join("response_meta.jsonl");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+        if let Ok(json) = serde_json::to_string(&log_entry) {
+            let _ = writeln!(file, "{}", json);
+        }
+    }
+}
+
+/// Build the request body for the LLM API, applying all API parameters from ResolvedConfig
+fn build_request_body(
+    config: &ResolvedConfig,
+    messages: &[serde_json::Value],
+    tools: Option<&[serde_json::Value]>,
+    stream: bool,
+) -> serde_json::Value {
+    let mut body = json!({
+        "model": config.model,
+        "messages": messages,
+        "stream": stream,
+    });
+
+    // Add tools if provided
+    if let Some(tools) = tools {
+        if !tools.is_empty() {
+            body["tools"] = json!(tools);
+        }
+    }
+
+    // Apply API parameters from resolved config
+    let api = &config.api;
+
+    // Temperature
+    if let Some(temp) = api.temperature {
+        body["temperature"] = json!(temp);
+    }
+
+    // Max tokens
+    if let Some(max_tokens) = api.max_tokens {
+        body["max_tokens"] = json!(max_tokens);
+    }
+
+    // Top P
+    if let Some(top_p) = api.top_p {
+        body["top_p"] = json!(top_p);
+    }
+
+    // Stop sequences
+    if let Some(ref stop) = api.stop {
+        body["stop"] = json!(stop);
+    }
+
+    // Tool choice
+    if let Some(ref tool_choice) = api.tool_choice {
+        match tool_choice {
+            ToolChoice::Mode(mode) => {
+                let mode_str = match mode {
+                    ToolChoiceMode::Auto => "auto",
+                    ToolChoiceMode::None => "none",
+                    ToolChoiceMode::Required => "required",
+                };
+                body["tool_choice"] = json!(mode_str);
+            }
+            ToolChoice::Function { type_, function } => {
+                body["tool_choice"] = json!({
+                    "type": type_,
+                    "function": { "name": function.name }
+                });
+            }
+        }
+    }
+
+    // Parallel tool calls
+    if let Some(parallel) = api.parallel_tool_calls {
+        body["parallel_tool_calls"] = json!(parallel);
+    }
+
+    // Frequency penalty
+    if let Some(freq) = api.frequency_penalty {
+        body["frequency_penalty"] = json!(freq);
+    }
+
+    // Presence penalty
+    if let Some(pres) = api.presence_penalty {
+        body["presence_penalty"] = json!(pres);
+    }
+
+    // Seed
+    if let Some(seed) = api.seed {
+        body["seed"] = json!(seed);
+    }
+
+    // Response format
+    if let Some(ref format) = api.response_format {
+        body["response_format"] = serde_json::to_value(format).unwrap_or(json!(null));
+    }
+
+    // Reasoning configuration (OpenRouter-specific)
+    // Either effort OR max_tokens can be set, plus optional exclude/enabled
+    if !api.reasoning.is_empty() {
+        let mut reasoning_obj = json!({});
+        if let Some(ref effort) = api.reasoning.effort {
+            reasoning_obj["effort"] = json!(effort.as_str());
+        }
+        if let Some(max_tokens) = api.reasoning.max_tokens {
+            reasoning_obj["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(exclude) = api.reasoning.exclude {
+            reasoning_obj["exclude"] = json!(exclude);
+        }
+        if let Some(enabled) = api.reasoning.enabled {
+            reasoning_obj["enabled"] = json!(enabled);
+        }
+        body["reasoning"] = reasoning_obj;
+    }
+
+    body
+}
 
 /// Rolling compaction: strips messages and integrates them into the summary
 /// This is triggered automatically when context exceeds threshold
 /// The LLM decides which messages to drop based on goals/todos, with fallback to percentage
-pub async fn rolling_compact(app: &AppState, verbose: bool) -> io::Result<()> {
+pub async fn rolling_compact(
+    app: &AppState,
+    resolved_config: &ResolvedConfig,
+    verbose: bool,
+) -> io::Result<()> {
     let mut context = app.get_current_context()?;
 
     // Skip system messages when counting
@@ -111,20 +278,15 @@ No explanation, just the JSON array."#,
     let client = Client::new();
 
     // First LLM call: decide what to drop
-    let decision_request = serde_json::json!({
-        "model": app.config.model,
-        "messages": [
-            {
-                "role": "user",
-                "content": decision_prompt,
-            }
-        ],
-        "stream": false,
-    });
+    let decision_messages = vec![json!({
+        "role": "user",
+        "content": decision_prompt,
+    })];
+    let decision_request = build_request_body(resolved_config, &decision_messages, None, false);
 
     let ids_to_drop: Vec<String> = match client
-        .post(&app.config.base_url)
-        .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
+        .post(&resolved_config.base_url)
+        .header(AUTHORIZATION, format!("Bearer {}", resolved_config.api_key))
         .header(CONTENT_TYPE, "application/json")
         .body(decision_request.to_string())
         .send()
@@ -237,20 +399,15 @@ Output ONLY the updated summary, no preamble."#,
         },
     );
 
-    let summary_request = serde_json::json!({
-        "model": app.config.model,
-        "messages": [
-            {
-                "role": "user",
-                "content": update_prompt,
-            }
-        ],
-        "stream": false,
-    });
+    let summary_messages = vec![json!({
+        "role": "user",
+        "content": update_prompt,
+    })];
+    let summary_request = build_request_body(resolved_config, &summary_messages, None, false);
 
     let response = client
-        .post(&app.config.base_url)
-        .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
+        .post(&resolved_config.base_url)
+        .header(AUTHORIZATION, format!("Bearer {}", resolved_config.api_key))
         .header(CONTENT_TYPE, "application/json")
         .body(summary_request.to_string())
         .send()
@@ -300,11 +457,18 @@ Output ONLY the updated summary, no preamble."#,
         .collect();
 
     // Update context with new summary and remaining messages
-    context.summary = new_summary;
+    context.summary = new_summary.clone();
     context.messages = remaining_messages;
     context.updated_at = now_timestamp();
 
-    // Save updated context
+    // Write compaction anchor to transcript (authoritative log)
+    let compaction_anchor = app.create_compaction_anchor(&context.name, &new_summary);
+    app.append_to_transcript(&context.name, &compaction_anchor)?;
+
+    // Mark context dirty so it rebuilds with new anchor on next load
+    app.mark_context_dirty(&context.name)?;
+
+    // Save updated context (summary.md, context_meta.json, etc.)
     app.save_current_context(&context)?;
 
     if verbose {
@@ -333,14 +497,22 @@ Output ONLY the updated summary, no preamble."#,
 }
 
 /// Full compaction: summarizes all messages and starts fresh (auto-triggered)
-pub async fn compact_context_with_llm(app: &AppState, verbose: bool) -> io::Result<()> {
+pub async fn compact_context_with_llm(
+    app: &AppState,
+    resolved_config: &ResolvedConfig,
+    verbose: bool,
+) -> io::Result<()> {
     // Use rolling compaction for auto-triggered compaction
-    rolling_compact(app, verbose).await
+    rolling_compact(app, resolved_config, verbose).await
 }
 
 /// Full compaction: summarizes all messages and starts fresh (manual -c flag)
-pub async fn compact_context_with_llm_manual(app: &AppState, verbose: bool) -> io::Result<()> {
-    compact_context_with_llm_internal(app, true, verbose).await
+pub async fn compact_context_with_llm_manual(
+    app: &AppState,
+    resolved_config: &ResolvedConfig,
+    verbose: bool,
+) -> io::Result<()> {
+    compact_context_with_llm_internal(app, resolved_config, true, verbose).await
 }
 
 /// Compact a specific context by name (for -Z flag)
@@ -369,23 +541,20 @@ pub async fn compact_context_by_name(
         return Ok(());
     }
 
-    // For compacting other contexts, we'll do a simple clear + save summary
-    // (full LLM compaction would require more significant refactoring)
-    // Archive the messages to transcript
-    app.ensure_context_dir(context_name)?;
-    let transcript_path = app.transcript_file(context_name);
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&transcript_path)?;
+    // Archive to transcript.md for human readability
+    app.append_to_transcript_md(&context)?;
 
-    for msg in &context.messages {
-        if msg.role == "system" {
-            continue;
-        }
-        use std::io::Write;
-        writeln!(file, "[{}]: {}\n", msg.role.to_uppercase(), msg.content)?;
-    }
+    // Write compaction anchor to transcript.jsonl
+    // For non-current contexts without LLM, we use a simple "archived" summary
+    let simple_summary = format!(
+        "Context compacted. {} messages archived to transcript.",
+        context.messages.len()
+    );
+    let compaction_anchor = app.create_compaction_anchor(context_name, &simple_summary);
+    app.append_to_transcript(context_name, &compaction_anchor)?;
+
+    // Mark context dirty so it rebuilds with new anchor on next load
+    app.mark_context_dirty(context_name)?;
 
     // Create fresh context preserving summary
     let new_context = Context {
@@ -411,6 +580,7 @@ pub async fn compact_context_by_name(
 
 async fn compact_context_with_llm_internal(
     app: &AppState,
+    resolved_config: &ResolvedConfig,
     print_message: bool,
     verbose: bool,
 ) -> io::Result<()> {
@@ -439,8 +609,8 @@ async fn compact_context_with_llm_internal(
     });
     let _ = tools::execute_hook(&tools, tools::HookPoint::PreCompact, &hook_data, verbose);
 
-    // Append to transcript before compacting
-    app.append_to_transcript(&context)?;
+    // Append to transcript.md before compacting (for archival)
+    app.append_to_transcript_md(&context)?;
 
     if print_message && verbose {
         eprintln!(
@@ -476,25 +646,21 @@ async fn compact_context_with_llm_internal(
 
     // Prepare messages for compaction request
     let compaction_messages = vec![
-        serde_json::json!({
+        json!({
             "role": "system",
             "content": compaction_prompt,
         }),
-        serde_json::json!({
+        json!({
             "role": "user",
             "content": format!("Please summarize this conversation:\n\n{}", conversation_text),
         }),
     ];
 
-    let request_body = serde_json::json!({
-        "model": app.config.model,
-        "messages": compaction_messages,
-        "stream": false,
-    });
+    let request_body = build_request_body(resolved_config, &compaction_messages, None, false);
 
     let response = client
-        .post(&app.config.base_url)
-        .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
+        .post(&resolved_config.base_url)
+        .header(AUTHORIZATION, format!("Bearer {}", resolved_config.api_key))
         .header(CONTENT_TYPE, "application/json")
         .body(request_body.to_string())
         .send()
@@ -572,26 +738,22 @@ async fn compact_context_with_llm_internal(
     ));
 
     // Add assistant acknowledgment
-    let messages = vec![
-        serde_json::json!({
+    let ack_messages = vec![
+        json!({
             "role": "system",
             "content": system_prompt,
         }),
-        serde_json::json!({
+        json!({
             "role": "user",
             "content": format!("{}\n\n--- SUMMARY ---\n{}", continuation_prompt, summary),
         }),
     ];
 
-    let request_body = serde_json::json!({
-        "model": app.config.model,
-        "messages": messages,
-        "stream": false,
-    });
+    let request_body = build_request_body(resolved_config, &ack_messages, None, false);
 
     let response = client
-        .post(&app.config.base_url)
-        .header(AUTHORIZATION, format!("Bearer {}", app.config.api_key))
+        .post(&resolved_config.base_url)
+        .header(AUTHORIZATION, format!("Bearer {}", resolved_config.api_key))
         .header(CONTENT_TYPE, "application/json")
         .body(request_body.to_string())
         .send()
@@ -624,6 +786,13 @@ async fn compact_context_with_llm_internal(
         .messages
         .push(Message::new("assistant", acknowledgment));
 
+    // Write compaction anchor to transcript (authoritative log)
+    let compaction_anchor = app.create_compaction_anchor(&new_context.name, &summary);
+    app.append_to_transcript(&new_context.name, &compaction_anchor)?;
+
+    // Mark context dirty so it rebuilds with new anchor on next load
+    app.mark_context_dirty(&new_context.name)?;
+
     // Save the new context
     app.save_current_context(&new_context)?;
 
@@ -650,6 +819,7 @@ pub async fn send_prompt(
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
     json_output: bool,
+    debug: Option<&DebugKey>,
 ) -> io::Result<()> {
     let output = OutputHandler::new(json_output);
     send_prompt_with_depth(
@@ -661,6 +831,7 @@ pub async fn send_prompt(
         0,
         resolved_config,
         &output,
+        debug,
     )
     .await
 }
@@ -674,6 +845,7 @@ async fn send_prompt_with_depth(
     recursion_depth: usize,
     resolved_config: &ResolvedConfig,
     output: &OutputHandler,
+    debug: Option<&DebugKey>,
 ) -> io::Result<()> {
     if prompt.trim().is_empty() {
         return Err(io::Error::new(
@@ -720,9 +892,9 @@ async fn send_prompt_with_depth(
     // Add user message to in-memory context
     app.add_message(&mut context, "user".to_string(), final_prompt.clone());
 
-    // Append user message to context.jsonl (append-only)
+    // Append user message to both transcript.jsonl and context.jsonl (tandem write)
     let user_entry = app.create_user_message_entry(&final_prompt, &resolved_config.username);
-    app.append_to_jsonl_transcript(&user_entry)?;
+    app.append_to_current_transcript_and_context(&user_entry)?;
     output.emit(&user_entry)?;
 
     // Check if we need to warn about context window
@@ -736,7 +908,7 @@ async fn send_prompt_with_depth(
 
     // Auto-compaction check
     if app.should_auto_compact(&context, resolved_config) {
-        return compact_context_with_llm(app, verbose).await;
+        return compact_context_with_llm(app, resolved_config, verbose).await;
     }
 
     // Prepare messages for API
@@ -868,13 +1040,6 @@ async fn send_prompt_with_depth(
         }));
     }
 
-    // Build request with optional tools
-    let mut request_body = serde_json::json!({
-        "model": app.config.model,
-        "messages": messages,
-        "stream": true,
-    });
-
     // Collect all tools (user-defined + built-in tools)
     let mut all_tools = tools::tools_to_api_format(tools);
 
@@ -889,9 +1054,9 @@ async fn send_prompt_with_depth(
         all_tools.push(tools::reflection_tool_to_api_format());
     }
 
-    if !all_tools.is_empty() {
-        request_body["tools"] = serde_json::json!(all_tools);
-    }
+    // Build request with tools and API params from resolved config
+    let mut request_body =
+        build_request_body(resolved_config, &messages, Some(&all_tools), true);
 
     // Track if we should recurse (continue_processing was called)
     let mut should_recurse = false;
@@ -899,12 +1064,10 @@ async fn send_prompt_with_depth(
 
     // Tool call loop - keep going until we get a final text response
     loop {
-        let response = llm::send_streaming_request(
-            &app.config.base_url,
-            &app.config.api_key,
-            request_body.clone(),
-        )
-        .await?;
+        // Log request if debug logging is enabled
+        log_request_if_enabled(app, debug, &request_body);
+
+        let response = llm::send_streaming_request(resolved_config, request_body.clone()).await?;
 
         let mut stream = response.bytes_stream();
         let mut stdout = stdout();
@@ -915,6 +1078,9 @@ async fn send_prompt_with_depth(
         // Tool call accumulation
         let mut tool_calls: Vec<llm::ToolCallAccumulator> = Vec::new();
         let mut has_tool_calls = false;
+
+        // Response metadata accumulation (usage stats, model info)
+        let mut response_meta: Option<serde_json::Value> = None;
 
         while let Some(chunk_result) = stream.next().await {
             let chunk =
@@ -931,6 +1097,25 @@ async fn send_prompt_with_depth(
 
                     let json: serde_json::Value = serde_json::from_str(data)
                         .map_err(|e| io::Error::other(format!("JSON parse error: {}", e)))?;
+
+                    // Capture response metadata (usage stats, model, id)
+                    // These typically appear in all chunks or the final chunk
+                    if json.get("usage").is_some()
+                        || json.get("model").is_some()
+                        || json.get("id").is_some()
+                    {
+                        let mut meta = response_meta.take().unwrap_or(json!({}));
+                        if let Some(usage) = json.get("usage") {
+                            meta["usage"] = usage.clone();
+                        }
+                        if let Some(model) = json.get("model") {
+                            meta["model"] = model.clone();
+                        }
+                        if let Some(id) = json.get("id") {
+                            meta["id"] = id.clone();
+                        }
+                        response_meta = Some(meta);
+                    }
 
                     if let Some(choices) = json["choices"].as_array()
                         && let Some(choice) = choices.first()
@@ -987,6 +1172,11 @@ async fn send_prompt_with_depth(
                     }
                 }
             }
+        }
+
+        // Log response metadata if debug logging is enabled
+        if let Some(ref meta) = response_meta {
+            log_response_meta_if_enabled(app, debug, meta);
         }
 
         // If we have tool calls, execute them and continue the loop
@@ -1177,13 +1367,13 @@ async fn send_prompt_with_depth(
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
 
-                // Log tool call and result to context.jsonl
+                // Log tool call and result to both transcript.jsonl and context.jsonl
                 let tool_call_entry = app.create_tool_call_entry(&tc.name, &tc.arguments);
-                app.append_to_jsonl_transcript(&tool_call_entry)?;
+                app.append_to_current_transcript_and_context(&tool_call_entry)?;
                 output.emit(&tool_call_entry)?;
 
                 let tool_result_entry = app.create_tool_result_entry(&tc.name, &tool_result);
-                app.append_to_jsonl_transcript(&tool_result_entry)?;
+                app.append_to_current_transcript_and_context(&tool_result_entry)?;
                 output.emit(&tool_result_entry)?;
 
                 // Execute post_tool hooks (observe only)
@@ -1214,9 +1404,9 @@ async fn send_prompt_with_depth(
         // Update in-memory context for this session
         app.add_message(&mut context, "assistant".to_string(), full_response.clone());
 
-        // Append assistant message to context.jsonl (append-only, no full rewrite)
+        // Append assistant message to both transcript.jsonl and context.jsonl (tandem write)
         let assistant_entry = app.create_assistant_message_entry(&full_response);
-        app.append_to_jsonl_transcript(&assistant_entry)?;
+        app.append_to_current_transcript_and_context(&assistant_entry)?;
         output.emit(&assistant_entry)?;
 
         // Execute post_message hooks (observe only)
@@ -1268,6 +1458,7 @@ async fn send_prompt_with_depth(
                 new_depth,
                 resolved_config,
                 output,
+                debug,
             ))
             .await;
         }

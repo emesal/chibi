@@ -12,7 +12,7 @@ mod state;
 mod tools;
 
 use cli::Inspectable;
-use context::Context;
+use context::{Context, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT};
 use input::{ChibiInput, Command, ContextSelection, UsernameOverride};
 use output::OutputHandler;
 use state::AppState;
@@ -146,10 +146,10 @@ fn show_log(app: &AppState, context_name: &str, num: isize, verbose: bool) -> io
 
     for entry in selected {
         match entry.entry_type.as_str() {
-            "message" => {
+            ENTRY_TYPE_MESSAGE => {
                 println!("[{}]: {}\n", entry.from.to_uppercase(), entry.content);
             }
-            "tool_call" => {
+            ENTRY_TYPE_TOOL_CALL => {
                 if verbose {
                     // Full tool call display
                     println!("[TOOL CALL: {}]\n{}\n", entry.to, entry.content);
@@ -163,7 +163,7 @@ fn show_log(app: &AppState, context_name: &str, num: isize, verbose: bool) -> io
                     println!("[TOOL: {}] {}", entry.to, args_preview);
                 }
             }
-            "tool_result" => {
+            ENTRY_TYPE_TOOL_RESULT => {
                 if verbose {
                     // Full tool result display
                     println!("[TOOL RESULT: {}]\n{}\n", entry.from, entry.content);
@@ -396,7 +396,9 @@ async fn execute_from_input(
                 api::compact_context_by_name(app, ctx_name, verbose).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
-                api::compact_context_with_llm_manual(app, verbose).await?;
+                // Compute resolved config for the current context
+                let resolved = app.resolve_config(None, None)?;
+                api::compact_context_with_llm_manual(app, &resolved, verbose).await?;
             }
             did_action = true;
         }
@@ -497,6 +499,7 @@ async fn execute_from_input(
                 use_reflection,
                 &resolved,
                 json_output,
+                input.flags.debug.as_ref(),
             )
             .await?;
             did_action = true;
