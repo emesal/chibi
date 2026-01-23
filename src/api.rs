@@ -17,6 +17,31 @@ use uuid::Uuid;
 /// Maximum number of simultaneous tool calls allowed (prevents memory exhaustion from malicious responses)
 const MAX_TOOL_CALLS: usize = 100;
 
+/// Options for controlling prompt execution behavior
+#[derive(Debug, Clone)]
+pub struct PromptOptions<'a> {
+    pub verbose: bool,
+    pub use_reflection: bool,
+    pub json_output: bool,
+    pub debug: Option<&'a DebugKey>,
+}
+
+impl<'a> PromptOptions<'a> {
+    pub fn new(
+        verbose: bool,
+        use_reflection: bool,
+        json_output: bool,
+        debug: Option<&'a DebugKey>,
+    ) -> Self {
+        Self {
+            verbose,
+            use_reflection,
+            json_output,
+            debug,
+        }
+    }
+}
+
 /// Safely extract content from an API response's first choice.
 /// Returns None if the response is malformed or empty.
 fn extract_choice_content(json: &serde_json::Value) -> Option<&str> {
@@ -822,37 +847,21 @@ pub async fn send_prompt(
     app: &AppState,
     prompt: String,
     tools: &[Tool],
-    verbose: bool,
-    use_reflection: bool,
     resolved_config: &ResolvedConfig,
-    json_output: bool,
-    debug: Option<&DebugKey>,
+    options: &PromptOptions<'_>,
 ) -> io::Result<()> {
-    let output = OutputHandler::new(json_output);
-    send_prompt_with_depth(
-        app,
-        prompt,
-        tools,
-        verbose,
-        use_reflection,
-        0,
-        resolved_config,
-        &output,
-        debug,
-    )
-    .await
+    let output = OutputHandler::new(options.json_output);
+    send_prompt_with_depth(app, prompt, tools, 0, resolved_config, &output, options).await
 }
 
 async fn send_prompt_with_depth(
     app: &AppState,
     prompt: String,
     tools: &[Tool],
-    verbose: bool,
-    use_reflection: bool,
     recursion_depth: usize,
     resolved_config: &ResolvedConfig,
     output: &OutputHandler,
-    debug: Option<&DebugKey>,
+    options: &PromptOptions<'_>,
 ) -> io::Result<()> {
     if prompt.trim().is_empty() {
         return Err(io::Error::new(
@@ -860,6 +869,10 @@ async fn send_prompt_with_depth(
             "Prompt cannot be empty",
         ));
     }
+
+    let verbose = options.verbose;
+    let use_reflection = options.use_reflection;
+    let debug = options.debug;
 
     let mut context = app.get_current_context()?;
 
@@ -1471,12 +1484,10 @@ async fn send_prompt_with_depth(
                 app,
                 continue_prompt,
                 tools,
-                verbose,
-                use_reflection,
                 new_depth,
                 resolved_config,
                 output,
-                debug,
+                options,
             ))
             .await;
         }

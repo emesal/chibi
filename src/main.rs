@@ -491,17 +491,13 @@ async fn execute_from_input(
             let _lock =
                 lock::ContextLock::acquire(&context_dir, app.config.lock_heartbeat_seconds)?;
 
-            api::send_prompt(
-                app,
-                prompt.clone(),
-                tools,
+            let options = api::PromptOptions::new(
                 verbose,
                 use_reflection,
-                &resolved,
                 json_output,
                 input.flags.debug.as_ref(),
-            )
-            .await?;
+            );
+            api::send_prompt(app, prompt.clone(), tools, &resolved, &options).await?;
             did_action = true;
         }
         Command::NoOp => {
