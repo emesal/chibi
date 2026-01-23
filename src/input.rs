@@ -156,6 +156,8 @@ impl Default for ChibiInput {
 mod tests {
     use super::*;
 
+    // === ChibiInput tests ===
+
     #[test]
     fn test_default_input() {
         let input = ChibiInput::default();
@@ -166,8 +168,375 @@ mod tests {
     }
 
     #[test]
+    fn test_default_input_no_username_override() {
+        let input = ChibiInput::default();
+        assert!(input.username_override.is_none());
+    }
+
+    #[test]
+    fn test_default_input_no_debug() {
+        let input = ChibiInput::default();
+        assert!(input.flags.debug.is_none());
+    }
+
+    // === ContextSelection tests ===
+
+    #[test]
     fn test_context_selection_default() {
         let ctx = ContextSelection::default();
         assert!(matches!(ctx, ContextSelection::Current));
+    }
+
+    #[test]
+    fn test_context_selection_switch_serialization() {
+        let ctx = ContextSelection::Switch {
+            name: "test".to_string(),
+            persistent: true,
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("switch"));
+        assert!(json.contains("test"));
+    }
+
+    #[test]
+    fn test_context_selection_transient_serialization() {
+        let ctx = ContextSelection::Transient {
+            name: "temp".to_string(),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("transient"));
+        assert!(json.contains("temp"));
+    }
+
+    #[test]
+    fn test_context_selection_current_serialization() {
+        let ctx = ContextSelection::Current;
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("current"));
+    }
+
+    #[test]
+    fn test_context_selection_deserialization() {
+        let json = r#"{"switch":{"name":"coding","persistent":true}}"#;
+        let ctx: ContextSelection = serde_json::from_str(json).unwrap();
+        assert!(
+            matches!(ctx, ContextSelection::Switch { ref name, persistent: true } if name == "coding")
+        );
+    }
+
+    // === Flags tests ===
+
+    #[test]
+    fn test_flags_default() {
+        let flags = Flags::default();
+        assert!(!flags.verbose);
+        assert!(!flags.json_output);
+        assert!(!flags.no_chibi);
+        assert!(flags.debug.is_none());
+    }
+
+    #[test]
+    fn test_flags_serialization() {
+        let flags = Flags {
+            verbose: true,
+            json_output: true,
+            no_chibi: false,
+            debug: Some(DebugKey::RequestLog),
+        };
+        let json = serde_json::to_string(&flags).unwrap();
+        assert!(json.contains("verbose"));
+        assert!(json.contains("json_output"));
+        assert!(json.contains("request_log"));
+    }
+
+    #[test]
+    fn test_flags_deserialization() {
+        let json = r#"{"verbose":true,"json_output":false,"no_chibi":true}"#;
+        let flags: Flags = serde_json::from_str(json).unwrap();
+        assert!(flags.verbose);
+        assert!(!flags.json_output);
+        assert!(flags.no_chibi);
+    }
+
+    // === DebugKey tests ===
+
+    #[test]
+    fn test_debug_key_from_str_request_log() {
+        assert_eq!(
+            DebugKey::from_str("request-log"),
+            Some(DebugKey::RequestLog)
+        );
+        assert_eq!(
+            DebugKey::from_str("request_log"),
+            Some(DebugKey::RequestLog)
+        );
+    }
+
+    #[test]
+    fn test_debug_key_from_str_response_meta() {
+        assert_eq!(
+            DebugKey::from_str("response-meta"),
+            Some(DebugKey::ResponseMeta)
+        );
+        assert_eq!(
+            DebugKey::from_str("response_meta"),
+            Some(DebugKey::ResponseMeta)
+        );
+    }
+
+    #[test]
+    fn test_debug_key_from_str_all() {
+        assert_eq!(DebugKey::from_str("all"), Some(DebugKey::All));
+    }
+
+    #[test]
+    fn test_debug_key_from_str_invalid() {
+        assert_eq!(DebugKey::from_str("invalid"), None);
+        assert_eq!(DebugKey::from_str(""), None);
+        assert_eq!(DebugKey::from_str("REQUEST_LOG"), None); // case sensitive
+    }
+
+    #[test]
+    fn test_debug_key_serialization() {
+        let key = DebugKey::RequestLog;
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(json, r#""request_log""#);
+
+        let key = DebugKey::ResponseMeta;
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(json, r#""response_meta""#);
+
+        let key = DebugKey::All;
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(json, r#""all""#);
+    }
+
+    #[test]
+    fn test_debug_key_deserialization() {
+        let key: DebugKey = serde_json::from_str(r#""request_log""#).unwrap();
+        assert_eq!(key, DebugKey::RequestLog);
+
+        let key: DebugKey = serde_json::from_str(r#""response_meta""#).unwrap();
+        assert_eq!(key, DebugKey::ResponseMeta);
+
+        let key: DebugKey = serde_json::from_str(r#""all""#).unwrap();
+        assert_eq!(key, DebugKey::All);
+    }
+
+    // === UsernameOverride tests ===
+
+    #[test]
+    fn test_username_override_persistent_serialization() {
+        let override_ = UsernameOverride::Persistent("alice".to_string());
+        let json = serde_json::to_string(&override_).unwrap();
+        assert!(json.contains("persistent"));
+        assert!(json.contains("alice"));
+    }
+
+    #[test]
+    fn test_username_override_transient_serialization() {
+        let override_ = UsernameOverride::Transient("bob".to_string());
+        let json = serde_json::to_string(&override_).unwrap();
+        assert!(json.contains("transient"));
+        assert!(json.contains("bob"));
+    }
+
+    #[test]
+    fn test_username_override_deserialization() {
+        let json = r#"{"persistent":"alice"}"#;
+        let override_: UsernameOverride = serde_json::from_str(json).unwrap();
+        assert!(matches!(override_, UsernameOverride::Persistent(ref u) if u == "alice"));
+
+        let json = r#"{"transient":"bob"}"#;
+        let override_: UsernameOverride = serde_json::from_str(json).unwrap();
+        assert!(matches!(override_, UsernameOverride::Transient(ref u) if u == "bob"));
+    }
+
+    // === Command tests ===
+
+    #[test]
+    fn test_command_send_prompt_serialization() {
+        let cmd = Command::SendPrompt {
+            prompt: "hello".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("send_prompt"));
+        assert!(json.contains("hello"));
+    }
+
+    #[test]
+    fn test_command_list_contexts_serialization() {
+        let cmd = Command::ListContexts;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(json, r#""list_contexts""#);
+    }
+
+    #[test]
+    fn test_command_delete_context_with_name() {
+        let cmd = Command::DeleteContext {
+            name: Some("test".to_string()),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("delete_context"));
+        assert!(json.contains("test"));
+    }
+
+    #[test]
+    fn test_command_delete_context_current() {
+        let cmd = Command::DeleteContext { name: None };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("delete_context"));
+        assert!(json.contains("null"));
+    }
+
+    #[test]
+    fn test_command_rename_context() {
+        let cmd = Command::RenameContext {
+            old: Some("old".to_string()),
+            new: "new".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("rename_context"));
+        assert!(json.contains("old"));
+        assert!(json.contains("new"));
+    }
+
+    #[test]
+    fn test_command_show_log() {
+        let cmd = Command::ShowLog {
+            context: Some("test".to_string()),
+            count: 10,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("show_log"));
+        assert!(json.contains("test"));
+        assert!(json.contains("10"));
+    }
+
+    #[test]
+    fn test_command_inspect() {
+        use crate::cli::Inspectable;
+        let cmd = Command::Inspect {
+            context: None,
+            thing: Inspectable::Todos,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("inspect"));
+        assert!(json.contains("todos"));
+    }
+
+    #[test]
+    fn test_command_set_system_prompt() {
+        let cmd = Command::SetSystemPrompt {
+            context: Some("ctx".to_string()),
+            prompt: "Be helpful".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("set_system_prompt"));
+        assert!(json.contains("ctx"));
+        assert!(json.contains("Be helpful"));
+    }
+
+    #[test]
+    fn test_command_run_plugin() {
+        let cmd = Command::RunPlugin {
+            name: "myplugin".to_string(),
+            args: vec!["--help".to_string()],
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("run_plugin"));
+        assert!(json.contains("myplugin"));
+        assert!(json.contains("--help"));
+    }
+
+    #[test]
+    fn test_command_call_tool() {
+        let cmd = Command::CallTool {
+            name: "update_todos".to_string(),
+            args: vec![],
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("call_tool"));
+        assert!(json.contains("update_todos"));
+    }
+
+    #[test]
+    fn test_command_show_help() {
+        let cmd = Command::ShowHelp;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(json, r#""show_help""#);
+    }
+
+    #[test]
+    fn test_command_show_version() {
+        let cmd = Command::ShowVersion;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(json, r#""show_version""#);
+    }
+
+    #[test]
+    fn test_command_no_op() {
+        let cmd = Command::NoOp;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(json, r#""no_op""#);
+    }
+
+    // === Full ChibiInput round-trip tests ===
+
+    #[test]
+    fn test_chibi_input_full_round_trip() {
+        use crate::cli::Inspectable;
+
+        let input = ChibiInput {
+            command: Command::Inspect {
+                context: Some("test".to_string()),
+                thing: Inspectable::SystemPrompt,
+            },
+            flags: Flags {
+                verbose: true,
+                json_output: true,
+                no_chibi: true,
+                debug: Some(DebugKey::All),
+            },
+            context: ContextSelection::Switch {
+                name: "coding".to_string(),
+                persistent: false,
+            },
+            username_override: Some(UsernameOverride::Transient("alice".to_string())),
+        };
+
+        let json = serde_json::to_string(&input).unwrap();
+        let deserialized: ChibiInput = serde_json::from_str(&json).unwrap();
+
+        assert!(
+            matches!(deserialized.command, Command::Inspect { context: Some(ref c), thing: Inspectable::SystemPrompt } if c == "test")
+        );
+        assert!(deserialized.flags.verbose);
+        assert!(deserialized.flags.json_output);
+        assert!(deserialized.flags.no_chibi);
+        assert_eq!(deserialized.flags.debug, Some(DebugKey::All));
+        assert!(
+            matches!(deserialized.context, ContextSelection::Switch { ref name, persistent: false } if name == "coding")
+        );
+        assert!(
+            matches!(deserialized.username_override, Some(UsernameOverride::Transient(ref u)) if u == "alice")
+        );
+    }
+
+    #[test]
+    fn test_chibi_input_minimal_round_trip() {
+        let input = ChibiInput {
+            command: Command::ListContexts,
+            flags: Flags::default(),
+            context: ContextSelection::Current,
+            username_override: None,
+        };
+
+        let json = serde_json::to_string(&input).unwrap();
+        let deserialized: ChibiInput = serde_json::from_str(&json).unwrap();
+
+        assert!(matches!(deserialized.command, Command::ListContexts));
+        assert!(matches!(deserialized.context, ContextSelection::Current));
+        assert!(deserialized.username_override.is_none());
     }
 }

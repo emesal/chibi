@@ -423,3 +423,78 @@ fn integration_json_config_mode_context_switch() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("json_test_context"));
 }
+
+// =============================================================================
+// Inspect config fields tests (issue #18)
+// =============================================================================
+
+#[test]
+fn integration_inspect_list_includes_config_fields() {
+    // -n list should show both file-based items and config fields
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("-n")
+        .arg("list")
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // File-based items
+    assert!(stdout.contains("system_prompt"));
+    assert!(stdout.contains("todos"));
+    assert!(stdout.contains("goals"));
+    assert!(stdout.contains("reflection"));
+
+    // Config fields (issue #18)
+    assert!(stdout.contains("model"));
+    assert!(stdout.contains("username"));
+    assert!(stdout.contains("api.temperature"));
+    assert!(stdout.contains("api.reasoning.effort"));
+}
+
+#[test]
+fn integration_inspect_config_field_model() {
+    // -n model should output the configured model
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("-n")
+        .arg("model")
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should output something (the model name from config)
+    // We can't test the exact value since it depends on user's config
+    assert!(!stdout.is_empty());
+}
+
+#[test]
+fn integration_inspect_config_field_username() {
+    // -n username should output the configured username
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("-n")
+        .arg("username")
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should output something (the username from config)
+    assert!(!stdout.is_empty());
+}
+
+#[test]
+fn integration_inspect_invalid_config_field() {
+    // -n with an invalid field should fail
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("-n")
+        .arg("invalid_nonexistent_field")
+        .output()
+        .expect("failed to run chibi");
+
+    // Should fail since the field doesn't exist
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Invalid") || stderr.contains("Unknown"));
+}

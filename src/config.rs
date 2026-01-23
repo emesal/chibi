@@ -333,6 +333,77 @@ pub struct ResolvedConfig {
     pub api: ApiParams,
 }
 
+impl ResolvedConfig {
+    /// Get a config field value by path (e.g., "model", "api.temperature", "api.reasoning.effort").
+    /// Returns None if the field doesn't exist or has no value set.
+    /// Note: api_key is intentionally excluded for security.
+    pub fn get_field(&self, path: &str) -> Option<String> {
+        match path {
+            // Top-level fields (excluding api_key for security)
+            "model" => Some(self.model.clone()),
+            "username" => Some(self.username.clone()),
+            "base_url" => Some(self.base_url.clone()),
+            "context_window_limit" => Some(self.context_window_limit.to_string()),
+            "warn_threshold_percent" => Some(format!("{}", self.warn_threshold_percent as i32)),
+            "auto_compact" => Some(self.auto_compact.to_string()),
+            "auto_compact_threshold" => Some(format!("{}", self.auto_compact_threshold as i32)),
+            "max_recursion_depth" => Some(self.max_recursion_depth.to_string()),
+            "reflection_enabled" => Some(self.reflection_enabled.to_string()),
+
+            // API params (api.*)
+            "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
+            "api.max_tokens" => self.api.max_tokens.map(|v| v.to_string()),
+            "api.top_p" => self.api.top_p.map(|v| format!("{}", v)),
+            "api.prompt_caching" => self.api.prompt_caching.map(|v| v.to_string()),
+            "api.parallel_tool_calls" => self.api.parallel_tool_calls.map(|v| v.to_string()),
+            "api.frequency_penalty" => self.api.frequency_penalty.map(|v| format!("{}", v)),
+            "api.presence_penalty" => self.api.presence_penalty.map(|v| format!("{}", v)),
+            "api.seed" => self.api.seed.map(|v| v.to_string()),
+            "api.stop" => self.api.stop.as_ref().map(|v| v.join(", ")),
+
+            // Reasoning config (api.reasoning.*)
+            "api.reasoning.effort" => self.api.reasoning.effort.map(|v| v.as_str().to_string()),
+            "api.reasoning.max_tokens" => self.api.reasoning.max_tokens.map(|v| v.to_string()),
+            "api.reasoning.exclude" => self.api.reasoning.exclude.map(|v| v.to_string()),
+            "api.reasoning.enabled" => self.api.reasoning.enabled.map(|v| v.to_string()),
+
+            _ => None,
+        }
+    }
+
+    /// List all inspectable config field paths.
+    /// Note: api_key is intentionally excluded for security.
+    pub fn list_fields() -> &'static [&'static str] {
+        &[
+            // Top-level fields
+            "model",
+            "username",
+            "base_url",
+            "context_window_limit",
+            "warn_threshold_percent",
+            "auto_compact",
+            "auto_compact_threshold",
+            "max_recursion_depth",
+            "reflection_enabled",
+            // API params
+            "api.temperature",
+            "api.max_tokens",
+            "api.top_p",
+            "api.prompt_caching",
+            "api.parallel_tool_calls",
+            "api.frequency_penalty",
+            "api.presence_penalty",
+            "api.seed",
+            "api.stop",
+            // Reasoning config
+            "api.reasoning.effort",
+            "api.reasoning.max_tokens",
+            "api.reasoning.exclude",
+            "api.reasoning.enabled",
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,5 +717,226 @@ mod tests {
         let json = r#"{"type": "json_object"}"#;
         let format: ResponseFormat = serde_json::from_str(json).unwrap();
         assert!(matches!(format, ResponseFormat::JsonObject));
+    }
+
+    // ========== ResolvedConfig field inspection tests (TDD for issue #18) ==========
+
+    fn create_test_resolved_config() -> ResolvedConfig {
+        ResolvedConfig {
+            api_key: "sk-test-key".to_string(),
+            model: "anthropic/claude-3-opus".to_string(),
+            context_window_limit: 200000,
+            warn_threshold_percent: 75.0,
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            auto_compact: true,
+            auto_compact_threshold: 80.0,
+            max_recursion_depth: 30,
+            username: "alice".to_string(),
+            reflection_enabled: true,
+            api: ApiParams {
+                temperature: Some(0.7),
+                max_tokens: Some(4096),
+                prompt_caching: Some(true),
+                reasoning: ReasoningConfig {
+                    effort: Some(ReasoningEffort::High),
+                    max_tokens: None,
+                    exclude: Some(false),
+                    enabled: Some(true),
+                },
+                parallel_tool_calls: Some(true),
+                top_p: Some(0.9),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_model() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("model"),
+            Some("anthropic/claude-3-opus".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_username() {
+        let config = create_test_resolved_config();
+        assert_eq!(config.get_field("username"), Some("alice".to_string()));
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_context_window_limit() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("context_window_limit"),
+            Some("200000".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_auto_compact() {
+        let config = create_test_resolved_config();
+        assert_eq!(config.get_field("auto_compact"), Some("true".to_string()));
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_warn_threshold_percent() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("warn_threshold_percent"),
+            Some("75".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_reflection_enabled() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("reflection_enabled"),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_max_recursion_depth() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("max_recursion_depth"),
+            Some("30".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_base_url() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("base_url"),
+            Some("https://openrouter.ai/api/v1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_auto_compact_threshold() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("auto_compact_threshold"),
+            Some("80".to_string())
+        );
+    }
+
+    // Nested API params tests
+
+    #[test]
+    fn test_resolved_config_get_field_api_temperature() {
+        let config = create_test_resolved_config();
+        assert_eq!(config.get_field("api.temperature"), Some("0.7".to_string()));
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_api_max_tokens() {
+        let config = create_test_resolved_config();
+        assert_eq!(config.get_field("api.max_tokens"), Some("4096".to_string()));
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_api_prompt_caching() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("api.prompt_caching"),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_api_top_p() {
+        let config = create_test_resolved_config();
+        assert_eq!(config.get_field("api.top_p"), Some("0.9".to_string()));
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_api_parallel_tool_calls() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("api.parallel_tool_calls"),
+            Some("true".to_string())
+        );
+    }
+
+    // Deeply nested reasoning config tests
+
+    #[test]
+    fn test_resolved_config_get_field_api_reasoning_effort() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("api.reasoning.effort"),
+            Some("high".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_api_reasoning_enabled() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("api.reasoning.enabled"),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_api_reasoning_exclude() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("api.reasoning.exclude"),
+            Some("false".to_string())
+        );
+    }
+
+    // None/unset values should return None
+
+    #[test]
+    fn test_resolved_config_get_field_unset_returns_none() {
+        let config = create_test_resolved_config();
+        // api.stop is not set
+        assert_eq!(config.get_field("api.stop"), None);
+        // api.seed is not set
+        assert_eq!(config.get_field("api.seed"), None);
+        // api.frequency_penalty is not set
+        assert_eq!(config.get_field("api.frequency_penalty"), None);
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_invalid_returns_none() {
+        let config = create_test_resolved_config();
+        assert_eq!(config.get_field("nonexistent_field"), None);
+        assert_eq!(config.get_field("api.nonexistent"), None);
+        assert_eq!(config.get_field("api.reasoning.nonexistent"), None);
+    }
+
+    // List all inspectable fields
+
+    #[test]
+    fn test_resolved_config_list_fields() {
+        let fields = ResolvedConfig::list_fields();
+        // Should include top-level fields
+        assert!(fields.contains(&"model"));
+        assert!(fields.contains(&"username"));
+        assert!(fields.contains(&"context_window_limit"));
+        assert!(fields.contains(&"auto_compact"));
+        assert!(fields.contains(&"reflection_enabled"));
+        // Should include nested API params
+        assert!(fields.contains(&"api.temperature"));
+        assert!(fields.contains(&"api.max_tokens"));
+        assert!(fields.contains(&"api.prompt_caching"));
+        // Should include deeply nested reasoning config
+        assert!(fields.contains(&"api.reasoning.effort"));
+        assert!(fields.contains(&"api.reasoning.enabled"));
+    }
+
+    #[test]
+    fn test_resolved_config_list_fields_excludes_api_key() {
+        // api_key should NOT be inspectable for security reasons
+        let fields = ResolvedConfig::list_fields();
+        assert!(!fields.contains(&"api_key"));
     }
 }

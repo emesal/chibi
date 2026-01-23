@@ -64,7 +64,12 @@ fn resolve_context_name(app: &AppState, name: &str) -> io::Result<String> {
 }
 
 /// Display inspectable content for a context
-fn inspect_context(app: &AppState, context_name: &str, thing: &Inspectable) -> io::Result<()> {
+fn inspect_context(
+    app: &AppState,
+    context_name: &str,
+    thing: &Inspectable,
+    resolved_config: Option<&config::ResolvedConfig>,
+) -> io::Result<()> {
     match thing {
         Inspectable::List => {
             println!("Inspectable items:");
@@ -113,6 +118,21 @@ fn inspect_context(app: &AppState, context_name: &str, thing: &Inspectable) -> i
                 print!("{}", goals);
                 if !goals.ends_with('\n') {
                     println!();
+                }
+            }
+        }
+        Inspectable::ConfigField(field_path) => {
+            if let Some(config) = resolved_config {
+                match config.get_field(field_path) {
+                    Some(value) => println!("{}", value),
+                    None => println!("(not set)"),
+                }
+            } else {
+                // Need to resolve config to inspect config fields
+                let config = app.resolve_config(None, None)?;
+                match config.get_field(field_path) {
+                    Some(value) => println!("{}", value),
+                    None => println!("(not set)"),
                 }
             }
         }
@@ -421,7 +441,8 @@ async fn execute_from_input(
             let ctx_name = context
                 .clone()
                 .unwrap_or_else(|| app.state.current_context.clone());
-            inspect_context(app, &ctx_name, thing)?;
+            // Pass None for resolved_config - it will be resolved on demand if needed
+            inspect_context(app, &ctx_name, thing, None)?;
             did_action = true;
         }
         Command::SetSystemPrompt { context, prompt } => {

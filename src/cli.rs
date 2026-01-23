@@ -18,27 +18,45 @@ pub struct PluginInvocation {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Inspectable {
+    // File-based items (context-specific)
     SystemPrompt,
     Reflection,
     Todos,
     Goals,
-    List, // Lists all inspectable items
+    // Lists all inspectable items
+    List,
+    // Config field (dynamic path like "model", "api.temperature", etc.)
+    // Note: untagged must be last for serde to work correctly
+    #[serde(untagged)]
+    ConfigField(String),
 }
 
 impl Inspectable {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
+            // File-based items
             "system_prompt" | "prompt" => Some(Inspectable::SystemPrompt),
             "reflection" => Some(Inspectable::Reflection),
             "todos" => Some(Inspectable::Todos),
             "goals" => Some(Inspectable::Goals),
             "list" => Some(Inspectable::List),
-            _ => None,
+            // Check if it's a valid config field path
+            other => {
+                use crate::config::ResolvedConfig;
+                if ResolvedConfig::list_fields().contains(&other) {
+                    Some(Inspectable::ConfigField(other.to_string()))
+                } else {
+                    None
+                }
+            }
         }
     }
 
-    pub fn all_names() -> &'static [&'static str] {
-        &["system_prompt", "reflection", "todos", "goals", "list"]
+    pub fn all_names() -> Vec<&'static str> {
+        use crate::config::ResolvedConfig;
+        let mut names = vec!["system_prompt", "reflection", "todos", "goals", "list"];
+        names.extend(ResolvedConfig::list_fields());
+        names
     }
 }
 
@@ -1315,5 +1333,64 @@ mod tests {
         assert!(names.contains(&"todos"));
         assert!(names.contains(&"goals"));
         assert!(names.contains(&"list"));
+    }
+
+    // === ConfigField inspect tests (issue #18) ===
+
+    #[test]
+    fn test_inspectable_config_field_model() {
+        assert_eq!(
+            Inspectable::from_str("model"),
+            Some(Inspectable::ConfigField("model".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_inspectable_config_field_username() {
+        assert_eq!(
+            Inspectable::from_str("username"),
+            Some(Inspectable::ConfigField("username".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_inspectable_config_field_api_temperature() {
+        assert_eq!(
+            Inspectable::from_str("api.temperature"),
+            Some(Inspectable::ConfigField("api.temperature".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_inspectable_config_field_api_reasoning_effort() {
+        assert_eq!(
+            Inspectable::from_str("api.reasoning.effort"),
+            Some(Inspectable::ConfigField("api.reasoning.effort".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_inspectable_config_field_context_window_limit() {
+        assert_eq!(
+            Inspectable::from_str("context_window_limit"),
+            Some(Inspectable::ConfigField("context_window_limit".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_inspectable_all_names_includes_config_fields() {
+        let names = Inspectable::all_names();
+        // Should include config fields
+        assert!(names.contains(&"model"));
+        assert!(names.contains(&"username"));
+        assert!(names.contains(&"api.temperature"));
+        assert!(names.contains(&"api.reasoning.effort"));
+    }
+
+    #[test]
+    fn test_inspectable_invalid_config_path() {
+        // Invalid paths should return None
+        assert_eq!(Inspectable::from_str("api.nonexistent"), None);
+        assert_eq!(Inspectable::from_str("foo.bar.baz"), None);
     }
 }
