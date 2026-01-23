@@ -2,6 +2,8 @@
 
 CLI tool for conversing with AI models via OpenRouter. Maintains conversation state across invocations for coherent multi-turn conversations directly from your terminal.
 
+![Cutethulu, the chibi mascot](docs/images/cutethulu.svg)
+
 ## Features
 
 - **Persistent conversations** - State saved between sessions
@@ -55,6 +57,8 @@ chibi -c research "Find info about X"
 # See tool activity
 chibi -v "Read my Cargo.toml"
 ```
+
+![Chibi in all the tubes!](docs/images/explain_this.jpeg)
 
 ## Documentation
 
