@@ -153,10 +153,15 @@ fn integration_version_word_is_prompt() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Should NOT show version (that would mean it parsed "version" as --version)
+    // The output should NOT be exactly "chibi X.Y.Z" (the version format)
+    // It might fail due to missing API key, or return something else
+    // But definitely should not match the version pattern "chibi \d+\.\d+\.\d+"
+    let version_pattern = regex::Regex::new(r"^chibi \d+\.\d+\.\d+$").unwrap();
+    let first_line = stdout.lines().next().unwrap_or("");
     assert!(
-        !stdout.starts_with("chibi "),
-        "Should not have treated 'version' as --version flag"
+        !version_pattern.is_match(first_line.trim()),
+        "Should not have treated 'version' as --version flag, got: {}",
+        stdout
     );
 }
 
@@ -189,4 +194,232 @@ fn integration_attached_arg_form() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("not found"));
+}
+
+// =============================================================================
+// "new" and "new:prefix" context name tests
+// =============================================================================
+
+/// Test that -c new creates a timestamped context name
+#[test]
+fn integration_switch_to_new_context() {
+    // -c new should switch to a new auto-generated context
+    // Since -c alone doesn't produce output without prompt, use -l to see the context
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "new", "-l"])
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should show a context name that looks like a timestamp: YYYYMMDD_HHMMSS
+    // Pattern: 8 digits, underscore, 6 digits
+    assert!(stdout.contains("Context:"), "Should show context info");
+
+    // The context name should be in the format YYYYMMDD_HHMMSS
+    // Check that stdout contains something matching this pattern
+    let has_timestamp_format = stdout.lines().any(|line| {
+        if line.starts_with("Context:") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[1];
+                // Check if name looks like YYYYMMDD_HHMMSS
+                let chars: Vec<char> = name.chars().collect();
+                chars.len() >= 15
+                    && chars[0..8].iter().all(|c| c.is_ascii_digit())
+                    && chars[8] == '_'
+                    && chars[9..15].iter().all(|c| c.is_ascii_digit())
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    });
+
+    assert!(
+        has_timestamp_format,
+        "Context name should be in YYYYMMDD_HHMMSS format, got: {}",
+        stdout
+    );
+}
+
+/// Test that -c new:prefix creates a prefixed timestamped context name
+#[test]
+fn integration_switch_to_new_context_with_prefix() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "new:myprefix", "-l"])
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should show a context name starting with "myprefix_"
+    assert!(
+        stdout.contains("myprefix_"),
+        "Context name should start with prefix, got: {}",
+        stdout
+    );
+}
+
+/// Test that -c new: (empty prefix) is an error
+#[test]
+fn integration_new_context_empty_prefix_error() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "new:", "-l"])
+        .output()
+        .expect("failed to run chibi");
+
+    // Should fail - empty prefix is not allowed
+    assert!(
+        !output.status.success(),
+        "Empty prefix should cause an error"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("empty") || stderr.contains("Prefix"),
+        "Error should mention empty prefix, got: {}",
+        stderr
+    );
+}
+
+/// Test transient context with -C new
+#[test]
+fn integration_transient_new_context() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-C", "new", "-l"])
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should show context info with a timestamped name
+    assert!(stdout.contains("Context:"));
+}
+
+// =============================================================================
+// JSON config mode tests
+// =============================================================================
+
+/// Test JSON config mode with --json-config
+#[test]
+fn integration_json_config_mode_help() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-config")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn chibi");
+
+    // Send help command via JSON
+    let json_input = r#"{"command": "show_help"}"#;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(json_input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("failed to read output");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Usage") || stdout.contains("chibi"));
+}
+
+/// Test JSON config mode with version command
+#[test]
+fn integration_json_config_mode_version() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-config")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn chibi");
+
+    let json_input = r#"{"command": "show_version"}"#;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(json_input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("failed to read output");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("chibi"));
+}
+
+/// Test JSON config mode with list_contexts command
+#[test]
+fn integration_json_config_mode_list_contexts() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-config")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn chibi");
+
+    let json_input = r#"{"command": "list_contexts"}"#;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(json_input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("failed to read output");
+
+    assert!(output.status.success());
+}
+
+/// Test JSON config mode with context switch
+#[test]
+fn integration_json_config_mode_context_switch() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-config")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn chibi");
+
+    // Switch to a context transiently and list current context info
+    let json_input = r#"{
+        "command": "list_current_context",
+        "context": {"transient": {"name": "json_test_context"}}
+    }"#;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(json_input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("failed to read output");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("json_test_context"));
 }

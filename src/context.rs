@@ -385,4 +385,176 @@ mod tests {
         assert_eq!(parsed.to, "context-b");
         assert_eq!(parsed.content, "Test message");
     }
+
+    // === Context name validation edge cases ===
+
+    #[test]
+    fn test_context_name_all_dashes() {
+        // Names like "--" or "---" are technically valid by current rules
+        // (alphanumeric OR dash OR underscore) but might be problematic
+        // Question: Should these be valid? They could conflict with CLI flags.
+        // Current behavior: valid (all chars are dashes, which are allowed)
+        assert!(is_valid_context_name("--"));
+        assert!(is_valid_context_name("---"));
+    }
+
+    #[test]
+    fn test_context_name_all_underscores() {
+        // Similar edge case with underscores
+        assert!(is_valid_context_name("_"));
+        assert!(is_valid_context_name("__"));
+        assert!(is_valid_context_name("___"));
+    }
+
+    #[test]
+    fn test_context_name_leading_dash() {
+        // Leading dash could be problematic with CLI parsing
+        assert!(is_valid_context_name("-mycontext"));
+        assert!(is_valid_context_name("-"));
+    }
+
+    #[test]
+    fn test_context_name_leading_underscore() {
+        assert!(is_valid_context_name("_mycontext"));
+        assert!(is_valid_context_name("_hidden"));
+    }
+
+    #[test]
+    fn test_context_name_numeric_only() {
+        // All-numeric names should be valid
+        assert!(is_valid_context_name("123"));
+        assert!(is_valid_context_name("0"));
+        assert!(is_valid_context_name("999999"));
+    }
+
+    #[test]
+    fn test_context_name_very_long() {
+        // Very long names - should be valid but might cause filesystem issues
+        let long_name = "a".repeat(255); // Max filename length on most filesystems
+        assert!(is_valid_context_name(&long_name));
+    }
+
+    #[test]
+    fn test_context_name_reserved_words() {
+        // "new" is special in the CLI for auto-generating context names
+        // but should still be valid as an actual context name
+        assert!(is_valid_context_name("new"));
+        // "default" is the default context name
+        assert!(is_valid_context_name("default"));
+    }
+
+    #[test]
+    fn test_context_name_with_numbers_at_start() {
+        assert!(is_valid_context_name("123abc"));
+        assert!(is_valid_context_name("1-context"));
+        assert!(is_valid_context_name("2_test"));
+    }
+
+    #[test]
+    fn test_context_name_mixed_case_preserved() {
+        // Verify mixed case names work (filesystem dependent)
+        assert!(is_valid_context_name("MyContext"));
+        assert!(is_valid_context_name("ALLCAPS"));
+        assert!(is_valid_context_name("lowercase"));
+    }
+
+    // === TranscriptEntry builder tests ===
+
+    #[test]
+    fn test_transcript_entry_builder_defaults() {
+        let entry = TranscriptEntry::builder().build();
+        assert!(!entry.id.is_empty()); // UUID generated
+        assert!(entry.timestamp > 0); // Timestamp set
+        assert_eq!(entry.from, ""); // Empty default
+        assert_eq!(entry.to, ""); // Empty default
+        assert_eq!(entry.content, ""); // Empty default
+        assert_eq!(entry.entry_type, ENTRY_TYPE_MESSAGE); // Default type
+        assert!(entry.metadata.is_none());
+    }
+
+    #[test]
+    fn test_transcript_entry_builder_full() {
+        let metadata = EntryMetadata {
+            summary: Some("test summary".to_string()),
+            hash: None,
+            transcript_anchor_id: None,
+        };
+        let entry = TranscriptEntry::builder()
+            .from("sender")
+            .to("receiver")
+            .content("hello")
+            .entry_type(ENTRY_TYPE_TOOL_CALL)
+            .metadata(metadata)
+            .build();
+
+        assert_eq!(entry.from, "sender");
+        assert_eq!(entry.to, "receiver");
+        assert_eq!(entry.content, "hello");
+        assert_eq!(entry.entry_type, ENTRY_TYPE_TOOL_CALL);
+        assert!(entry.metadata.is_some());
+        assert_eq!(
+            entry.metadata.unwrap().summary,
+            Some("test summary".to_string())
+        );
+    }
+
+    #[test]
+    fn test_transcript_entry_new_constructor() {
+        let entry = TranscriptEntry::new("from", "to", "content", "custom_type");
+        assert_eq!(entry.from, "from");
+        assert_eq!(entry.to, "to");
+        assert_eq!(entry.content, "content");
+        assert_eq!(entry.entry_type, "custom_type");
+        assert!(!entry.id.is_empty());
+        assert!(entry.timestamp > 0);
+    }
+
+    #[test]
+    fn test_transcript_entry_with_metadata() {
+        let metadata = EntryMetadata {
+            summary: Some("summary".to_string()),
+            hash: Some("abc123".to_string()),
+            transcript_anchor_id: Some("anchor-id".to_string()),
+        };
+        let entry = TranscriptEntry::with_metadata("from", "to", "content", "type", metadata);
+        assert!(entry.metadata.is_some());
+        let m = entry.metadata.unwrap();
+        assert_eq!(m.summary, Some("summary".to_string()));
+        assert_eq!(m.hash, Some("abc123".to_string()));
+        assert_eq!(m.transcript_anchor_id, Some("anchor-id".to_string()));
+    }
+
+    // === Context struct tests ===
+
+    #[test]
+    fn test_context_new_initializes_correctly() {
+        let ctx = Context::new("test-ctx");
+        assert_eq!(ctx.name, "test-ctx");
+        assert!(ctx.messages.is_empty());
+        assert!(ctx.created_at > 0);
+        assert_eq!(ctx.updated_at, 0); // Not updated yet
+        assert!(ctx.summary.is_empty());
+    }
+
+    #[test]
+    fn test_context_meta_default() {
+        let meta = ContextMeta::default();
+        assert!(meta.created_at > 0); // Should have current timestamp
+    }
+
+    // === EntryMetadata tests ===
+
+    #[test]
+    fn test_entry_metadata_serialization_skips_none() {
+        let metadata = EntryMetadata {
+            summary: Some("test".to_string()),
+            hash: None,
+            transcript_anchor_id: None,
+        };
+        let json = serde_json::to_string(&metadata).unwrap();
+        // Should not contain "hash" or "transcript_anchor_id" keys
+        assert!(json.contains("summary"));
+        assert!(!json.contains("hash"));
+        assert!(!json.contains("transcript_anchor_id"));
+    }
 }

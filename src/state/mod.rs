@@ -1717,6 +1717,203 @@ mod tests {
         assert_eq!(resolved.username, "cliuser");
     }
 
+    #[test]
+    fn test_resolve_config_api_params_global_defaults() {
+        let (app, _temp) = create_test_app();
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        // Should have defaults from ApiParams::defaults()
+        assert_eq!(resolved.api.prompt_caching, Some(true));
+        assert_eq!(resolved.api.parallel_tool_calls, Some(true));
+        assert_eq!(
+            resolved.api.reasoning.effort,
+            Some(crate::config::ReasoningEffort::Medium)
+        );
+    }
+
+    #[test]
+    fn test_resolve_config_api_params_context_override() {
+        let (app, _temp) = create_test_app();
+
+        // Set local config with API overrides
+        let local = LocalConfig {
+            api: Some(ApiParams {
+                temperature: Some(0.7),
+                max_tokens: Some(2000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        // Context-level API params should override
+        assert_eq!(resolved.api.temperature, Some(0.7));
+        assert_eq!(resolved.api.max_tokens, Some(2000));
+        // But defaults should still be present for unset values
+        assert_eq!(resolved.api.prompt_caching, Some(true));
+    }
+
+    #[test]
+    fn test_resolve_config_model_level_api_params() {
+        // Create test app with models config
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config {
+            api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
+            context_window_limit: 8000,
+            warn_threshold_percent: 75.0,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            base_url: "https://test.api/v1".to_string(),
+            reflection_enabled: true,
+            reflection_character_limit: 10000,
+            max_recursion_depth: 15,
+            username: "testuser".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            api: ApiParams::default(),
+        };
+
+        let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+
+        // Add model config
+        app.models_config.models.insert(
+            "test-model".to_string(),
+            crate::config::ModelMetadata {
+                context_window: Some(16000),
+                api: ApiParams {
+                    temperature: Some(0.5),
+                    reasoning: crate::config::ReasoningConfig {
+                        effort: Some(crate::config::ReasoningEffort::High),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        );
+
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        // Model-level params should be applied
+        assert_eq!(resolved.api.temperature, Some(0.5));
+        assert_eq!(
+            resolved.api.reasoning.effort,
+            Some(crate::config::ReasoningEffort::High)
+        );
+        // Model context window should override
+        assert_eq!(resolved.context_window_limit, 16000);
+    }
+
+    #[test]
+    fn test_resolve_config_hierarchy_context_over_model() {
+        // Test that context-level API params override model-level
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config {
+            api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
+            context_window_limit: 8000,
+            warn_threshold_percent: 75.0,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            base_url: "https://test.api/v1".to_string(),
+            reflection_enabled: true,
+            reflection_character_limit: 10000,
+            max_recursion_depth: 15,
+            username: "testuser".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            api: ApiParams::default(),
+        };
+
+        let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+
+        // Add model config with temperature
+        app.models_config.models.insert(
+            "test-model".to_string(),
+            crate::config::ModelMetadata {
+                context_window: Some(16000),
+                api: ApiParams {
+                    temperature: Some(0.5),
+                    max_tokens: Some(1000),
+                    ..Default::default()
+                },
+            },
+        );
+
+        // Set local config that overrides temperature but not max_tokens
+        let local = LocalConfig {
+            api: Some(ApiParams {
+                temperature: Some(0.9), // Override model's 0.5
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        // Context should override model
+        assert_eq!(resolved.api.temperature, Some(0.9));
+        // Model value should be preserved when context doesn't override
+        assert_eq!(resolved.api.max_tokens, Some(1000));
+    }
+
+    #[test]
+    fn test_resolve_config_cli_persistent_username() {
+        let (app, _temp) = create_test_app();
+
+        // CLI persistent username (simulates -u flag)
+        let resolved = app.resolve_config(Some("persistentuser"), None).unwrap();
+        assert_eq!(resolved.username, "persistentuser");
+    }
+
+    #[test]
+    fn test_resolve_config_cli_temp_username_over_persistent() {
+        let (app, _temp) = create_test_app();
+
+        // Temp username should override persistent
+        let resolved = app
+            .resolve_config(Some("persistentuser"), Some("tempuser"))
+            .unwrap();
+        assert_eq!(resolved.username, "tempuser");
+    }
+
+    #[test]
+    fn test_resolve_config_all_local_overrides() {
+        let (app, _temp) = create_test_app();
+
+        // Set all local config overrides
+        let local = LocalConfig {
+            model: Some("local-model".to_string()),
+            api_key: Some("local-key".to_string()),
+            base_url: Some("https://local.api/v1".to_string()),
+            username: Some("localuser".to_string()),
+            auto_compact: Some(true),
+            auto_compact_threshold: Some(90.0),
+            max_recursion_depth: Some(50),
+            warn_threshold_percent: Some(85.0),
+            context_window_limit: Some(16000),
+            reflection_enabled: Some(false),
+            api: None,
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        assert_eq!(resolved.model, "local-model");
+        assert_eq!(resolved.api_key, "local-key");
+        assert_eq!(resolved.base_url, "https://local.api/v1");
+        assert_eq!(resolved.username, "localuser");
+        assert!(resolved.auto_compact);
+        assert!((resolved.auto_compact_threshold - 90.0).abs() < f32::EPSILON);
+        assert_eq!(resolved.max_recursion_depth, 50);
+        assert!((resolved.warn_threshold_percent - 85.0).abs() < f32::EPSILON);
+        assert_eq!(resolved.context_window_limit, 16000);
+        assert!(!resolved.reflection_enabled);
+    }
+
     // === Transcript entry creation tests ===
 
     #[test]
@@ -1761,5 +1958,294 @@ mod tests {
         assert_eq!(entry.from, "web_search");
         assert_eq!(entry.to, "default");
         assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_TOOL_RESULT);
+    }
+
+    // === JSONL parsing robustness tests ===
+
+    #[test]
+    fn test_jsonl_empty_file() {
+        let (app, _temp) = create_test_app();
+
+        // Create empty context.jsonl
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+        fs::write(ctx_dir.join("context.jsonl"), "").unwrap();
+
+        // Should return empty vec, not error
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_jsonl_blank_lines() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with blank lines
+        let content = r#"
+{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message"}
+
+{"id":"2","timestamp":1234567891,"from":"ctx","to":"user","content":"hi","entry_type":"message"}
+
+"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].content, "hello");
+        assert_eq!(entries[1].content, "hi");
+    }
+
+    #[test]
+    fn test_jsonl_malformed_entries_skipped() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with some malformed entries
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message"}
+not valid json at all
+{"id":"2","timestamp":1234567891,"from":"ctx","to":"user","content":"hi","entry_type":"message"}
+{"incomplete": true
+{"id":"3","timestamp":1234567892,"from":"user","to":"ctx","content":"bye","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        // Should skip malformed entries and return valid ones
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 3, "Should have 3 valid entries");
+        assert_eq!(entries[0].content, "hello");
+        assert_eq!(entries[1].content, "hi");
+        assert_eq!(entries[2].content, "bye");
+    }
+
+    #[test]
+    fn test_jsonl_nonexistent_file() {
+        let (app, _temp) = create_test_app();
+
+        // Don't create the context directory
+        let entries = app.read_context_entries("nonexistent-context").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_jsonl_unicode_content() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with unicode content
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"こんにちは 🎉 Привет","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "こんにちは 🎉 Привет");
+    }
+
+    #[test]
+    fn test_jsonl_with_escaped_content() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with escaped characters in content
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"line1\nline2\ttab","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].content.contains('\n'));
+        assert!(entries[0].content.contains('\t'));
+    }
+
+    #[test]
+    fn test_jsonl_missing_optional_fields() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL without optional metadata field
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].metadata.is_none());
+    }
+
+    #[test]
+    fn test_jsonl_with_metadata() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with metadata field
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message","metadata":{"summary":"test summary"}}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].metadata.is_some());
+        assert_eq!(
+            entries[0].metadata.as_ref().unwrap().summary,
+            Some("test summary".to_string())
+        );
+    }
+
+    #[test]
+    fn test_jsonl_transcript_vs_context_entries() {
+        // read_jsonl_transcript and read_context_entries should behave the same
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries1 = app.read_context_entries("test-context").unwrap();
+        let entries2 = app.read_jsonl_transcript("test-context").unwrap();
+
+        assert_eq!(entries1.len(), entries2.len());
+        assert_eq!(entries1[0].id, entries2[0].id);
+    }
+
+    // === State/directory sync tests (Issue #13) ===
+
+    #[test]
+    fn test_list_contexts_excludes_manually_deleted_directories() {
+        // BUG: When a context directory is manually deleted (rm -r), the context
+        // should not appear in list_contexts(). Currently it lingers in state.json.
+        let (mut app, _temp) = create_test_app();
+
+        // Create two contexts
+        let ctx1 = Context::new("context-one");
+        let ctx2 = Context::new("context-two");
+        app.save_context(&ctx1).unwrap();
+        app.save_context(&ctx2).unwrap();
+
+        // Add them to state.json
+        app.state.contexts.push("context-one".to_string());
+        app.state.contexts.push("context-two".to_string());
+        app.save().unwrap();
+
+        // Manually delete one context's directory (simulating rm -r)
+        fs::remove_dir_all(app.context_dir("context-one")).unwrap();
+
+        // list_contexts should NOT include the deleted context
+        let contexts = app.list_contexts();
+        assert!(
+            !contexts.contains(&"context-one".to_string()),
+            "Deleted context should not appear in list_contexts()"
+        );
+        assert!(contexts.contains(&"context-two".to_string()));
+    }
+
+    #[test]
+    fn test_list_contexts_only_includes_directories_not_files() {
+        // BUG: Files in ~/.chibi/contexts/ should not appear as contexts
+        let (app, _temp) = create_test_app();
+
+        // Create a real context
+        let ctx = Context::new("real-context");
+        app.save_context(&ctx).unwrap();
+
+        // Create a stray file in the contexts directory (not a context)
+        let stray_file = app.contexts_dir.join("not-a-context.txt");
+        fs::write(&stray_file, "stray file content").unwrap();
+
+        let contexts = app.list_contexts();
+
+        // Should include the real context
+        assert!(contexts.contains(&"real-context".to_string()));
+
+        // Should NOT include the stray file
+        assert!(
+            !contexts.contains(&"not-a-context.txt".to_string()),
+            "Stray files should not appear as contexts"
+        );
+    }
+
+    #[test]
+    fn test_save_context_adds_to_state_contexts() {
+        // Verify that saving a new context adds it to state.json
+        let (app, _temp) = create_test_app();
+
+        assert!(!app.state.contexts.contains(&"new-context".to_string()));
+
+        let ctx = Context::new("new-context");
+        app.save_current_context(&ctx).unwrap();
+
+        // Need to reload state to see the change
+        // Actually save_current_context should add it - let's verify
+        // by checking the state file directly
+        let state_content = fs::read_to_string(&app.state_path).unwrap();
+        assert!(
+            state_content.contains("new-context"),
+            "New context should be added to state.json"
+        );
+    }
+
+    // === clear_context_by_name archival anchor tests (Bug #2) ===
+
+    #[test]
+    fn test_clear_context_by_name_writes_archival_anchor() {
+        // BUG: clear_context_by_name should write an archival anchor to transcript.jsonl
+        // like clear_context does, but currently it doesn't
+        let (app, _temp) = create_test_app();
+
+        // Create a context with some messages
+        let mut ctx = Context::new("test-context");
+        ctx.messages.push(Message::new("user", "Hello"));
+        ctx.messages.push(Message::new("assistant", "Hi there"));
+        app.save_context(&ctx).unwrap();
+
+        // Create transcript.jsonl with the messages
+        let user_entry = app.create_user_message_entry("Hello", "testuser");
+        let asst_entry = app.create_assistant_message_entry("Hi there");
+        app.append_to_transcript("test-context", &user_entry)
+            .unwrap();
+        app.append_to_transcript("test-context", &asst_entry)
+            .unwrap();
+
+        // Clear the context by name
+        app.clear_context_by_name("test-context").unwrap();
+
+        // Read transcript and check for archival anchor
+        let entries = app.read_transcript_entries("test-context").unwrap();
+        let has_archival = entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_ARCHIVAL);
+
+        assert!(
+            has_archival,
+            "clear_context_by_name should write an archival anchor to transcript"
+        );
+    }
+
+    #[test]
+    fn test_clear_context_by_name_marks_dirty() {
+        // clear_context_by_name should mark the context as dirty for rebuild
+        let (app, _temp) = create_test_app();
+
+        // Create a context with messages
+        let mut ctx = Context::new("test-context");
+        ctx.messages.push(Message::new("user", "Hello"));
+        app.save_context(&ctx).unwrap();
+
+        // Clear should mark dirty
+        app.clear_context_by_name("test-context").unwrap();
+
+        assert!(
+            app.is_context_dirty("test-context"),
+            "clear_context_by_name should mark context as dirty"
+        );
     }
 }

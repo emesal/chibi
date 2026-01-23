@@ -1147,4 +1147,173 @@ mod tests {
             if name == "myplugin" && args == &["arg1"])
         );
     }
+
+    // === Attached arg expansion tests (expand_attached_args) ===
+
+    #[test]
+    fn test_expand_attached_args_basic() {
+        let args = vec!["chibi".to_string(), "-Dmycontext".to_string()];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-D", "mycontext"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_already_separated() {
+        let args = vec![
+            "chibi".to_string(),
+            "-D".to_string(),
+            "mycontext".to_string(),
+        ];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-D", "mycontext"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_flag_only() {
+        // Just -D without value - should not expand
+        let args = vec!["chibi".to_string(), "-D".to_string()];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-D"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_with_utf8_value() {
+        // UTF-8 characters in the value should be preserved
+        let args = vec!["chibi".to_string(), "-Dкириллица".to_string()];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-D", "кириллица"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_with_emoji_value() {
+        // Emoji in the value
+        let args = vec!["chibi".to_string(), "-Dtest🎉emoji".to_string()];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-D", "test🎉emoji"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_with_cjk_value() {
+        // CJK characters in the value
+        let args = vec!["chibi".to_string(), "-D日本語".to_string()];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-D", "日本語"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_dash_as_value() {
+        // -D- should expand to -D and -
+        let args = vec!["chibi".to_string(), "-D-".to_string()];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-D", "-"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_multiple_dashes_as_value() {
+        // -D-- should expand to -D and --
+        let args = vec!["chibi".to_string(), "-D--".to_string()];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-D", "--"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_preserves_long_flags() {
+        // Long flags should not be expanded
+        let args = vec![
+            "chibi".to_string(),
+            "--delete-context".to_string(),
+            "mycontext".to_string(),
+        ];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "--delete-context", "mycontext"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_non_expandable_flag() {
+        // -v is not in the ATTACHED_FLAGS list, so -vfoo should stay as-is
+        let args = vec!["chibi".to_string(), "-vfoo".to_string()];
+        let expanded = super::expand_attached_args(&args);
+        // -v is not expandable, so it stays as -vfoo
+        assert_eq!(expanded, vec!["chibi", "-vfoo"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_multiple_flags() {
+        let args = vec![
+            "chibi".to_string(),
+            "-v".to_string(),
+            "-Dold".to_string(),
+            "-cmycontext".to_string(),
+        ];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(
+            expanded,
+            vec!["chibi", "-v", "-D", "old", "-c", "mycontext"]
+        );
+    }
+
+    #[test]
+    fn test_expand_attached_args_empty_after_flag() {
+        // Edge case: what if flag char is at end? Should not panic
+        let args = vec!["chibi".to_string(), "-c".to_string()];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-c"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_preserves_positional() {
+        // Positional args should be preserved
+        let args = vec![
+            "chibi".to_string(),
+            "hello".to_string(),
+            "world".to_string(),
+        ];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "hello", "world"]);
+    }
+
+    #[test]
+    fn test_expand_attached_args_mixed_with_positional() {
+        let args = vec![
+            "chibi".to_string(),
+            "-cmyctx".to_string(),
+            "hello".to_string(),
+            "world".to_string(),
+        ];
+        let expanded = super::expand_attached_args(&args);
+        assert_eq!(expanded, vec!["chibi", "-c", "myctx", "hello", "world"]);
+    }
+
+    // === Inspectable tests ===
+
+    #[test]
+    fn test_inspectable_from_str_all_variants() {
+        assert_eq!(
+            Inspectable::from_str("system_prompt"),
+            Some(Inspectable::SystemPrompt)
+        );
+        assert_eq!(
+            Inspectable::from_str("prompt"),
+            Some(Inspectable::SystemPrompt)
+        ); // alias
+        assert_eq!(
+            Inspectable::from_str("reflection"),
+            Some(Inspectable::Reflection)
+        );
+        assert_eq!(Inspectable::from_str("todos"), Some(Inspectable::Todos));
+        assert_eq!(Inspectable::from_str("goals"), Some(Inspectable::Goals));
+        assert_eq!(Inspectable::from_str("list"), Some(Inspectable::List));
+        assert_eq!(Inspectable::from_str("unknown"), None);
+        assert_eq!(Inspectable::from_str(""), None);
+    }
+
+    #[test]
+    fn test_inspectable_all_names() {
+        let names = Inspectable::all_names();
+        assert!(names.contains(&"system_prompt"));
+        assert!(names.contains(&"reflection"));
+        assert!(names.contains(&"todos"));
+        assert!(names.contains(&"goals"));
+        assert!(names.contains(&"list"));
+    }
 }
