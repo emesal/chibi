@@ -2,6 +2,8 @@
 
 CLI tool for conversing with AI models via OpenRouter. Maintains conversation state across invocations for coherent multi-turn conversations directly from your terminal.
 
+*This tool is still in early development and not ready for general use.*
+
 ## Features
 
 - **Persistent conversations** - State saved between sessions
