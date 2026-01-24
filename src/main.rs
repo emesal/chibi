@@ -384,7 +384,7 @@ async fn execute_from_input(
             }
             did_action = true;
         }
-        Command::ArchiveContext { name } => {
+        Command::ArchiveHistory { name } => {
             let ctx_name = name
                 .clone()
                 .unwrap_or_else(|| app.state.current_context.clone());

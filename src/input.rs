@@ -19,8 +19,8 @@ pub enum Command {
     ListCurrentContext,
     /// Delete a context (-d/-D)
     DeleteContext { name: Option<String> },
-    /// Archive a context (-a/-A)
-    ArchiveContext { name: Option<String> },
+    /// Archive a context's history (-a/-A)
+    ArchiveHistory { name: Option<String> },
     /// Compact a context (-z/-Z)
     CompactContext { name: Option<String> },
     /// Rename a context (-r/-R)

@@ -33,7 +33,7 @@
 //! Commands with arguments:
 //! - `{ "send_prompt": { "prompt": "..." } }`
 //! - `{ "delete_context": { "name": "..." } }` (name is optional, null = current)
-//! - `{ "archive_context": { "name": "..." } }` (name is optional)
+//! - `{ "archive_history": { "name": "..." } }` (name is optional)
 //! - `{ "compact_context": { "name": "..." } }` (name is optional)
 //! - `{ "rename_context": { "old": "...", "new": "..." } }` (old is optional)
 //! - `{ "show_log": { "context": "...", "count": 10 } }` (context is optional)
@@ -295,12 +295,12 @@ mod tests {
     }
 
     #[test]
-    fn test_archive_context() {
-        let json = r#"{"command": {"archive_context": {"name": "old"}}}"#;
+    fn test_archive_history() {
+        let json = r#"{"command": {"archive_history": {"name": "old"}}}"#;
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.command,
-            Command::ArchiveContext { name: Some(ref n) } if n == "old"
+            Command::ArchiveHistory { name: Some(ref n) } if n == "old"
         ));
     }
 

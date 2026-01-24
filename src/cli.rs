@@ -111,18 +111,18 @@ pub struct Cli {
     )]
     pub delete_context: Option<String>,
 
-    /// Archive current context (clear history, save to transcript)
-    #[arg(short = 'a', long = "archive-current-context")]
-    pub archive_current_context: bool,
+    /// Archive current context history (save to transcript)
+    #[arg(short = 'a', long = "archive-current-history")]
+    pub archive_current_history: bool,
 
-    /// Archive specified context
+    /// Archive specified context's history
     #[arg(
         short = 'A',
-        long = "archive-context",
+        long = "archive-history",
         value_name = "CTX",
         allow_hyphen_values = true
     )]
-    pub archive_context: Option<String>,
+    pub archive_history: Option<String>,
 
     /// Compact current context (summarize and clear)
     #[arg(short = 'z', long = "compact-current-context")]
@@ -266,7 +266,7 @@ const CLI_AFTER_HELP: &str = r#"EXAMPLES:
   chibi -g 10                     Show last 10 log entries
   chibi -x -c test                Switch context without LLM
   chibi -X -L                     List contexts then invoke LLM
-  chibi -a hello                  Archive context, then send prompt
+  chibi -a hello                  Archive history, then send prompt
 
 FLAG BEHAVIOR:
   Some flags imply --no-chibi (operations that produce output or
@@ -397,7 +397,7 @@ impl Cli {
             || self.list_contexts
             || self.delete_current_context
             || self.delete_context.is_some()
-            || self.archive_context.is_some()
+            || self.archive_history.is_some()
             || self.compact_context.is_some()
             || rename_context.is_some()
             || self.show_current_log.is_some()
@@ -449,10 +449,10 @@ impl Cli {
             Command::DeleteContext {
                 name: Some(name.clone()),
             }
-        } else if self.archive_current_context {
-            Command::ArchiveContext { name: None }
-        } else if let Some(ref name) = self.archive_context {
-            Command::ArchiveContext {
+        } else if self.archive_current_history {
+            Command::ArchiveHistory { name: None }
+        } else if let Some(ref name) = self.archive_history {
+            Command::ArchiveHistory {
                 name: Some(name.clone()),
             }
         } else if self.compact_current_context {
@@ -827,20 +827,20 @@ mod tests {
     // === Archive tests ===
 
     #[test]
-    fn test_archive_current_context_short() {
+    fn test_archive_current_history_short() {
         let input = parse_input("-a").unwrap();
         assert!(matches!(
             input.command,
-            Command::ArchiveContext { name: None }
+            Command::ArchiveHistory { name: None }
         ));
         assert!(!input.flags.no_chibi); // combinable
     }
 
     #[test]
-    fn test_archive_context_short() {
+    fn test_archive_history_short() {
         let input = parse_input("-A other").unwrap();
         assert!(
-            matches!(input.command, Command::ArchiveContext { ref name } if *name == Some("other".to_string()))
+            matches!(input.command, Command::ArchiveHistory { ref name } if *name == Some("other".to_string()))
         );
         assert!(input.flags.no_chibi);
     }
