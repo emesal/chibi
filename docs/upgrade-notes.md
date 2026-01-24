@@ -1,6 +1,6 @@
 # chibi upgrade notes
 
-## 0.5.0 -> 0.5.1
+## Changes since 0.5.0
 
 - `-d`/`-D` renamed from `--delete-*` to `--destroy-*`
 - `delete_context` command renamed to `destroy_context` (JSON input)
