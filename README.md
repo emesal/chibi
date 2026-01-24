@@ -42,7 +42,7 @@ Copy example prompts:
 
 ```bash
 mkdir -p ~/.chibi/prompts
-cp prompts.example/*.md ~/.chibi/prompts/
+cp examples/prompts/*.md ~/.chibi/prompts/
 ```
 
 ### Use
