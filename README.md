@@ -16,10 +16,13 @@ CLI tool for conversing with AI models via OpenRouter. Maintains conversation st
 - **Unix philosophy** - Only LLM output goes to stdout (pipeable)
 
 <div align="center">
-    <img src="docs/images/cutethulu.png" width="62%" style="margin: 2em; padding: 1em;">
     <br>
-    Cutethulu &ndash; <em>lead developer of chibi</em>
+    <img src="docs/images/cutethulu.png" width="62%">
+    <br>
+    Cutethulu – lead developer of chibi
+    <br>
 </div>
+
 
 ## Quick Start
 
@@ -64,12 +67,6 @@ chibi -c research "Find info about X"
 chibi -v "Read my Cargo.toml"
 ```
 
-<div align="center">
-    <img src="docs/images/explain_this.jpeg" width="80%" style="margin: 2em; padding: 1em; border: 2pt solid #999; border-radius: 0.5em;">
-    <br>
-    <em>Soon chibis will be scurrying in all your pipes!</em>
-</div>
-
 ## Documentation
 
 - **[Getting Started](docs/getting-started.md)** - Installation and first steps
@@ -106,6 +103,12 @@ chibi -p plugin args  # Run plugin directly
 
 See [CLI Reference](docs/cli-reference.md) for the complete list.
 
+<div align="center">
+    <br>
+    <img src="docs/images/explain_this.jpeg" width="62%">
+    <br>
+</div>
+
 ## Example Plugins
 
 See [chibi-plugins](https://github.com/emesal/chibi-plugins) for ready-to-use plugins:
@@ -135,3 +138,7 @@ See [chibi-plugins](https://github.com/emesal/chibi-plugins) for ready-to-use pl
     ├── goals.md          # Current goals
     └── system_prompt.md  # Custom prompt (optional)
 ```
+
+## License
+
+ISC. make meow, not rawr
