@@ -5,13 +5,8 @@
 //! - Configuration loading and resolution
 //! - Transcript and inbox operations
 
-// Submodules - utilities extracted for better organization
-// Future refactoring can migrate more functionality into these modules
-mod entries;
 mod jsonl;
-mod paths;
 
-// Re-export submodule items for internal use
 use jsonl::read_jsonl_file;
 
 use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig};
@@ -33,8 +28,6 @@ pub struct AppState {
     pub models_config: ModelsConfig,
     pub state: ContextState,
     pub state_path: PathBuf,
-    #[allow(dead_code)]
-    pub chibi_dir: PathBuf,
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
     pub plugins_dir: PathBuf,
@@ -65,7 +58,6 @@ impl AppState {
             models_config: ModelsConfig::default(),
             state,
             state_path,
-            chibi_dir,
             contexts_dir,
             prompts_dir,
             plugins_dir,
@@ -149,7 +141,6 @@ impl AppState {
             models_config,
             state,
             state_path,
-            chibi_dir,
             contexts_dir,
             prompts_dir,
             plugins_dir,
@@ -478,23 +469,6 @@ impl AppState {
         let storage_config = self.get_storage_config(name)?;
         let pm = PartitionManager::load_with_config(&context_dir, storage_config)?;
         pm.read_all_entries()
-    }
-
-    /// Read entries within a timestamp range (using partitioned storage)
-    pub fn read_entries_in_range(
-        &self,
-        name: &str,
-        from_ts: u64,
-        to_ts: u64,
-    ) -> io::Result<Vec<TranscriptEntry>> {
-        let context_dir = self.context_dir(name);
-        if !context_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let storage_config = self.get_storage_config(name)?;
-        let pm = PartitionManager::load_with_config(&context_dir, storage_config)?;
-        pm.read_entries_in_range(from_ts, to_ts)
     }
 
     /// Write entries to context (full rewrite using partitioned storage)
@@ -1960,6 +1934,7 @@ mod tests {
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
             api: ApiParams::default(),
+            storage: StorageConfig::default(),
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -2011,6 +1986,7 @@ mod tests {
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
             api: ApiParams::default(),
+            storage: StorageConfig::default(),
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -2083,6 +2059,7 @@ mod tests {
             context_window_limit: Some(16000),
             reflection_enabled: Some(false),
             api: None,
+            storage: StorageConfig::default(),
         };
         app.save_local_config("default", &local).unwrap();
 

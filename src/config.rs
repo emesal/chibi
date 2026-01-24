@@ -414,7 +414,6 @@ impl ResolvedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::partition::StorageConfig;
 
     #[test]
     fn test_default_auto_compact() {

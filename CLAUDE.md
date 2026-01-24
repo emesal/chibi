@@ -38,9 +38,7 @@ api/
   request.rs     Request body building, PromptOptions
 
 state/
-  mod.rs         AppState: all file I/O, config resolution
-  paths.rs       Path construction helpers
-  entries.rs     TranscriptEntry creation (builder pattern)
+  mod.rs         AppState: all file I/O, config resolution, entry creation
   jsonl.rs       JSONL file reading utilities
 
 partition.rs     Partitioned storage, manifest, bloom filters
