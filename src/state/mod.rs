@@ -774,15 +774,23 @@ impl AppState {
     }
 
     pub fn list_contexts(&self) -> Vec<String> {
-        // Scan contexts directory
-        let mut contexts = self.state.contexts.clone();
+        // Scan contexts directory for directories only
+        let mut contexts = Vec::new();
 
         if let Ok(entries) = fs::read_dir(&self.contexts_dir) {
             for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if !contexts.contains(&name) {
+                // Only include directories, not files
+                if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                    let name = entry.file_name().to_string_lossy().to_string();
                     contexts.push(name);
                 }
+            }
+        }
+
+        // Also include contexts from state.json if their directories exist
+        for name in &self.state.contexts {
+            if !contexts.contains(name) && self.context_dir(name).is_dir() {
+                contexts.push(name.clone());
             }
         }
 

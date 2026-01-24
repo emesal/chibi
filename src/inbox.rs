@@ -63,7 +63,7 @@ impl AppState {
         writeln!(file, "{}", json)?;
 
         // Release lock
-        lock_file.unlock()?;
+        FileExt::unlock(&lock_file)?;
         Ok(())
     }
 
@@ -109,7 +109,7 @@ impl AppState {
         }
 
         // Release lock
-        lock_file.unlock()?;
+        FileExt::unlock(&lock_file)?;
         Ok(entries)
     }
 }

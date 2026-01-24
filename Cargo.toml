@@ -2,6 +2,7 @@
 name = "chibi"
 version = "0.5.0"
 edition = "2024"
+rust-version = "1.88"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
