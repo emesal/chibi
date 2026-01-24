@@ -662,10 +662,20 @@ impl AppState {
     pub fn save_current_context(&self, context: &Context) -> io::Result<()> {
         self.save_context(context)?;
 
-        // Ensure the context is tracked in state
+        // Ensure the context is tracked in state.
+        // Important: Read state from disk to avoid persisting transient context switches.
+        // The in-memory state may have a transient current_context that shouldn't be saved.
         if !self.state.contexts.contains(&context.name) {
-            let mut new_state = self.state.clone();
-            new_state.contexts.push(context.name.clone());
+            let disk_state = if self.state_path.exists() {
+                let content = fs::read_to_string(&self.state_path)?;
+                serde_json::from_str(&content).unwrap_or_else(|_| self.state.clone())
+            } else {
+                self.state.clone()
+            };
+            let mut new_state = disk_state;
+            if !new_state.contexts.contains(&context.name) {
+                new_state.contexts.push(context.name.clone());
+            }
             new_state.save(&self.state_path)?;
         }
 
@@ -2190,6 +2200,36 @@ not valid json at all
         assert!(
             state_content.contains("new-context"),
             "New context should be added to state.json"
+        );
+    }
+
+    #[test]
+    fn test_save_current_context_preserves_disk_current_context() {
+        // Verify that save_current_context doesn't persist in-memory current_context
+        // This is critical for transient context (-C) support
+        let (mut app, _temp) = create_test_app();
+
+        // Save initial state with "default" as current_context
+        app.save().unwrap();
+
+        // Simulate transient context switch (in-memory only)
+        app.state.current_context = "transient-ctx".to_string();
+
+        // Create and save a new context while "transient-ctx" is in memory
+        let ctx = Context::new("new-context");
+        app.save_current_context(&ctx).unwrap();
+
+        // Verify the state file still has original current_context, not the transient one
+        let state_content = fs::read_to_string(&app.state_path).unwrap();
+        let saved_state: ContextState = serde_json::from_str(&state_content).unwrap();
+
+        assert_eq!(
+            saved_state.current_context, "default",
+            "Transient current_context should not be persisted to state.json"
+        );
+        assert!(
+            saved_state.contexts.contains(&"new-context".to_string()),
+            "New context should still be added to contexts list"
         );
     }
 
