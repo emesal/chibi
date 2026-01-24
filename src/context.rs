@@ -51,9 +51,33 @@ impl Context {
     }
 }
 
+/// Metadata entry for a context in state.json
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ContextEntry {
+    pub name: String,
+    pub created_at: u64,
+}
+
+impl ContextEntry {
+    #[allow(dead_code)]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            created_at: now_timestamp(),
+        }
+    }
+
+    pub fn with_created_at(name: impl Into<String>, created_at: u64) -> Self {
+        Self {
+            name: name.into(),
+            created_at,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContextState {
-    pub contexts: Vec<String>,
+    pub contexts: Vec<ContextEntry>,
     pub current_context: String,
     #[serde(default)]
     pub previous_context: Option<String>,
@@ -341,7 +365,7 @@ mod tests {
     #[test]
     fn test_context_state_switch_valid() {
         let mut state = ContextState {
-            contexts: vec!["default".to_string()],
+            contexts: vec![ContextEntry::new("default")],
             current_context: "default".to_string(),
             previous_context: None,
         };
@@ -353,7 +377,7 @@ mod tests {
     #[test]
     fn test_context_state_switch_invalid() {
         let mut state = ContextState {
-            contexts: vec!["default".to_string()],
+            contexts: vec![ContextEntry::new("default")],
             current_context: "default".to_string(),
             previous_context: None,
         };
@@ -366,7 +390,7 @@ mod tests {
     #[test]
     fn test_context_state_switch_same_context() {
         let mut state = ContextState {
-            contexts: vec!["default".to_string()],
+            contexts: vec![ContextEntry::new("default")],
             current_context: "default".to_string(),
             previous_context: Some("old".to_string()),
         };
