@@ -41,7 +41,7 @@ Copy the example prompts to set up the default personality:
 
 ```bash
 mkdir -p ~/.chibi/prompts
-cp prompts.example/*.md ~/.chibi/prompts/
+cp examples/prompts/*.md ~/.chibi/prompts/
 ```
 
 **Available prompts:**
