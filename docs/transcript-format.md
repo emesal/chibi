@@ -1,56 +1,95 @@
 # Transcript Format
 
-Chibi maintains conversation history in two formats: human-readable markdown and machine-readable JSONL.
+Chibi maintains conversation history in two JSONL files plus a human-readable markdown archive.
 
-## Human-Readable (transcript.md)
+## File Roles
 
-The `transcript.md` file stores conversation history in a format similar to the LLM's context:
+```
+transcript.jsonl    # Authoritative, append-only log of complete history
+context.jsonl       # LLM context window (derived from transcript.jsonl)
+transcript.md       # Human-readable archive (append-only)
+```
+
+### transcript.jsonl (Authoritative)
+
+The authoritative record of all conversation history. Append-only—entries are never removed or modified. Contains anchor entries that mark significant events (context creation, compaction, archival).
+
+### context.jsonl (Derived)
+
+The active LLM context window. Derived from transcript.jsonl starting at the last anchor entry. Rebuilt automatically when the context is marked as dirty (via `.dirty` marker file).
+
+Structure:
+1. **Entry 0**: Anchor entry (`context_created`, `compaction`, or `archival`)
+2. **Entry 1**: System prompt entry (`system_prompt`)
+3. **Remaining**: Conversation entries (messages, tool calls, tool results)
+
+### transcript.md
+
+Human-readable markdown archive. Appended during compaction operations.
 
 ```
 [USER]: What is Rust?
 
 [ASSISTANT]: Rust is a systems programming language...
-
-[USER]: Tell me more about ownership.
-
-[ASSISTANT]: Ownership is Rust's key feature...
 ```
 
-This file is appended to during archiving and compaction operations. It provides a readable archive of past conversations.
+## Entry Format
 
-## Machine-Readable (context.jsonl)
-
-The `context.jsonl` file stores the active conversation in JSON Lines format with metadata:
+All JSONL entries share this structure:
 
 ```json
-{"id":"550e8400-e29b-41d4-a716-446655440000","timestamp":1705123456,"from":"alice","to":"default","content":"What is Rust?","entry_type":"message"}
-{"id":"550e8400-e29b-41d4-a716-446655440001","timestamp":1705123460,"from":"default","to":"user","content":"Rust is a systems programming language...","entry_type":"message"}
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "timestamp": 1705123456,
+  "from": "alice",
+  "to": "default",
+  "content": "What is Rust?",
+  "entry_type": "message",
+  "metadata": {}
+}
 ```
 
-### Entry Fields
+### Fields
 
 | Field | Description |
 |-------|-------------|
 | `id` | Unique UUID for the entry |
 | `timestamp` | Unix timestamp (seconds since epoch) |
-| `from` | Source: username, context name, or tool name |
+| `from` | Source: username, context name, tool name, or "system" |
 | `to` | Destination: context name, "user", or tool name |
 | `content` | Message content, tool arguments, or tool results |
 | `entry_type` | Type of entry (see below) |
-| `metadata` | Optional additional data |
+| `metadata` | Optional object with additional data (summary, hash, etc.) |
 
 ### Entry Types
 
-| Type | Description | Example `from` | Example `to` |
-|------|-------------|----------------|--------------|
-| `message` | User or assistant message | `alice` | `default` |
-| `tool_call` | LLM calling a tool | `default` | `read_file` |
-| `tool_result` | Tool returning a result | `read_file` | `default` |
-| `compaction` | Compaction marker | `system` | `default` |
+#### Conversation Types
 
-### Message Examples
+| Type | Description | `from` | `to` |
+|------|-------------|--------|------|
+| `message` | User or assistant message | username or context | context or "user" |
+| `tool_call` | LLM calling a tool | context | tool name |
+| `tool_result` | Tool returning a result | tool name | context |
 
-**User message:**
+#### Anchor Types (context.jsonl[0])
+
+| Type | Description | When Created |
+|------|-------------|--------------|
+| `context_created` | New context initialization | Context first created |
+| `compaction` | Context was compacted | After LLM-based or rolling compaction |
+| `archival` | Context was archived/cleared | After clear operation |
+
+#### System Types
+
+| Type | Description | Location |
+|------|-------------|----------|
+| `system_prompt` | Current system prompt | context.jsonl[1] |
+| `system_prompt_changed` | System prompt was updated | transcript.jsonl only |
+
+## Examples
+
+### User Message
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -62,7 +101,8 @@ The `context.jsonl` file stores the active conversation in JSON Lines format wit
 }
 ```
 
-**Assistant message:**
+### Assistant Message
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440001",
@@ -74,7 +114,8 @@ The `context.jsonl` file stores the active conversation in JSON Lines format wit
 }
 ```
 
-**Tool call:**
+### Tool Call
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440002",
@@ -86,7 +127,8 @@ The `context.jsonl` file stores the active conversation in JSON Lines format wit
 }
 ```
 
-**Tool result:**
+### Tool Result
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440003",
@@ -98,14 +140,28 @@ The `context.jsonl` file stores the active conversation in JSON Lines format wit
 }
 ```
 
-**Compaction marker:**
+### Context Created Anchor
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440004",
+  "timestamp": 1705123400,
+  "from": "system",
+  "to": "default",
+  "content": "Context created",
+  "entry_type": "context_created"
+}
+```
+
+### Compaction Anchor
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440005",
   "timestamp": 1705123500,
   "from": "system",
   "to": "default",
-  "content": "",
+  "content": "Context compacted",
   "entry_type": "compaction",
   "metadata": {
     "summary": "The conversation covered Rust basics including ownership..."
@@ -113,19 +169,55 @@ The `context.jsonl` file stores the active conversation in JSON Lines format wit
 }
 ```
 
-## Archive Files
+### Archival Anchor
 
-### transcript_archive.jsonl
-
-When compaction occurs, older entries are moved to `transcript_archive.jsonl`. This file has the same format as `context.jsonl` but contains archived entries.
-
-### Relationship Between Files
-
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440006",
+  "timestamp": 1705123600,
+  "from": "system",
+  "to": "default",
+  "content": "Context archived/cleared",
+  "entry_type": "archival"
+}
 ```
-context.jsonl           # Active conversation (rebuilt from transcript on load)
-transcript_archive.jsonl # Archived entries from compaction
-transcript.md           # Human-readable archive (append-only)
+
+### System Prompt Entry
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440007",
+  "timestamp": 1705123401,
+  "from": "system",
+  "to": "default",
+  "content": "You are a helpful assistant...",
+  "entry_type": "system_prompt",
+  "metadata": {
+    "hash": "a1b2c3d4e5f6..."
+  }
+}
 ```
+
+## Metadata Structure
+
+The optional `metadata` field can contain:
+
+| Field | Used In | Description |
+|-------|---------|-------------|
+| `summary` | `compaction` | Summary of compacted conversation |
+| `hash` | `system_prompt` | SHA256 hash of the prompt content |
+| `transcript_anchor_id` | context.jsonl anchors | Reference to corresponding transcript.jsonl entry |
+
+## Context Rebuilding
+
+When the context is marked dirty (`.dirty` file exists), `context.jsonl` is rebuilt from `transcript.jsonl`:
+
+1. Find the last anchor entry in transcript.jsonl
+2. Copy entries from that anchor to end
+3. Inject current system prompt as entry[1]
+4. Remove `.dirty` marker
+
+This ensures context.jsonl stays synchronized with the authoritative transcript while allowing front-matter (system prompt) to change without rewriting transcript history.
 
 ## Inbox Format (inbox.jsonl)
 
@@ -141,15 +233,15 @@ Inter-context messages are stored in `inbox.jsonl`:
 }
 ```
 
-Inbox messages are injected into the prompt and cleared after use.
+Inbox messages are injected into the prompt and cleared after delivery.
 
 ## Debug Files
 
-When debug logging is enabled (`--debug`):
+When debug logging is enabled (`--debug request-log`):
 
 ### requests.jsonl
 
-Full API request bodies:
+Full API request bodies logged to the context directory:
 
 ```json
 {
@@ -163,41 +255,25 @@ Full API request bodies:
 }
 ```
 
-### response_meta.jsonl
-
-Response metadata (usage stats, model info):
-
-```json
-{
-  "timestamp": 1705123460,
-  "response": {
-    "id": "chatcmpl-abc123",
-    "model": "anthropic/claude-sonnet-4",
-    "usage": {
-      "prompt_tokens": 1234,
-      "completion_tokens": 567,
-      "total_tokens": 1801
-    }
-  }
-}
-```
-
 ## Working with JSONL
 
 ### Viewing with jq
 
 ```bash
 # Pretty print all entries
-cat ~/.chibi/contexts/default/context.jsonl | jq '.'
+cat ~/.chibi/contexts/default/transcript.jsonl | jq '.'
 
 # Filter by entry type
-cat context.jsonl | jq 'select(.entry_type == "message")'
+cat transcript.jsonl | jq 'select(.entry_type == "message")'
 
 # Get just the content
-cat context.jsonl | jq -r '.content'
+cat transcript.jsonl | jq -r '.content'
 
 # Count entries by type
-cat context.jsonl | jq -s 'group_by(.entry_type) | map({type: .[0].entry_type, count: length})'
+cat transcript.jsonl | jq -s 'group_by(.entry_type) | map({type: .[0].entry_type, count: length})'
+
+# Find anchor entries
+cat transcript.jsonl | jq 'select(.entry_type == "context_created" or .entry_type == "compaction" or .entry_type == "archival")'
 ```
 
 ### Viewing with chibi

@@ -205,15 +205,18 @@ chibi -g -5  # First 5 entries
 
 ```
 ~/.chibi/contexts/<name>/
-├── context.jsonl        # Current conversation (append-only JSONL)
+├── transcript.jsonl     # Authoritative conversation log (append-only)
+├── context.jsonl        # LLM context window (derived from transcript.jsonl)
 ├── context_meta.json    # Metadata (created_at timestamp)
 ├── local.toml           # Per-context config overrides (optional)
 ├── summary.md           # Conversation summary (from compaction)
 ├── transcript.md        # Human-readable history archive
-├── transcript_archive.jsonl  # Archived entries (from compaction)
 ├── todos.md             # Current todos
 ├── goals.md             # Current goals
 ├── inbox.jsonl          # Messages from other contexts
 ├── system_prompt.md     # Custom system prompt (optional)
-└── .lock                # Lock file (when active)
+├── .lock                # Lock file (when active)
+└── .dirty               # Marker for context rebuild (temporary)
 ```
+
+See [transcript-format.md](transcript-format.md) for details on the JSONL file formats.
