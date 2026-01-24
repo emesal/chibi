@@ -166,7 +166,3 @@ print("result")
 3. Global config.toml
 4. models.toml (for model-specific params)
 5. Defaults
-
-### See Also
-
-- PHILOSOPHY.md for design principles

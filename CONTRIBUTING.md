@@ -7,7 +7,13 @@ Chibi aims to be a minimal, secure core with extensibility through plugins.
 - **Core binary**: Small, stable, few dependencies. Changes here need strong justification.
 - **Plugins**: Where features live. Most contributions should be plugins, not core changes.
 
-See [PHILOSOPHY.md](PHILOSOPHY.md) for the full picture.
+## Guidelines
+
+- cargo fmt your patches
+- don't make clippy sad
+- test-drive development appreciated
+- documentation bugs are serious bugs
+- be nice to your chibis
 
 ## Plugins vs Core
 
@@ -20,6 +26,8 @@ Plugins can:
 - Intercept and modify behavior
 
 The core handles: API communication, context management, plugin loading, streaming.
+
+Stable plugins may eventually be incorporated in the Rust binary.
 
 ## CLI Conventions
 
