@@ -1,11 +1,8 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## General
 
-Chibi is currently in early development with no backwards compatibility to maintain. The current goal is a lean, flexible, secure and solid core architecture which can support rapid growth without causing unnecessary maintenance debt and other headaches down the line. Legacy code can be removed and instructions for manual migration added to upgrade notes. Aim for a structure that prevents code duplication and other bloat. Self-documenting code is good. Now is the time to refactor since the cost will be much higher in the future.
-
+Early development, no backwards compatibility. Prioritize lean, secure, well-structured core. Remove legacy code freely. Self-documenting code preferred.
 
 ## Build Commands
 
@@ -13,105 +10,126 @@ Chibi is currently in early development with no backwards compatibility to maint
 cargo build              # Debug build
 cargo build --release    # Release build
 cargo install --path .   # Install to ~/.cargo/bin
-cargo run -- <args>      # Run with arguments (e.g., cargo run -- -v "hello")
+cargo run -- <args>      # Run with arguments
 ```
 
-## Architecture Overview
+## Architecture
 
-Chibi is a CLI tool for conversing with LLMs via OpenRouter. It maintains persistent conversation state and supports plugins/hooks for extensibility.
+CLI tool for LLM conversations via OpenRouter. Persistent conversation state with plugin/hook extensibility.
 
-### Source Files (`src/`)
+### Source Structure (`src/`)
 
-- **main.rs** - CLI entry point, argument parsing, prompt input handling (interactive/piped)
-- **cli.rs** - Argument definitions and parsing logic
-- **config.rs** - Config structs (`Config`, `LocalConfig`, `ModelsConfig`, `ResolvedConfig`) and TOML loading
-- **context.rs** - Data structures for conversations (`Context`, `Message`, `ContextState`, `TranscriptEntry`, `InboxEntry`)
-- **state.rs** - `AppState` manages all file I/O: contexts, prompts, todos, goals, transcripts, inbox
-- **api.rs** - LLM API communication, streaming responses, tool execution loop, compaction
-- **tools.rs** - Plugin loading, schema parsing, hook system (`HookPoint` enum), built-in tool definitions
-- **lock.rs** - Context locking with heartbeat to prevent concurrent access
+```
+main.rs          Entry point, prompt input (interactive/piped)
+cli.rs           Clap argument definitions, ChibiInput conversion
+config.rs        Config structs (Config, LocalConfig, ModelsConfig, ResolvedConfig)
+context.rs       Context, Message, TranscriptEntry, InboxEntry
+input.rs         ChibiInput, Command enum, Flags
+output.rs        OutputHandler (stdout/JSON modes)
+lock.rs          Context locking with heartbeat
+inbox.rs         Inter-context messaging
+llm.rs           Low-level API request helpers
+json_input.rs    JSON config input parsing
+
+api/
+  mod.rs         send_prompt(), tool execution loop, streaming
+  compact.rs     Compaction operations (rolling, manual)
+  logging.rs     Debug request/response logging
+  request.rs     Request body building, PromptOptions
+
+state/
+  mod.rs         AppState: all file I/O, config resolution
+  paths.rs       Path construction helpers
+  entries.rs     TranscriptEntry creation (builder pattern)
+  jsonl.rs       JSONL file reading utilities
+
+tools/
+  mod.rs         Tool struct, public exports
+  plugins.rs     Plugin loading, execution, schema parsing
+  builtin.rs     Built-in tools (reflection, todos, goals, send_message)
+  hooks.rs       HookPoint enum, hook execution
+```
 
 ### Data Flow
 
-1. `main.rs` parses CLI args and reads prompt (interactive or piped)
-2. `AppState::load()` initializes from `~/.chibi/` directory structure
-3. `send_prompt()` in `api.rs` handles the conversation:
-   - Executes lifecycle hooks (`on_start`, `pre_message`, `pre_system_prompt`, etc.)
-   - Loads/injects inbox messages from other contexts
-   - Builds system prompt with todos, goals, summary, reflection
-   - Streams response from OpenRouter API
-   - Executes tool calls in a loop until final text response
-   - Logs to transcript files (txt and jsonl)
+1. `cli.rs` parses args into `ChibiInput`
+2. `AppState::load()` initializes from `~/.chibi/`
+3. `send_prompt()` handles conversation:
+   - Executes lifecycle hooks
+   - Injects inbox messages
+   - Builds system prompt (todos, goals, summary, reflection)
+   - Streams response from OpenRouter
+   - Executes tool calls in loop until text response
+   - Logs to transcript (JSONL + markdown)
 
-### Plugin System
+### Built-in Tools
 
-Plugins are executable scripts in `~/.chibi/plugins/` that provide tools for the LLM:
-- Output JSON schema when called with `--schema`
-- Receive arguments via `CHIBI_TOOL_ARGS` environment variable
-- Can register for hooks via `"hooks": [...]` in schema
-
-Built-in tools (defined in `tools.rs`, executed in `api.rs`):
+Defined in `tools/builtin.rs`:
 - `update_todos`, `update_goals` - Per-context task tracking
 - `update_reflection` - Global persistent memory
 - `send_message` - Inter-context messaging
+- `recurse` - Signal to continue processing (external plugin)
 
-### Hook System
+### Hooks
 
-Hooks fire at lifecycle points. Plugins register via schema. Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
+17 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
 
-Key hooks: `on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `post_tool`, `pre_system_prompt`, `post_system_prompt`, `pre_send_message`, `post_send_message`, `on_context_switch`, `pre_clear`, `post_clear`, `pre_compact`, `post_compact`, `pre_rolling_compact`, `post_rolling_compact`
+```
+on_start, on_end
+pre_message, post_message
+pre_tool, post_tool
+pre_system_prompt, post_system_prompt
+pre_send_message, post_send_message
+on_context_switch
+pre_clear, post_clear
+pre_compact, post_compact
+pre_rolling_compact, post_rolling_compact
+```
+
+Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
 
 ### Storage Layout
 
 ```
 ~/.chibi/
-├── config.toml              # Global config
-├── models.toml              # Model aliases (optional)
+├── config.toml              # Required: api_key, model, context_window_limit, warn_threshold_percent
+├── models.toml              # Model aliases, context windows, API params
 ├── state.json               # Current context name
-├── prompts/                 # System prompts
-│   ├── chibi.md            # Default prompt
+├── prompts/
+│   ├── chibi.md            # Default system prompt
 │   ├── reflection.md       # LLM's persistent memory
 │   ├── compaction.md       # Compaction instructions
 │   └── continuation.md     # Post-compaction instructions
-├── plugins/                 # Plugin scripts (provide tools for LLM)
+├── plugins/                 # Executable scripts (provide tools)
 └── contexts/<name>/
-    ├── context.jsonl       # Conversation entries (JSONL, append-only)
-    ├── context_meta.json   # Context metadata (created_at timestamp)
+    ├── context.jsonl       # LLM window (anchor + system_prompt + entries)
+    ├── transcript.jsonl    # Authoritative log (never truncated)
+    ├── transcript.md       # Human-readable archive
+    ├── context_meta.json   # Metadata (created_at)
     ├── local.toml          # Per-context config overrides
     ├── summary.md          # Conversation summary
-    ├── transcript.md       # Human-readable history (for archiving)
-    ├── transcript_archive.jsonl  # Archived entries (from compaction)
     ├── todos.md            # Current todos
     ├── goals.md            # Current goals
     ├── inbox.jsonl         # Messages from other contexts
-    └── system_prompt.md    # Context-specific system prompt
+    ├── system_prompt.md    # Context-specific system prompt
+    └── .dirty              # Marker: prefix needs rebuild
 ```
 
-### Context Entry Format (context.jsonl)
+### Entry Format (JSONL)
 
-Each line is a JSON object with these fields:
-- `id`: Unique identifier (UUID)
-- `timestamp`: Unix timestamp
-- `from`: Source (username, context name, or tool name)
-- `to`: Destination (context name, "user", or tool name)
-- `content`: Message content or tool arguments/results
-- `entry_type`: One of "message", "tool_call", "tool_result", "compaction"
-
-Example:
-```jsonl
-{"id":"uuid1","timestamp":1234567890,"from":"alice","to":"default","content":"Hello","entry_type":"message"}
-{"id":"uuid2","timestamp":1234567891,"from":"default","to":"read_file","content":"{\"path\":\"Cargo.toml\"}","entry_type":"tool_call"}
-{"id":"uuid3","timestamp":1234567892,"from":"read_file","to":"default","content":"[package]...","entry_type":"tool_result"}
-{"id":"uuid4","timestamp":1234567893,"from":"default","to":"user","content":"Here's the file...","entry_type":"message"}
+```json
+{"id":"uuid","timestamp":1234567890,"from":"alice","to":"default","content":"Hello","entry_type":"message"}
 ```
 
-### Example Plugin Pattern (Python with uv)
+Entry types: `message`, `tool_call`, `tool_result`, `compaction`, `archival`, `context_created`, `system_prompt`, `system_prompt_changed`
+
+### Plugin Pattern
 
 ```python
 #!/usr/bin/env -S uv run --quiet --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["some-package"]
+# dependencies = []
 # ///
 
 import json, os, sys
@@ -120,30 +138,35 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     print(json.dumps({
         "name": "tool_name",
         "description": "...",
-        "parameters": {"type": "object", "properties": {...}, "required": [...]},
-        "hooks": ["on_start", "post_system_prompt"]  # optional
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "hooks": ["on_start"]  # optional
     }))
     sys.exit(0)
 
-# Handle hooks
 hook = os.environ.get("CHIBI_HOOK", "")
-if hook == "on_start":
-    print("{}")
+if hook:
+    print("{}")  # Hook response
     sys.exit(0)
 
-# Handle tool call
 params = json.loads(os.environ["CHIBI_TOOL_ARGS"])
-# ... do work ...
 print("result")
 ```
 
-### Key Conventions
+### CLI Conventions
 
-- stdout: Only LLM output (pipeable)
+- stdout: LLM output only (pipeable)
 - stderr: Diagnostics (with `-v`)
-- Plugins read args from `CHIBI_TOOL_ARGS` env var (not stdin)
-- Plugins can use stdin for user interaction (confirmations)
-- Hooks receive data via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars
+- Plugins: args via `CHIBI_TOOL_ARGS` env var, stdin free for user interaction
+- Hooks: `CHIBI_HOOK` + `CHIBI_HOOK_DATA` env vars
+
+### Config Resolution Order
+
+1. CLI flags (highest priority)
+2. Context local.toml
+3. Global config.toml
+4. models.toml (for model-specific params)
+5. Defaults
 
 ### See Also
-- PHILOSOPHY.md for architectural decisions etc
+
+- PHILOSOPHY.md for design principles
