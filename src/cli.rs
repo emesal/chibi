@@ -124,6 +124,22 @@ pub struct Cli {
     )]
     pub archive_history: Option<String>,
 
+    /// Clear the tool output cache for current context
+    #[arg(long = "clear-cache")]
+    pub clear_cache: bool,
+
+    /// Clear the tool output cache for specified context
+    #[arg(
+        long = "clear-cache-for",
+        value_name = "CTX",
+        allow_hyphen_values = true
+    )]
+    pub clear_cache_for: Option<String>,
+
+    /// Cleanup old cache entries across all contexts (removes entries older than configured max_age)
+    #[arg(long = "cleanup-cache")]
+    pub cleanup_cache: bool,
+
     /// Compact current context (summarize and clear)
     #[arg(short = 'z', long = "compact-current-context")]
     pub compact_current_context: bool,
@@ -455,6 +471,14 @@ impl Cli {
             Command::ArchiveHistory {
                 name: Some(name.clone()),
             }
+        } else if self.clear_cache {
+            Command::ClearCache { name: None }
+        } else if let Some(ref name) = self.clear_cache_for {
+            Command::ClearCache {
+                name: Some(name.clone()),
+            }
+        } else if self.cleanup_cache {
+            Command::CleanupCache
         } else if self.compact_current_context {
             Command::CompactContext { name: None }
         } else if let Some(ref name) = self.compact_context {

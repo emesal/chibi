@@ -10,6 +10,7 @@ mod compact;
 mod logging;
 mod request;
 
+use crate::cache;
 use crate::config::ResolvedConfig;
 use crate::context::{InboxEntry, now_timestamp};
 use crate::llm;
@@ -266,6 +267,13 @@ async fn send_prompt_with_depth(
     if use_reflection {
         all_tools.push(tools::reflection_tool_to_api_format());
     }
+
+    // Add file/cache access tools
+    all_tools.push(tools::file_head_tool_to_api_format());
+    all_tools.push(tools::file_tail_tool_to_api_format());
+    all_tools.push(tools::file_lines_tool_to_api_format());
+    all_tools.push(tools::file_grep_tool_to_api_format());
+    all_tools.push(tools::cache_list_tool_to_api_format());
 
     // Build request with tools and API params from resolved config
     let mut request_body = build_request_body(resolved_config, &messages, Some(&all_tools), true);
@@ -583,6 +591,19 @@ async fn send_prompt_with_depth(
 
                         delivery_result
                     }
+                } else if tools::is_file_tool(&tc.name) {
+                    // Handle file/cache access tools
+                    match tools::execute_file_tool(
+                        app,
+                        &context.name,
+                        &tc.name,
+                        &args,
+                        resolved_config,
+                    ) {
+                        Some(Ok(r)) => r,
+                        Some(Err(e)) => format!("Error: {}", e),
+                        None => format!("Error: Unknown file tool '{}'", tc.name),
+                    }
                 } else if let Some(tool) = tools::find_tool(tools, &tc.name) {
                     match tools::execute_tool(tool, &args, verbose) {
                         Ok(r) => r,
@@ -592,12 +613,58 @@ async fn send_prompt_with_depth(
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
 
+                // Check if output should be cached (for non-error, non-file-tool results)
+                let (final_result, was_cached) = if !tool_result.starts_with("Error:")
+                    && !tools::is_file_tool(&tc.name)
+                    && cache::should_cache(
+                        &tool_result,
+                        resolved_config.tool_output_cache_threshold,
+                    ) {
+                    // Cache the large output
+                    let cache_dir = app.tool_cache_dir(&context.name);
+                    match cache::cache_output(&cache_dir, &tc.name, &tool_result, &args) {
+                        Ok(entry) => {
+                            match cache::generate_truncated_message(
+                                &entry,
+                                resolved_config.tool_cache_preview_chars,
+                            ) {
+                                Ok(truncated) => {
+                                    output.diagnostic(
+                                        &format!(
+                                            "[Cached {} chars from {} as {}]",
+                                            tool_result.len(),
+                                            tc.name,
+                                            entry.metadata.id
+                                        ),
+                                        verbose,
+                                    );
+                                    (truncated, true)
+                                }
+                                Err(_) => (tool_result.clone(), false),
+                            }
+                        }
+                        Err(e) => {
+                            output.diagnostic(&format!("[Failed to cache output: {}]", e), verbose);
+                            (tool_result.clone(), false)
+                        }
+                    }
+                } else {
+                    (tool_result.clone(), false)
+                };
+
                 // Log tool call and result to both transcript.jsonl and context.jsonl
+                // Note: We log the original tool_result to transcript, but use final_result for API
                 let tool_call_entry = app.create_tool_call_entry(&tc.name, &tc.arguments);
                 app.append_to_current_transcript_and_context(&tool_call_entry)?;
                 output.emit(&tool_call_entry)?;
 
-                let tool_result_entry = app.create_tool_result_entry(&tc.name, &tool_result);
+                // Log original or truncated result based on caching
+                let logged_result = if was_cached {
+                    &final_result
+                } else {
+                    &tool_result
+                };
+                let tool_result_entry = app.create_tool_result_entry(&tc.name, logged_result);
                 app.append_to_current_transcript_and_context(&tool_result_entry)?;
                 output.emit(&tool_result_entry)?;
 
@@ -605,7 +672,8 @@ async fn send_prompt_with_depth(
                 let post_hook_data = serde_json::json!({
                     "tool_name": tc.name,
                     "arguments": args,
-                    "result": tool_result,
+                    "result": tool_result,  // Pass original result to hooks
+                    "cached": was_cached,
                 });
                 let _ = tools::execute_hook(
                     tools,
@@ -617,7 +685,7 @@ async fn send_prompt_with_depth(
                 messages.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": tool_result,
+                    "content": final_result,  // Use truncated message if cached
                 }));
             }
 

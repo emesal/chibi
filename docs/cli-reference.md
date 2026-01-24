@@ -49,6 +49,14 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 | `-p, --plugin <NAME> [ARGS...]` | Run a plugin directly (bypasses LLM) |
 | `-P, --call-tool <TOOL> [ARGS...]` | Call a tool directly (plugin or built-in) |
 
+## Cache Management
+
+| Flag | Description |
+|------|-------------|
+| `--clear-cache` | Clear the tool output cache for current context |
+| `--clear-cache-for <CTX>` | Clear the tool output cache for specified context |
+| `--cleanup-cache` | Remove old cache entries across all contexts |
+
 ## Control Flags
 
 | Flag | Description |

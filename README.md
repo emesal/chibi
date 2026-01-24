@@ -13,6 +13,7 @@ CLI tool for conversing with AI models via OpenRouter. Maintains conversation st
 - **Rolling compaction** - Automatic context management with intelligent summarization
 - **Agentic workflows** - Built-in tools for todos, goals, and autonomous processing
 - **Cross-context messaging** - Contexts can communicate with each other
+- **Large output caching** - Tool outputs automatically cached with surgical access tools
 - **Unix philosophy** - Only LLM output goes to stdout (pipeable)
 
 <div align="center">
@@ -136,7 +137,8 @@ See [chibi-plugins](https://github.com/emesal/chibi-plugins) for ready-to-use pl
     ├── local.toml        # Per-context config
     ├── todos.md          # Current todos
     ├── goals.md          # Current goals
-    └── system_prompt.md  # Custom prompt (optional)
+    ├── system_prompt.md  # Custom prompt (optional)
+    └── tool_cache/       # Cached large tool outputs
 ```
 
 ## License

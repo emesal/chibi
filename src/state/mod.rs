@@ -198,9 +198,54 @@ impl AppState {
         self.context_dir(name).join("summary.md")
     }
 
+    /// Path to tool cache directory for a context
+    pub fn tool_cache_dir(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("tool_cache")
+    }
+
+    /// Path to a cached tool output file
+    pub fn cache_file(&self, name: &str, cache_id: &str) -> PathBuf {
+        self.tool_cache_dir(name)
+            .join(format!("{}.cache", cache_id))
+    }
+
+    /// Path to cache metadata file
+    pub fn cache_meta_file(&self, name: &str, cache_id: &str) -> PathBuf {
+        self.tool_cache_dir(name)
+            .join(format!("{}.meta.json", cache_id))
+    }
+
     pub fn ensure_context_dir(&self, name: &str) -> io::Result<()> {
         let dir = self.context_dir(name);
         fs::create_dir_all(&dir)
+    }
+
+    /// Ensure tool cache directory exists
+    pub fn ensure_tool_cache_dir(&self, name: &str) -> io::Result<()> {
+        let dir = self.tool_cache_dir(name);
+        fs::create_dir_all(&dir)
+    }
+
+    /// Clear the tool cache for a context
+    pub fn clear_tool_cache(&self, name: &str) -> io::Result<()> {
+        let cache_dir = self.tool_cache_dir(name);
+        crate::cache::clear_cache(&cache_dir)
+    }
+
+    /// Cleanup old cache entries for a context (based on max age)
+    pub fn cleanup_tool_cache(&self, name: &str, max_age_days: u64) -> io::Result<usize> {
+        let cache_dir = self.tool_cache_dir(name);
+        crate::cache::cleanup_old_cache(&cache_dir, max_age_days)
+    }
+
+    /// Cleanup old cache entries for all contexts
+    pub fn cleanup_all_tool_caches(&self, max_age_days: u64) -> io::Result<usize> {
+        let mut total_removed = 0;
+        for context_name in &self.state.contexts {
+            let removed = self.cleanup_tool_cache(context_name, max_age_days)?;
+            total_removed += removed;
+        }
+        Ok(total_removed)
     }
 
     // === Context Dirty/Clean State ===
@@ -1151,6 +1196,10 @@ impl AppState {
             max_recursion_depth: self.config.max_recursion_depth,
             username: self.config.username.clone(),
             reflection_enabled: self.config.reflection_enabled,
+            tool_output_cache_threshold: self.config.tool_output_cache_threshold,
+            tool_cache_max_age_days: self.config.tool_cache_max_age_days,
+            tool_cache_preview_chars: self.config.tool_cache_preview_chars,
+            file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             api: api_params,
         };
 
@@ -1184,6 +1233,18 @@ impl AppState {
         }
         if let Some(reflection_enabled) = local.reflection_enabled {
             resolved.reflection_enabled = reflection_enabled;
+        }
+        if let Some(tool_output_cache_threshold) = local.tool_output_cache_threshold {
+            resolved.tool_output_cache_threshold = tool_output_cache_threshold;
+        }
+        if let Some(tool_cache_max_age_days) = local.tool_cache_max_age_days {
+            resolved.tool_cache_max_age_days = tool_cache_max_age_days;
+        }
+        if let Some(tool_cache_preview_chars) = local.tool_cache_preview_chars {
+            resolved.tool_cache_preview_chars = tool_cache_preview_chars;
+        }
+        if let Some(ref file_tools_allowed_paths) = local.file_tools_allowed_paths {
+            resolved.file_tools_allowed_paths = file_tools_allowed_paths.clone();
         }
 
         // Apply context-level API params (Layer 3)
@@ -1344,6 +1405,10 @@ mod tests {
             username: "testuser".to_string(),
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
             api: ApiParams::default(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -1910,6 +1975,10 @@ mod tests {
             username: "testuser".to_string(),
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
             api: ApiParams::default(),
         };
 
@@ -1961,6 +2030,10 @@ mod tests {
             username: "testuser".to_string(),
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
             api: ApiParams::default(),
         };
 
@@ -2033,6 +2106,10 @@ mod tests {
             warn_threshold_percent: Some(85.0),
             context_window_limit: Some(16000),
             reflection_enabled: Some(false),
+            tool_output_cache_threshold: None,
+            tool_cache_max_age_days: None,
+            tool_cache_preview_chars: None,
+            file_tools_allowed_paths: None,
             api: None,
         };
         app.save_local_config("default", &local).unwrap();

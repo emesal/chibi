@@ -1,4 +1,5 @@
 mod api;
+mod cache;
 mod cli;
 mod config;
 mod context;
@@ -524,6 +525,23 @@ async fn execute_from_input(
                 };
 
             output.emit_result(&result);
+            did_action = true;
+        }
+        Command::ClearCache { name } => {
+            let ctx_name = name
+                .clone()
+                .unwrap_or_else(|| app.state.current_context.clone());
+            app.clear_tool_cache(&ctx_name)?;
+            output.emit_result(&format!("Cleared tool cache for context '{}'", ctx_name));
+            did_action = true;
+        }
+        Command::CleanupCache => {
+            let resolved = app.resolve_config(None, None)?;
+            let removed = app.cleanup_all_tool_caches(resolved.tool_cache_max_age_days)?;
+            output.emit_result(&format!(
+                "Removed {} old cache entries (older than {} days)",
+                removed, resolved.tool_cache_max_age_days
+            ));
             did_action = true;
         }
         Command::SendPrompt { prompt } => {

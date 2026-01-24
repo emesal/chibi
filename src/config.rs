@@ -251,6 +251,18 @@ fn default_rolling_compact_drop_percentage() -> f32 {
     50.0
 }
 
+fn default_tool_output_cache_threshold() -> usize {
+    4000
+}
+
+fn default_tool_cache_max_age_days() -> u64 {
+    7
+}
+
+fn default_tool_cache_preview_chars() -> usize {
+    500
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -276,6 +288,18 @@ pub struct Config {
     pub lock_heartbeat_seconds: u64,
     #[serde(default = "default_rolling_compact_drop_percentage")]
     pub rolling_compact_drop_percentage: f32,
+    /// Threshold (in chars) above which tool output is cached
+    #[serde(default = "default_tool_output_cache_threshold")]
+    pub tool_output_cache_threshold: usize,
+    /// Maximum age in days for cached tool outputs
+    #[serde(default = "default_tool_cache_max_age_days")]
+    pub tool_cache_max_age_days: u64,
+    /// Number of preview characters to show in truncated message
+    #[serde(default = "default_tool_cache_preview_chars")]
+    pub tool_cache_preview_chars: usize,
+    /// Paths allowed for file tools (empty = cache only)
+    #[serde(default)]
+    pub file_tools_allowed_paths: Vec<String>,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: ApiParams,
@@ -294,6 +318,14 @@ pub struct LocalConfig {
     pub warn_threshold_percent: Option<f32>,
     pub context_window_limit: Option<usize>,
     pub reflection_enabled: Option<bool>,
+    /// Threshold (in chars) above which tool output is cached
+    pub tool_output_cache_threshold: Option<usize>,
+    /// Maximum age in days for cached tool outputs
+    pub tool_cache_max_age_days: Option<u64>,
+    /// Number of preview characters to show in truncated message
+    pub tool_cache_preview_chars: Option<usize>,
+    /// Paths allowed for file tools (empty = cache only)
+    pub file_tools_allowed_paths: Option<Vec<String>>,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
@@ -329,6 +361,14 @@ pub struct ResolvedConfig {
     pub max_recursion_depth: usize,
     pub username: String,
     pub reflection_enabled: bool,
+    /// Threshold (in chars) above which tool output is cached
+    pub tool_output_cache_threshold: usize,
+    /// Maximum age in days for cached tool outputs
+    pub tool_cache_max_age_days: u64,
+    /// Number of preview characters to show in truncated message
+    pub tool_cache_preview_chars: usize,
+    /// Paths allowed for file tools (empty = cache only)
+    pub file_tools_allowed_paths: Vec<String>,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
 }
@@ -349,6 +389,16 @@ impl ResolvedConfig {
             "auto_compact_threshold" => Some(format!("{}", self.auto_compact_threshold as i32)),
             "max_recursion_depth" => Some(self.max_recursion_depth.to_string()),
             "reflection_enabled" => Some(self.reflection_enabled.to_string()),
+            "tool_output_cache_threshold" => Some(self.tool_output_cache_threshold.to_string()),
+            "tool_cache_max_age_days" => Some(self.tool_cache_max_age_days.to_string()),
+            "tool_cache_preview_chars" => Some(self.tool_cache_preview_chars.to_string()),
+            "file_tools_allowed_paths" => {
+                if self.file_tools_allowed_paths.is_empty() {
+                    Some("(empty)".to_string())
+                } else {
+                    Some(self.file_tools_allowed_paths.join(", "))
+                }
+            }
 
             // API params (api.*)
             "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
@@ -383,6 +433,10 @@ impl ResolvedConfig {
             "warn_threshold_percent",
             "auto_compact",
             "auto_compact_threshold",
+            "tool_output_cache_threshold",
+            "tool_cache_max_age_days",
+            "tool_cache_preview_chars",
+            "file_tools_allowed_paths",
             "max_recursion_depth",
             "reflection_enabled",
             // API params
@@ -733,6 +787,10 @@ mod tests {
             max_recursion_depth: 30,
             username: "alice".to_string(),
             reflection_enabled: true,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
             api: ApiParams {
                 temperature: Some(0.7),
                 max_tokens: Some(4096),

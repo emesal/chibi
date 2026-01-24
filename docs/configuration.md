@@ -73,6 +73,24 @@ max_recursion_depth = 30
 lock_heartbeat_seconds = 30
 
 # =============================================================================
+# Tool Output Caching
+# =============================================================================
+
+# Character threshold above which tool outputs are cached (default: 4000)
+# When exceeded, output is cached to disk and a truncated preview is sent to the LLM
+tool_output_cache_threshold = 4000
+
+# Maximum age in days for cached outputs before automatic cleanup (default: 7)
+tool_cache_max_age_days = 7
+
+# Number of preview characters to show in truncated message (default: 500)
+tool_cache_preview_chars = 500
+
+# Paths allowed for file tools (default: empty = cache only)
+# When empty, file tools only work with cache_id. Add paths to allow file access.
+# file_tools_allowed_paths = ["~", "/tmp"]
+
+# =============================================================================
 # API Parameters
 # =============================================================================
 
@@ -203,6 +221,12 @@ max_recursion_depth = 25
 
 # Override reflection
 reflection_enabled = false
+
+# Override tool caching
+tool_output_cache_threshold = 8000
+tool_cache_max_age_days = 14
+tool_cache_preview_chars = 1000
+file_tools_allowed_paths = ["~/projects"]
 
 # Context-specific API parameters
 [api]

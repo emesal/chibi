@@ -12,6 +12,11 @@ The LLM always has access to these tools (no setup required):
 | `update_goals` | Set high-level objectives |
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
 | `send_message` | Send messages to other contexts |
+| `file_head` | Read first N lines from a cached output or file |
+| `file_tail` | Read last N lines from a cached output or file |
+| `file_lines` | Read a specific line range from a cached output or file |
+| `file_grep` | Search for a pattern in a cached output or file |
+| `cache_list` | List all cached tool outputs for the current context |
 
 ## External Plugins
 
@@ -242,6 +247,67 @@ LLM: Writes summary report
      Returns final response to user
 ```
 
+## Tool Output Caching
+
+When tool outputs exceed the configured threshold (default: 4000 chars), they're automatically cached to disk and a truncated preview is sent to the LLM.
+
+### How It Works
+
+1. Tool produces large output (e.g., `fetch_url` returns a large webpage)
+2. Output is cached to `~/.chibi/contexts/<name>/tool_cache/`
+3. LLM receives a truncated message with:
+   - Cache ID for later reference
+   - Size and line count statistics
+   - Preview of first ~500 chars
+   - Instructions to use file tools for examination
+
+### Examining Cached Content
+
+The LLM uses built-in file tools to examine cached content surgically:
+
+```
+[Output cached: fetch_url_abc123_def456]
+Tool: fetch_url | Size: 50000 chars, ~12500 tokens | Lines: 1200
+Preview:
+---
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Example Page</title>
+...
+---
+Use file_head, file_tail, file_lines, file_grep with cache_id to examine.
+```
+
+The LLM can then:
+- `file_head(cache_id="fetch_url_abc123_def456", lines=100)` - See first 100 lines
+- `file_grep(cache_id="...", pattern="class.*Button")` - Search for patterns
+- `file_lines(cache_id="...", start=500, end=550)` - Read specific section
+
+### Configuration
+
+```toml
+# Threshold above which outputs are cached (chars)
+tool_output_cache_threshold = 4000
+
+# Max age for cached entries before cleanup (days)
+tool_cache_max_age_days = 7
+
+# Preview size in truncated message (chars)
+tool_cache_preview_chars = 500
+
+# Allow file tools to access files outside cache
+# file_tools_allowed_paths = ["~", "/tmp"]
+```
+
+### Cache Management
+
+```bash
+chibi --clear-cache           # Clear current context's cache
+chibi --clear-cache-for other # Clear specific context's cache
+chibi --cleanup-cache         # Remove old entries across all contexts
+```
+
 ## Best Practices
 
 1. **Clear Goals** - Help the LLM stay focused by encouraging goal-setting
@@ -249,3 +315,4 @@ LLM: Writes summary report
 3. **Reasonable Recursion Limits** - Balance autonomy vs. runaway loops
 4. **Use Reflection Wisely** - Store genuinely useful long-term knowledge
 5. **Monitor with Verbose Mode** - Use `-v` to see what the agent is doing
+6. **Leverage Caching** - Large outputs are automatically cached for surgical access

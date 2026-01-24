@@ -81,4 +81,21 @@ pub trait PathHelpers {
     fn inbox_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("inbox.jsonl")
     }
+
+    /// Path to tool cache directory for a context
+    fn tool_cache_dir(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("tool_cache")
+    }
+
+    /// Path to a cached tool output file
+    fn cache_file(&self, name: &str, cache_id: &str) -> PathBuf {
+        self.tool_cache_dir(name)
+            .join(format!("{}.cache", cache_id))
+    }
+
+    /// Path to cache metadata file
+    fn cache_meta_file(&self, name: &str, cache_id: &str) -> PathBuf {
+        self.tool_cache_dir(name)
+            .join(format!("{}.meta.json", cache_id))
+    }
 }
