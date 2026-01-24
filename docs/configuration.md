@@ -66,8 +66,8 @@ reflection_character_limit = 10000
 # Safety Limits
 # =============================================================================
 
-# Maximum recursion depth for autonomous tool loops (default: 15)
-max_recursion_depth = 15
+# Maximum recursion depth for autonomous tool loops (default: 30)
+max_recursion_depth = 30
 
 # Context lock heartbeat interval in seconds (default: 30)
 lock_heartbeat_seconds = 30

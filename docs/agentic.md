@@ -105,10 +105,10 @@ LLM: (sees note) "Continuing. Note to self: Check the test results"
 
 ### Safety Limits
 
-The `max_recursion_depth` config limits how many rounds can happen (default: 15).
+The `max_recursion_depth` config limits how many rounds can happen (default: 30).
 
 ```toml
-max_recursion_depth = 15
+max_recursion_depth = 30
 ```
 
 ## Inter-Context Communication
