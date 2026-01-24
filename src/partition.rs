@@ -50,6 +50,7 @@
 //! See: <https://github.com/tomtomwombat/fastbloom>
 
 use crate::context::TranscriptEntry;
+use crate::state::jsonl::read_jsonl_file;
 use fastbloom::BloomFilter;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -367,14 +368,14 @@ impl PartitionManager {
         for partition in &self.manifest.partitions {
             let path = self.context_dir.join(&partition.file);
             if path.exists() {
-                entries.extend(read_jsonl_file(&path)?);
+                entries.extend(read_jsonl_file::<TranscriptEntry>(&path)?);
             }
         }
 
         // Active partition
         let active_path = self.context_dir.join(&self.manifest.active_partition);
         if active_path.exists() {
-            entries.extend(read_jsonl_file(&active_path)?);
+            entries.extend(read_jsonl_file::<TranscriptEntry>(&active_path)?);
         }
 
         Ok(entries)
@@ -490,7 +491,7 @@ impl PartitionManager {
         }
 
         // Read entries to get timestamp range
-        let entries = read_jsonl_file(&active_path)?;
+        let entries = read_jsonl_file::<TranscriptEntry>(&active_path)?;
         if entries.is_empty() {
             return Ok(());
         }
@@ -582,7 +583,7 @@ impl PartitionManager {
 
             let path = self.context_dir.join(&partition.file);
             if path.exists() {
-                for entry in read_jsonl_file(&path)? {
+                for entry in read_jsonl_file::<TranscriptEntry>(&path)? {
                     if entry.timestamp >= from_ts && entry.timestamp <= to_ts {
                         entries.push(entry);
                     }
@@ -593,7 +594,7 @@ impl PartitionManager {
         // Check active partition
         let active_path = self.context_dir.join(&self.manifest.active_partition);
         if active_path.exists() {
-            for entry in read_jsonl_file(&active_path)? {
+            for entry in read_jsonl_file::<TranscriptEntry>(&active_path)? {
                 if entry.timestamp >= from_ts && entry.timestamp <= to_ts {
                     entries.push(entry);
                 }
@@ -627,39 +628,6 @@ impl StorageConfig {
 }
 
 // ============================================================================
-// File I/O Helpers
-// ============================================================================
-
-/// Reads all entries from a JSONL file.
-///
-/// Malformed lines are skipped with a warning to stderr.
-fn read_jsonl_file(path: &Path) -> io::Result<Vec<TranscriptEntry>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut entries = Vec::new();
-
-    for (line_num, line) in reader.lines().enumerate() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str(&line) {
-            Ok(entry) => entries.push(entry),
-            Err(e) => {
-                eprintln!(
-                    "[WARN] {}:{}: skipping malformed entry: {}",
-                    path.display(),
-                    line_num + 1,
-                    e
-                );
-            }
-        }
-    }
-
-    Ok(entries)
-}
-
-// ============================================================================
 // Bloom Filter Implementation (using fastbloom by tomtomwombat)
 // ============================================================================
 
@@ -668,8 +636,8 @@ fn read_jsonl_file(path: &Path) -> io::Result<Vec<TranscriptEntry>> {
 /// Uses fastbloom for optimized bloom filter operations (2-20x faster than alternatives).
 /// The bloom filter file is named by replacing `.jsonl` with `.bloom`.
 fn build_bloom_filter(entries: &[TranscriptEntry], partition_path: &Path) -> io::Result<PathBuf> {
-    let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
-    let bloom = BloomFilter::with_false_pos(BLOOM_FALSE_POSITIVE_RATE).items(ids.iter());
+    let bloom = BloomFilter::with_false_pos(BLOOM_FALSE_POSITIVE_RATE)
+        .items(entries.iter().map(|e| e.id.as_str()));
 
     let bloom_path = partition_path.with_extension("bloom");
     let serialized =

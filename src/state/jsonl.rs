@@ -8,8 +8,10 @@ use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
 /// Read entries from a JSONL file, skipping malformed lines with warnings.
+///
+/// Warning messages include the file path and line number for easier debugging.
 /// Returns an empty Vec if the file doesn't exist.
-pub fn read_jsonl_file<T: DeserializeOwned>(path: &Path, warn_prefix: &str) -> io::Result<Vec<T>> {
+pub fn read_jsonl_file<T: DeserializeOwned>(path: &Path) -> io::Result<Vec<T>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -18,7 +20,7 @@ pub fn read_jsonl_file<T: DeserializeOwned>(path: &Path, warn_prefix: &str) -> i
     let reader = BufReader::new(file);
     let mut entries = Vec::new();
 
-    for line in reader.lines() {
+    for (line_num, line) in reader.lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
@@ -26,7 +28,12 @@ pub fn read_jsonl_file<T: DeserializeOwned>(path: &Path, warn_prefix: &str) -> i
         match serde_json::from_str(&line) {
             Ok(entry) => entries.push(entry),
             Err(e) => {
-                eprintln!("[WARN] Skipping malformed {} entry: {}", warn_prefix, e);
+                eprintln!(
+                    "[WARN] {}:{}: skipping malformed entry: {}",
+                    path.display(),
+                    line_num + 1,
+                    e
+                );
             }
         }
     }

@@ -5,7 +5,7 @@
 //! - Configuration loading and resolution
 //! - Transcript and inbox operations
 
-mod jsonl;
+pub mod jsonl;
 
 use jsonl::read_jsonl_file;
 
@@ -390,7 +390,7 @@ impl AppState {
 
     /// Read all entries from transcript.jsonl
     pub fn read_transcript_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        read_jsonl_file(&self.transcript_jsonl_file(name), "transcript")
+        read_jsonl_file(&self.transcript_jsonl_file(name))
     }
 
     /// Migrate from old context.json format to new context.jsonl format
