@@ -16,7 +16,26 @@ use context::{Context, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL
 use input::{ChibiInput, Command, ContextSelection, UsernameOverride};
 use output::OutputHandler;
 use state::AppState;
-use std::io::{self, ErrorKind, Read};
+use std::io::{self, ErrorKind, IsTerminal, Read, Write};
+
+/// Prompt user for confirmation (y/N). Returns true if user confirms.
+/// If stdin is not a terminal (piped input), returns false.
+fn confirm_action(prompt: &str) -> bool {
+    let stdin = io::stdin();
+    if !stdin.is_terminal() {
+        return false;
+    }
+
+    eprint!("{} [y/N] ", prompt);
+    io::stderr().flush().ok();
+
+    let mut input = String::new();
+    if stdin.read_line(&mut input).is_err() {
+        return false;
+    }
+
+    matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+}
 
 /// Generate a unique context name for `-c new` or `-c new:prefix`
 /// Format: [prefix_]YYYYMMDD_HHMMSS[_N]
@@ -373,14 +392,30 @@ async fn execute_from_input(
             }
             did_action = true;
         }
-        Command::DeleteContext { name } => {
+        Command::DestroyContext { name } => {
             let ctx_name = name
                 .clone()
                 .unwrap_or_else(|| app.state.current_context.clone());
-            match app.delete_context(&ctx_name) {
-                Ok(true) => output.emit_result(&format!("Deleted context: {}", ctx_name)),
-                Ok(false) => output.emit_result(&format!("Context '{}' not found", ctx_name)),
-                Err(e) => return Err(e),
+
+            // Check if context exists before prompting
+            if !app.context_dir(&ctx_name).exists() {
+                output.emit_result(&format!("Context '{}' not found", ctx_name));
+            } else if !confirm_action(&format!("Destroy context '{}'?", ctx_name)) {
+                // Prompt for confirmation
+                output.emit_result("Aborted");
+            } else {
+                match app.destroy_context(&ctx_name) {
+                    Ok(Some(switched_to)) => {
+                        output.emit_result(&format!(
+                            "Destroyed context '{}', switched to '{}'",
+                            ctx_name, switched_to
+                        ));
+                    }
+                    Ok(None) => {
+                        output.emit_result(&format!("Destroyed context: {}", ctx_name));
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             did_action = true;
         }

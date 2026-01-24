@@ -55,11 +55,16 @@ impl Context {
 pub struct ContextState {
     pub contexts: Vec<String>,
     pub current_context: String,
+    #[serde(default)]
+    pub previous_context: Option<String>,
 }
 
 impl ContextState {
     pub fn switch_context(&mut self, name: String) -> io::Result<()> {
         validate_context_name(&name)?;
+        if self.current_context != name {
+            self.previous_context = Some(self.current_context.clone());
+        }
         self.current_context = name;
         Ok(())
     }
@@ -338,9 +343,11 @@ mod tests {
         let mut state = ContextState {
             contexts: vec!["default".to_string()],
             current_context: "default".to_string(),
+            previous_context: None,
         };
         assert!(state.switch_context("new-context".to_string()).is_ok());
         assert_eq!(state.current_context, "new-context");
+        assert_eq!(state.previous_context, Some("default".to_string()));
     }
 
     #[test]
@@ -348,10 +355,25 @@ mod tests {
         let mut state = ContextState {
             contexts: vec!["default".to_string()],
             current_context: "default".to_string(),
+            previous_context: None,
         };
         assert!(state.switch_context("invalid name".to_string()).is_err());
         // Should not have changed
         assert_eq!(state.current_context, "default");
+        assert_eq!(state.previous_context, None);
+    }
+
+    #[test]
+    fn test_context_state_switch_same_context() {
+        let mut state = ContextState {
+            contexts: vec!["default".to_string()],
+            current_context: "default".to_string(),
+            previous_context: Some("old".to_string()),
+        };
+        // Switching to the same context should not update previous_context
+        assert!(state.switch_context("default".to_string()).is_ok());
+        assert_eq!(state.current_context, "default");
+        assert_eq!(state.previous_context, Some("old".to_string()));
     }
 
     #[test]

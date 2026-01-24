@@ -17,8 +17,8 @@ pub enum Command {
     ListContexts,
     /// Show current context info (-l)
     ListCurrentContext,
-    /// Delete a context (-d/-D)
-    DeleteContext { name: Option<String> },
+    /// Destroy a context (-d/-D)
+    DestroyContext { name: Option<String> },
     /// Archive a context's history (-a/-A)
     ArchiveHistory { name: Option<String> },
     /// Compact a context (-z/-Z)
@@ -372,20 +372,20 @@ mod tests {
     }
 
     #[test]
-    fn test_command_delete_context_with_name() {
-        let cmd = Command::DeleteContext {
+    fn test_command_destroy_context_with_name() {
+        let cmd = Command::DestroyContext {
             name: Some("test".to_string()),
         };
         let json = serde_json::to_string(&cmd).unwrap();
-        assert!(json.contains("delete_context"));
+        assert!(json.contains("destroy_context"));
         assert!(json.contains("test"));
     }
 
     #[test]
-    fn test_command_delete_context_current() {
-        let cmd = Command::DeleteContext { name: None };
+    fn test_command_destroy_context_current() {
+        let cmd = Command::DestroyContext { name: None };
         let json = serde_json::to_string(&cmd).unwrap();
-        assert!(json.contains("delete_context"));
+        assert!(json.contains("destroy_context"));
         assert!(json.contains("null"));
     }
 

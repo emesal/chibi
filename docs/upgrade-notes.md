@@ -1,5 +1,13 @@
 # chibi upgrade notes
 
+## Changes since 0.5.0
+
+- `-d`/`-D` renamed from `--delete-*` to `--destroy-*`
+- `delete_context` command renamed to `destroy_context` (JSON input)
+- `state.json` now has optional `previous_context` field (auto-handled by serde default)
+
+No migration needed - old state files work automatically.
+
 ## 0.4.1 -> 0.5.0
 
 - completely reworked code

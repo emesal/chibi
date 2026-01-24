@@ -98,18 +98,18 @@ pub struct Cli {
     #[arg(short = 'L', long = "list-contexts")]
     pub list_contexts: bool,
 
-    /// Delete current context
-    #[arg(short = 'd', long = "delete-current-context")]
-    pub delete_current_context: bool,
+    /// Destroy current context (permanently removes all data)
+    #[arg(short = 'd', long = "destroy-current-context")]
+    pub destroy_current_context: bool,
 
-    /// Delete specified context
+    /// Destroy specified context (permanently removes all data)
     #[arg(
         short = 'D',
-        long = "delete-context",
+        long = "destroy-context",
         value_name = "CTX",
         allow_hyphen_values = true
     )]
-    pub delete_context: Option<String>,
+    pub destroy_context: Option<String>,
 
     /// Archive current context history (save to transcript)
     #[arg(short = 'a', long = "archive-current-history")]
@@ -260,8 +260,8 @@ const CLI_AFTER_HELP: &str = r#"EXAMPLES:
   chibi -c coding write code      Switch context, then send prompt
   chibi -L                        List all contexts
   chibi -l                        Show current context info
-  chibi -Dold                     Delete 'old' context (attached arg)
-  chibi -D old                    Delete 'old' context (separated arg)
+  chibi -Dold                     Destroy 'old' context (attached arg)
+  chibi -D old                    Destroy 'old' context (separated arg)
   chibi -n system_prompt          Inspect current system prompt
   chibi -g 10                     Show last 10 log entries
   chibi -x -c test                Switch context without LLM
@@ -395,8 +395,8 @@ impl Cli {
         // Compute implied no_chibi based on flags
         let implies_no_chibi = self.list_current_context
             || self.list_contexts
-            || self.delete_current_context
-            || self.delete_context.is_some()
+            || self.destroy_current_context
+            || self.destroy_context.is_some()
             || self.archive_history.is_some()
             || self.compact_context.is_some()
             || rename_context.is_some()
@@ -443,10 +443,10 @@ impl Cli {
             Command::ListContexts
         } else if self.list_current_context {
             Command::ListCurrentContext
-        } else if self.delete_current_context {
-            Command::DeleteContext { name: None }
-        } else if let Some(ref name) = self.delete_context {
-            Command::DeleteContext {
+        } else if self.destroy_current_context {
+            Command::DestroyContext { name: None }
+        } else if let Some(ref name) = self.destroy_context {
+            Command::DestroyContext {
                 name: Some(name.clone()),
             }
         } else if self.archive_current_history {
@@ -795,32 +795,32 @@ mod tests {
         assert!(input.flags.no_chibi); // implied
     }
 
-    // === Delete tests ===
+    // === Destroy tests ===
 
     #[test]
-    fn test_delete_current_context_short() {
+    fn test_destroy_current_context_short() {
         let input = parse_input("-d").unwrap();
         assert!(matches!(
             input.command,
-            Command::DeleteContext { name: None }
+            Command::DestroyContext { name: None }
         ));
         assert!(input.flags.no_chibi);
     }
 
     #[test]
-    fn test_delete_context_short() {
+    fn test_destroy_context_short() {
         let input = parse_input("-D old-context").unwrap();
         assert!(
-            matches!(input.command, Command::DeleteContext { ref name } if *name == Some("old-context".to_string()))
+            matches!(input.command, Command::DestroyContext { ref name } if *name == Some("old-context".to_string()))
         );
         assert!(input.flags.no_chibi);
     }
 
     #[test]
-    fn test_delete_context_attached() {
+    fn test_destroy_context_attached() {
         let input = parse_input("-Dold-context").unwrap();
         assert!(
-            matches!(input.command, Command::DeleteContext { ref name } if *name == Some("old-context".to_string()))
+            matches!(input.command, Command::DestroyContext { ref name } if *name == Some("old-context".to_string()))
         );
     }
 

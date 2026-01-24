@@ -56,6 +56,7 @@ impl AppState {
         let state = ContextState {
             contexts: Vec::new(),
             current_context: "default".to_string(),
+            previous_context: None,
         };
 
         Ok(AppState {
@@ -126,12 +127,14 @@ impl AppState {
                 ContextState {
                     contexts: Vec::new(),
                     current_context: "default".to_string(),
+                    previous_context: None,
                 }
             })
         } else {
             ContextState {
                 contexts: Vec::new(),
                 current_context: "default".to_string(),
+                previous_context: None,
             }
         };
 
@@ -712,28 +715,52 @@ impl AppState {
         Ok(())
     }
 
-    pub fn delete_context(&self, name: &str) -> io::Result<bool> {
-        if self.state.current_context == name {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                format!(
-                    "Cannot delete the current context '{}'. Switch to another context first.",
-                    name
-                ),
-            ));
+    /// Destroy a context and its directory.
+    /// If destroying the current context, switches to the previous context first
+    /// (or "default" if no previous context exists).
+    /// Returns the name of the context that was switched to if a switch occurred.
+    pub fn destroy_context(&mut self, name: &str) -> io::Result<Option<String>> {
+        let dir = self.context_dir(name);
+        if !dir.exists() {
+            return Ok(None);
         }
 
-        let dir = self.context_dir(name);
-        if dir.exists() {
-            fs::remove_dir_all(&dir)?;
-            // Remove from state
-            let mut new_state = self.state.clone();
-            new_state.contexts.retain(|c| c != name);
-            new_state.save(&self.state_path)?;
-            Ok(true)
+        let mut new_state = self.state.clone();
+        let switched_to: Option<String>;
+
+        // If destroying the current context, switch to another first
+        if self.state.current_context == name {
+            // Determine the fallback context
+            let fallback = self
+                .state
+                .previous_context
+                .as_ref()
+                .filter(|prev| *prev != name && self.context_dir(prev).exists())
+                .cloned()
+                .unwrap_or_else(|| "default".to_string());
+
+            new_state.current_context = fallback.clone();
+            new_state.previous_context = None; // Clear previous after using it
+            self.state.current_context = fallback.clone();
+            self.state.previous_context = None;
+            switched_to = Some(fallback);
         } else {
-            Ok(false)
+            // If destroying a context that was the previous context, clear it
+            if self.state.previous_context.as_ref() == Some(&name.to_string()) {
+                new_state.previous_context = None;
+                self.state.previous_context = None;
+            }
+            switched_to = None;
         }
+
+        // Remove the directory
+        fs::remove_dir_all(&dir)?;
+
+        // Update state
+        new_state.contexts.retain(|c| c != name);
+        new_state.save(&self.state_path)?;
+
+        Ok(switched_to)
     }
 
     pub fn rename_context(&self, old_name: &str, new_name: &str) -> io::Result<()> {
@@ -1499,12 +1526,12 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_context() {
+    fn test_destroy_context() {
         let (mut app, _temp) = create_test_app();
 
-        // Create context to delete
+        // Create context to destroy
         let context = Context {
-            name: "to-delete".to_string(),
+            name: "to-destroy".to_string(),
             messages: vec![],
             created_at: 0,
             updated_at: 0,
@@ -1515,32 +1542,102 @@ mod tests {
         // Make sure we're not on this context
         app.state.current_context = "default".to_string();
 
-        // Delete
-        let deleted = app.delete_context("to-delete").unwrap();
-        assert!(deleted);
-        assert!(!app.context_dir("to-delete").exists());
+        // Destroy
+        let result = app.destroy_context("to-destroy").unwrap();
+        assert!(result.is_none()); // No switch occurred
+        assert!(!app.context_dir("to-destroy").exists());
     }
 
     #[test]
-    fn test_delete_current_context_fails() {
-        let (app, _temp) = create_test_app();
+    fn test_destroy_current_context_switches_to_previous() {
+        let (mut app, _temp) = create_test_app();
 
-        // Try to delete current context
-        let result = app.delete_context("default");
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Cannot delete the current context")
-        );
+        // Create two contexts
+        let ctx1 = Context::new("context-one");
+        let ctx2 = Context::new("context-two");
+        app.save_context(&ctx1).unwrap();
+        app.save_context(&ctx2).unwrap();
+
+        // Set up state: current is context-two, previous is context-one
+        app.state.current_context = "context-two".to_string();
+        app.state.previous_context = Some("context-one".to_string());
+
+        // Destroy current context
+        let result = app.destroy_context("context-two").unwrap();
+        assert_eq!(result, Some("context-one".to_string()));
+        assert_eq!(app.state.current_context, "context-one");
+        assert_eq!(app.state.previous_context, None);
+        assert!(!app.context_dir("context-two").exists());
     }
 
     #[test]
-    fn test_delete_nonexistent_context() {
-        let (app, _temp) = create_test_app();
-        let deleted = app.delete_context("nonexistent").unwrap();
-        assert!(!deleted);
+    fn test_destroy_current_context_falls_back_to_default() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create a context
+        let ctx = Context::new("my-context");
+        app.save_context(&ctx).unwrap();
+
+        // Set up state: current is my-context, no previous
+        app.state.current_context = "my-context".to_string();
+        app.state.previous_context = None;
+
+        // Destroy current context
+        let result = app.destroy_context("my-context").unwrap();
+        assert_eq!(result, Some("default".to_string()));
+        assert_eq!(app.state.current_context, "default");
+        assert!(!app.context_dir("my-context").exists());
+    }
+
+    #[test]
+    fn test_destroy_current_context_skips_deleted_previous() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create contexts
+        let ctx1 = Context::new("context-one");
+        let ctx2 = Context::new("context-two");
+        app.save_context(&ctx1).unwrap();
+        app.save_context(&ctx2).unwrap();
+
+        // Delete context-one's directory manually (simulate it being gone)
+        fs::remove_dir_all(app.context_dir("context-one")).unwrap();
+
+        // Set up state: current is context-two, previous points to non-existent context
+        app.state.current_context = "context-two".to_string();
+        app.state.previous_context = Some("context-one".to_string());
+
+        // Destroy current context - should fall back to default since previous doesn't exist
+        let result = app.destroy_context("context-two").unwrap();
+        assert_eq!(result, Some("default".to_string()));
+        assert_eq!(app.state.current_context, "default");
+    }
+
+    #[test]
+    fn test_destroy_nonexistent_context() {
+        let (mut app, _temp) = create_test_app();
+        let result = app.destroy_context("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_destroy_clears_previous_context_reference() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create two contexts
+        let ctx1 = Context::new("context-one");
+        let ctx2 = Context::new("context-two");
+        app.save_context(&ctx1).unwrap();
+        app.save_context(&ctx2).unwrap();
+
+        // Set up state: current is context-one, previous is context-two
+        app.state.current_context = "context-one".to_string();
+        app.state.previous_context = Some("context-two".to_string());
+
+        // Destroy context-two (which is the previous context)
+        let result = app.destroy_context("context-two").unwrap();
+        assert!(result.is_none()); // No switch occurred
+        assert_eq!(app.state.previous_context, None); // Previous should be cleared
+        assert!(!app.context_dir("context-two").exists());
     }
 
     // === Token calculation tests ===
