@@ -32,7 +32,7 @@
 //!
 //! Commands with arguments:
 //! - `{ "send_prompt": { "prompt": "..." } }`
-//! - `{ "delete_context": { "name": "..." } }` (name is optional, null = current)
+//! - `{ "destroy_context": { "name": "..." } }` (name is optional, null = current)
 //! - `{ "archive_history": { "name": "..." } }` (name is optional)
 //! - `{ "compact_context": { "name": "..." } }` (name is optional)
 //! - `{ "rename_context": { "old": "...", "new": "..." } }` (old is optional)
@@ -102,22 +102,22 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_delete_context_named() {
-        let json = r#"{"command": {"delete_context": {"name": "foo"}}}"#;
+    fn test_parse_destroy_context_named() {
+        let json = r#"{"command": {"destroy_context": {"name": "foo"}}}"#;
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.command,
-            Command::DeleteContext { name: Some(ref n) } if n == "foo"
+            Command::DestroyContext { name: Some(ref n) } if n == "foo"
         ));
     }
 
     #[test]
-    fn test_parse_delete_context_current() {
-        let json = r#"{"command": {"delete_context": {"name": null}}}"#;
+    fn test_parse_destroy_context_current() {
+        let json = r#"{"command": {"destroy_context": {"name": null}}}"#;
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.command,
-            Command::DeleteContext { name: None }
+            Command::DestroyContext { name: None }
         ));
     }
 
