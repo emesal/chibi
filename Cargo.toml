@@ -1,6 +1,6 @@
 [package]
 name = "chibi"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 
 [dependencies]
@@ -11,6 +11,8 @@ futures-util = { version = "0.3.31", features = ["std"] }
 reqwest = { version = "0.13.1", features = ["json", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+sha2 = "0.10"
+strum = { version = "0.27", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["full"] }
 toml = "0.9.11"
 uuid = { version = "1", features = ["v4"] }
@@ -18,3 +20,4 @@ fs2 = "0.4"
 
 [dev-dependencies]
 tempfile = "3.19"
+regex = "1"

@@ -3,7 +3,7 @@
 //! This module provides `OutputHandler` which handles outputting
 //! transcript entries and diagnostics in either plain text or JSONL format.
 
-use crate::context::{now_timestamp, TranscriptEntry};
+use crate::context::{TranscriptEntry, now_timestamp};
 use std::io::{self, Write};
 use uuid::Uuid;
 
@@ -62,6 +62,7 @@ impl OutputHandler {
                 to: "user".to_string(),
                 content: message.to_string(),
                 entry_type: "diagnostic".to_string(),
+                metadata: None,
             };
             if let Ok(json) = serde_json::to_string(&entry) {
                 eprintln!("{}", json);
@@ -83,34 +84,13 @@ impl OutputHandler {
                 to: "user".to_string(),
                 content: message.to_string(),
                 entry_type: "diagnostic".to_string(),
+                metadata: None,
             };
             if let Ok(json) = serde_json::to_string(&entry) {
                 eprintln!("{}", json);
             }
         } else {
             eprintln!("{}", message);
-        }
-    }
-
-    /// Stream text to stdout (normal mode only).
-    ///
-    /// In JSON mode, this is a no-op - use `emit()` to output complete entries.
-    /// In normal mode, this prints text without a newline and flushes.
-    pub fn stream(&self, content: &str) -> io::Result<()> {
-        if !self.json_mode {
-            print!("{}", content);
-            io::stdout().flush()?;
-        }
-        Ok(())
-    }
-
-    /// Print a line to stdout (normal mode only).
-    ///
-    /// In JSON mode, this is a no-op.
-    /// In normal mode, this prints a line with newline.
-    pub fn println(&self, content: &str) {
-        if !self.json_mode {
-            println!("{}", content);
         }
     }
 
@@ -134,34 +114,13 @@ impl OutputHandler {
                 to: "user".to_string(),
                 content: content.to_string(),
                 entry_type: "result".to_string(),
+                metadata: None,
             };
             if let Ok(json) = serde_json::to_string(&entry) {
                 println!("{}", json);
             }
         } else {
             println!("{}", content);
-        }
-    }
-
-    /// Emit an error entry.
-    ///
-    /// In JSON mode, this outputs a JSONL entry with type "error".
-    /// In normal mode, this prints to stderr.
-    pub fn emit_error(&self, message: &str) {
-        if self.json_mode {
-            let entry = TranscriptEntry {
-                id: Uuid::new_v4().to_string(),
-                timestamp: now_timestamp(),
-                from: "system".to_string(),
-                to: "user".to_string(),
-                content: message.to_string(),
-                entry_type: "error".to_string(),
-            };
-            if let Ok(json) = serde_json::to_string(&entry) {
-                eprintln!("{}", json);
-            }
-        } else {
-            eprintln!("Error: {}", message);
         }
     }
 }
@@ -192,6 +151,7 @@ mod tests {
             to: "assistant".to_string(),
             content: "Hello".to_string(),
             entry_type: "message".to_string(),
+            metadata: None,
         };
         // Should not panic
         let _ = handler.emit(&entry);
@@ -207,6 +167,7 @@ mod tests {
             to: "assistant".to_string(),
             content: "Hello".to_string(),
             entry_type: "message".to_string(),
+            metadata: None,
         };
         // Should not panic (no-op in normal mode)
         let _ = handler.emit(&entry);
@@ -224,19 +185,5 @@ mod tests {
         let handler = OutputHandler::new(false);
         // Should not panic
         handler.diagnostic("Test message", true);
-    }
-
-    #[test]
-    fn test_stream_normal_mode() {
-        let handler = OutputHandler::new(false);
-        // Should not panic
-        let _ = handler.stream("test");
-    }
-
-    #[test]
-    fn test_stream_json_mode() {
-        let handler = OutputHandler::new(true);
-        // Should not panic (no-op in JSON mode)
-        let _ = handler.stream("test");
     }
 }

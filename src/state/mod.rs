@@ -1,12 +1,28 @@
-use crate::config::{Config, LocalConfig, ModelsConfig, ResolvedConfig};
+//! Application state management.
+//!
+//! This module manages all persistent state for chibi:
+//! - Context files and directories
+//! - Configuration loading and resolution
+//! - Transcript and inbox operations
+
+// Submodules - utilities extracted for better organization
+// Future refactoring can migrate more functionality into these modules
+mod entries;
+mod jsonl;
+mod paths;
+
+// Re-export submodule items for internal use
+use jsonl::read_jsonl_file;
+
+use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig};
 use crate::context::{
-    Context, ContextMeta, ContextState, InboxEntry, Message, TranscriptEntry, now_timestamp,
-    validate_context_name,
+    Context, ContextMeta, ContextState, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION,
+    ENTRY_TYPE_CONTEXT_CREATED, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
+    EntryMetadata, Message, TranscriptEntry, now_timestamp, validate_context_name,
 };
 use dirs_next::home_dir;
-use fs2::FileExt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, BufWriter, ErrorKind, Write};
+use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -153,13 +169,26 @@ impl AppState {
         self.context_dir(name).join("context_meta.json")
     }
 
-    /// Path to the transcript archive file (for compaction)
-    pub fn transcript_archive_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript_archive.jsonl")
+    /// Path to human-readable transcript (transcript.md)
+    pub fn transcript_md_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("transcript.md")
     }
 
+    /// Alias for transcript_md_file (backwards compatibility)
     pub fn transcript_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript.md")
+        self.transcript_md_file(name)
+    }
+
+    /// Path to JSONL transcript (transcript.jsonl) - the authoritative log
+    pub fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("transcript.jsonl")
+    }
+
+    /// Path to dirty context marker file (.dirty)
+    /// A "dirty" context has a stale prefix (anchor + system prompt) that needs rebuilding.
+    /// A "clean" context has a valid prefix that caches well.
+    pub fn dirty_marker_file(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join(".dirty")
     }
 
     pub fn summary_file(&self, name: &str) -> PathBuf {
@@ -169,6 +198,42 @@ impl AppState {
     pub fn ensure_context_dir(&self, name: &str) -> io::Result<()> {
         let dir = self.context_dir(name);
         fs::create_dir_all(&dir)
+    }
+
+    // === Context Dirty/Clean State ===
+    //
+    // A context is "clean" when its context.jsonl prefix (anchor + system prompt entries)
+    // matches the current state and caches well. A context becomes "dirty" when something
+    // changes that requires rebuilding the prefix (e.g., system prompt change, compaction).
+    // The .dirty marker file indicates a dirty context that needs rebuilding on next load.
+
+    /// Check if the context is dirty (needs prefix rebuild)
+    pub fn is_context_dirty(&self, name: &str) -> bool {
+        self.dirty_marker_file(name).exists()
+    }
+
+    /// Mark the context as dirty (triggers rebuild on next load)
+    pub fn mark_context_dirty(&self, name: &str) -> io::Result<()> {
+        self.ensure_context_dir(name)?;
+        let marker_path = self.dirty_marker_file(name);
+        fs::write(&marker_path, "")
+    }
+
+    /// Mark the context as clean (remove dirty marker after rebuild)
+    pub fn mark_context_clean(&self, name: &str) -> io::Result<()> {
+        let marker_path = self.dirty_marker_file(name);
+        if marker_path.exists() {
+            fs::remove_file(&marker_path)?;
+        }
+        Ok(())
+    }
+
+    /// Compute SHA256 hash of system prompt content
+    pub fn compute_system_prompt_hash(&self, content: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("{:x}", hasher.finalize())
     }
 
     pub fn load_context(&self, name: &str) -> io::Result<Context> {
@@ -194,6 +259,12 @@ impl AppState {
 
     /// Load context from the new JSONL format
     fn load_context_from_jsonl(&self, name: &str) -> io::Result<Context> {
+        // Check if prefix is invalidated and rebuild if needed
+        if self.is_context_dirty(name) {
+            self.rebuild_context_from_transcript(name)?;
+            self.mark_context_clean(name)?;
+        }
+
         let entries = self.read_context_entries(name)?;
         let meta = self.load_context_meta(name)?;
 
@@ -209,7 +280,10 @@ impl AppState {
         let messages = self.entries_to_messages(&entries);
 
         // Get updated_at from the last entry timestamp, or created_at if empty
-        let updated_at = entries.last().map(|e| e.timestamp).unwrap_or(meta.created_at);
+        let updated_at = entries
+            .last()
+            .map(|e| e.timestamp)
+            .unwrap_or(meta.created_at);
 
         Ok(Context {
             name: name.to_string(),
@@ -218,6 +292,97 @@ impl AppState {
             updated_at,
             summary,
         })
+    }
+
+    /// Rebuild context.jsonl from transcript.jsonl
+    /// This creates a fresh context.jsonl with:
+    /// - [0] anchor entry (context_created or latest compaction/archival from transcript)
+    /// - [1] system_prompt entry with current content and hash
+    /// - [2..] entries from transcript since the anchor
+    pub fn rebuild_context_from_transcript(&self, name: &str) -> io::Result<()> {
+        use crate::context::{
+            ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION, ENTRY_TYPE_CONTEXT_CREATED,
+            ENTRY_TYPE_SYSTEM_PROMPT, EntryMetadata,
+        };
+
+        // Read transcript entries
+        let transcript_entries = self.read_transcript_entries(name)?;
+
+        // Find the most recent anchor in the transcript
+        let anchor_index = transcript_entries.iter().rposition(|e| {
+            e.entry_type == ENTRY_TYPE_CONTEXT_CREATED
+                || e.entry_type == ENTRY_TYPE_COMPACTION
+                || e.entry_type == ENTRY_TYPE_ARCHIVAL
+        });
+
+        // Determine anchor entry and entries to include
+        let (anchor_entry, entries_after_anchor) = match anchor_index {
+            Some(idx) => {
+                // Use existing anchor from transcript
+                let anchor = transcript_entries[idx].clone();
+                let entries: Vec<_> = transcript_entries[idx + 1..]
+                    .iter()
+                    .filter(|e| {
+                        // Exclude system_prompt_changed events from context
+                        e.entry_type != crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED
+                    })
+                    .cloned()
+                    .collect();
+                (anchor, entries)
+            }
+            None => {
+                // No anchor found, create context_created anchor
+                let meta = self.load_context_meta(name).unwrap_or_default();
+                let anchor = TranscriptEntry {
+                    id: Uuid::new_v4().to_string(),
+                    timestamp: meta.created_at,
+                    from: "system".to_string(),
+                    to: name.to_string(),
+                    content: "Context created".to_string(),
+                    entry_type: ENTRY_TYPE_CONTEXT_CREATED.to_string(),
+                    metadata: None,
+                };
+                // Include all transcript entries (excluding system_prompt_changed)
+                let entries: Vec<_> = transcript_entries
+                    .iter()
+                    .filter(|e| e.entry_type != crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED)
+                    .cloned()
+                    .collect();
+                (anchor, entries)
+            }
+        };
+
+        // Load current system prompt and compute hash
+        let system_prompt_content = self.load_system_prompt_for(name)?;
+        let system_prompt_hash = self.compute_system_prompt_hash(&system_prompt_content);
+
+        let system_prompt_entry = TranscriptEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_timestamp(),
+            from: "system".to_string(),
+            to: name.to_string(),
+            content: system_prompt_content,
+            entry_type: ENTRY_TYPE_SYSTEM_PROMPT.to_string(),
+            metadata: Some(EntryMetadata {
+                summary: None,
+                hash: Some(system_prompt_hash),
+                transcript_anchor_id: Some(anchor_entry.id.clone()),
+            }),
+        };
+
+        // Build the complete context entries: anchor + system_prompt + conversation entries
+        let mut context_entries = vec![anchor_entry, system_prompt_entry];
+        context_entries.extend(entries_after_anchor);
+
+        // Write to context.jsonl (full rewrite)
+        self.write_context_entries(name, &context_entries)?;
+
+        Ok(())
+    }
+
+    /// Read all entries from transcript.jsonl
+    pub fn read_transcript_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
+        read_jsonl_file(&self.transcript_jsonl_file(name), "transcript")
     }
 
     /// Migrate from old context.json format to new context.jsonl format
@@ -268,29 +433,7 @@ impl AppState {
 
     /// Read entries from context.jsonl
     pub fn read_context_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        let path = self.context_file(name);
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let file = File::open(&path)?;
-        let reader = BufReader::new(file);
-        let mut entries = Vec::new();
-
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str(&line) {
-                Ok(entry) => entries.push(entry),
-                Err(e) => {
-                    eprintln!("[WARN] Skipping malformed context entry: {}", e);
-                }
-            }
-        }
-
-        Ok(entries)
+        read_jsonl_file(&self.context_file(name), "context")
     }
 
     /// Write entries to context.jsonl (full rewrite)
@@ -317,10 +460,7 @@ impl AppState {
     pub fn append_context_entry(&self, name: &str, entry: &TranscriptEntry) -> io::Result<()> {
         self.ensure_context_dir(name)?;
         let path = self.context_file(name);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
         let json = serde_json::to_string(entry)
             .map_err(|e| io::Error::other(format!("Failed to serialize entry: {}", e)))?;
@@ -361,7 +501,7 @@ impl AppState {
     fn entries_to_messages(&self, entries: &[TranscriptEntry]) -> Vec<Message> {
         entries
             .iter()
-            .filter(|e| e.entry_type == "message")
+            .filter(|e| e.entry_type == crate::context::ENTRY_TYPE_MESSAGE)
             .map(|e| {
                 let role = if e.to == "user" {
                     "assistant".to_string()
@@ -378,7 +518,11 @@ impl AppState {
     }
 
     /// Convert messages to transcript entries (for migration)
-    fn messages_to_entries(&self, messages: &[Message], context_name: &str) -> Vec<TranscriptEntry> {
+    fn messages_to_entries(
+        &self,
+        messages: &[Message],
+        context_name: &str,
+    ) -> Vec<TranscriptEntry> {
         messages
             .iter()
             .filter(|m| m.role != "system")
@@ -394,7 +538,8 @@ impl AppState {
                     from,
                     to,
                     content: m.content.clone(),
-                    entry_type: "message".to_string(),
+                    entry_type: crate::context::ENTRY_TYPE_MESSAGE.to_string(),
+                    metadata: None,
                 }
             })
             .collect()
@@ -403,13 +548,33 @@ impl AppState {
     pub fn save_context(&self, context: &Context) -> io::Result<()> {
         self.ensure_context_dir(&context.name)?;
 
+        // Check if this is a brand new context (no transcript.jsonl exists yet)
+        let transcript_path = self.transcript_jsonl_file(&context.name);
+        let is_new_context = !transcript_path.exists();
+
         // Save metadata (created_at)
         let meta = ContextMeta {
             created_at: context.created_at,
         };
         self.save_context_meta(&context.name, &meta)?;
 
+        // For brand new contexts, write context_created anchor to transcript.
+        // Don't mark dirty - new contexts don't need a rebuild since they're being
+        // created fresh. The anchor is just for transcript history.
+        if is_new_context {
+            let anchor = self.create_context_created_anchor(&context.name);
+            self.append_to_transcript(&context.name, &anchor)?;
+
+            // Also write the initial messages to transcript so they're preserved
+            let entries = self.messages_to_entries(&context.messages, &context.name);
+            for entry in &entries {
+                self.append_to_transcript(&context.name, entry)?;
+            }
+        }
+
         // Convert messages to entries and write to JSONL
+        // Note: This is a full rewrite. If context is dirty, the next load will rebuild
+        // with proper anchor + system_prompt prefix from transcript.
         let entries = self.messages_to_entries(&context.messages, &context.name);
         self.write_context_entries(&context.name, &entries)?;
 
@@ -425,12 +590,13 @@ impl AppState {
         Ok(())
     }
 
-    pub fn append_to_transcript(&self, context: &Context) -> io::Result<()> {
+    /// Append all context messages to human-readable transcript.md
+    pub fn append_to_transcript_md(&self, context: &Context) -> io::Result<()> {
         self.ensure_context_dir(&context.name)?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.transcript_file(&context.name))?;
+            .open(self.transcript_md_file(&context.name))?;
 
         for msg in &context.messages {
             // Skip system messages to avoid cluttering transcript with boilerplate
@@ -443,17 +609,50 @@ impl AppState {
         Ok(())
     }
 
+    /// Append a single entry to transcript.jsonl (the authoritative log)
+    pub fn append_to_transcript(
+        &self,
+        context_name: &str,
+        entry: &TranscriptEntry,
+    ) -> io::Result<()> {
+        self.ensure_context_dir(context_name)?;
+        let path = self.transcript_jsonl_file(context_name);
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+
+        let json = serde_json::to_string(entry).map_err(|e| {
+            io::Error::other(format!("Failed to serialize transcript entry: {}", e))
+        })?;
+        writeln!(file, "{}", json)?;
+        Ok(())
+    }
+
+    /// Append an entry to both transcript.jsonl and context.jsonl (tandem write)
+    /// This is the primary method for recording new events during normal operation.
+    pub fn append_to_transcript_and_context(
+        &self,
+        context_name: &str,
+        entry: &TranscriptEntry,
+    ) -> io::Result<()> {
+        // Write to authoritative transcript first
+        self.append_to_transcript(context_name, entry)?;
+        // Then append to context (LLM window)
+        self.append_context_entry(context_name, entry)?;
+        Ok(())
+    }
+
+    /// Append an entry to both transcript and context for the current context
+    pub fn append_to_current_transcript_and_context(
+        &self,
+        entry: &TranscriptEntry,
+    ) -> io::Result<()> {
+        self.append_to_transcript_and_context(&self.state.current_context, entry)
+    }
+
     pub fn get_current_context(&self) -> io::Result<Context> {
         self.load_context(&self.state.current_context).or_else(|e| {
             if e.kind() == ErrorKind::NotFound {
                 // Return empty context if it doesn't exist yet
-                Ok(Context {
-                    name: self.state.current_context.clone(),
-                    messages: Vec::new(),
-                    created_at: now_timestamp(),
-                    updated_at: 0,
-                    summary: String::new(),
-                })
+                Ok(Context::new(self.state.current_context.clone()))
             } else {
                 Err(e)
             }
@@ -463,10 +662,20 @@ impl AppState {
     pub fn save_current_context(&self, context: &Context) -> io::Result<()> {
         self.save_context(context)?;
 
-        // Ensure the context is tracked in state
+        // Ensure the context is tracked in state.
+        // Important: Read state from disk to avoid persisting transient context switches.
+        // The in-memory state may have a transient current_context that shouldn't be saved.
         if !self.state.contexts.contains(&context.name) {
-            let mut new_state = self.state.clone();
-            new_state.contexts.push(context.name.clone());
+            let disk_state = if self.state_path.exists() {
+                let content = fs::read_to_string(&self.state_path)?;
+                serde_json::from_str(&content).unwrap_or_else(|_| self.state.clone())
+            } else {
+                self.state.clone()
+            };
+            let mut new_state = disk_state;
+            if !new_state.contexts.contains(&context.name) {
+                new_state.contexts.push(context.name.clone());
+            }
             new_state.save(&self.state_path)?;
         }
 
@@ -486,17 +695,18 @@ impl AppState {
             return Ok(());
         }
 
-        // Append to transcript before clearing
-        self.append_to_transcript(&context)?;
+        // Append to transcript.md before clearing (for human-readable archival)
+        self.append_to_transcript_md(&context)?;
+
+        // Write archival anchor to transcript.jsonl
+        let archival_anchor = self.create_archival_anchor(&context.name);
+        self.append_to_transcript(&context.name, &archival_anchor)?;
+
+        // Mark context dirty so it rebuilds with new anchor on next load
+        self.mark_context_dirty(&context.name)?;
 
         // Create fresh context (preserving nothing - full clear)
-        let new_context = Context {
-            name: self.state.current_context.clone(),
-            messages: Vec::new(),
-            created_at: now_timestamp(),
-            updated_at: 0,
-            summary: String::new(),
-        };
+        let new_context = Context::new(self.state.current_context.clone());
 
         self.save_current_context(&new_context)?;
         Ok(())
@@ -637,21 +847,51 @@ impl AppState {
     }
 
     /// Set a custom system prompt for a specific context.
+    /// This also logs a system_prompt_changed event to transcript and invalidates the prefix.
     pub fn set_system_prompt_for(&self, context_name: &str, content: &str) -> io::Result<()> {
+        use crate::context::{ENTRY_TYPE_SYSTEM_PROMPT_CHANGED, EntryMetadata};
+
         self.ensure_context_dir(context_name)?;
         let prompt_path = self.context_prompt_file(context_name);
-        fs::write(&prompt_path, content)
+
+        // Check if content actually changed
+        let old_content = if prompt_path.exists() {
+            fs::read_to_string(&prompt_path).ok()
+        } else {
+            None
+        };
+
+        fs::write(&prompt_path, content)?;
+
+        // Only log change and invalidate if content actually changed
+        if old_content.as_deref() != Some(content) {
+            // Log system_prompt_changed event to transcript
+            let hash = self.compute_system_prompt_hash(content);
+            let entry = TranscriptEntry {
+                id: Uuid::new_v4().to_string(),
+                timestamp: now_timestamp(),
+                from: "system".to_string(),
+                to: context_name.to_string(),
+                content: "System prompt updated".to_string(),
+                entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
+                metadata: Some(EntryMetadata {
+                    summary: None,
+                    hash: Some(hash),
+                    transcript_anchor_id: None,
+                }),
+            };
+            self.append_to_transcript(context_name, &entry)?;
+
+            // Invalidate prefix so context.jsonl will be rebuilt on next load
+            self.mark_context_dirty(context_name)?;
+        }
+
+        Ok(())
     }
 
     /// Load the reflection content from ~/.chibi/prompts/reflection.md
     pub fn load_reflection(&self) -> io::Result<String> {
         self.load_reflection_prompt()
-    }
-
-    /// Save reflection content to ~/.chibi/prompts/reflection.md
-    pub fn save_reflection(&self, content: &str) -> io::Result<()> {
-        let reflection_path = self.prompts_dir.join("reflection.md");
-        fs::write(&reflection_path, content)
     }
 
     /// Load todos for a specific context (alias for load_todos)
@@ -665,6 +905,13 @@ impl AppState {
     }
 
     /// Clear a context by name (archive its history)
+    ///
+    /// This mirrors `clear_context()` behavior but operates on any named context,
+    /// not just the current one. Both functions:
+    /// - Archive messages to transcript.md
+    /// - Write an archival anchor to transcript.jsonl
+    /// - Mark the context as dirty for rebuild
+    /// - Create a fresh context
     pub fn clear_context_by_name(&self, context_name: &str) -> io::Result<()> {
         let context = self.load_context(context_name)?;
 
@@ -673,7 +920,7 @@ impl AppState {
             return Ok(());
         }
 
-        // Append to transcript before clearing
+        // Append to transcript.md before clearing (for human-readable archival)
         self.ensure_context_dir(context_name)?;
         let mut file = OpenOptions::new()
             .create(true)
@@ -687,29 +934,26 @@ impl AppState {
             writeln!(file, "[{}]: {}\n", msg.role.to_uppercase(), msg.content)?;
         }
 
+        // Write archival anchor to transcript.jsonl (like clear_context does)
+        let archival_anchor = self.create_archival_anchor(context_name);
+        self.append_to_transcript(context_name, &archival_anchor)?;
+
+        // Mark context dirty so it rebuilds with new anchor on next load
+        self.mark_context_dirty(context_name)?;
+
         // Create fresh context
-        let new_context = Context {
-            name: context_name.to_string(),
-            messages: Vec::new(),
-            created_at: now_timestamp(),
-            updated_at: 0,
-            summary: String::new(),
-        };
+        let new_context = Context::new(context_name);
 
         self.save_context(&new_context)?;
-        Ok(())
-    }
 
-    /// Send a message to another context's inbox
-    pub fn send_inbox_message(&self, to_context: &str, message: &str) -> io::Result<()> {
-        let entry = InboxEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: self.state.current_context.clone(),
-            to: to_context.to_string(),
-            content: message.to_string(),
-        };
-        self.append_to_inbox(to_context, &entry)
+        // Ensure the context is tracked in state (like clear_context does via save_current_context)
+        if !self.state.contexts.contains(&new_context.name) {
+            let mut new_state = self.state.clone();
+            new_state.contexts.push(new_context.name.clone());
+            new_state.save(&self.state_path)?;
+        }
+
+        Ok(())
     }
 
     pub fn should_auto_compact(&self, context: &Context, resolved_config: &ResolvedConfig) -> bool {
@@ -843,14 +1087,6 @@ impl AppState {
         }
     }
 
-    /// Get context window limit for a model (from models.toml if available)
-    pub fn get_model_context_window(&self, model: &str) -> Option<usize> {
-        self.models_config
-            .models
-            .get(model)
-            .and_then(|m| m.context_window)
-    }
-
     /// Resolve the full configuration, applying overrides in order:
     /// 1. CLI flags (passed as parameters)
     /// 2. Context-local config (local.toml)
@@ -864,6 +1100,10 @@ impl AppState {
     ) -> io::Result<ResolvedConfig> {
         let local = self.load_local_config(&self.state.current_context)?;
 
+        // Start with defaults, then merge global config
+        let mut api_params = ApiParams::defaults();
+        api_params = api_params.merge_with(&self.config.api);
+
         // Start with global config values
         let mut resolved = ResolvedConfig {
             api_key: self.config.api_key.clone(),
@@ -876,6 +1116,7 @@ impl AppState {
             max_recursion_depth: self.config.max_recursion_depth,
             username: self.config.username.clone(),
             reflection_enabled: self.config.reflection_enabled,
+            api: api_params,
         };
 
         // Apply local config overrides
@@ -910,6 +1151,11 @@ impl AppState {
             resolved.reflection_enabled = reflection_enabled;
         }
 
+        // Apply context-level API params (Layer 3)
+        if let Some(ref local_api) = local.api {
+            resolved.api = resolved.api.merge_with(local_api);
+        }
+
         // Apply CLI overrides (highest priority)
         // Note: -u (persistent) should have been saved to local.toml before calling this
         // -U (temp) overrides for this invocation only
@@ -919,18 +1165,27 @@ impl AppState {
             resolved.username = username.to_string();
         }
 
-        // Resolve model name and potentially override context window
+        // Resolve model name and potentially override context window + API params
         resolved.model = self.resolve_model_name(&resolved.model);
-        if let Some(context_window) = self.get_model_context_window(&resolved.model) {
-            resolved.context_window_limit = context_window;
+        if let Some(model_meta) = self.models_config.models.get(&resolved.model) {
+            // Apply model-level API params (Layer 2 - after global, before context)
+            // Note: We merge model params before context params because context should override model
+            // But we do this after context-level override for the rest of config, so we need to
+            // re-merge context params on top
+            let model_api = resolved.api.merge_with(&model_meta.api);
+            // Re-apply context-level API params on top of model params
+            resolved.api = if let Some(ref local_api) = local.api {
+                model_api.merge_with(local_api)
+            } else {
+                model_api
+            };
+
+            if let Some(context_window) = model_meta.context_window {
+                resolved.context_window_limit = context_window;
+            }
         }
 
         Ok(resolved)
-    }
-
-    /// Append an entry to the context (context.jsonl) - this replaces append_to_jsonl_transcript
-    pub fn append_to_jsonl_transcript(&self, entry: &TranscriptEntry) -> io::Result<()> {
-        self.append_context_entry(&self.state.current_context, entry)
     }
 
     /// Read all entries from the context file (context.jsonl) - unified with transcript
@@ -938,147 +1193,103 @@ impl AppState {
         self.read_context_entries(context_name)
     }
 
+    // === Entry Creation ===
+    // These methods create transcript entries using the builder pattern.
+    // Each method encapsulates context-specific logic (from/to derivation).
+
     /// Create a transcript entry for a user message
     pub fn create_user_message_entry(&self, content: &str, username: &str) -> TranscriptEntry {
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: username.to_string(),
-            to: self.state.current_context.clone(),
-            content: content.to_string(),
-            entry_type: "message".to_string(),
-        }
+        TranscriptEntry::builder()
+            .from(username)
+            .to(&self.state.current_context)
+            .content(content)
+            .entry_type(ENTRY_TYPE_MESSAGE)
+            .build()
     }
 
     /// Create a transcript entry for an assistant message
     pub fn create_assistant_message_entry(&self, content: &str) -> TranscriptEntry {
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: self.state.current_context.clone(),
-            to: "user".to_string(),
-            content: content.to_string(),
-            entry_type: "message".to_string(),
-        }
+        TranscriptEntry::builder()
+            .from(&self.state.current_context)
+            .to("user")
+            .content(content)
+            .entry_type(ENTRY_TYPE_MESSAGE)
+            .build()
     }
 
     /// Create a transcript entry for a tool call
     pub fn create_tool_call_entry(&self, tool_name: &str, arguments: &str) -> TranscriptEntry {
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: self.state.current_context.clone(),
-            to: tool_name.to_string(),
-            content: arguments.to_string(),
-            entry_type: "tool_call".to_string(),
-        }
+        TranscriptEntry::builder()
+            .from(&self.state.current_context)
+            .to(tool_name)
+            .content(arguments)
+            .entry_type(ENTRY_TYPE_TOOL_CALL)
+            .build()
     }
 
     /// Create a transcript entry for a tool result
     pub fn create_tool_result_entry(&self, tool_name: &str, result: &str) -> TranscriptEntry {
-        TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: tool_name.to_string(),
-            to: self.state.current_context.clone(),
-            content: result.to_string(),
-            entry_type: "tool_result".to_string(),
-        }
+        TranscriptEntry::builder()
+            .from(tool_name)
+            .to(&self.state.current_context)
+            .content(result)
+            .entry_type(ENTRY_TYPE_TOOL_RESULT)
+            .build()
     }
 
-    /// Get the path to a context's inbox file
-    pub fn inbox_file(&self, context_name: &str) -> PathBuf {
-        self.context_dir(context_name).join("inbox.jsonl")
+    // === Anchor Entry Creation ===
+
+    /// Create a context_created anchor entry
+    pub fn create_context_created_anchor(&self, context_name: &str) -> TranscriptEntry {
+        TranscriptEntry::builder()
+            .from("system")
+            .to(context_name)
+            .content("Context created")
+            .entry_type(ENTRY_TYPE_CONTEXT_CREATED)
+            .build()
     }
 
-    /// Get the path to a context's inbox lock file
-    pub fn inbox_lock_file(&self, context_name: &str) -> PathBuf {
-        self.context_dir(context_name).join(".inbox.lock")
+    /// Create a compaction anchor entry with summary
+    pub fn create_compaction_anchor(&self, context_name: &str, summary: &str) -> TranscriptEntry {
+        TranscriptEntry::builder()
+            .from("system")
+            .to(context_name)
+            .content("Context compacted")
+            .entry_type(ENTRY_TYPE_COMPACTION)
+            .metadata(EntryMetadata {
+                summary: Some(summary.to_string()),
+                hash: None,
+                transcript_anchor_id: None,
+            })
+            .build()
     }
 
-    /// Append a message to a context's inbox with exclusive locking
-    pub fn append_to_inbox(&self, context_name: &str, entry: &InboxEntry) -> io::Result<()> {
-        // Ensure context directory exists
-        let context_dir = self.context_dir(context_name);
-        fs::create_dir_all(&context_dir)?;
+    /// Create an archival anchor entry
+    pub fn create_archival_anchor(&self, context_name: &str) -> TranscriptEntry {
+        TranscriptEntry::builder()
+            .from("system")
+            .to(context_name)
+            .content("Context archived/cleared")
+            .entry_type(ENTRY_TYPE_ARCHIVAL)
+            .build()
+    }
 
-        let lock_path = self.inbox_lock_file(context_name);
-        let inbox_path = self.inbox_file(context_name);
+    // === Compaction Finalization ===
 
-        // Create/open lock file and acquire exclusive lock
-        let lock_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)?;
-        lock_file.lock_exclusive()?;
-
-        // Append to inbox
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&inbox_path)?;
-
-        let json = serde_json::to_string(entry)
-            .map_err(|e| io::Error::other(format!("JSON serialize error: {}", e)))?;
-        writeln!(file, "{}", json)?;
-
-        // Release lock
-        lock_file.unlock()?;
+    /// Finalize a compaction operation by writing the anchor to transcript and marking dirty.
+    /// This is the common final step for all compaction operations (rolling, manual, by-name).
+    pub fn finalize_compaction(&self, context_name: &str, summary: &str) -> io::Result<()> {
+        let compaction_anchor = self.create_compaction_anchor(context_name, summary);
+        self.append_to_transcript(context_name, &compaction_anchor)?;
+        self.mark_context_dirty(context_name)?;
         Ok(())
-    }
-
-    /// Load and clear the current context's inbox atomically
-    pub fn load_and_clear_current_inbox(&self) -> io::Result<Vec<InboxEntry>> {
-        let context_name = &self.state.current_context;
-        let lock_path = self.inbox_lock_file(context_name);
-        let inbox_path = self.inbox_file(context_name);
-
-        // If inbox doesn't exist, return empty
-        if !inbox_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        // Create/open lock file and acquire exclusive lock
-        let lock_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)?;
-        lock_file.lock_exclusive()?;
-
-        // Read all entries
-        let file = File::open(&inbox_path)?;
-        let reader = BufReader::new(file);
-        let mut entries = Vec::new();
-
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<InboxEntry>(&line) {
-                Ok(entry) => entries.push(entry),
-                Err(e) => eprintln!("[Warning: Failed to parse inbox entry: {}]", e),
-            }
-        }
-
-        // Clear the inbox by truncating the file
-        if !entries.is_empty() {
-            File::create(&inbox_path)?; // This truncates the file
-        }
-
-        // Release lock
-        lock_file.unlock()?;
-        Ok(entries)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::InboxEntry;
     use tempfile::TempDir;
 
     /// Create a test AppState with a temporary directory
@@ -1098,6 +1309,7 @@ mod tests {
             username: "testuser".to_string(),
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
+            api: ApiParams::default(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)
@@ -1537,6 +1749,203 @@ mod tests {
         assert_eq!(resolved.username, "cliuser");
     }
 
+    #[test]
+    fn test_resolve_config_api_params_global_defaults() {
+        let (app, _temp) = create_test_app();
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        // Should have defaults from ApiParams::defaults()
+        assert_eq!(resolved.api.prompt_caching, Some(true));
+        assert_eq!(resolved.api.parallel_tool_calls, Some(true));
+        assert_eq!(
+            resolved.api.reasoning.effort,
+            Some(crate::config::ReasoningEffort::Medium)
+        );
+    }
+
+    #[test]
+    fn test_resolve_config_api_params_context_override() {
+        let (app, _temp) = create_test_app();
+
+        // Set local config with API overrides
+        let local = LocalConfig {
+            api: Some(ApiParams {
+                temperature: Some(0.7),
+                max_tokens: Some(2000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        // Context-level API params should override
+        assert_eq!(resolved.api.temperature, Some(0.7));
+        assert_eq!(resolved.api.max_tokens, Some(2000));
+        // But defaults should still be present for unset values
+        assert_eq!(resolved.api.prompt_caching, Some(true));
+    }
+
+    #[test]
+    fn test_resolve_config_model_level_api_params() {
+        // Create test app with models config
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config {
+            api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
+            context_window_limit: 8000,
+            warn_threshold_percent: 75.0,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            base_url: "https://test.api/v1".to_string(),
+            reflection_enabled: true,
+            reflection_character_limit: 10000,
+            max_recursion_depth: 15,
+            username: "testuser".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            api: ApiParams::default(),
+        };
+
+        let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+
+        // Add model config
+        app.models_config.models.insert(
+            "test-model".to_string(),
+            crate::config::ModelMetadata {
+                context_window: Some(16000),
+                api: ApiParams {
+                    temperature: Some(0.5),
+                    reasoning: crate::config::ReasoningConfig {
+                        effort: Some(crate::config::ReasoningEffort::High),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        );
+
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        // Model-level params should be applied
+        assert_eq!(resolved.api.temperature, Some(0.5));
+        assert_eq!(
+            resolved.api.reasoning.effort,
+            Some(crate::config::ReasoningEffort::High)
+        );
+        // Model context window should override
+        assert_eq!(resolved.context_window_limit, 16000);
+    }
+
+    #[test]
+    fn test_resolve_config_hierarchy_context_over_model() {
+        // Test that context-level API params override model-level
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config {
+            api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
+            context_window_limit: 8000,
+            warn_threshold_percent: 75.0,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            base_url: "https://test.api/v1".to_string(),
+            reflection_enabled: true,
+            reflection_character_limit: 10000,
+            max_recursion_depth: 15,
+            username: "testuser".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            api: ApiParams::default(),
+        };
+
+        let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+
+        // Add model config with temperature
+        app.models_config.models.insert(
+            "test-model".to_string(),
+            crate::config::ModelMetadata {
+                context_window: Some(16000),
+                api: ApiParams {
+                    temperature: Some(0.5),
+                    max_tokens: Some(1000),
+                    ..Default::default()
+                },
+            },
+        );
+
+        // Set local config that overrides temperature but not max_tokens
+        let local = LocalConfig {
+            api: Some(ApiParams {
+                temperature: Some(0.9), // Override model's 0.5
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        // Context should override model
+        assert_eq!(resolved.api.temperature, Some(0.9));
+        // Model value should be preserved when context doesn't override
+        assert_eq!(resolved.api.max_tokens, Some(1000));
+    }
+
+    #[test]
+    fn test_resolve_config_cli_persistent_username() {
+        let (app, _temp) = create_test_app();
+
+        // CLI persistent username (simulates -u flag)
+        let resolved = app.resolve_config(Some("persistentuser"), None).unwrap();
+        assert_eq!(resolved.username, "persistentuser");
+    }
+
+    #[test]
+    fn test_resolve_config_cli_temp_username_over_persistent() {
+        let (app, _temp) = create_test_app();
+
+        // Temp username should override persistent
+        let resolved = app
+            .resolve_config(Some("persistentuser"), Some("tempuser"))
+            .unwrap();
+        assert_eq!(resolved.username, "tempuser");
+    }
+
+    #[test]
+    fn test_resolve_config_all_local_overrides() {
+        let (app, _temp) = create_test_app();
+
+        // Set all local config overrides
+        let local = LocalConfig {
+            model: Some("local-model".to_string()),
+            api_key: Some("local-key".to_string()),
+            base_url: Some("https://local.api/v1".to_string()),
+            username: Some("localuser".to_string()),
+            auto_compact: Some(true),
+            auto_compact_threshold: Some(90.0),
+            max_recursion_depth: Some(50),
+            warn_threshold_percent: Some(85.0),
+            context_window_limit: Some(16000),
+            reflection_enabled: Some(false),
+            api: None,
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+
+        assert_eq!(resolved.model, "local-model");
+        assert_eq!(resolved.api_key, "local-key");
+        assert_eq!(resolved.base_url, "https://local.api/v1");
+        assert_eq!(resolved.username, "localuser");
+        assert!(resolved.auto_compact);
+        assert!((resolved.auto_compact_threshold - 90.0).abs() < f32::EPSILON);
+        assert_eq!(resolved.max_recursion_depth, 50);
+        assert!((resolved.warn_threshold_percent - 85.0).abs() < f32::EPSILON);
+        assert_eq!(resolved.context_window_limit, 16000);
+        assert!(!resolved.reflection_enabled);
+    }
+
     // === Transcript entry creation tests ===
 
     #[test]
@@ -1549,7 +1958,7 @@ mod tests {
         assert_eq!(entry.from, "alice");
         assert_eq!(entry.to, "default");
         assert_eq!(entry.content, "Hello");
-        assert_eq!(entry.entry_type, "message");
+        assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
     }
 
     #[test]
@@ -1560,7 +1969,7 @@ mod tests {
         assert_eq!(entry.from, "default");
         assert_eq!(entry.to, "user");
         assert_eq!(entry.content, "Hi there!");
-        assert_eq!(entry.entry_type, "message");
+        assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
     }
 
     #[test]
@@ -1570,7 +1979,7 @@ mod tests {
 
         assert_eq!(entry.from, "default");
         assert_eq!(entry.to, "web_search");
-        assert_eq!(entry.entry_type, "tool_call");
+        assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_TOOL_CALL);
     }
 
     #[test]
@@ -1580,6 +1989,325 @@ mod tests {
 
         assert_eq!(entry.from, "web_search");
         assert_eq!(entry.to, "default");
-        assert_eq!(entry.entry_type, "tool_result");
+        assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_TOOL_RESULT);
+    }
+
+    // === JSONL parsing robustness tests ===
+
+    #[test]
+    fn test_jsonl_empty_file() {
+        let (app, _temp) = create_test_app();
+
+        // Create empty context.jsonl
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+        fs::write(ctx_dir.join("context.jsonl"), "").unwrap();
+
+        // Should return empty vec, not error
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_jsonl_blank_lines() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with blank lines
+        let content = r#"
+{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message"}
+
+{"id":"2","timestamp":1234567891,"from":"ctx","to":"user","content":"hi","entry_type":"message"}
+
+"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].content, "hello");
+        assert_eq!(entries[1].content, "hi");
+    }
+
+    #[test]
+    fn test_jsonl_malformed_entries_skipped() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with some malformed entries
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message"}
+not valid json at all
+{"id":"2","timestamp":1234567891,"from":"ctx","to":"user","content":"hi","entry_type":"message"}
+{"incomplete": true
+{"id":"3","timestamp":1234567892,"from":"user","to":"ctx","content":"bye","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        // Should skip malformed entries and return valid ones
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 3, "Should have 3 valid entries");
+        assert_eq!(entries[0].content, "hello");
+        assert_eq!(entries[1].content, "hi");
+        assert_eq!(entries[2].content, "bye");
+    }
+
+    #[test]
+    fn test_jsonl_nonexistent_file() {
+        let (app, _temp) = create_test_app();
+
+        // Don't create the context directory
+        let entries = app.read_context_entries("nonexistent-context").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_jsonl_unicode_content() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with unicode content
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"こんにちは 🎉 Привет","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "こんにちは 🎉 Привет");
+    }
+
+    #[test]
+    fn test_jsonl_with_escaped_content() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with escaped characters in content
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"line1\nline2\ttab","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].content.contains('\n'));
+        assert!(entries[0].content.contains('\t'));
+    }
+
+    #[test]
+    fn test_jsonl_missing_optional_fields() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL without optional metadata field
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].metadata.is_none());
+    }
+
+    #[test]
+    fn test_jsonl_with_metadata() {
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        // Write JSONL with metadata field
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message","metadata":{"summary":"test summary"}}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries = app.read_context_entries("test-context").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].metadata.is_some());
+        assert_eq!(
+            entries[0].metadata.as_ref().unwrap().summary,
+            Some("test summary".to_string())
+        );
+    }
+
+    #[test]
+    fn test_jsonl_transcript_vs_context_entries() {
+        // read_jsonl_transcript and read_context_entries should behave the same
+        let (app, _temp) = create_test_app();
+
+        let ctx_dir = app.context_dir("test-context");
+        fs::create_dir_all(&ctx_dir).unwrap();
+
+        let content = r#"{"id":"1","timestamp":1234567890,"from":"user","to":"ctx","content":"hello","entry_type":"message"}"#;
+        fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+        let entries1 = app.read_context_entries("test-context").unwrap();
+        let entries2 = app.read_jsonl_transcript("test-context").unwrap();
+
+        assert_eq!(entries1.len(), entries2.len());
+        assert_eq!(entries1[0].id, entries2[0].id);
+    }
+
+    // === State/directory sync tests (Issue #13) ===
+
+    #[test]
+    fn test_list_contexts_excludes_manually_deleted_directories() {
+        // BUG: When a context directory is manually deleted (rm -r), the context
+        // should not appear in list_contexts(). Currently it lingers in state.json.
+        let (mut app, _temp) = create_test_app();
+
+        // Create two contexts
+        let ctx1 = Context::new("context-one");
+        let ctx2 = Context::new("context-two");
+        app.save_context(&ctx1).unwrap();
+        app.save_context(&ctx2).unwrap();
+
+        // Add them to state.json
+        app.state.contexts.push("context-one".to_string());
+        app.state.contexts.push("context-two".to_string());
+        app.save().unwrap();
+
+        // Manually delete one context's directory (simulating rm -r)
+        fs::remove_dir_all(app.context_dir("context-one")).unwrap();
+
+        // list_contexts should NOT include the deleted context
+        let contexts = app.list_contexts();
+        assert!(
+            !contexts.contains(&"context-one".to_string()),
+            "Deleted context should not appear in list_contexts()"
+        );
+        assert!(contexts.contains(&"context-two".to_string()));
+    }
+
+    #[test]
+    fn test_list_contexts_only_includes_directories_not_files() {
+        // BUG: Files in ~/.chibi/contexts/ should not appear as contexts
+        let (app, _temp) = create_test_app();
+
+        // Create a real context
+        let ctx = Context::new("real-context");
+        app.save_context(&ctx).unwrap();
+
+        // Create a stray file in the contexts directory (not a context)
+        let stray_file = app.contexts_dir.join("not-a-context.txt");
+        fs::write(&stray_file, "stray file content").unwrap();
+
+        let contexts = app.list_contexts();
+
+        // Should include the real context
+        assert!(contexts.contains(&"real-context".to_string()));
+
+        // Should NOT include the stray file
+        assert!(
+            !contexts.contains(&"not-a-context.txt".to_string()),
+            "Stray files should not appear as contexts"
+        );
+    }
+
+    #[test]
+    fn test_save_context_adds_to_state_contexts() {
+        // Verify that saving a new context adds it to state.json
+        let (app, _temp) = create_test_app();
+
+        assert!(!app.state.contexts.contains(&"new-context".to_string()));
+
+        let ctx = Context::new("new-context");
+        app.save_current_context(&ctx).unwrap();
+
+        // Need to reload state to see the change
+        // Actually save_current_context should add it - let's verify
+        // by checking the state file directly
+        let state_content = fs::read_to_string(&app.state_path).unwrap();
+        assert!(
+            state_content.contains("new-context"),
+            "New context should be added to state.json"
+        );
+    }
+
+    #[test]
+    fn test_save_current_context_preserves_disk_current_context() {
+        // Verify that save_current_context doesn't persist in-memory current_context
+        // This is critical for transient context (-C) support
+        let (mut app, _temp) = create_test_app();
+
+        // Save initial state with "default" as current_context
+        app.save().unwrap();
+
+        // Simulate transient context switch (in-memory only)
+        app.state.current_context = "transient-ctx".to_string();
+
+        // Create and save a new context while "transient-ctx" is in memory
+        let ctx = Context::new("new-context");
+        app.save_current_context(&ctx).unwrap();
+
+        // Verify the state file still has original current_context, not the transient one
+        let state_content = fs::read_to_string(&app.state_path).unwrap();
+        let saved_state: ContextState = serde_json::from_str(&state_content).unwrap();
+
+        assert_eq!(
+            saved_state.current_context, "default",
+            "Transient current_context should not be persisted to state.json"
+        );
+        assert!(
+            saved_state.contexts.contains(&"new-context".to_string()),
+            "New context should still be added to contexts list"
+        );
+    }
+
+    // === clear_context_by_name archival anchor tests (Bug #2) ===
+
+    #[test]
+    fn test_clear_context_by_name_writes_archival_anchor() {
+        // BUG: clear_context_by_name should write an archival anchor to transcript.jsonl
+        // like clear_context does, but currently it doesn't
+        let (app, _temp) = create_test_app();
+
+        // Create a context with some messages
+        let mut ctx = Context::new("test-context");
+        ctx.messages.push(Message::new("user", "Hello"));
+        ctx.messages.push(Message::new("assistant", "Hi there"));
+        app.save_context(&ctx).unwrap();
+
+        // Create transcript.jsonl with the messages
+        let user_entry = app.create_user_message_entry("Hello", "testuser");
+        let asst_entry = app.create_assistant_message_entry("Hi there");
+        app.append_to_transcript("test-context", &user_entry)
+            .unwrap();
+        app.append_to_transcript("test-context", &asst_entry)
+            .unwrap();
+
+        // Clear the context by name
+        app.clear_context_by_name("test-context").unwrap();
+
+        // Read transcript and check for archival anchor
+        let entries = app.read_transcript_entries("test-context").unwrap();
+        let has_archival = entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_ARCHIVAL);
+
+        assert!(
+            has_archival,
+            "clear_context_by_name should write an archival anchor to transcript"
+        );
+    }
+
+    #[test]
+    fn test_clear_context_by_name_marks_dirty() {
+        // clear_context_by_name should mark the context as dirty for rebuild
+        let (app, _temp) = create_test_app();
+
+        // Create a context with messages
+        let mut ctx = Context::new("test-context");
+        ctx.messages.push(Message::new("user", "Hello"));
+        app.save_context(&ctx).unwrap();
+
+        // Clear should mark dirty
+        app.clear_context_by_name("test-context").unwrap();
+
+        assert!(
+            app.is_context_dirty("test-context"),
+            "clear_context_by_name should mark context as dirty"
+        );
     }
 }
