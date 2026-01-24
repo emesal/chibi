@@ -8,7 +8,34 @@
 //! tests in cli.rs which verify the argument parsing produces the correct
 //! Cli struct.
 
+use std::fs;
 use std::process::Command;
+use tempfile::TempDir;
+
+/// Create a temporary CHIBI_HOME with minimal config for testing.
+/// Returns the TempDir (must be kept alive for the duration of the test).
+fn setup_test_home() -> TempDir {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let config_content = r#"
+api_key = "test-key-not-real"
+model = "test-model"
+context_window_limit = 8000
+warn_threshold_percent = 75.0
+"#;
+    fs::write(temp_dir.path().join("config.toml"), config_content)
+        .expect("failed to write config.toml");
+    temp_dir
+}
+
+/// Run chibi with CHIBI_HOME set to a temp directory
+fn run_chibi_with_test_home(args: &[&str]) -> std::process::Output {
+    let temp_home = setup_test_home();
+    Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(args)
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi")
+}
 
 // =============================================================================
 // CLI parsing tests (no API calls needed)
@@ -43,10 +70,7 @@ fn integration_version_flag() {
 #[test]
 fn integration_list_current_context() {
     // -l now shows current context info
-    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .arg("-l")
-        .output()
-        .expect("failed to run chibi");
+    let output = run_chibi_with_test_home(&["-l"]);
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -57,10 +81,7 @@ fn integration_list_current_context() {
 #[test]
 fn integration_list_contexts() {
     // -L lists all contexts
-    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .arg("-L")
-        .output()
-        .expect("failed to run chibi");
+    let output = run_chibi_with_test_home(&["-L"]);
 
     assert!(output.status.success());
 }
@@ -69,8 +90,10 @@ fn integration_list_contexts() {
 fn integration_unknown_flag_is_treated_as_prompt() {
     // With the clap-based parser, unknown flags are treated as positional args (prompt)
     // This is more permissive - users can ask "what does --unknown-flag mean?"
+    let temp_home = setup_test_home();
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .arg("--unknown-flag")
+        .env("CHIBI_HOME", temp_home.path())
         .env_remove("OPENROUTER_API_KEY")
         .output()
         .expect("failed to run chibi");
@@ -85,10 +108,7 @@ fn integration_unknown_flag_is_treated_as_prompt() {
 fn integration_multiple_operations_can_combine() {
     // In the new CLI design, multiple operations can combine
     // -l and -L together should work (both execute, no error)
-    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args(["-l", "-L"])
-        .output()
-        .expect("failed to run chibi");
+    let output = run_chibi_with_test_home(&["-l", "-L"]);
 
     // Both should execute (no_chibi implied)
     assert!(output.status.success());
@@ -98,10 +118,7 @@ fn integration_multiple_operations_can_combine() {
 fn integration_output_operations_dont_invoke_llm() {
     // -L with a prompt argument should still work
     // (the prompt is ignored when no_chibi is implied)
-    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args(["-L", "hello"])
-        .output()
-        .expect("failed to run chibi");
+    let output = run_chibi_with_test_home(&["-L", "hello"]);
 
     // Should succeed - -L implies no_chibi, so prompt is not sent
     assert!(output.status.success());
@@ -115,10 +132,7 @@ fn integration_output_operations_dont_invoke_llm() {
 /// Verify "-L" lists all contexts
 #[test]
 fn integration_dash_upper_l_lists_contexts() {
-    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .arg("-L")
-        .output()
-        .expect("failed to run chibi");
+    let output = run_chibi_with_test_home(&["-L"]);
 
     // -L should succeed and return quickly (no API call)
     assert!(output.status.success());
@@ -127,8 +141,10 @@ fn integration_dash_upper_l_lists_contexts() {
 /// Similarly "chibi help" should be a prompt, not trigger --help
 #[test]
 fn integration_help_word_is_prompt() {
+    let temp_home = setup_test_home();
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .arg("help")
+        .env("CHIBI_HOME", temp_home.path())
         .env_remove("OPENROUTER_API_KEY")
         .output()
         .expect("failed to run chibi");
@@ -145,8 +161,10 @@ fn integration_help_word_is_prompt() {
 /// "chibi version" should be a prompt, not trigger --version
 #[test]
 fn integration_version_word_is_prompt() {
+    let temp_home = setup_test_home();
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .arg("version")
+        .env("CHIBI_HOME", temp_home.path())
         .env_remove("OPENROUTER_API_KEY")
         .output()
         .expect("failed to run chibi");
@@ -170,8 +188,10 @@ fn integration_version_word_is_prompt() {
 fn integration_short_v_is_treated_as_prompt() {
     // With clap-based parser, -V is treated as positional arg (prompt)
     // This is more permissive - users can ask "what does -V mean?"
+    let temp_home = setup_test_home();
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .arg("-V")
+        .env("CHIBI_HOME", temp_home.path())
         .env_remove("OPENROUTER_API_KEY")
         .output()
         .expect("failed to run chibi");
@@ -185,10 +205,7 @@ fn integration_short_v_is_treated_as_prompt() {
 #[test]
 fn integration_attached_arg_form() {
     // -Dnonexistent should work as a valid form (even if context doesn't exist)
-    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .arg("-Dnonexistent_test_context_12345")
-        .output()
-        .expect("failed to run chibi");
+    let output = run_chibi_with_test_home(&["-Dnonexistent_test_context_12345"]);
 
     // Should succeed (context not found is not an error, just prints message)
     assert!(output.status.success());

@@ -20,6 +20,7 @@ use crate::context::{
     ENTRY_TYPE_CONTEXT_CREATED, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
     EntryMetadata, Message, TranscriptEntry, now_timestamp, validate_context_name,
 };
+use crate::partition::{PartitionManager, StorageConfig};
 use dirs_next::home_dir;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
@@ -72,9 +73,14 @@ impl AppState {
     }
 
     pub fn load() -> io::Result<Self> {
-        let home = home_dir()
-            .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Home directory not found"))?;
-        let chibi_dir = home.join(".chibi");
+        // Check CHIBI_HOME env var first, fall back to ~/.chibi
+        let chibi_dir = if let Ok(chibi_home) = std::env::var("CHIBI_HOME") {
+            PathBuf::from(chibi_home)
+        } else {
+            let home = home_dir()
+                .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Home directory not found"))?;
+            home.join(".chibi")
+        };
         let contexts_dir = chibi_dir.join("contexts");
         let prompts_dir = chibi_dir.join("prompts");
         let plugins_dir = chibi_dir.join("plugins");
@@ -240,15 +246,23 @@ impl AppState {
     }
 
     pub fn load_context(&self, name: &str) -> io::Result<Context> {
+        let context_dir = self.context_dir(name);
+        let manifest_path = context_dir.join("manifest.json");
+        let active_path = context_dir.join("active.jsonl");
         let context_jsonl = self.context_file(name);
         let context_json_old = self.context_file_old(name);
 
-        // Try to load from new JSONL format first
+        // Try to load from partitioned format first (manifest.json or active.jsonl)
+        if manifest_path.exists() || active_path.exists() {
+            return self.load_context_from_jsonl(name);
+        }
+
+        // Try to load from legacy JSONL format (context.jsonl)
         if context_jsonl.exists() {
             return self.load_context_from_jsonl(name);
         }
 
-        // Check if old format exists and migrate
+        // Check if very old format exists and migrate
         if context_json_old.exists() {
             return self.migrate_and_load_context(name);
         }
@@ -434,40 +448,74 @@ impl AppState {
         })
     }
 
-    /// Read entries from context.jsonl
-    pub fn read_context_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        read_jsonl_file(&self.context_file(name), "context")
+    /// Get the resolved storage configuration for a context
+    fn get_storage_config(&self, name: &str) -> io::Result<StorageConfig> {
+        let local = self.load_local_config(name)?;
+        // Merge local overrides with global config
+        Ok(StorageConfig {
+            partition_max_entries: local
+                .storage
+                .partition_max_entries
+                .or(self.config.storage.partition_max_entries),
+            partition_max_age_seconds: local
+                .storage
+                .partition_max_age_seconds
+                .or(self.config.storage.partition_max_age_seconds),
+            enable_bloom_filters: local
+                .storage
+                .enable_bloom_filters
+                .or(self.config.storage.enable_bloom_filters),
+        })
     }
 
-    /// Write entries to context.jsonl (full rewrite)
-    pub fn write_context_entries(&self, name: &str, entries: &[TranscriptEntry]) -> io::Result<()> {
-        self.ensure_context_dir(name)?;
-        let path = self.context_file(name);
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
-        let mut writer = BufWriter::new(file);
-
-        for entry in entries {
-            let json = serde_json::to_string(entry)
-                .map_err(|e| io::Error::other(format!("Failed to serialize entry: {}", e)))?;
-            writeln!(writer, "{}", json)?;
+    /// Read entries from context (using partitioned storage)
+    pub fn read_context_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
+        let context_dir = self.context_dir(name);
+        if !context_dir.exists() {
+            return Ok(Vec::new());
         }
 
-        Ok(())
+        let storage_config = self.get_storage_config(name)?;
+        let pm = PartitionManager::load_with_config(&context_dir, storage_config)?;
+        pm.read_all_entries()
     }
 
-    /// Append a single entry to context.jsonl
+    /// Read entries within a timestamp range (using partitioned storage)
+    pub fn read_entries_in_range(
+        &self,
+        name: &str,
+        from_ts: u64,
+        to_ts: u64,
+    ) -> io::Result<Vec<TranscriptEntry>> {
+        let context_dir = self.context_dir(name);
+        if !context_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let storage_config = self.get_storage_config(name)?;
+        let pm = PartitionManager::load_with_config(&context_dir, storage_config)?;
+        pm.read_entries_in_range(from_ts, to_ts)
+    }
+
+    /// Write entries to context (full rewrite using partitioned storage)
+    pub fn write_context_entries(&self, name: &str, entries: &[TranscriptEntry]) -> io::Result<()> {
+        self.ensure_context_dir(name)?;
+        let context_dir = self.context_dir(name);
+        let storage_config = self.get_storage_config(name)?;
+        let mut pm = PartitionManager::load_with_config(&context_dir, storage_config)?;
+        pm.write_entries(entries)
+    }
+
+    /// Append a single entry to context (using partitioned storage)
     pub fn append_context_entry(&self, name: &str, entry: &TranscriptEntry) -> io::Result<()> {
         self.ensure_context_dir(name)?;
-        let path = self.context_file(name);
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let context_dir = self.context_dir(name);
+        let storage_config = self.get_storage_config(name)?;
+        let mut pm = PartitionManager::load_with_config(&context_dir, storage_config)?;
+        pm.append_entry(entry)?;
 
-        let json = serde_json::to_string(entry)
-            .map_err(|e| io::Error::other(format!("Failed to serialize entry: {}", e)))?;
-        writeln!(file, "{}", json)?;
+        // Check if rotation is needed after append
+        pm.rotate_if_needed()?;
         Ok(())
     }
 
@@ -1345,6 +1393,7 @@ mod tests {
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
             api: ApiParams::default(),
+            storage: StorageConfig::default(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)

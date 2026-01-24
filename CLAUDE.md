@@ -43,6 +43,8 @@ state/
   entries.rs     TranscriptEntry creation (builder pattern)
   jsonl.rs       JSONL file reading utilities
 
+partition.rs     Partitioned storage, manifest, bloom filters
+
 tools/
   mod.rs         Tool struct, public exports
   plugins.rs     Plugin loading, execution, schema parsing
@@ -115,6 +117,29 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
     └── .dirty              # Marker: prefix needs rebuild
 ```
 
+#### Partitioned Context Storage
+
+Context entries use time-partitioned JSONL with manifest tracking:
+
+```
+contexts/<name>/
+├── manifest.json        # Partition metadata, timestamp ranges
+├── active.jsonl         # Current write partition (append-only)
+└── partitions/          # Archived read-only partitions
+    ├── <start>-<end>.jsonl
+    └── <start>-<end>.bloom  # Optional bloom filter index
+```
+
+Partitions rotate when thresholds are reached (configurable in `[storage]` section):
+- Entry count exceeds `partition_max_entries` (default: 1000)
+- Age exceeds `partition_max_age_seconds` (default: 30 days)
+
+Legacy `context.jsonl` files are migrated automatically on first access.
+
+### Environment Variables
+
+- **CHIBI_HOME**: Override the default `~/.chibi` directory. Useful for testing or running multiple isolated instances.
+
 ### Entry Format (JSONL)
 
 ```json
@@ -166,3 +191,19 @@ print("result")
 3. Global config.toml
 4. models.toml (for model-specific params)
 5. Defaults
+
+### Storage Configuration
+
+Global `config.toml`:
+```toml
+[storage]
+partition_max_entries = 1000        # Rotate after N entries
+partition_max_age_seconds = 2592000 # Or after 30 days
+enable_bloom_filters = true         # Build bloom indexes for fast lookups
+```
+
+Per-context override in `local.toml`:
+```toml
+[storage]
+partition_max_entries = 500         # More aggressive for busy contexts
+```
