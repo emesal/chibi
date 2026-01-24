@@ -59,6 +59,43 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 | `-h, --help` | Show help message |
 | `--version` | Show version |
 
+## JSON Modes
+
+| Flag | Description |
+|------|-------------|
+| `--json-config` | Read input as JSON from stdin (for programmatic use) |
+| `--json-output` | Output in JSONL format (structured output) |
+
+### JSON Input Format (--json-config)
+
+When using `--json-config`, pass a JSON object to stdin:
+
+```json
+{
+  "command": { "send_prompt": { "prompt": "Hello" } },
+  "context": { "switch": { "name": "coding" } },
+  "flags": { "verbose": true }
+}
+```
+
+**Simple commands:** `"list_contexts"`, `"list_current_context"`, `"no_op"`
+
+**Commands with arguments:**
+- `{ "send_prompt": { "prompt": "..." } }`
+- `{ "delete_context": { "name": "..." } }` (name optional, null = current)
+- `{ "archive_history": { "name": "..." } }`
+- `{ "compact_context": { "name": "..." } }`
+- `{ "rename_context": { "old": "...", "new": "..." } }`
+- `{ "show_log": { "context": "...", "count": 10 } }`
+- `{ "inspect": { "context": "...", "thing": "todos" } }`
+- `{ "set_system_prompt": { "context": "...", "prompt": "..." } }`
+- `{ "run_plugin": { "name": "...", "args": [...] } }`
+- `{ "call_tool": { "name": "...", "args": [...] } }`
+
+**Context selection:** `"current"`, `{ "switch": { "name": "..." } }`, `{ "transient": { "name": "..." } }`
+
+**Username:** `{ "persistent": "name" }`, `{ "transient": "name" }`
+
 ## Debug Flags
 
 | Flag | Description |

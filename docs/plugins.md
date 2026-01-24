@@ -98,7 +98,7 @@ Plugins can register for lifecycle hooks by including a `hooks` array in the sch
 | `post_message` | After receiving LLM response | `{prompt, response, context_name}` |
 | `pre_tool` | Before executing a tool | `{tool_name, arguments}` |
 | `post_tool` | After tool execution | `{tool_name, arguments, result}` |
-| `on_context_switch` | Context changes | `{from_context, to_context, is_sub_context}` |
+| `on_context_switch` | Context changes | `{from_context, to_context, is_transient}` |
 | `pre_clear` | Before clearing context | `{context_name, message_count, summary}` |
 | `post_clear` | After clearing context | `{context_name}` |
 | `pre_compact` | Before manual compaction | `{context_name, message_count, summary}` |

@@ -13,9 +13,9 @@ The LLM always has access to these tools (no setup required):
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
 | `send_message` | Send messages to other contexts |
 
-## Optional External Plugins
+## External Plugins
 
-These are available in [chibi-plugins](https://github.com/emesal/chibi-plugins):
+These plugins are available in [chibi-plugins](https://github.com/emesal/chibi-plugins) and must be installed separately:
 
 | Plugin | Description |
 |--------|-------------|
