@@ -905,6 +905,13 @@ impl AppState {
     }
 
     /// Clear a context by name (archive its history)
+    ///
+    /// This mirrors `clear_context()` behavior but operates on any named context,
+    /// not just the current one. Both functions:
+    /// - Archive messages to transcript.md
+    /// - Write an archival anchor to transcript.jsonl
+    /// - Mark the context as dirty for rebuild
+    /// - Create a fresh context
     pub fn clear_context_by_name(&self, context_name: &str) -> io::Result<()> {
         let context = self.load_context(context_name)?;
 
@@ -913,7 +920,7 @@ impl AppState {
             return Ok(());
         }
 
-        // Append to transcript before clearing
+        // Append to transcript.md before clearing (for human-readable archival)
         self.ensure_context_dir(context_name)?;
         let mut file = OpenOptions::new()
             .create(true)
@@ -927,10 +934,25 @@ impl AppState {
             writeln!(file, "[{}]: {}\n", msg.role.to_uppercase(), msg.content)?;
         }
 
+        // Write archival anchor to transcript.jsonl (like clear_context does)
+        let archival_anchor = self.create_archival_anchor(context_name);
+        self.append_to_transcript(context_name, &archival_anchor)?;
+
+        // Mark context dirty so it rebuilds with new anchor on next load
+        self.mark_context_dirty(context_name)?;
+
         // Create fresh context
         let new_context = Context::new(context_name);
 
         self.save_context(&new_context)?;
+
+        // Ensure the context is tracked in state (like clear_context does via save_current_context)
+        if !self.state.contexts.contains(&new_context.name) {
+            let mut new_state = self.state.clone();
+            new_state.contexts.push(new_context.name.clone());
+            new_state.save(&self.state_path)?;
+        }
+
         Ok(())
     }
 
