@@ -63,11 +63,11 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 
 | Flag | Description |
 |------|-------------|
-| `--debug <KEY>` | Enable debug logging: `request_log`, `response_meta`, `all` |
+| `--debug <KEY>` | Enable debug logging: `request-log`, `response-meta`, `all` |
 
 Debug output is written to files in the context directory:
-- `requests.jsonl` - Full API request bodies
-- `response_meta.jsonl` - Response metadata (usage stats, model info)
+- `requests.jsonl` - Full API request bodies (with `request-log` or `all`)
+- `response_meta.jsonl` - Response metadata, usage stats, model info (with `response-meta` or `all`)
 
 ## Flag Behavior
 

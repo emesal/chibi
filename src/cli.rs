@@ -236,7 +236,7 @@ pub struct Cli {
     pub json_output: bool,
 
     // === Debug options ===
-    /// Enable debug features (request-log, all)
+    /// Enable debug features (request-log, response-meta, all)
     #[arg(long = "debug", value_name = "KEY")]
     pub debug: Option<String>,
 
