@@ -10,6 +10,7 @@ chrono = "0.4"
 dirs-next = "2.0.0"
 fastbloom = { version = "0.14", features = ["serde"] }
 futures-util = { version = "0.3.31", features = ["std"] }
+regex = "1"
 reqwest = { version = "0.13.1", features = ["json", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -25,4 +26,3 @@ dead_code = "deny"
 
 [dev-dependencies]
 tempfile = "3.19"
-regex = "1"

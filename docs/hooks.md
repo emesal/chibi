@@ -32,6 +32,13 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 | `pre_tool` | Before executing a tool | Yes (arguments, can block) |
 | `post_tool` | After executing a tool | No |
 
+### Tool Output Caching
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_cache_output` | Before caching large tool output | Yes (can provide custom summary) |
+| `post_cache_output` | After output is cached | No |
+
 ### Message Delivery
 
 | Hook | When | Can Modify |
@@ -160,7 +167,45 @@ Or to block execution:
 {
   "tool_name": "read_file",
   "arguments": {"path": "Cargo.toml"},
-  "result": "file contents..."
+  "result": "file contents...",
+  "cached": false
+}
+```
+
+Note: `cached` is `true` if the output was cached due to size.
+
+### pre_cache_output
+
+Called before caching a large tool output. Can provide a custom summary.
+
+```json
+{
+  "tool_name": "fetch_url",
+  "arguments": {"url": "https://example.com"},
+  "content": "full output content...",
+  "char_count": 50000,
+  "line_count": 1200
+}
+```
+
+**Can return (to provide custom summary):**
+```json
+{
+  "summary": "Custom summary of the content..."
+}
+```
+
+### post_cache_output
+
+Notification after output has been cached.
+
+```json
+{
+  "tool_name": "fetch_url",
+  "cache_id": "fetch_url_abc123_def456",
+  "char_count": 50000,
+  "token_estimate": 12500,
+  "line_count": 1200
 }
 ```
 

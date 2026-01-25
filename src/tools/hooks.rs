@@ -29,6 +29,8 @@ pub enum HookPoint {
     PostSystemPrompt, // Can inject content after all system prompt sections
     PreSendMessage,   // Can intercept delivery (return {"delivered": true, "via": "..."})
     PostSendMessage,  // Observe delivery (read-only)
+    PreCacheOutput,   // Before caching large tool output (can provide custom summary)
+    PostCacheOutput,  // After output is cached (notification only)
 }
 
 /// Execute a hook on all tools that registered for it
@@ -99,7 +101,7 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
-    // All 17 hook points for testing
+    // All 19 hook points for testing
     const ALL_HOOKS: &[(&str, HookPoint)] = &[
         ("pre_message", HookPoint::PreMessage),
         ("post_message", HookPoint::PostMessage),
@@ -118,6 +120,8 @@ mod tests {
         ("post_system_prompt", HookPoint::PostSystemPrompt),
         ("pre_send_message", HookPoint::PreSendMessage),
         ("post_send_message", HookPoint::PostSendMessage),
+        ("pre_cache_output", HookPoint::PreCacheOutput),
+        ("post_cache_output", HookPoint::PostCacheOutput),
     ];
 
     #[test]

@@ -30,9 +30,10 @@ lock.rs          Context locking with heartbeat
 inbox.rs         Inter-context messaging
 llm.rs           Low-level API request helpers
 json_input.rs    JSON config input parsing
+cache.rs         Tool output caching (large outputs cached to disk)
 
 api/
-  mod.rs         send_prompt(), tool execution loop, streaming
+  mod.rs         send_prompt(), tool execution loop, streaming, cache integration
   compact.rs     Compaction operations (rolling, manual)
   logging.rs     Debug request/response logging
   request.rs     Request body building, PromptOptions
@@ -47,6 +48,7 @@ tools/
   mod.rs         Tool struct, public exports
   plugins.rs     Plugin loading, execution, schema parsing
   builtin.rs     Built-in tools (reflection, todos, goals, send_message)
+  file_tools.rs  File access tools (file_head, file_tail, file_lines, file_grep, cache_list)
   hooks.rs       HookPoint enum, hook execution
 ```
 
@@ -70,9 +72,13 @@ Defined in `tools/builtin.rs`:
 - `send_message` - Inter-context messaging
 - `recurse` - Signal to continue processing (external plugin)
 
+Defined in `tools/file_tools.rs`:
+- `file_head`, `file_tail`, `file_lines`, `file_grep` - Surgical file/cache access
+- `cache_list` - List cached tool outputs
+
 ### Hooks
 
-17 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
+19 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
 
 ```
 on_start, on_end
@@ -84,6 +90,7 @@ on_context_switch
 pre_clear, post_clear
 pre_compact, post_compact
 pre_rolling_compact, post_rolling_compact
+pre_cache_output, post_cache_output
 ```
 
 Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
@@ -117,7 +124,8 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
     ├── goals.md            # Current goals
     ├── inbox.jsonl         # Messages from other contexts
     ├── system_prompt.md    # Context-specific system prompt
-    └── .dirty              # Marker: prefix needs rebuild
+    ├── .dirty              # Marker: prefix needs rebuild
+    └── tool_cache/         # Cached large tool outputs
 ```
 
 #### Partitioned Transcript Storage

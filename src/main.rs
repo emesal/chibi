@@ -1,4 +1,5 @@
 mod api;
+mod cache;
 mod cli;
 mod config;
 mod context;
@@ -527,6 +528,23 @@ async fn execute_from_input(
             output.emit_result(&result);
             did_action = true;
         }
+        Command::ClearCache { name } => {
+            let ctx_name = name
+                .clone()
+                .unwrap_or_else(|| app.state.current_context.clone());
+            app.clear_tool_cache(&ctx_name)?;
+            output.emit_result(&format!("Cleared tool cache for context '{}'", ctx_name));
+            did_action = true;
+        }
+        Command::CleanupCache => {
+            let resolved = app.resolve_config(None, None)?;
+            let removed = app.cleanup_all_tool_caches(resolved.tool_cache_max_age_days)?;
+            output.emit_result(&format!(
+                "Removed {} old cache entries (older than {} days)",
+                removed, resolved.tool_cache_max_age_days
+            ));
+            did_action = true;
+        }
         Command::SendPrompt { prompt } => {
             // Ensure context exists
             if !app.context_dir(&app.state.current_context).exists() {
@@ -567,6 +585,22 @@ async fn execute_from_input(
         "current_context": app.state.current_context,
     });
     let _ = tools::execute_hook(tools, tools::HookPoint::OnEnd, &hook_data, verbose);
+
+    // Automatic cache cleanup (if enabled)
+    let resolved = app.resolve_config(None, None)?;
+    if resolved.auto_cleanup_cache {
+        let removed = app.cleanup_all_tool_caches(resolved.tool_cache_max_age_days)?;
+        if removed > 0 {
+            output.diagnostic(
+                &format!(
+                    "[Auto-cleanup: removed {} old cache entries (older than {} days)]",
+                    removed,
+                    resolved.tool_cache_max_age_days + 1
+                ),
+                verbose,
+            );
+        }
+    }
 
     // Check for no action and no prompt
     if !did_action && matches!(input.command, Command::NoOp) {

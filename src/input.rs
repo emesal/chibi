@@ -44,6 +44,10 @@ pub enum Command {
     RunPlugin { name: String, args: Vec<String> },
     /// Call a tool directly (-P)
     CallTool { name: String, args: Vec<String> },
+    /// Clear tool cache (--clear-cache/--clear-cache-for)
+    ClearCache { name: Option<String> },
+    /// Cleanup old cache entries (--cleanup-cache)
+    CleanupCache,
     /// Show help
     ShowHelp,
     /// Show version

@@ -3,9 +3,11 @@
 //! This module provides the tool system that extends chibi's capabilities:
 //! - Plugin loading and execution from the plugins directory
 //! - Built-in tools for reflection, todos, goals, and messaging
+//! - File tools for examining cached tool outputs
 //! - Hook system for plugin lifecycle events
 
 mod builtin;
+pub mod file_tools;
 mod hooks;
 mod plugins;
 
@@ -31,6 +33,15 @@ pub use builtin::{
 
 // Re-export built-in tool execution functions
 pub use builtin::{check_recurse_signal, execute_builtin_tool};
+
+// Re-export file tool API format functions
+pub use file_tools::{
+    cache_list_tool_to_api_format, file_grep_tool_to_api_format, file_head_tool_to_api_format,
+    file_lines_tool_to_api_format, file_tail_tool_to_api_format,
+};
+
+// Re-export file tool execution and utilities
+pub use file_tools::{execute_file_tool, is_file_tool};
 
 /// Represents a tool that can be called by the LLM
 #[derive(Debug, Clone)]
