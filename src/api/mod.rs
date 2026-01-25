@@ -613,9 +613,9 @@ async fn send_prompt_with_depth(
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
 
-                // Check if output should be cached (for non-error, non-file-tool results)
+                // Check if output should be cached (for non-error results exceeding threshold)
+                // All tools are subject to caching - no exceptions
                 let (final_result, was_cached) = if !tool_result.starts_with("Error:")
-                    && !tools::is_file_tool(&tc.name)
                     && cache::should_cache(
                         &tool_result,
                         resolved_config.tool_output_cache_threshold,
