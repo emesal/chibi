@@ -2,7 +2,14 @@
 
 ## General
 
-Early development, no backwards compatibility. Prioritize for a focused, well-structured and secure core. Remove legacy code liberally, expect rapid growth and design for preventing code duplication and unecessary maintenance burden. Self-documenting code preferred; keep symbols, comments and docs consistent. Write comprehensive tests including for edge cases. Protect file operations from corruption and race conditions.
+- Early development, minimal needs for backwards compatibility.
+- Aim for a focused, well-structured and secure core.
+- Expect rapid growth, design for preventing code duplication and unecessary maintenance burden. Refactoring is cheaper now.
+- Remove legacy code liberally.
+- Self-documenting code preferred; keep symbols, comments and docs consistent.
+- Missing docs/* for user-facing features are critial bugs.
+- Write comprehensive tests including edge cases.
+- Protect all file operations from corruption and race conditions.
 
 ## Build Commands
 
@@ -55,7 +62,7 @@ tools/
 ### Data Flow
 
 1. `cli.rs` parses args into `ChibiInput`
-2. `AppState::load()` initializes from `~/.chibi/`
+2. `AppState::load(home_override)` initializes from chibi home directory
 3. `send_prompt()` handles conversation:
    - Executes lifecycle hooks
    - Injects inbox messages
@@ -139,9 +146,15 @@ Partitions rotate when thresholds are reached (configurable in `[storage]` secti
 
 Legacy `transcript.jsonl` files are migrated automatically on first access.
 
-### Environment Variables
+### Home Directory
 
-- **CHIBI_HOME**: Override the default `~/.chibi` directory. Useful for testing or running multiple isolated instances.
+The chibi home directory (default `~/.chibi`) can be overridden:
+
+1. `--home <PATH>` CLI flag (highest priority)
+2. `CHIBI_HOME` environment variable
+3. `~/.chibi` default
+
+Use `-n home` to inspect the resolved home directory path.
 
 ### Entry Format (JSONL)
 
