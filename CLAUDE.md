@@ -108,7 +108,7 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
 ~/.chibi/
 ├── config.toml              # Required: api_key, model, context_window_limit, warn_threshold_percent
 ├── models.toml              # Model aliases, context windows, API params
-├── state.json               # Current context name, context metadata (activity, auto-destroy)
+├── state.json               # Current context name, context list (created_at, activity, auto-destroy)
 ├── prompts/
 │   ├── chibi.md            # Default system prompt
 │   ├── reflection.md       # LLM's persistent memory
@@ -124,7 +124,7 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
     │       ├── <ts>-<ts>.jsonl
     │       └── <ts>-<ts>.bloom
     ├── transcript.md       # Human-readable archive
-    ├── context_meta.json   # Metadata (created_at)
+    ├── context_meta.json   # Metadata (system_prompt_md_mtime, last_combined_prompt)
     ├── local.toml          # Per-context config overrides
     ├── summary.md          # Conversation summary
     ├── todos.md            # Current todos
