@@ -1,3 +1,4 @@
+use crate::partition::StorageConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -310,6 +311,9 @@ pub struct Config {
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: ApiParams,
+    /// Storage configuration for partitioned context storage
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 /// Per-context config from ~/.chibi/contexts/<name>/local.toml
@@ -338,6 +342,9 @@ pub struct LocalConfig {
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
+    /// Per-context storage configuration overrides
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 /// Model metadata from ~/.chibi/models.toml

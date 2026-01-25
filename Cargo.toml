@@ -8,6 +8,7 @@ rust-version = "1.88"
 clap = { version = "4.5", features = ["derive"] }
 chrono = "0.4"
 dirs-next = "2.0.0"
+fastbloom = { version = "0.14", features = ["serde"] }
 futures-util = { version = "0.3.31", features = ["std"] }
 regex = "1"
 reqwest = { version = "0.13.1", features = ["json", "stream"] }
@@ -19,6 +20,9 @@ tokio = { version = "1.49.0", features = ["full"] }
 toml = "0.9.11"
 uuid = { version = "1", features = ["v4"] }
 fs2 = "0.4"
+
+[lints.rust]
+dead_code = "deny"
 
 [dev-dependencies]
 tempfile = "3.19"
