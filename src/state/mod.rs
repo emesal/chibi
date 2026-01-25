@@ -11,9 +11,10 @@ use jsonl::read_jsonl_file;
 
 use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig};
 use crate::context::{
-    Context, ContextMeta, ContextState, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION,
+    Context, ContextEntry, ContextMeta, ContextState, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION,
     ENTRY_TYPE_CONTEXT_CREATED, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
-    EntryMetadata, Message, TranscriptEntry, now_timestamp, validate_context_name,
+    EntryMetadata, Message, TranscriptEntry, is_valid_context_name, now_timestamp,
+    validate_context_name,
 };
 use crate::partition::{PartitionManager, StorageConfig};
 use dirs_next::home_dir;
@@ -136,7 +137,7 @@ impl AppState {
             }
         };
 
-        Ok(AppState {
+        let mut app = AppState {
             config,
             models_config,
             state,
@@ -144,11 +145,97 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
-        })
+        };
+
+        // Sync state with filesystem (handles stale entries and orphan directories)
+        if app.sync_state_with_filesystem()? {
+            app.save()?;
+        }
+
+        Ok(app)
     }
 
     pub fn save(&self) -> io::Result<()> {
         self.state.save(&self.state_path)
+    }
+
+    /// Synchronize state.json with filesystem reality.
+    /// Called during startup after reading state.json.
+    ///
+    /// Operations:
+    /// 1. Remove entries whose directories no longer exist
+    /// 2. Register orphan directories (exist on disk but not in state)
+    /// 3. Validate current_context and previous_context references
+    ///
+    /// Returns true if state was modified (needs saving)
+    pub fn sync_state_with_filesystem(&mut self) -> io::Result<bool> {
+        use std::collections::HashSet;
+
+        let mut modified = false;
+        let contexts_dir = self.contexts_dir.clone();
+
+        // Phase 1: Remove stale entries (directory doesn't exist)
+        let original_count = self.state.contexts.len();
+        self.state
+            .contexts
+            .retain(|entry| contexts_dir.join(&entry.name).is_dir());
+        if self.state.contexts.len() != original_count {
+            modified = true;
+        }
+
+        // Phase 2: Discover orphan directories
+        let known_names: HashSet<_> = self.state.contexts.iter().map(|e| e.name.clone()).collect();
+
+        if let Ok(entries) = fs::read_dir(&contexts_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !known_names.contains(&name) && is_valid_context_name(&name) {
+                        // Load created_at from context_meta.json if available
+                        let created_at = self
+                            .load_context_meta(&name)
+                            .map(|m| m.created_at)
+                            .unwrap_or_else(|_| now_timestamp());
+
+                        self.state
+                            .contexts
+                            .push(ContextEntry::with_created_at(name, created_at));
+                        modified = true;
+                    }
+                }
+            }
+        }
+
+        // Phase 3: Validate current_context reference
+        let current_exists = self
+            .state
+            .contexts
+            .iter()
+            .any(|e| e.name == self.state.current_context);
+        if !current_exists {
+            // Fall back to first available context or "default"
+            self.state.current_context = self
+                .state
+                .contexts
+                .first()
+                .map(|e| e.name.clone())
+                .unwrap_or_else(|| "default".to_string());
+            modified = true;
+        }
+
+        // Phase 4: Validate previous_context reference
+        if let Some(ref prev) = self.state.previous_context {
+            let prev_exists = self.state.contexts.iter().any(|e| &e.name == prev);
+            if !prev_exists {
+                self.state.previous_context = None;
+                modified = true;
+            }
+        }
+
+        // Sort by name for consistent ordering
+        self.state.contexts.sort_by(|a, b| a.name.cmp(&b.name));
+
+        Ok(modified)
     }
 
     pub fn context_dir(&self, name: &str) -> PathBuf {
@@ -729,7 +816,7 @@ impl AppState {
         // Ensure the context is tracked in state.
         // Important: Read state from disk to avoid persisting transient context switches.
         // The in-memory state may have a transient current_context that shouldn't be saved.
-        if !self.state.contexts.contains(&context.name) {
+        if !self.state.contexts.iter().any(|e| e.name == context.name) {
             let disk_state = if self.state_path.exists() {
                 let content = fs::read_to_string(&self.state_path)?;
                 serde_json::from_str(&content).unwrap_or_else(|_| self.state.clone())
@@ -737,8 +824,11 @@ impl AppState {
                 self.state.clone()
             };
             let mut new_state = disk_state;
-            if !new_state.contexts.contains(&context.name) {
-                new_state.contexts.push(context.name.clone());
+            if !new_state.contexts.iter().any(|e| e.name == context.name) {
+                new_state.contexts.push(ContextEntry::with_created_at(
+                    context.name.clone(),
+                    context.created_at,
+                ));
             }
             new_state.save(&self.state_path)?;
         }
@@ -818,7 +908,7 @@ impl AppState {
         fs::remove_dir_all(&dir)?;
 
         // Update state
-        new_state.contexts.retain(|c| c != name);
+        new_state.contexts.retain(|e| e.name != name);
         new_state.save(&self.state_path)?;
 
         Ok(switched_to)
@@ -852,9 +942,18 @@ impl AppState {
         if new_state.current_context == old_name {
             new_state.current_context = new_name.to_string();
         }
-        new_state.contexts.retain(|c| c != old_name);
-        if !new_state.contexts.contains(&new_name.to_string()) {
-            new_state.contexts.push(new_name.to_string());
+        // Preserve created_at from old entry
+        let created_at = new_state
+            .contexts
+            .iter()
+            .find(|e| e.name == old_name)
+            .map(|e| e.created_at)
+            .unwrap_or_else(now_timestamp);
+        new_state.contexts.retain(|e| e.name != old_name);
+        if !new_state.contexts.iter().any(|e| e.name == new_name) {
+            new_state
+                .contexts
+                .push(ContextEntry::with_created_at(new_name, created_at));
         }
         new_state.save(&self.state_path)?;
 
@@ -862,28 +961,8 @@ impl AppState {
     }
 
     pub fn list_contexts(&self) -> Vec<String> {
-        // Scan contexts directory for directories only
-        let mut contexts = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(&self.contexts_dir) {
-            for entry in entries.flatten() {
-                // Only include directories, not files
-                if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    contexts.push(name);
-                }
-            }
-        }
-
-        // Also include contexts from state.json if their directories exist
-        for name in &self.state.contexts {
-            if !contexts.contains(name) && self.context_dir(name).is_dir() {
-                contexts.push(name.clone());
-            }
-        }
-
-        contexts.sort();
-        contexts
+        // state.json is the single source of truth (synced with filesystem on startup)
+        self.state.contexts.iter().map(|e| e.name.clone()).collect()
     }
 
     pub fn calculate_token_count(&self, messages: &[Message]) -> usize {
@@ -1043,9 +1122,17 @@ impl AppState {
         self.save_context(&new_context)?;
 
         // Ensure the context is tracked in state (like clear_context does via save_current_context)
-        if !self.state.contexts.contains(&new_context.name) {
+        if !self
+            .state
+            .contexts
+            .iter()
+            .any(|e| e.name == new_context.name)
+        {
             let mut new_state = self.state.clone();
-            new_state.contexts.push(new_context.name.clone());
+            new_state.contexts.push(ContextEntry::with_created_at(
+                new_context.name.clone(),
+                new_context.created_at,
+            ));
             new_state.save(&self.state_path)?;
         }
 
@@ -1507,7 +1594,7 @@ mod tests {
 
     #[test]
     fn test_list_contexts_with_contexts() {
-        let (app, _temp) = create_test_app();
+        let (mut app, _temp) = create_test_app();
 
         // Create some contexts
         for name in &["alpha", "beta", "gamma"] {
@@ -1520,6 +1607,9 @@ mod tests {
             };
             app.save_context(&context).unwrap();
         }
+
+        // Sync state with filesystem (discovers new directories)
+        app.sync_state_with_filesystem().unwrap();
 
         let contexts = app.list_contexts();
         assert_eq!(contexts.len(), 3);
@@ -2334,12 +2424,15 @@ not valid json at all
         app.save_context(&ctx2).unwrap();
 
         // Add them to state.json
-        app.state.contexts.push("context-one".to_string());
-        app.state.contexts.push("context-two".to_string());
+        app.state.contexts.push(ContextEntry::new("context-one"));
+        app.state.contexts.push(ContextEntry::new("context-two"));
         app.save().unwrap();
 
         // Manually delete one context's directory (simulating rm -r)
         fs::remove_dir_all(app.context_dir("context-one")).unwrap();
+
+        // Sync state with filesystem (this happens on startup in real usage)
+        app.sync_state_with_filesystem().unwrap();
 
         // list_contexts should NOT include the deleted context
         let contexts = app.list_contexts();
@@ -2353,7 +2446,7 @@ not valid json at all
     #[test]
     fn test_list_contexts_only_includes_directories_not_files() {
         // BUG: Files in ~/.chibi/contexts/ should not appear as contexts
-        let (app, _temp) = create_test_app();
+        let (mut app, _temp) = create_test_app();
 
         // Create a real context
         let ctx = Context::new("real-context");
@@ -2362,6 +2455,9 @@ not valid json at all
         // Create a stray file in the contexts directory (not a context)
         let stray_file = app.contexts_dir.join("not-a-context.txt");
         fs::write(&stray_file, "stray file content").unwrap();
+
+        // Sync state with filesystem (discovers new directories, ignores files)
+        app.sync_state_with_filesystem().unwrap();
 
         let contexts = app.list_contexts();
 
@@ -2380,7 +2476,7 @@ not valid json at all
         // Verify that saving a new context adds it to state.json
         let (app, _temp) = create_test_app();
 
-        assert!(!app.state.contexts.contains(&"new-context".to_string()));
+        assert!(!app.state.contexts.iter().any(|e| e.name == "new-context"));
 
         let ctx = Context::new("new-context");
         app.save_current_context(&ctx).unwrap();
@@ -2420,7 +2516,7 @@ not valid json at all
             "Transient current_context should not be persisted to state.json"
         );
         assert!(
-            saved_state.contexts.contains(&"new-context".to_string()),
+            saved_state.contexts.iter().any(|e| e.name == "new-context"),
             "New context should still be added to contexts list"
         );
     }
