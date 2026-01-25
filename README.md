@@ -1,6 +1,4 @@
-![chibi~](docs/images/socials-wide-trans.png.png)
-
-# chibi
+![chibi~](docs/images/socials-wide-trans.png)
 
 CLI tool for conversing with AI models via OpenRouter. Maintains conversation state across invocations for coherent multi-turn conversations directly from your terminal.
 
