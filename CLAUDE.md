@@ -102,8 +102,13 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
 │   └── continuation.md     # Post-compaction instructions
 ├── plugins/                 # Executable scripts (provide tools)
 └── contexts/<name>/
-    ├── context.jsonl       # LLM window (anchor + system_prompt + entries)
-    ├── transcript.jsonl    # Authoritative log (never truncated)
+    ├── context.jsonl       # LLM window (bounded by compaction)
+    ├── transcript/         # Authoritative log (partitioned, never truncated)
+    │   ├── manifest.json   # Partition metadata, timestamp ranges
+    │   ├── active.jsonl    # Current write partition
+    │   └── partitions/     # Archived read-only partitions
+    │       ├── <ts>-<ts>.jsonl
+    │       └── <ts>-<ts>.bloom
     ├── transcript.md       # Human-readable archive
     ├── context_meta.json   # Metadata (created_at)
     ├── local.toml          # Per-context config overrides
@@ -115,24 +120,16 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
     └── .dirty              # Marker: prefix needs rebuild
 ```
 
-#### Partitioned Context Storage
+#### Partitioned Transcript Storage
 
-Context entries use time-partitioned JSONL with manifest tracking:
-
-```
-contexts/<name>/
-├── manifest.json        # Partition metadata, timestamp ranges
-├── active.jsonl         # Current write partition (append-only)
-└── partitions/          # Archived read-only partitions
-    ├── <start>-<end>.jsonl
-    └── <start>-<end>.bloom  # Optional bloom filter index
-```
+The transcript (authoritative log) uses time-partitioned JSONL with manifest tracking.
+Context files remain single JSONL files since compaction keeps them bounded.
 
 Partitions rotate when thresholds are reached (configurable in `[storage]` section):
 - Entry count exceeds `partition_max_entries` (default: 1000)
 - Age exceeds `partition_max_age_seconds` (default: 30 days)
 
-Legacy `context.jsonl` files are migrated automatically on first access.
+Legacy `transcript.jsonl` files are migrated automatically on first access.
 
 ### Environment Variables
 

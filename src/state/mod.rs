@@ -179,9 +179,14 @@ impl AppState {
         self.transcript_md_file(name)
     }
 
-    /// Path to JSONL transcript (transcript.jsonl) - the authoritative log
-    pub fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
+    /// Path to JSONL transcript (transcript.jsonl) - legacy location
+    fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("transcript.jsonl")
+    }
+
+    /// Path to partitioned transcript directory
+    pub fn transcript_dir(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("transcript")
     }
 
     /// Path to dirty context marker file (.dirty)
@@ -388,9 +393,32 @@ impl AppState {
         Ok(())
     }
 
-    /// Read all entries from transcript.jsonl
+    /// Migrate legacy transcript.jsonl to partitioned transcript/ directory
+    fn migrate_transcript_if_needed(&self, name: &str) -> io::Result<()> {
+        let legacy_path = self.transcript_jsonl_file(name);
+        let transcript_dir = self.transcript_dir(name);
+        let manifest_path = transcript_dir.join("manifest.json");
+
+        // Already migrated or no legacy file
+        if manifest_path.exists() || !legacy_path.exists() {
+            return Ok(());
+        }
+
+        // Create transcript directory and move legacy file
+        fs::create_dir_all(&transcript_dir)?;
+        let active_path = transcript_dir.join("active.jsonl");
+        fs::rename(&legacy_path, &active_path)?;
+
+        Ok(())
+    }
+
+    /// Read all entries from transcript (using partitioned storage)
     pub fn read_transcript_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        read_jsonl_file(&self.transcript_jsonl_file(name))
+        self.migrate_transcript_if_needed(name)?;
+        let transcript_dir = self.transcript_dir(name);
+        let storage_config = self.get_storage_config(name)?;
+        let pm = PartitionManager::load_with_config(&transcript_dir, storage_config)?;
+        pm.read_all_entries()
     }
 
     /// Migrate from old context.json format to new context.jsonl format
@@ -459,37 +487,39 @@ impl AppState {
         })
     }
 
-    /// Read entries from context (using partitioned storage)
+    /// Read entries from context.jsonl (the LLM's working memory)
     pub fn read_context_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        let context_dir = self.context_dir(name);
-        if !context_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let storage_config = self.get_storage_config(name)?;
-        let pm = PartitionManager::load_with_config(&context_dir, storage_config)?;
-        pm.read_all_entries()
+        read_jsonl_file(&self.context_file(name))
     }
 
-    /// Write entries to context (full rewrite using partitioned storage)
+    /// Write entries to context.jsonl (full rewrite)
     pub fn write_context_entries(&self, name: &str, entries: &[TranscriptEntry]) -> io::Result<()> {
         self.ensure_context_dir(name)?;
-        let context_dir = self.context_dir(name);
-        let storage_config = self.get_storage_config(name)?;
-        let mut pm = PartitionManager::load_with_config(&context_dir, storage_config)?;
-        pm.write_entries(entries)
+        let path = self.context_file(name);
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+
+        let mut writer = BufWriter::new(file);
+        for entry in entries {
+            let json = serde_json::to_string(entry)
+                .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
+            writeln!(writer, "{}", json)?;
+        }
+        Ok(())
     }
 
-    /// Append a single entry to context (using partitioned storage)
+    /// Append a single entry to context.jsonl
     pub fn append_context_entry(&self, name: &str, entry: &TranscriptEntry) -> io::Result<()> {
         self.ensure_context_dir(name)?;
-        let context_dir = self.context_dir(name);
-        let storage_config = self.get_storage_config(name)?;
-        let mut pm = PartitionManager::load_with_config(&context_dir, storage_config)?;
-        pm.append_entry(entry)?;
+        let path = self.context_file(name);
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
-        // Check if rotation is needed after append
-        pm.rotate_if_needed()?;
+        let json = serde_json::to_string(entry)
+            .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
+        writeln!(file, "{}", json)?;
         Ok(())
     }
 
@@ -634,20 +664,21 @@ impl AppState {
         Ok(())
     }
 
-    /// Append a single entry to transcript.jsonl (the authoritative log)
+    /// Append a single entry to transcript (the authoritative log, using partitioned storage)
     pub fn append_to_transcript(
         &self,
         context_name: &str,
         entry: &TranscriptEntry,
     ) -> io::Result<()> {
         self.ensure_context_dir(context_name)?;
-        let path = self.transcript_jsonl_file(context_name);
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        self.migrate_transcript_if_needed(context_name)?;
+        let transcript_dir = self.transcript_dir(context_name);
+        let storage_config = self.get_storage_config(context_name)?;
+        let mut pm = PartitionManager::load_with_config(&transcript_dir, storage_config)?;
+        pm.append_entry(entry)?;
 
-        let json = serde_json::to_string(entry).map_err(|e| {
-            io::Error::other(format!("Failed to serialize transcript entry: {}", e))
-        })?;
-        writeln!(file, "{}", json)?;
+        // Check if rotation is needed after append
+        pm.rotate_if_needed()?;
         Ok(())
     }
 

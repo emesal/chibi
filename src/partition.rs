@@ -406,34 +406,6 @@ impl PartitionManager {
         Ok(())
     }
 
-    /// Writes entries to the active partition, replacing existing content.
-    ///
-    /// Used during migration and compaction. For normal operation, prefer `append_entry`.
-    pub fn write_entries(&mut self, entries: &[TranscriptEntry]) -> io::Result<()> {
-        fs::create_dir_all(&self.context_dir)?;
-
-        let active_path = self.context_dir.join(&self.manifest.active_partition);
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&active_path)?;
-
-        let mut writer = BufWriter::new(file);
-        for entry in entries {
-            let json = serde_json::to_string(entry)
-                .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
-            writeln!(writer, "{}", json)?;
-        }
-
-        // Update cached state
-        self.active.entry_count = entries.len();
-        self.active.first_entry_ts = entries.first().map(|e| e.timestamp);
-
-        self.save_manifest()?;
-        Ok(())
-    }
-
     // ========================================================================
     // Rotation
     // ========================================================================
