@@ -25,7 +25,7 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 |------|-------------|
 | `-g, --show-current-log <N>` | Show last N log entries from current context (negative = from start) |
 | `-G, --show-log <CTX> <N>` | Show last N log entries from specified context |
-| `-n, --inspect-current <THING>` | Inspect current context: `system_prompt`, `reflection`, `todos`, `goals`, `list` |
+| `-n, --inspect-current <THING>` | Inspect: `system_prompt`, `reflection`, `todos`, `goals`, `home`, `list`, or config fields |
 | `-N, --inspect <CTX> <THING>` | Inspect specified context |
 
 ## System Prompt
@@ -103,6 +103,24 @@ When using `--json-config`, pass a JSON object to stdin:
 **Context selection:** `"current"`, `{ "switch": { "name": "..." } }`, `{ "transient": { "name": "..." } }`
 
 **Username:** `{ "persistent": "name" }`, `{ "transient": "name" }`
+
+**Home directory:** Use `--home` alongside `--json-config` (cannot be set in JSON):
+```bash
+echo '{"command": "list_contexts"}' | chibi --home /path/to/alt --json-config
+```
+
+## Directory Override
+
+| Flag | Description |
+|------|-------------|
+| `--home <PATH>` | Override chibi home directory (default: `~/.chibi`) |
+
+The home directory is resolved in this order:
+1. `--home` CLI flag (highest priority)
+2. `CHIBI_HOME` environment variable
+3. `~/.chibi` default
+
+Use `-n home` to inspect the resolved path.
 
 ## Debug Flags
 

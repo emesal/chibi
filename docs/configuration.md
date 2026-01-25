@@ -8,9 +8,19 @@ Chibi uses a layered configuration system. Settings are resolved in this order (
 4. **Context config** (`~/.chibi/contexts/<name>/local.toml`) - Per-context overrides
 5. **CLI flags** - Command-line arguments (highest priority)
 
+## Home Directory
+
+By default, chibi stores all data in `~/.chibi`. This can be overridden:
+
+1. `--home <PATH>` CLI flag (highest priority)
+2. `CHIBI_HOME` environment variable
+3. `~/.chibi` default
+
+Use `-n home` to see the resolved path.
+
 ## Global Configuration (config.toml)
 
-Create `~/.chibi/config.toml`:
+Create `~/.chibi/config.toml` (or `<CHIBI_HOME>/config.toml` if overridden):
 
 ```toml
 # =============================================================================

@@ -515,3 +515,146 @@ fn integration_inspect_invalid_config_field() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Invalid") || stderr.contains("Unknown"));
 }
+
+// =============================================================================
+// --home flag tests
+// =============================================================================
+
+/// Test --home flag overrides default directory
+#[test]
+fn integration_home_flag() {
+    let temp_home = setup_test_home();
+    let temp_path = temp_home.path().to_string_lossy().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["--home", &temp_path, "-n", "home"])
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim() == temp_path,
+        "Expected home to be '{}', got '{}'",
+        temp_path,
+        stdout.trim()
+    );
+}
+
+/// Test --home=path form (attached argument)
+#[test]
+fn integration_home_flag_attached() {
+    let temp_home = setup_test_home();
+    let temp_path = temp_home.path().to_string_lossy().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg(format!("--home={}", temp_path))
+        .args(["-n", "home"])
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim() == temp_path,
+        "Expected home to be '{}', got '{}'",
+        temp_path,
+        stdout.trim()
+    );
+}
+
+/// Test --home takes precedence over CHIBI_HOME env var
+#[test]
+fn integration_home_flag_overrides_env() {
+    let temp_home = setup_test_home();
+    let temp_path = temp_home.path().to_string_lossy().to_string();
+
+    // Create another temp dir for the env var (should be ignored)
+    let env_home = setup_test_home();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["--home", &temp_path, "-n", "home"])
+        .env("CHIBI_HOME", env_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim() == temp_path,
+        "--home should override CHIBI_HOME env var"
+    );
+}
+
+/// Test --home works with --json-config
+#[test]
+fn integration_home_flag_with_json_config() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let temp_home = setup_test_home();
+    let temp_path = temp_home.path().to_string_lossy().to_string();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["--home", &temp_path, "--json-config"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn chibi");
+
+    let json_input = r#"{"command": {"inspect": {"thing": "home"}}}"#;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(json_input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("failed to read output");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim() == temp_path,
+        "--home should work with --json-config, expected '{}', got '{}'",
+        temp_path,
+        stdout.trim()
+    );
+}
+
+/// Test --home=path form works with --json-config
+#[test]
+fn integration_home_flag_attached_with_json_config() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let temp_home = setup_test_home();
+    let temp_path = temp_home.path().to_string_lossy().to_string();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg(format!("--home={}", temp_path))
+        .arg("--json-config")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn chibi");
+
+    let json_input = r#"{"command": {"inspect": {"thing": "home"}}}"#;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(json_input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("failed to read output");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim() == temp_path,
+        "--home=path should work with --json-config"
+    );
+}

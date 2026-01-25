@@ -23,6 +23,8 @@ pub enum Inspectable {
     Reflection,
     Todos,
     Goals,
+    // Global items
+    Home,
     // Lists all inspectable items
     List,
     // Config field (dynamic path like "model", "api.temperature", etc.)
@@ -39,6 +41,8 @@ impl Inspectable {
             "reflection" => Some(Inspectable::Reflection),
             "todos" => Some(Inspectable::Todos),
             "goals" => Some(Inspectable::Goals),
+            // Global items
+            "home" => Some(Inspectable::Home),
             "list" => Some(Inspectable::List),
             // Check if it's a valid config field path
             other => {
@@ -54,7 +58,14 @@ impl Inspectable {
 
     pub fn all_names() -> Vec<&'static str> {
         use crate::config::ResolvedConfig;
-        let mut names = vec!["system_prompt", "reflection", "todos", "goals", "list"];
+        let mut names = vec![
+            "system_prompt",
+            "reflection",
+            "todos",
+            "goals",
+            "home",
+            "list",
+        ];
         names.extend(ResolvedConfig::list_fields());
         names
     }
@@ -255,6 +266,11 @@ pub struct Cli {
     /// Enable debug features (request-log, response-meta, all)
     #[arg(long = "debug", value_name = "KEY")]
     pub debug: Option<String>,
+
+    // === Directory override ===
+    /// Override chibi home directory (default: ~/.chibi, or CHIBI_HOME env var)
+    #[arg(long = "home", value_name = "PATH")]
+    pub home: Option<String>,
 
     // === Help and version ===
     /// Show help

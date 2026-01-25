@@ -28,6 +28,7 @@ pub struct AppState {
     pub config: Config,
     pub models_config: ModelsConfig,
     pub state: ContextState,
+    pub chibi_dir: PathBuf,
     pub state_path: PathBuf,
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
@@ -58,6 +59,7 @@ impl AppState {
             config,
             models_config: ModelsConfig::default(),
             state,
+            chibi_dir,
             state_path,
             contexts_dir,
             prompts_dir,
@@ -65,9 +67,16 @@ impl AppState {
         })
     }
 
-    pub fn load() -> io::Result<Self> {
-        // Check CHIBI_HOME env var first, fall back to ~/.chibi
-        let chibi_dir = if let Ok(chibi_home) = std::env::var("CHIBI_HOME") {
+    /// Load AppState with optional home directory override.
+    ///
+    /// Precedence for chibi directory:
+    /// 1. `home_override` parameter (from --home CLI flag)
+    /// 2. `CHIBI_HOME` environment variable
+    /// 3. `~/.chibi` default
+    pub fn load(home_override: Option<PathBuf>) -> io::Result<Self> {
+        let chibi_dir = if let Some(path) = home_override {
+            path
+        } else if let Ok(chibi_home) = std::env::var("CHIBI_HOME") {
             PathBuf::from(chibi_home)
         } else {
             let home = home_dir()
@@ -141,6 +150,7 @@ impl AppState {
             config,
             models_config,
             state,
+            chibi_dir,
             state_path,
             contexts_dir,
             prompts_dir,

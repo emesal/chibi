@@ -142,6 +142,9 @@ fn inspect_context(
                 }
             }
         }
+        Inspectable::Home => {
+            println!("{}", app.chibi_dir.display());
+        }
         Inspectable::ConfigField(field_path) => {
             if let Some(config) = resolved_config {
                 match config.get_field(field_path) {
@@ -613,12 +616,27 @@ async fn execute_from_input(
     Ok(())
 }
 
+/// Extract --home flag value from args (before full CLI parsing)
+fn extract_home_override(args: &[String]) -> Option<std::path::PathBuf> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--home" {
+            return iter.next().map(std::path::PathBuf::from);
+        }
+        if let Some(path) = arg.strip_prefix("--home=") {
+            return Some(std::path::PathBuf::from(path));
+        }
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    // Check for --json-config early (before full CLI parsing)
+    // Check for early flags (before full CLI parsing)
     let args: Vec<String> = std::env::args().collect();
     let is_json_config = args.iter().any(|a| a == "--json-config");
     let cli_json_output = args.iter().any(|a| a == "--json-output");
+    let home_override = extract_home_override(&args);
 
     if is_json_config {
         // JSON mode: read from stdin and parse directly to ChibiInput
@@ -643,7 +661,7 @@ async fn main() -> io::Result<()> {
         }
 
         let output = OutputHandler::new(input.flags.json_output);
-        let mut app = AppState::load()?;
+        let mut app = AppState::load(home_override)?;
 
         let tools = tools::load_tools(&app.plugins_dir, input.flags.verbose)?;
         output.diagnostic(
@@ -657,7 +675,7 @@ async fn main() -> io::Result<()> {
     // CLI mode: parse to ChibiInput and use unified execution
     let input = cli::parse()?;
     let verbose = input.flags.verbose;
-    let mut app = AppState::load()?;
+    let mut app = AppState::load(home_override)?;
 
     // Load tools
     let tools = tools::load_tools(&app.plugins_dir, verbose)?;
