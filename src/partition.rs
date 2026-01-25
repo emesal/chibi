@@ -28,7 +28,7 @@
 //!
 //! The active partition rotates when any threshold is reached:
 //! - **Entry count**: Default 1000 entries per partition
-//! - **Token count**: Default 100,000 estimated LLM tokens (~4 bytes/token)
+//! - **Token count**: Default 100,000 estimated LLM tokens (configurable bytes/token, default 3)
 //! - **Age**: Default 30 days since first entry
 //!
 //! On rotation, the active partition is moved to `partitions/` and a bloom
@@ -71,18 +71,21 @@ pub const DEFAULT_PARTITION_MAX_AGE_SECONDS: u64 = 30 * 24 * 60 * 60;
 /// Default maximum tokens per partition before rotation (100k tokens).
 pub const DEFAULT_PARTITION_MAX_TOKENS: usize = 100_000;
 
+/// Default bytes per token for estimation (conservative for mixed content).
+pub const DEFAULT_BYTES_PER_TOKEN: usize = 3;
+
 /// Target false positive rate for bloom filters.
 const BLOOM_FALSE_POSITIVE_RATE: f64 = 0.01;
 
-/// Estimates token count from text using ~4 bytes per token heuristic.
+/// Estimates token count from text using configurable bytes-per-token heuristic.
 ///
-/// Note: This uses byte length, not character count, for performance.
-/// For ASCII text this is accurate, but for UTF-8 with multibyte characters
-/// the estimate may be higher than reality (e.g., emoji count as 4 bytes each).
+/// Uses byte length (not character count) for O(1) performance.
+/// A lower bytes_per_token value produces higher token estimates (more conservative).
+/// Default of 3 bytes/token handles mixed English/CJK content safely.
 #[inline]
-fn estimate_tokens(text: &str) -> usize {
-    // Round up to avoid returning 0 for short strings (1-3 bytes)
-    text.len().div_ceil(4)
+fn estimate_tokens(text: &str, bytes_per_token: usize) -> usize {
+    let divisor = bytes_per_token.max(1); // Prevent division by zero
+    text.len().div_ceil(divisor)
 }
 
 // ============================================================================
@@ -106,12 +109,18 @@ pub struct StorageConfig {
     pub partition_max_age_seconds: Option<u64>,
 
     /// Maximum estimated tokens per partition before rotation.
-    /// Uses ~4 chars per token heuristic. Default 100k tokens.
+    /// Default 100k tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partition_max_tokens: Option<usize>,
 
+    /// Bytes per token for estimation heuristic.
+    /// Lower values = more conservative (higher token estimates).
+    /// Default is 3 (handles mixed English/CJK content).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_per_token: Option<usize>,
+
     /// Whether to build bloom filter indexes for archived partitions.
-    /// Bloom filters enable fast entry ID lookups without reading partition files.
+    /// Bloom filters enable fast term-based search across partitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_bloom_filters: Option<bool>,
 }
@@ -136,6 +145,12 @@ impl StorageConfig {
     pub fn max_tokens(&self) -> usize {
         self.partition_max_tokens
             .unwrap_or(DEFAULT_PARTITION_MAX_TOKENS)
+    }
+
+    /// Returns the bytes-per-token value for estimation.
+    #[inline]
+    pub fn bytes_per_token(&self) -> usize {
+        self.bytes_per_token.unwrap_or(DEFAULT_BYTES_PER_TOKEN)
     }
 
     /// Returns whether bloom filters should be built.
@@ -246,7 +261,7 @@ struct ActiveState {
 
 impl ActiveState {
     /// Scans a JSONL file to extract count, tokens, and first timestamp.
-    fn from_file(path: &Path) -> io::Result<Self> {
+    fn from_file(path: &Path, bytes_per_token: usize) -> io::Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -267,7 +282,7 @@ impl ActiveState {
                     first_ts = Some(entry.timestamp);
                 }
                 count += 1;
-                tokens += estimate_tokens(&entry.content);
+                tokens += estimate_tokens(&entry.content, bytes_per_token);
             }
         }
 
@@ -279,11 +294,11 @@ impl ActiveState {
     }
 
     /// Updates state after appending an entry.
-    fn record_append(&mut self, entry: &TranscriptEntry) {
+    fn record_append(&mut self, entry: &TranscriptEntry, bytes_per_token: usize) {
         self.entry_count += 1;
         self.token_count = self
             .token_count
-            .saturating_add(estimate_tokens(&entry.content));
+            .saturating_add(estimate_tokens(&entry.content, bytes_per_token));
         if self.first_entry_ts.is_none() {
             self.first_entry_ts = Some(entry.timestamp);
         }
@@ -371,7 +386,7 @@ impl PartitionManager {
 
         // Scan active partition for count and first timestamp
         let active_path = context_dir.join(&manifest.active_partition);
-        let active = ActiveState::from_file(&active_path)?;
+        let active = ActiveState::from_file(&active_path, config.bytes_per_token())?;
 
         Ok(Self {
             context_dir: context_dir.to_path_buf(),
@@ -471,7 +486,8 @@ impl PartitionManager {
         // Ensure durability: flush OS buffer cache to disk
         file.sync_all()?;
 
-        self.active.record_append(entry);
+        self.active
+            .record_append(entry, self.config.bytes_per_token());
         Ok(())
     }
 
@@ -582,9 +598,10 @@ impl PartitionManager {
         };
 
         // Calculate token count for the partition
+        let bytes_per_token = self.config.bytes_per_token();
         let token_count: usize = entries
             .iter()
-            .map(|e| estimate_tokens(&e.content))
+            .map(|e| estimate_tokens(&e.content, bytes_per_token))
             .fold(0usize, |acc, n| acc.saturating_add(n));
 
         // Record partition metadata
@@ -779,6 +796,7 @@ impl StorageConfig {
                 .partition_max_age_seconds
                 .or(self.partition_max_age_seconds),
             partition_max_tokens: other.partition_max_tokens.or(self.partition_max_tokens),
+            bytes_per_token: other.bytes_per_token.or(self.bytes_per_token),
             enable_bloom_filters: other.enable_bloom_filters.or(self.enable_bloom_filters),
         }
     }
@@ -794,10 +812,7 @@ impl StorageConfig {
 /// for fast "does this partition contain term X" lookups.
 fn build_bloom_filter(entries: &[TranscriptEntry], partition_path: &Path) -> io::Result<PathBuf> {
     // Collect terms into a Vec; fastbloom requires ExactSizeIterator
-    let terms: Vec<String> = entries
-        .iter()
-        .flat_map(|e| tokenize(&e.content))
-        .collect();
+    let terms: Vec<String> = entries.iter().flat_map(|e| tokenize(&e.content)).collect();
 
     let bloom = BloomFilter::with_false_pos(BLOOM_FALSE_POSITIVE_RATE).items(terms.iter());
 
@@ -886,12 +901,14 @@ mod tests {
             partition_max_entries: Some(500),
             partition_max_age_seconds: Some(86400),
             partition_max_tokens: Some(50_000),
+            bytes_per_token: Some(4),
             enable_bloom_filters: Some(true),
         };
         let override_ = StorageConfig {
             partition_max_entries: Some(1000),
             partition_max_age_seconds: None,
             partition_max_tokens: None,
+            bytes_per_token: None,
             enable_bloom_filters: Some(false),
         };
 
@@ -1015,6 +1032,7 @@ mod tests {
             partition_max_entries: Some(3),
             partition_max_age_seconds: Some(86400),
             partition_max_tokens: None,
+            bytes_per_token: None,
             enable_bloom_filters: Some(true),
         };
         let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
@@ -1050,6 +1068,7 @@ mod tests {
             partition_max_entries: Some(2),
             partition_max_age_seconds: Some(86400),
             partition_max_tokens: None,
+            bytes_per_token: None,
             enable_bloom_filters: Some(false),
         };
         let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
@@ -1092,6 +1111,7 @@ mod tests {
             partition_max_entries: Some(2),
             partition_max_age_seconds: Some(86400),
             partition_max_tokens: None,
+            bytes_per_token: None,
             enable_bloom_filters: Some(false),
         };
 
@@ -1134,6 +1154,7 @@ mod tests {
             partition_max_entries: Some(2),
             partition_max_age_seconds: Some(86400),
             partition_max_tokens: None,
+            bytes_per_token: None,
             enable_bloom_filters: Some(false),
         };
         let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
@@ -1173,6 +1194,7 @@ mod tests {
             partition_max_entries: Some(2),
             partition_max_age_seconds: Some(86400),
             partition_max_tokens: None,
+            bytes_per_token: None,
             enable_bloom_filters: Some(true),
         };
         let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();

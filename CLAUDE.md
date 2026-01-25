@@ -193,8 +193,9 @@ Global `config.toml`:
 ```toml
 [storage]
 partition_max_entries = 1000        # Rotate after N entries
-partition_max_tokens = 100000       # Or after N estimated LLM tokens (~4 bytes/token)
+partition_max_tokens = 100000       # Or after N estimated LLM tokens
 partition_max_age_seconds = 2592000 # Or after 30 days
+bytes_per_token = 3                 # Token estimation (lower = more conservative)
 enable_bloom_filters = true         # Build bloom indexes for search
 ```
 
@@ -203,4 +204,5 @@ Per-context override in `local.toml`:
 [storage]
 partition_max_entries = 500         # More aggressive for busy contexts
 partition_max_tokens = 50000        # Lower token threshold
+bytes_per_token = 4                 # Less conservative for English-only content
 ```

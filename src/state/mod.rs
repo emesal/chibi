@@ -484,6 +484,10 @@ impl AppState {
                 .storage
                 .partition_max_tokens
                 .or(self.config.storage.partition_max_tokens),
+            bytes_per_token: local
+                .storage
+                .bytes_per_token
+                .or(self.config.storage.bytes_per_token),
             enable_bloom_filters: local
                 .storage
                 .enable_bloom_filters
