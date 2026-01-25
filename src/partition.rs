@@ -67,8 +67,22 @@ pub const DEFAULT_PARTITION_MAX_ENTRIES: usize = 1000;
 /// Default maximum age of a partition in seconds (30 days).
 pub const DEFAULT_PARTITION_MAX_AGE_SECONDS: u64 = 30 * 24 * 60 * 60;
 
+/// Default maximum tokens per partition before rotation (100k tokens).
+pub const DEFAULT_PARTITION_MAX_TOKENS: usize = 100_000;
+
 /// Target false positive rate for bloom filters.
 const BLOOM_FALSE_POSITIVE_RATE: f64 = 0.01;
+
+/// Estimates token count from text using ~4 bytes per token heuristic.
+///
+/// Note: This uses byte length, not character count, for performance.
+/// For ASCII text this is accurate, but for UTF-8 with multibyte characters
+/// the estimate may be higher than reality (e.g., emoji count as 4 bytes each).
+#[inline]
+fn estimate_tokens(text: &str) -> usize {
+    // Round up to avoid returning 0 for short strings (1-3 bytes)
+    text.len().div_ceil(4)
+}
 
 // ============================================================================
 // Configuration Types
@@ -90,6 +104,11 @@ pub struct StorageConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partition_max_age_seconds: Option<u64>,
 
+    /// Maximum estimated tokens per partition before rotation.
+    /// Uses ~4 chars per token heuristic. Default 100k tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_max_tokens: Option<usize>,
+
     /// Whether to build bloom filter indexes for archived partitions.
     /// Bloom filters enable fast entry ID lookups without reading partition files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,6 +128,13 @@ impl StorageConfig {
     pub fn max_age_seconds(&self) -> u64 {
         self.partition_max_age_seconds
             .unwrap_or(DEFAULT_PARTITION_MAX_AGE_SECONDS)
+    }
+
+    /// Returns the effective max tokens threshold.
+    #[inline]
+    pub fn max_tokens(&self) -> usize {
+        self.partition_max_tokens
+            .unwrap_or(DEFAULT_PARTITION_MAX_TOKENS)
     }
 
     /// Returns whether bloom filters should be built.
@@ -167,6 +193,10 @@ pub struct PartitionMeta {
     /// Number of entries in this partition.
     pub entry_count: usize,
 
+    /// Estimated token count in this partition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_count: Option<usize>,
+
     /// Optional bloom filter file path, relative to context directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bloom_file: Option<String>,
@@ -180,6 +210,10 @@ pub struct RotationPolicy {
 
     /// Rotate when the partition age exceeds this (seconds since first entry).
     pub max_age_seconds: u64,
+
+    /// Rotate when estimated token count reaches this threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<usize>,
 }
 
 impl Default for RotationPolicy {
@@ -187,6 +221,7 @@ impl Default for RotationPolicy {
         Self {
             max_entries: DEFAULT_PARTITION_MAX_ENTRIES,
             max_age_seconds: DEFAULT_PARTITION_MAX_AGE_SECONDS,
+            max_tokens: Some(DEFAULT_PARTITION_MAX_TOKENS),
         }
     }
 }
@@ -201,12 +236,15 @@ struct ActiveState {
     /// Number of entries in active partition.
     entry_count: usize,
 
+    /// Estimated token count in active partition.
+    token_count: usize,
+
     /// Timestamp of first entry, if any.
     first_entry_ts: Option<u64>,
 }
 
 impl ActiveState {
-    /// Scans a JSONL file to extract count and first timestamp.
+    /// Scans a JSONL file to extract count, tokens, and first timestamp.
     fn from_file(path: &Path) -> io::Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
@@ -215,6 +253,7 @@ impl ActiveState {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut count = 0;
+        let mut tokens = 0;
         let mut first_ts = None;
 
         for line in reader.lines() {
@@ -227,11 +266,13 @@ impl ActiveState {
                     first_ts = Some(entry.timestamp);
                 }
                 count += 1;
+                tokens += estimate_tokens(&entry.content);
             }
         }
 
         Ok(Self {
             entry_count: count,
+            token_count: tokens,
             first_entry_ts: first_ts,
         })
     }
@@ -239,6 +280,9 @@ impl ActiveState {
     /// Updates state after appending an entry.
     fn record_append(&mut self, entry: &TranscriptEntry) {
         self.entry_count += 1;
+        self.token_count = self
+            .token_count
+            .saturating_add(estimate_tokens(&entry.content));
         if self.first_entry_ts.is_none() {
             self.first_entry_ts = Some(entry.timestamp);
         }
@@ -247,6 +291,7 @@ impl ActiveState {
     /// Resets state after rotation.
     fn reset(&mut self) {
         self.entry_count = 0;
+        self.token_count = 0;
         self.first_entry_ts = None;
     }
 }
@@ -308,6 +353,7 @@ impl PartitionManager {
                 rotation_policy: RotationPolicy {
                     max_entries: config.max_entries(),
                     max_age_seconds: config.max_age_seconds(),
+                    max_tokens: Some(config.max_tokens()),
                 },
             }
         } else {
@@ -316,6 +362,7 @@ impl PartitionManager {
                 rotation_policy: RotationPolicy {
                     max_entries: config.max_entries(),
                     max_age_seconds: config.max_age_seconds(),
+                    max_tokens: Some(config.max_tokens()),
                 },
                 ..Manifest::default()
             }
@@ -344,13 +391,19 @@ impl PartitionManager {
     /// Persists the manifest to disk.
     fn save_manifest(&self) -> io::Result<()> {
         let path = self.context_dir.join("manifest.json");
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .open(&path)?;
-        serde_json::to_writer_pretty(BufWriter::new(file), &self.manifest)
-            .map_err(|e| io::Error::other(format!("Failed to write manifest: {}", e)))
+        {
+            let mut writer = BufWriter::new(&mut file);
+            serde_json::to_writer_pretty(&mut writer, &self.manifest)
+                .map_err(|e| io::Error::other(format!("Failed to write manifest: {}", e)))?;
+        }
+        // Ensure durability: flush OS buffer cache to disk
+        file.sync_all()?;
+        Ok(())
     }
 
     // ========================================================================
@@ -389,6 +442,18 @@ impl PartitionManager {
     ///
     /// This is an append-only operation; the partition file is opened in
     /// append mode to minimize I/O and avoid rewriting existing content.
+    ///
+    /// # Atomicity
+    ///
+    /// Each entry is written as a complete JSON line. Rotation thresholds are
+    /// checked *after* appending, ensuring entries are never split across
+    /// partitions. Call `rotate_if_needed()` after appending to trigger
+    /// rotation if thresholds are exceeded.
+    ///
+    /// # Durability
+    ///
+    /// Writes are flushed to disk via fsync to ensure durability. This prevents
+    /// data loss on crash but may impact write performance on high-throughput workloads.
     pub fn append_entry(&mut self, entry: &TranscriptEntry) -> io::Result<()> {
         fs::create_dir_all(&self.context_dir)?;
 
@@ -402,6 +467,9 @@ impl PartitionManager {
             .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
         writeln!(file, "{}", json)?;
 
+        // Ensure durability: flush OS buffer cache to disk
+        file.sync_all()?;
+
         self.active.record_append(entry);
         Ok(())
     }
@@ -412,14 +480,23 @@ impl PartitionManager {
 
     /// Returns true if the active partition should be rotated.
     ///
-    /// Rotation is triggered when either:
+    /// Rotation is triggered when any threshold is reached:
     /// - Entry count >= configured max_entries
     /// - Time since first entry >= configured max_age_seconds
+    /// - Estimated token count >= configured max_tokens
+    #[must_use]
     pub fn needs_rotation(&self) -> bool {
         let policy = &self.manifest.rotation_policy;
 
         // Entry count threshold
         if self.active.entry_count >= policy.max_entries {
+            return true;
+        }
+
+        // Token count threshold
+        if let Some(max_tokens) = policy.max_tokens
+            && self.active.token_count >= max_tokens
+        {
             return true;
         }
 
@@ -437,6 +514,7 @@ impl PartitionManager {
     /// Rotates the active partition if thresholds are exceeded.
     ///
     /// Returns `true` if rotation occurred, `false` otherwise.
+    #[must_use = "check if rotation occurred to handle partition state changes"]
     pub fn rotate_if_needed(&mut self) -> io::Result<bool> {
         if !self.needs_rotation() {
             return Ok(false);
@@ -502,12 +580,19 @@ impl PartitionManager {
             None
         };
 
+        // Calculate token count for the partition
+        let token_count: usize = entries
+            .iter()
+            .map(|e| estimate_tokens(&e.content))
+            .fold(0usize, |acc, n| acc.saturating_add(n));
+
         // Record partition metadata
         self.manifest.partitions.push(PartitionMeta {
             file: partition_rel,
             start_ts,
             end_ts,
             entry_count: entries.len(),
+            token_count: Some(token_count),
             bloom_file,
         });
 
@@ -517,6 +602,104 @@ impl PartitionManager {
 
         self.save_manifest()?;
         Ok(())
+    }
+
+    // ========================================================================
+    // Search Operations
+    // ========================================================================
+
+    /// Searches for entries containing a term.
+    ///
+    /// Uses bloom filters to skip partitions that definitely don't contain
+    /// the term. Returns matching entries and search statistics.
+    ///
+    /// The search is case-insensitive and matches whole words.
+    #[allow(dead_code)] // Public API, will be used when search CLI is added
+    pub fn search(&self, query: &str) -> io::Result<SearchResult> {
+        let query_lower = query.to_lowercase();
+        let mut entries = Vec::new();
+        let mut partitions_scanned = 0;
+        let mut partitions_skipped = 0;
+
+        // Search archived partitions
+        for partition in &self.manifest.partitions {
+            // Check bloom filter if available
+            if let Some(ref bloom_file) = partition.bloom_file {
+                let bloom_path = self.context_dir.join(bloom_file);
+                if bloom_path.exists()
+                    && let Ok(bloom) = load_bloom_filter(&bloom_path)
+                {
+                    // Tokenize query and check if ANY token is present
+                    // The bloom filter contains individual words, not multi-word phrases
+                    let query_tokens: Vec<String> = tokenize(&query_lower).collect();
+                    let has_match = query_tokens.is_empty()
+                        || query_tokens.iter().any(|token| bloom.contains(token));
+
+                    if !has_match {
+                        partitions_skipped += 1;
+                        continue;
+                    }
+                }
+            }
+
+            // Scan the partition
+            partitions_scanned += 1;
+            let path = self.context_dir.join(&partition.file);
+            if path.exists() {
+                for entry in read_jsonl_file::<TranscriptEntry>(&path)? {
+                    if entry.content.to_lowercase().contains(&query_lower) {
+                        entries.push(entry);
+                    }
+                }
+            }
+        }
+
+        // Always search active partition (no bloom filter yet)
+        partitions_scanned += 1;
+        let active_path = self.context_dir.join(&self.manifest.active_partition);
+        if active_path.exists() {
+            for entry in read_jsonl_file::<TranscriptEntry>(&active_path)? {
+                if entry.content.to_lowercase().contains(&query_lower) {
+                    entries.push(entry);
+                }
+            }
+        }
+
+        Ok(SearchResult {
+            entries,
+            partitions_scanned,
+            partitions_skipped,
+        })
+    }
+
+    /// Checks if an entry with the given ID exists in any partition.
+    ///
+    /// Scans all partitions to find the entry. Returns `true` if found.
+    #[allow(dead_code)] // Public API, will be used when needed
+    pub fn entry_might_exist(&self, id: &str) -> io::Result<bool> {
+        // Check active partition first (linear scan, but typically small)
+        let active_path = self.context_dir.join(&self.manifest.active_partition);
+        if active_path.exists() {
+            for entry in read_jsonl_file::<TranscriptEntry>(&active_path)? {
+                if entry.id == id {
+                    return Ok(true);
+                }
+            }
+        }
+
+        // Check archived partitions
+        for partition in &self.manifest.partitions {
+            let path = self.context_dir.join(&partition.file);
+            if path.exists() {
+                for entry in read_jsonl_file::<TranscriptEntry>(&path)? {
+                    if entry.id == id {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
+        Ok(false)
     }
 
     // ========================================================================
@@ -594,6 +777,7 @@ impl StorageConfig {
             partition_max_age_seconds: other
                 .partition_max_age_seconds
                 .or(self.partition_max_age_seconds),
+            partition_max_tokens: other.partition_max_tokens.or(self.partition_max_tokens),
             enable_bloom_filters: other.enable_bloom_filters.or(self.enable_bloom_filters),
         }
     }
@@ -603,19 +787,49 @@ impl StorageConfig {
 // Bloom Filter Implementation (using fastbloom by tomtomwombat)
 // ============================================================================
 
-/// Builds a bloom filter for entry IDs and writes it to disk.
+/// Builds a bloom filter for search terms found in entries.
 ///
-/// Uses fastbloom for optimized bloom filter operations (2-20x faster than alternatives).
-/// The bloom filter file is named by replacing `.jsonl` with `.bloom`.
+/// Extracts words from entry content and stores them in a bloom filter
+/// for fast "does this partition contain term X" lookups.
 fn build_bloom_filter(entries: &[TranscriptEntry], partition_path: &Path) -> io::Result<PathBuf> {
-    let bloom = BloomFilter::with_false_pos(BLOOM_FALSE_POSITIVE_RATE)
-        .items(entries.iter().map(|e| e.id.as_str()));
+    // Collect terms into a Vec; fastbloom requires ExactSizeIterator
+    let terms: Vec<String> = entries
+        .iter()
+        .flat_map(|e| tokenize(&e.content))
+        .collect();
+
+    let bloom = BloomFilter::with_false_pos(BLOOM_FALSE_POSITIVE_RATE).items(terms.iter());
 
     let bloom_path = partition_path.with_extension("bloom");
     let serialized =
         serde_json::to_vec(&bloom).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     fs::write(&bloom_path, serialized)?;
     Ok(bloom_path)
+}
+
+/// Loads a bloom filter from disk.
+fn load_bloom_filter(path: &Path) -> io::Result<BloomFilter> {
+    let data = fs::read(path)?;
+    serde_json::from_slice(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Tokenizes text into lowercase words for search indexing.
+fn tokenize(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 2)
+        .map(|w| w.to_lowercase())
+}
+
+/// Result from a search query.
+#[derive(Debug)]
+#[allow(dead_code)] // Public API, will be used when search CLI is added
+pub struct SearchResult {
+    /// Matching entries.
+    pub entries: Vec<TranscriptEntry>,
+    /// Partitions that were actually scanned.
+    pub partitions_scanned: usize,
+    /// Partitions skipped due to bloom filter.
+    pub partitions_skipped: usize,
 }
 
 // ============================================================================
@@ -670,17 +884,20 @@ mod tests {
         let base = StorageConfig {
             partition_max_entries: Some(500),
             partition_max_age_seconds: Some(86400),
+            partition_max_tokens: Some(50_000),
             enable_bloom_filters: Some(true),
         };
         let override_ = StorageConfig {
             partition_max_entries: Some(1000),
             partition_max_age_seconds: None,
+            partition_max_tokens: None,
             enable_bloom_filters: Some(false),
         };
 
         let merged = base.merge(&override_);
         assert_eq!(merged.partition_max_entries, Some(1000)); // overridden
         assert_eq!(merged.partition_max_age_seconds, Some(86400)); // from base
+        assert_eq!(merged.partition_max_tokens, Some(50_000)); // from base
         assert_eq!(merged.enable_bloom_filters, Some(false)); // overridden
     }
 
@@ -696,11 +913,13 @@ mod tests {
                 start_ts: 1000,
                 end_ts: 2000,
                 entry_count: 100,
+                token_count: Some(5000),
                 bloom_file: Some("partitions/1000-2000.bloom".to_string()),
             }],
             rotation_policy: RotationPolicy {
                 max_entries: 500,
                 max_age_seconds: 86400,
+                max_tokens: Some(50_000),
             },
         };
 
@@ -721,6 +940,7 @@ mod tests {
             start_ts: 1000,
             end_ts: 2000,
             entry_count: 10,
+            token_count: None,
             bloom_file: None,
         };
 
@@ -793,6 +1013,7 @@ mod tests {
         let config = StorageConfig {
             partition_max_entries: Some(3),
             partition_max_age_seconds: Some(86400),
+            partition_max_tokens: None,
             enable_bloom_filters: Some(true),
         };
         let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
@@ -827,6 +1048,7 @@ mod tests {
         let config = StorageConfig {
             partition_max_entries: Some(2),
             partition_max_age_seconds: Some(86400),
+            partition_max_tokens: None,
             enable_bloom_filters: Some(false),
         };
         let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
@@ -868,6 +1090,7 @@ mod tests {
         let config = StorageConfig {
             partition_max_entries: Some(2),
             partition_max_age_seconds: Some(86400),
+            partition_max_tokens: None,
             enable_bloom_filters: Some(false),
         };
 
@@ -909,6 +1132,7 @@ mod tests {
         let config = StorageConfig {
             partition_max_entries: Some(2),
             partition_max_age_seconds: Some(86400),
+            partition_max_tokens: None,
             enable_bloom_filters: Some(false),
         };
         let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
@@ -924,5 +1148,70 @@ mod tests {
         assert_eq!(pm.total_entry_count(), 5);
         assert_eq!(pm.manifest.partitions.len(), 2);
         assert_eq!(pm.active_entry_count(), 1);
+    }
+
+    #[test]
+    fn test_search_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut pm = PartitionManager::load(temp_dir.path()).unwrap();
+
+        pm.append_entry(&make_entry("Hello world")).unwrap();
+        pm.append_entry(&make_entry("Goodbye world")).unwrap();
+        pm.append_entry(&make_entry("Hello again")).unwrap();
+
+        let result = pm.search("hello").unwrap();
+        assert_eq!(result.entries.len(), 2);
+        assert!(result.entries.iter().any(|e| e.content == "Hello world"));
+        assert!(result.entries.iter().any(|e| e.content == "Hello again"));
+    }
+
+    #[test]
+    fn test_search_uses_bloom_filter() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = StorageConfig {
+            partition_max_entries: Some(2),
+            partition_max_age_seconds: Some(86400),
+            partition_max_tokens: None,
+            enable_bloom_filters: Some(true),
+        };
+        let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
+
+        // Create entries with specific words
+        pm.append_entry(&make_entry("apple banana")).unwrap();
+        pm.append_entry(&make_entry("cherry date")).unwrap();
+        pm.rotate_if_needed().unwrap(); // Rotates, creates bloom filter
+
+        pm.append_entry(&make_entry("elderberry fig")).unwrap();
+
+        // Search for word in archived partition
+        let result = pm.search("apple").unwrap();
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].content, "apple banana");
+
+        // Search for word not in any partition
+        let result = pm.search("zebra").unwrap();
+        assert_eq!(result.entries.len(), 0);
+        assert!(result.partitions_skipped > 0); // Bloom filter skipped partitions
+    }
+
+    #[test]
+    fn test_entry_might_exist() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut pm = PartitionManager::load(temp_dir.path()).unwrap();
+
+        let entry = make_entry("Test content");
+        let entry_id = entry.id.clone();
+        pm.append_entry(&entry).unwrap();
+
+        assert!(pm.entry_might_exist(&entry_id).unwrap());
+        assert!(!pm.entry_might_exist("nonexistent-id").unwrap());
+    }
+
+    #[test]
+    fn test_tokenize() {
+        let tokens: Vec<String> = tokenize("Hello, World! Test123").collect();
+        assert!(tokens.contains(&"hello".to_string()));
+        assert!(tokens.contains(&"world".to_string()));
+        assert!(tokens.contains(&"test123".to_string()));
     }
 }

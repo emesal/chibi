@@ -480,6 +480,10 @@ impl AppState {
                 .storage
                 .partition_max_age_seconds
                 .or(self.config.storage.partition_max_age_seconds),
+            partition_max_tokens: local
+                .storage
+                .partition_max_tokens
+                .or(self.config.storage.partition_max_tokens),
             enable_bloom_filters: local
                 .storage
                 .enable_bloom_filters
