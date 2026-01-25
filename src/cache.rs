@@ -36,7 +36,8 @@ pub struct CacheEntry {
     pub metadata: CacheMetadata,
     /// Path to the cache file
     pub cache_path: std::path::PathBuf,
-    /// Path to the metadata file
+    /// Path to the metadata file (kept for potential future use)
+    #[allow(dead_code)]
     pub meta_path: std::path::PathBuf,
 }
 
@@ -170,10 +171,12 @@ pub fn read_cache_lines(cache_path: &Path, start: usize, end: usize) -> io::Resu
     let file = File::open(cache_path)?;
     let reader = BufReader::new(file);
 
+    // Convert 1-indexed to 0-indexed: line N is at index N-1
+    // For inclusive end, we want i < end (0-indexed end is end itself)
     let lines: Vec<String> = reader
         .lines()
         .enumerate()
-        .filter(|(i, _)| *i + 1 >= start && *i + 1 <= end)
+        .filter(|(i, _)| *i >= start.saturating_sub(1) && *i < end)
         .map(|(_, line)| line)
         .collect::<Result<_, _>>()?;
 
@@ -208,9 +211,10 @@ pub fn read_cache_grep(
             }
 
             // Add lines we haven't added yet
-            for j in start.max(last_end)..end {
+            let range_start = start.max(last_end);
+            for (j, line) in lines.iter().enumerate().take(end).skip(range_start) {
                 let prefix = if j == i { ">" } else { " " };
-                result.push(format!("{}{}:{}", prefix, j + 1, lines[j]));
+                result.push(format!("{}{}:{}", prefix, j + 1, line));
             }
 
             last_end = end;
@@ -233,15 +237,21 @@ pub fn list_cache_entries(cache_dir: &Path) -> io::Result<Vec<CacheMetadata>> {
         let path = entry.path();
 
         // Check for .meta.json files
-        if let Some(name) = path.file_name() {
-            if name.to_string_lossy().ends_with(".meta.json") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(metadata) = serde_json::from_str::<CacheMetadata>(&content) {
-                        entries.push(metadata);
-                    }
-                }
-            }
+        let is_meta_file = path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().ends_with(".meta.json"));
+
+        if !is_meta_file {
+            continue;
         }
+
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(metadata) = serde_json::from_str::<CacheMetadata>(&content) else {
+            continue;
+        };
+        entries.push(metadata);
     }
 
     // Sort by timestamp (newest first)
@@ -270,20 +280,27 @@ pub fn cleanup_old_cache(cache_dir: &Path, max_age_days: u64) -> io::Result<usiz
         let path = entry.path();
 
         // Check for .meta.json files
-        if let Some(name) = path.file_name() {
-            if name.to_string_lossy().ends_with(".meta.json") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(metadata) = serde_json::from_str::<CacheMetadata>(&content) {
-                        if metadata.timestamp < cutoff {
-                            // Remove both cache and meta files
-                            let cache_path = cache_dir.join(format!("{}.cache", metadata.id));
-                            let _ = fs::remove_file(&cache_path);
-                            let _ = fs::remove_file(&path);
-                            removed += 1;
-                        }
-                    }
-                }
-            }
+        let is_meta_file = path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().ends_with(".meta.json"));
+
+        if !is_meta_file {
+            continue;
+        }
+
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(metadata) = serde_json::from_str::<CacheMetadata>(&content) else {
+            continue;
+        };
+
+        if metadata.timestamp < cutoff {
+            // Remove both cache and meta files
+            let cache_path = cache_dir.join(format!("{}.cache", metadata.id));
+            let _ = fs::remove_file(&cache_path);
+            let _ = fs::remove_file(&path);
+            removed += 1;
         }
     }
 

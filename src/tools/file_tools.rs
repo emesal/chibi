@@ -222,24 +222,17 @@ fn resolve_and_validate_path(path: &str, config: &ResolvedConfig) -> io::Result<
     }
 
     // Check if path is under any allowed path
-    let mut allowed = false;
-    for allowed_path in &config.file_tools_allowed_paths {
+    let allowed = config.file_tools_allowed_paths.iter().any(|allowed_path| {
         let allowed_resolved = if allowed_path.starts_with('~') {
-            let home = dirs_next::home_dir().ok_or_else(|| {
-                io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
-            })?;
-            home.join(&allowed_path[2..])
+            dirs_next::home_dir().map(|home| home.join(&allowed_path[2..]))
         } else {
-            PathBuf::from(allowed_path)
+            Some(PathBuf::from(allowed_path))
         };
 
-        if let Ok(allowed_canonical) = allowed_resolved.canonicalize() {
-            if canonical.starts_with(&allowed_canonical) {
-                allowed = true;
-                break;
-            }
-        }
-    }
+        allowed_resolved
+            .and_then(|p| p.canonicalize().ok())
+            .is_some_and(|allowed_canonical| canonical.starts_with(&allowed_canonical))
+    });
 
     if !allowed {
         return Err(io::Error::new(

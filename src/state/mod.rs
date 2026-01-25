@@ -203,13 +203,15 @@ impl AppState {
         self.context_dir(name).join("tool_cache")
     }
 
-    /// Path to a cached tool output file
+    /// Path to a cached tool output file (kept for potential future use)
+    #[allow(dead_code)]
     pub fn cache_file(&self, name: &str, cache_id: &str) -> PathBuf {
         self.tool_cache_dir(name)
             .join(format!("{}.cache", cache_id))
     }
 
-    /// Path to cache metadata file
+    /// Path to cache metadata file (kept for potential future use)
+    #[allow(dead_code)]
     pub fn cache_meta_file(&self, name: &str, cache_id: &str) -> PathBuf {
         self.tool_cache_dir(name)
             .join(format!("{}.meta.json", cache_id))
@@ -220,7 +222,8 @@ impl AppState {
         fs::create_dir_all(&dir)
     }
 
-    /// Ensure tool cache directory exists
+    /// Ensure tool cache directory exists (kept for potential future use)
+    #[allow(dead_code)]
     pub fn ensure_tool_cache_dir(&self, name: &str) -> io::Result<()> {
         let dir = self.tool_cache_dir(name);
         fs::create_dir_all(&dir)
