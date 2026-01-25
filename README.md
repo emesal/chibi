@@ -1,3 +1,5 @@
+![chibi~](docs/images/socials-wide-trans.png.png)
+
 # chibi
 
 CLI tool for conversing with AI models via OpenRouter. Maintains conversation state across invocations for coherent multi-turn conversations directly from your terminal.
@@ -15,15 +17,6 @@ CLI tool for conversing with AI models via OpenRouter. Maintains conversation st
 - **Cross-context messaging** - Contexts can communicate with each other
 - **Large output caching** - Tool outputs automatically cached with surgical access tools
 - **Unix philosophy** - Only LLM output goes to stdout (pipeable)
-
-<div align="center">
-    <br>
-    <img src="docs/images/cutethulu.png" width="62%">
-    <br>
-    Cutethulu – lead developer of chibi
-    <br>
-</div>
-
 
 ## Quick Start
 
@@ -143,4 +136,6 @@ See [chibi-plugins](https://github.com/emesal/chibi-plugins) for ready-to-use pl
 
 ## License
 
-ISC. make meow, not rawr
+ISC
+
+Make meow, not rawr
