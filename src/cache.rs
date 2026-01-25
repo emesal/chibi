@@ -261,6 +261,10 @@ pub fn list_cache_entries(cache_dir: &Path) -> io::Result<Vec<CacheMetadata>> {
 }
 
 /// Clean up cache entries older than max_age_days
+/// Note: max_age_days is offset by 1, so:
+/// - 0 = delete after 24 hours (1 day)
+/// - 1 = delete after 48 hours (2 days)
+/// - 7 = delete after 8 days (default)
 pub fn cleanup_old_cache(cache_dir: &Path, max_age_days: u64) -> io::Result<usize> {
     if !cache_dir.exists() {
         return Ok(0);
@@ -270,7 +274,8 @@ pub fn cleanup_old_cache(cache_dir: &Path, max_age_days: u64) -> io::Result<usiz
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let max_age_secs = max_age_days * 24 * 60 * 60;
+    // Add 1 to max_age_days so 0 means 1 day, 1 means 2 days, etc.
+    let max_age_secs = (max_age_days + 1) * 24 * 60 * 60;
     let cutoff = now.saturating_sub(max_age_secs);
 
     let mut removed = 0;

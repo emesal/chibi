@@ -585,6 +585,22 @@ async fn execute_from_input(
     });
     let _ = tools::execute_hook(tools, tools::HookPoint::OnEnd, &hook_data, verbose);
 
+    // Automatic cache cleanup (if enabled)
+    let resolved = app.resolve_config(None, None)?;
+    if resolved.auto_cleanup_cache {
+        let removed = app.cleanup_all_tool_caches(resolved.tool_cache_max_age_days)?;
+        if removed > 0 {
+            output.diagnostic(
+                &format!(
+                    "[Auto-cleanup: removed {} old cache entries (older than {} days)]",
+                    removed,
+                    resolved.tool_cache_max_age_days + 1
+                ),
+                verbose,
+            );
+        }
+    }
+
     // Check for no action and no prompt
     if !did_action && matches!(input.command, Command::NoOp) {
         return Err(io::Error::new(

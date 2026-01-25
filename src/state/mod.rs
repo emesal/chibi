@@ -1201,6 +1201,7 @@ impl AppState {
             reflection_enabled: self.config.reflection_enabled,
             tool_output_cache_threshold: self.config.tool_output_cache_threshold,
             tool_cache_max_age_days: self.config.tool_cache_max_age_days,
+            auto_cleanup_cache: self.config.auto_cleanup_cache,
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             api: api_params,
@@ -1242,6 +1243,9 @@ impl AppState {
         }
         if let Some(tool_cache_max_age_days) = local.tool_cache_max_age_days {
             resolved.tool_cache_max_age_days = tool_cache_max_age_days;
+        }
+        if let Some(auto_cleanup_cache) = local.auto_cleanup_cache {
+            resolved.auto_cleanup_cache = auto_cleanup_cache;
         }
         if let Some(tool_cache_preview_chars) = local.tool_cache_preview_chars {
             resolved.tool_cache_preview_chars = tool_cache_preview_chars;
@@ -1410,6 +1414,7 @@ mod tests {
             rolling_compact_drop_percentage: 50.0,
             tool_output_cache_threshold: 4000,
             tool_cache_max_age_days: 7,
+            auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             api: ApiParams::default(),
@@ -1980,6 +1985,7 @@ mod tests {
             rolling_compact_drop_percentage: 50.0,
             tool_output_cache_threshold: 4000,
             tool_cache_max_age_days: 7,
+            auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             api: ApiParams::default(),
@@ -2035,6 +2041,7 @@ mod tests {
             rolling_compact_drop_percentage: 50.0,
             tool_output_cache_threshold: 4000,
             tool_cache_max_age_days: 7,
+            auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             api: ApiParams::default(),
@@ -2111,6 +2118,7 @@ mod tests {
             reflection_enabled: Some(false),
             tool_output_cache_threshold: None,
             tool_cache_max_age_days: None,
+            auto_cleanup_cache: None,
             tool_cache_preview_chars: None,
             file_tools_allowed_paths: None,
             api: None,

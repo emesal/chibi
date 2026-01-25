@@ -259,6 +259,10 @@ fn default_tool_cache_max_age_days() -> u64 {
     7
 }
 
+fn default_auto_cleanup_cache() -> bool {
+    true
+}
+
 fn default_tool_cache_preview_chars() -> usize {
     500
 }
@@ -294,6 +298,9 @@ pub struct Config {
     /// Maximum age in days for cached tool outputs
     #[serde(default = "default_tool_cache_max_age_days")]
     pub tool_cache_max_age_days: u64,
+    /// Automatically cleanup old cache entries on exit
+    #[serde(default = "default_auto_cleanup_cache")]
+    pub auto_cleanup_cache: bool,
     /// Number of preview characters to show in truncated message
     #[serde(default = "default_tool_cache_preview_chars")]
     pub tool_cache_preview_chars: usize,
@@ -322,6 +329,8 @@ pub struct LocalConfig {
     pub tool_output_cache_threshold: Option<usize>,
     /// Maximum age in days for cached tool outputs
     pub tool_cache_max_age_days: Option<u64>,
+    /// Automatically cleanup old cache entries on exit
+    pub auto_cleanup_cache: Option<bool>,
     /// Number of preview characters to show in truncated message
     pub tool_cache_preview_chars: Option<usize>,
     /// Paths allowed for file tools (empty = cache only)
@@ -365,6 +374,8 @@ pub struct ResolvedConfig {
     pub tool_output_cache_threshold: usize,
     /// Maximum age in days for cached tool outputs
     pub tool_cache_max_age_days: u64,
+    /// Automatically cleanup old cache entries on exit
+    pub auto_cleanup_cache: bool,
     /// Number of preview characters to show in truncated message
     pub tool_cache_preview_chars: usize,
     /// Paths allowed for file tools (empty = cache only)
@@ -391,6 +402,7 @@ impl ResolvedConfig {
             "reflection_enabled" => Some(self.reflection_enabled.to_string()),
             "tool_output_cache_threshold" => Some(self.tool_output_cache_threshold.to_string()),
             "tool_cache_max_age_days" => Some(self.tool_cache_max_age_days.to_string()),
+            "auto_cleanup_cache" => Some(self.auto_cleanup_cache.to_string()),
             "tool_cache_preview_chars" => Some(self.tool_cache_preview_chars.to_string()),
             "file_tools_allowed_paths" => {
                 if self.file_tools_allowed_paths.is_empty() {
@@ -435,6 +447,7 @@ impl ResolvedConfig {
             "auto_compact_threshold",
             "tool_output_cache_threshold",
             "tool_cache_max_age_days",
+            "auto_cleanup_cache",
             "tool_cache_preview_chars",
             "file_tools_allowed_paths",
             "max_recursion_depth",
@@ -789,6 +802,7 @@ mod tests {
             reflection_enabled: true,
             tool_output_cache_threshold: 4000,
             tool_cache_max_age_days: 7,
+            auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             api: ApiParams {
