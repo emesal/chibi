@@ -132,6 +132,36 @@ The `-L` flag shows lock status:
 
 If a process crashes, its lock becomes stale. Chibi automatically cleans up stale locks and acquires a new one.
 
+## Activity Tracking & Auto-Destroy
+
+Chibi tracks when each context was last used. This enables automatic cleanup of test contexts.
+
+### Activity Tracking
+
+Every time chibi runs with a context, it updates the `last_activity_at` timestamp in `state.json`. This happens automatically during normal usage.
+
+### Auto-Destroy (Debug Feature)
+
+Contexts can be marked for automatic destruction using `--debug` flags. This is primarily for test cleanup:
+
+```bash
+# Create a context that auto-destroys after 60 seconds of inactivity
+chibi --debug destroy_after_seconds_inactive=60 -c test-context
+
+# Create a context that auto-destroys at a specific timestamp
+chibi --debug destroy_at=1737820800 -c ephemeral-context
+```
+
+**How it works:**
+- Auto-destroy checks run at the start of every chibi invocation
+- Only non-current contexts are eligible for destruction
+- A context is destroyed if:
+  - `destroy_at >= 1` and current time > `destroy_at`, OR
+  - `destroy_after_seconds_inactive >= 1` and current time > `last_activity_at + destroy_after_seconds_inactive`
+- Values of 0 disable the respective feature (default)
+
+**Use case:** Integration tests can create contexts with short inactivity timeouts. Subsequent normal chibi usage automatically cleans them up.
+
 ## Per-Context System Prompts
 
 Each context can have its own system prompt:

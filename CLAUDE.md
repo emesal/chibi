@@ -108,7 +108,7 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
 ~/.chibi/
 ├── config.toml              # Required: api_key, model, context_window_limit, warn_threshold_percent
 ├── models.toml              # Model aliases, context windows, API params
-├── state.json               # Current context name
+├── state.json               # Current context name, context metadata (activity, auto-destroy)
 ├── prompts/
 │   ├── chibi.md            # Default system prompt
 │   ├── reflection.md       # LLM's persistent memory
@@ -227,3 +227,21 @@ partition_max_entries = 500         # More aggressive for busy contexts
 partition_max_tokens = 50000        # Lower token threshold
 bytes_per_token = 4                 # Less conservative for English-only content
 ```
+
+### Context Auto-Destroy (Debug Feature)
+
+Contexts track activity and can be marked for automatic destruction. This is primarily for test cleanup.
+
+**state.json context entry fields:**
+- `last_activity_at` - Updated every time chibi runs with the context (always on)
+- `destroy_at` - Absolute timestamp; context destroyed when `now > destroy_at` (0 = disabled)
+- `destroy_after_seconds_inactive` - Inactivity timeout in seconds (0 = disabled)
+
+**Debug flags to set destroy settings:**
+```bash
+chibi --debug destroy_at=1234567890 -c test-ctx      # Destroy at timestamp
+chibi --debug destroy_after_seconds_inactive=60 -c test-ctx  # Destroy after 60s inactivity
+```
+
+Auto-destroy runs at every chibi invocation, destroying non-current contexts that meet criteria.
+Used in tests to avoid manual cleanup of test contexts.

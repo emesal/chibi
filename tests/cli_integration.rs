@@ -7,6 +7,14 @@
 //! require API keys and network access. Those behaviors are tested via unit
 //! tests in cli.rs which verify the argument parsing produces the correct
 //! Cli struct.
+//!
+//! ## Context Cleanup
+//!
+//! Tests that create contexts use `--debug destroy_after_seconds_inactive=1`
+//! to mark them for automatic cleanup. This ensures test contexts don't
+//! accumulate in the user's ~/.chibi directory. The auto-destroy feature
+//! runs at every chibi invocation, so subsequent normal usage cleans up
+//! these test contexts automatically.
 
 use std::fs;
 use std::process::Command;
@@ -222,8 +230,15 @@ fn integration_attached_arg_form() {
 fn integration_switch_to_new_context() {
     // -c new should switch to a new auto-generated context
     // Since -c alone doesn't produce output without prompt, use -l to see the context
+    // Use --debug destroy_after_seconds_inactive=1 so the context is auto-cleaned
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args(["-c", "new", "-l"])
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "new",
+            "-l",
+        ])
         .output()
         .expect("failed to run chibi");
 
@@ -265,8 +280,15 @@ fn integration_switch_to_new_context() {
 /// Test that -c new:prefix creates a prefixed timestamped context name
 #[test]
 fn integration_switch_to_new_context_with_prefix() {
+    // Use --debug destroy_after_seconds_inactive=1 so the context is auto-cleaned
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args(["-c", "new:myprefix", "-l"])
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "new:myprefix",
+            "-l",
+        ])
         .output()
         .expect("failed to run chibi");
 
@@ -306,8 +328,15 @@ fn integration_new_context_empty_prefix_error() {
 /// Test transient context with -C new
 #[test]
 fn integration_transient_new_context() {
+    // Use --debug destroy_after_seconds_inactive=1 so the context is auto-cleaned
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args(["-C", "new", "-l"])
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-C",
+            "new",
+            "-l",
+        ])
         .output()
         .expect("failed to run chibi");
 
@@ -414,8 +443,13 @@ fn integration_json_config_mode_context_switch() {
     use std::io::Write;
     use std::process::Stdio;
 
+    // Use --debug destroy_after_seconds_inactive=1 so the context is auto-cleaned
     let mut child = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .arg("--json-config")
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "--json-config",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

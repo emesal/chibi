@@ -126,11 +126,37 @@ Use `-n home` to inspect the resolved path.
 
 | Flag | Description |
 |------|-------------|
-| `--debug <KEY>` | Enable debug logging: `request-log`, `response-meta`, `all` |
+| `--debug <KEY>` | Enable debug features (see below) |
+
+### Debug Keys
+
+| Key | Description |
+|-----|-------------|
+| `request-log` | Log full API request bodies to `requests.jsonl` |
+| `response-meta` | Log response metadata/usage stats to `response_meta.jsonl` |
+| `all` | Enable all logging features above |
+| `destroy_at=<TIMESTAMP>` | Set auto-destroy timestamp on current context |
+| `destroy_after_seconds_inactive=<SECS>` | Set inactivity timeout on current context |
+
+### Debug Logging
 
 Debug output is written to files in the context directory:
 - `requests.jsonl` - Full API request bodies (with `request-log` or `all`)
 - `response_meta.jsonl` - Response metadata, usage stats, model info (with `response-meta` or `all`)
+
+### Auto-Destroy (Test Cleanup)
+
+Contexts can be marked for automatic destruction, primarily for test cleanup:
+
+```bash
+# Destroy context after 60 seconds of inactivity
+chibi --debug destroy_after_seconds_inactive=60 -c test-ctx
+
+# Destroy context at a specific timestamp
+chibi --debug destroy_at=1234567890 -c test-ctx
+```
+
+Auto-destroy runs automatically at every chibi invocation. It checks all non-current contexts and destroys those that meet the criteria. This prevents test contexts from accumulating.
 
 ## Flag Behavior
 

@@ -274,6 +274,16 @@ async fn execute_from_input(
     });
     let _ = tools::execute_hook(tools, tools::HookPoint::OnStart, &hook_data, verbose);
 
+    // Auto-destroy expired contexts (always enabled)
+    let destroyed = app.auto_destroy_expired_contexts(verbose)?;
+    if !destroyed.is_empty() {
+        app.save()?;
+        output.diagnostic(
+            &format!("[Auto-destroyed {} expired context(s)]", destroyed.len()),
+            verbose,
+        );
+    }
+
     // Track if we did an action
     let mut did_action = false;
 
@@ -332,6 +342,24 @@ async fn execute_from_input(
             );
             did_action = true;
         }
+    }
+
+    // Touch the current context to update last_activity_at and apply debug destroy settings
+    let current_ctx = app.state.current_context.clone();
+    let debug_destroy_at = match &input.flags.debug {
+        Some(input::DebugKey::DestroyAt(ts)) => Some(*ts),
+        _ => None,
+    };
+    let debug_destroy_after = match &input.flags.debug {
+        Some(input::DebugKey::DestroyAfterSecondsInactive(secs)) => Some(*secs),
+        _ => None,
+    };
+    if app.touch_context_with_destroy_settings(
+        &current_ctx,
+        debug_destroy_at,
+        debug_destroy_after,
+    )? {
+        app.save()?;
     }
 
     // Handle username override

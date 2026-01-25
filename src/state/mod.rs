@@ -248,6 +248,72 @@ impl AppState {
         Ok(modified)
     }
 
+    /// Update the last_activity_at timestamp for a context
+    #[allow(dead_code)]
+    pub fn touch_context(&mut self, name: &str) -> io::Result<bool> {
+        self.touch_context_with_destroy_settings(name, None, None)
+    }
+
+    /// Update the last_activity_at timestamp for a context and optionally set destroy settings.
+    /// The destroy settings are only set via --debug flags for testing purposes.
+    pub fn touch_context_with_destroy_settings(
+        &mut self,
+        name: &str,
+        destroy_at: Option<u64>,
+        destroy_after_seconds_inactive: Option<u64>,
+    ) -> io::Result<bool> {
+        if let Some(entry) = self.state.contexts.iter_mut().find(|e| e.name == name) {
+            entry.touch();
+            if let Some(ts) = destroy_at {
+                entry.destroy_at = ts;
+            }
+            if let Some(secs) = destroy_after_seconds_inactive {
+                entry.destroy_after_seconds_inactive = secs;
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Auto-destroy contexts that have expired based on their settings.
+    /// Only destroys non-current contexts.
+    /// Returns the list of destroyed context names.
+    pub fn auto_destroy_expired_contexts(&mut self, verbose: bool) -> io::Result<Vec<String>> {
+        let current = self.state.current_context.clone();
+        let mut destroyed = Vec::new();
+
+        // Collect contexts to destroy (excluding current)
+        let to_destroy: Vec<String> = self
+            .state
+            .contexts
+            .iter()
+            .filter(|e| e.name != current && e.should_auto_destroy())
+            .map(|e| e.name.clone())
+            .collect();
+
+        // Destroy each one
+        for name in to_destroy {
+            if verbose {
+                eprintln!("[DEBUG] Auto-destroying expired context: {}", name);
+            }
+            // Remove directory
+            let dir = self.context_dir(&name);
+            if dir.exists() {
+                fs::remove_dir_all(&dir)?;
+            }
+            // Remove from state
+            self.state.contexts.retain(|e| e.name != name);
+            // Clear previous_context if it was destroyed
+            if self.state.previous_context.as_ref() == Some(&name) {
+                self.state.previous_context = None;
+            }
+            destroyed.push(name);
+        }
+
+        Ok(destroyed)
+    }
+
     pub fn context_dir(&self, name: &str) -> PathBuf {
         self.contexts_dir.join(name)
     }
@@ -2673,5 +2739,160 @@ not valid json at all
             app.is_context_dirty("test-context"),
             "clear_context_by_name should mark context as dirty"
         );
+    }
+
+    // === Touch context tests ===
+
+    #[test]
+    fn test_touch_context_updates_last_activity() {
+        let (mut app, _temp) = create_test_app();
+
+        // Add an entry to state.contexts manually (save_context doesn't do this)
+        let entry = ContextEntry::new("test-context");
+        let initial_activity = entry.last_activity_at;
+        app.state.contexts.push(entry);
+
+        // Create the context directory
+        let ctx = Context::new("test-context");
+        app.save_context(&ctx).unwrap();
+
+        // Touch the context
+        let result = app.touch_context("test-context").unwrap();
+        assert!(result);
+
+        // Check that last_activity_at was updated
+        let entry = app
+            .state
+            .contexts
+            .iter()
+            .find(|e| e.name == "test-context")
+            .unwrap();
+        assert!(entry.last_activity_at >= initial_activity);
+    }
+
+    #[test]
+    fn test_touch_context_nonexistent_returns_false() {
+        let (mut app, _temp) = create_test_app();
+        let result = app.touch_context("nonexistent").unwrap();
+        assert!(!result);
+    }
+
+    // === Auto-destroy tests ===
+
+    #[test]
+    fn test_auto_destroy_expired_contexts_by_timestamp() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create a context to be destroyed
+        let ctx = Context::new("to-destroy");
+        app.save_context(&ctx).unwrap();
+
+        // Add entry to state.contexts with destroy_at in the past
+        let mut entry = ContextEntry::new("to-destroy");
+        entry.destroy_at = 1; // Way in the past
+        app.state.contexts.push(entry);
+
+        // Also set the current context to something else
+        app.state.current_context = "default".to_string();
+
+        // Run auto-destroy
+        let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
+        assert_eq!(destroyed, vec!["to-destroy".to_string()]);
+        assert!(!app.context_dir("to-destroy").exists());
+    }
+
+    #[test]
+    fn test_auto_destroy_expired_contexts_by_inactivity() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create a context to be destroyed
+        let ctx = Context::new("to-destroy");
+        app.save_context(&ctx).unwrap();
+
+        // Add entry to state.contexts with inactivity timeout triggered
+        let mut entry = ContextEntry::new("to-destroy");
+        entry.last_activity_at = 1; // Way in the past
+        entry.destroy_after_seconds_inactive = 60; // 1 minute
+        app.state.contexts.push(entry);
+
+        // Also set the current context to something else
+        app.state.current_context = "default".to_string();
+
+        // Run auto-destroy
+        let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
+        assert_eq!(destroyed, vec!["to-destroy".to_string()]);
+        assert!(!app.context_dir("to-destroy").exists());
+    }
+
+    #[test]
+    fn test_auto_destroy_skips_current_context() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create a context to be destroyed
+        let ctx = Context::new("current-context");
+        app.save_context(&ctx).unwrap();
+
+        // Add entry to state.contexts with destroy_at in the past
+        let mut entry = ContextEntry::new("current-context");
+        entry.destroy_at = 1; // Way in the past
+        app.state.contexts.push(entry);
+
+        // Set this as the current context
+        app.state.current_context = "current-context".to_string();
+
+        // Run auto-destroy - should NOT destroy the current context
+        let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
+        assert!(destroyed.is_empty());
+        assert!(app.context_dir("current-context").exists());
+    }
+
+    #[test]
+    fn test_auto_destroy_clears_previous_context_reference() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create contexts
+        let ctx1 = Context::new("context-one");
+        let ctx2 = Context::new("context-two");
+        app.save_context(&ctx1).unwrap();
+        app.save_context(&ctx2).unwrap();
+
+        // Add entries to state.contexts
+        app.state.contexts.push(ContextEntry::new("context-one"));
+        let mut entry2 = ContextEntry::new("context-two");
+        entry2.destroy_at = 1; // Way in the past
+        app.state.contexts.push(entry2);
+
+        // Set up state: current is context-one, previous is context-two
+        app.state.current_context = "context-one".to_string();
+        app.state.previous_context = Some("context-two".to_string());
+
+        // Run auto-destroy
+        let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
+        assert_eq!(destroyed, vec!["context-two".to_string()]);
+        assert_eq!(app.state.previous_context, None); // Should be cleared
+    }
+
+    #[test]
+    fn test_auto_destroy_respects_disabled_settings() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create a context
+        let ctx = Context::new("keep-context");
+        app.save_context(&ctx).unwrap();
+
+        // Add entry to state.contexts with settings that should NOT trigger destroy
+        let mut entry = ContextEntry::new("keep-context");
+        entry.last_activity_at = 1; // Way in the past
+        entry.destroy_after_seconds_inactive = 0; // Disabled
+        entry.destroy_at = 0; // Disabled
+        app.state.contexts.push(entry);
+
+        // Also set the current context to something else
+        app.state.current_context = "default".to_string();
+
+        // Run auto-destroy - should NOT destroy since both are disabled
+        let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
+        assert!(destroyed.is_empty());
+        assert!(app.context_dir("keep-context").exists());
     }
 }
