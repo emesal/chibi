@@ -187,12 +187,7 @@ impl AppState {
         }
 
         // Phase 2: Discover orphan directories
-        let known_names: HashSet<_> = self
-            .state
-            .contexts
-            .iter()
-            .map(|e| e.name.clone())
-            .collect();
+        let known_names: HashSet<_> = self.state.contexts.iter().map(|e| e.name.clone()).collect();
 
         if let Ok(entries) = fs::read_dir(&contexts_dir) {
             for entry in entries.flatten() {
@@ -906,11 +901,7 @@ impl AppState {
 
     pub fn list_contexts(&self) -> Vec<String> {
         // state.json is the single source of truth (synced with filesystem on startup)
-        self.state
-            .contexts
-            .iter()
-            .map(|e| e.name.clone())
-            .collect()
+        self.state.contexts.iter().map(|e| e.name.clone()).collect()
     }
 
     pub fn calculate_token_count(&self, messages: &[Message]) -> usize {
@@ -1070,7 +1061,12 @@ impl AppState {
         self.save_context(&new_context)?;
 
         // Ensure the context is tracked in state (like clear_context does via save_current_context)
-        if !self.state.contexts.iter().any(|e| e.name == new_context.name) {
+        if !self
+            .state
+            .contexts
+            .iter()
+            .any(|e| e.name == new_context.name)
+        {
             let mut new_state = self.state.clone();
             new_state.contexts.push(ContextEntry::with_created_at(
                 new_context.name.clone(),
