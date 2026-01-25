@@ -2,7 +2,7 @@
 
 ## General
 
-Early development, no backwards compatibility. Prioritize lean, secure, well-structured core. Remove legacy code freely. Self-documenting code preferred.
+Early development, no backwards compatibility. Prioritize for a focused, well-structured and secure core. Remove legacy code liberally, expect rapid growth and design for preventing code duplication and unecessary maintenance burden. Self-documenting code preferred; keep symbols, comments and docs consistent. Write comprehensive tests including for edge cases. Protect file operations from corruption and race conditions.
 
 ## Build Commands
 
