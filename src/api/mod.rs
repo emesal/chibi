@@ -234,6 +234,11 @@ async fn send_prompt_with_depth(
         }
     }
 
+    // Store combined prompt in context_meta for API request reconstruction
+    if !full_system_prompt.is_empty() {
+        app.save_combined_system_prompt(&context.name, &full_system_prompt)?;
+    }
+
     let mut messages: Vec<serde_json::Value> = if !full_system_prompt.is_empty() {
         vec![serde_json::json!({
             "role": "system",

@@ -187,10 +187,7 @@ pub const ENTRY_TYPE_CONTEXT_CREATED: &str = "context_created";
 pub const ENTRY_TYPE_COMPACTION: &str = "compaction";
 pub const ENTRY_TYPE_ARCHIVAL: &str = "archival";
 
-// System prompt entry type (context.jsonl[1])
-pub const ENTRY_TYPE_SYSTEM_PROMPT: &str = "system_prompt";
-
-// Change event (transcript only)
+// Change event (transcript only) - logs full raw prompt content
 pub const ENTRY_TYPE_SYSTEM_PROMPT_CHANGED: &str = "system_prompt_changed";
 
 /// Entry for JSONL transcript file (now also context.jsonl)
@@ -279,26 +276,20 @@ pub struct EntryMetadata {
     /// Summary content for compaction anchors
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    /// SHA256 hash for system prompt entries
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash: Option<String>,
     /// Reference to the transcript entry ID this anchor corresponds to
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_anchor_id: Option<String>,
 }
 
 /// Metadata for context (stored in context_meta.json)
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContextMeta {
-    pub created_at: u64,
-}
-
-impl Default for ContextMeta {
-    fn default() -> Self {
-        Self {
-            created_at: now_timestamp(),
-        }
-    }
+    /// Tracks mtime of system_prompt.md to detect external edits
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt_md_mtime: Option<u64>,
+    /// The full combined prompt last sent to API (raw + hook injections + todos/goals/etc)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_combined_prompt: Option<String>,
 }
 
 /// Entry for inbox.jsonl file - messages from other contexts
@@ -524,7 +515,6 @@ mod tests {
     fn test_transcript_entry_builder_full() {
         let metadata = EntryMetadata {
             summary: Some("test summary".to_string()),
-            hash: None,
             transcript_anchor_id: None,
         };
         let entry = TranscriptEntry::builder()
@@ -566,7 +556,6 @@ mod tests {
     fn test_transcript_entry_builder_with_metadata() {
         let metadata = EntryMetadata {
             summary: Some("summary".to_string()),
-            hash: Some("abc123".to_string()),
             transcript_anchor_id: Some("anchor-id".to_string()),
         };
         let entry = TranscriptEntry::builder()
@@ -579,7 +568,6 @@ mod tests {
         assert!(entry.metadata.is_some());
         let m = entry.metadata.unwrap();
         assert_eq!(m.summary, Some("summary".to_string()));
-        assert_eq!(m.hash, Some("abc123".to_string()));
         assert_eq!(m.transcript_anchor_id, Some("anchor-id".to_string()));
     }
 
@@ -598,7 +586,8 @@ mod tests {
     #[test]
     fn test_context_meta_default() {
         let meta = ContextMeta::default();
-        assert!(meta.created_at > 0); // Should have current timestamp
+        assert!(meta.system_prompt_md_mtime.is_none());
+        assert!(meta.last_combined_prompt.is_none());
     }
 
     // === EntryMetadata tests ===
@@ -607,13 +596,11 @@ mod tests {
     fn test_entry_metadata_serialization_skips_none() {
         let metadata = EntryMetadata {
             summary: Some("test".to_string()),
-            hash: None,
             transcript_anchor_id: None,
         };
         let json = serde_json::to_string(&metadata).unwrap();
-        // Should not contain "hash" or "transcript_anchor_id" keys
+        // Should not contain "transcript_anchor_id" key when None
         assert!(json.contains("summary"));
-        assert!(!json.contains("hash"));
         assert!(!json.contains("transcript_anchor_id"));
     }
 

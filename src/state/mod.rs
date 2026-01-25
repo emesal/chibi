@@ -201,15 +201,11 @@ impl AppState {
                 if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
                     let name = entry.file_name().to_string_lossy().to_string();
                     if !known_names.contains(&name) && is_valid_context_name(&name) {
-                        // Load created_at from context_meta.json if available
-                        let created_at = self
-                            .load_context_meta(&name)
-                            .map(|m| m.created_at)
-                            .unwrap_or_else(|_| now_timestamp());
-
+                        // Orphaned context directory - use current timestamp
+                        // (state.json is the single source of truth for created_at)
                         self.state
                             .contexts
-                            .push(ContextEntry::with_created_at(name, created_at));
+                            .push(ContextEntry::with_created_at(name, now_timestamp()));
                         modified = true;
                     }
                 }
@@ -444,14 +440,6 @@ impl AppState {
         Ok(())
     }
 
-    /// Compute SHA256 hash of system prompt content
-    pub fn compute_system_prompt_hash(&self, content: &str) -> String {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        format!("{:x}", hasher.finalize())
-    }
-
     pub fn load_context(&self, name: &str) -> io::Result<Context> {
         let context_dir = self.context_dir(name);
         let manifest_path = context_dir.join("manifest.json");
@@ -483,6 +471,9 @@ impl AppState {
 
     /// Load context from the new JSONL format
     fn load_context_from_jsonl(&self, name: &str) -> io::Result<Context> {
+        // Check if system_prompt.md was modified externally
+        self.check_system_prompt_mtime_change(name)?;
+
         // Check if prefix is invalidated and rebuild if needed
         if self.is_context_dirty(name) {
             self.rebuild_context_from_transcript(name)?;
@@ -490,7 +481,6 @@ impl AppState {
         }
 
         let entries = self.read_context_entries(name)?;
-        let meta = self.load_context_meta(name)?;
 
         // Load summary from separate file
         let summary_path = self.summary_file(name);
@@ -503,16 +493,16 @@ impl AppState {
         // Convert entries to messages for backwards compatibility with existing code
         let messages = self.entries_to_messages(&entries);
 
+        // Get created_at from state.json (single source of truth)
+        let created_at = self.get_context_created_at(name);
+
         // Get updated_at from the last entry timestamp, or created_at if empty
-        let updated_at = entries
-            .last()
-            .map(|e| e.timestamp)
-            .unwrap_or(meta.created_at);
+        let updated_at = entries.last().map(|e| e.timestamp).unwrap_or(created_at);
 
         Ok(Context {
             name: name.to_string(),
             messages,
-            created_at: meta.created_at,
+            created_at,
             updated_at,
             summary,
         })
@@ -521,12 +511,13 @@ impl AppState {
     /// Rebuild context.jsonl from transcript.jsonl
     /// This creates a fresh context.jsonl with:
     /// - [0] anchor entry (context_created or latest compaction/archival from transcript)
-    /// - [1] system_prompt entry with current content and hash
-    /// - [2..] entries from transcript since the anchor
+    /// - [1..] entries from transcript since the anchor
+    ///
+    /// Note: System prompt is NOT stored in context.jsonl. It lives in system_prompt.md
+    /// (source of truth) and context_meta.json (last combined prompt sent to API).
     pub fn rebuild_context_from_transcript(&self, name: &str) -> io::Result<()> {
         use crate::context::{
             ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION, ENTRY_TYPE_CONTEXT_CREATED,
-            ENTRY_TYPE_SYSTEM_PROMPT, EntryMetadata,
         };
 
         // Read transcript entries
@@ -556,10 +547,11 @@ impl AppState {
             }
             None => {
                 // No anchor found, create context_created anchor
-                let meta = self.load_context_meta(name).unwrap_or_default();
+                // Use created_at from state.json (single source of truth)
+                let created_at = self.get_context_created_at(name);
                 let anchor = TranscriptEntry {
                     id: Uuid::new_v4().to_string(),
-                    timestamp: meta.created_at,
+                    timestamp: created_at,
                     from: "system".to_string(),
                     to: name.to_string(),
                     content: "Context created".to_string(),
@@ -576,26 +568,9 @@ impl AppState {
             }
         };
 
-        // Load current system prompt and compute hash
-        let system_prompt_content = self.load_system_prompt_for(name)?;
-        let system_prompt_hash = self.compute_system_prompt_hash(&system_prompt_content);
-
-        let system_prompt_entry = TranscriptEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: "system".to_string(),
-            to: name.to_string(),
-            content: system_prompt_content,
-            entry_type: ENTRY_TYPE_SYSTEM_PROMPT.to_string(),
-            metadata: Some(EntryMetadata {
-                summary: None,
-                hash: Some(system_prompt_hash),
-                transcript_anchor_id: Some(anchor_entry.id.clone()),
-            }),
-        };
-
-        // Build the complete context entries: anchor + system_prompt + conversation entries
-        let mut context_entries = vec![anchor_entry, system_prompt_entry];
+        // Build the complete context entries: anchor + conversation entries
+        // (system prompt is stored in context_meta.json, not in context.jsonl)
+        let mut context_entries = vec![anchor_entry];
         context_entries.extend(entries_after_anchor);
 
         // Write to context.jsonl (full rewrite)
@@ -643,11 +618,8 @@ impl AppState {
             )
         })?;
 
-        // Save metadata
-        let meta = ContextMeta {
-            created_at: old_context.created_at,
-        };
-        self.save_context_meta(name, &meta)?;
+        // Note: created_at is stored in state.json, not context_meta.json
+        // context_meta.json is used for system_prompt_md_mtime and last_combined_prompt
 
         // Convert messages to entries and save to JSONL
         let entries = self.messages_to_entries(&old_context.messages, name);
@@ -758,6 +730,16 @@ impl AppState {
         }
     }
 
+    /// Get created_at timestamp for a context from state.json (single source of truth)
+    pub fn get_context_created_at(&self, name: &str) -> u64 {
+        self.state
+            .contexts
+            .iter()
+            .find(|c| c.name == name)
+            .map(|c| c.created_at)
+            .unwrap_or_else(now_timestamp)
+    }
+
     /// Save context metadata
     fn save_context_meta(&self, name: &str, meta: &ContextMeta) -> io::Result<()> {
         self.ensure_context_dir(name)?;
@@ -826,11 +808,8 @@ impl AppState {
         let transcript_path = self.transcript_jsonl_file(&context.name);
         let is_new_context = !transcript_path.exists();
 
-        // Save metadata (created_at)
-        let meta = ContextMeta {
-            created_at: context.created_at,
-        };
-        self.save_context_meta(&context.name, &meta)?;
+        // Note: created_at is stored in state.json, not context_meta.json
+        // context_meta.json is used for system_prompt_md_mtime and last_combined_prompt
 
         // For brand new contexts, write context_created anchor to transcript.
         // Don't mark dirty - new contexts don't need a rebuild since they're being
@@ -1146,9 +1125,10 @@ impl AppState {
     }
 
     /// Set a custom system prompt for a specific context.
-    /// This also logs a system_prompt_changed event to transcript and invalidates the prefix.
+    /// This also logs a system_prompt_changed event (with full content) to transcript,
+    /// updates the mtime in context_meta, and invalidates the prefix.
     pub fn set_system_prompt_for(&self, context_name: &str, content: &str) -> io::Result<()> {
-        use crate::context::{ENTRY_TYPE_SYSTEM_PROMPT_CHANGED, EntryMetadata};
+        use crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED;
 
         self.ensure_context_dir(context_name)?;
         let prompt_path = self.context_prompt_file(context_name);
@@ -1164,28 +1144,102 @@ impl AppState {
 
         // Only log change and invalidate if content actually changed
         if old_content.as_deref() != Some(content) {
-            // Log system_prompt_changed event to transcript
-            let hash = self.compute_system_prompt_hash(content);
+            // Log system_prompt_changed event to transcript with full raw prompt content
             let entry = TranscriptEntry {
                 id: Uuid::new_v4().to_string(),
                 timestamp: now_timestamp(),
                 from: "system".to_string(),
                 to: context_name.to_string(),
-                content: "System prompt updated".to_string(),
+                content: content.to_string(), // Full raw prompt for history
                 entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
-                metadata: Some(EntryMetadata {
-                    summary: None,
-                    hash: Some(hash),
-                    transcript_anchor_id: None,
-                }),
+                metadata: None,
             };
             self.append_to_transcript(context_name, &entry)?;
+
+            // Update mtime in context_meta
+            self.update_system_prompt_mtime(context_name)?;
 
             // Invalidate prefix so context.jsonl will be rebuilt on next load
             self.mark_context_dirty(context_name)?;
         }
 
         Ok(())
+    }
+
+    /// Update system_prompt_md_mtime in context_meta to current file mtime
+    fn update_system_prompt_mtime(&self, context_name: &str) -> io::Result<()> {
+        let prompt_path = self.context_prompt_file(context_name);
+        let mtime = self.get_file_mtime(&prompt_path);
+
+        let mut meta = self.load_context_meta(context_name).unwrap_or_default();
+        meta.system_prompt_md_mtime = mtime;
+        self.save_context_meta(context_name, &meta)
+    }
+
+    /// Get file mtime as unix timestamp, or None if file doesn't exist
+    fn get_file_mtime(&self, path: &std::path::Path) -> Option<u64> {
+        if path.exists() {
+            fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+        } else {
+            None
+        }
+    }
+
+    /// Check if system_prompt.md was modified externally since last tracked mtime.
+    /// If so, log the new prompt to transcript, update mtime, and mark context dirty.
+    fn check_system_prompt_mtime_change(&self, context_name: &str) -> io::Result<()> {
+        use crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED;
+
+        let prompt_path = self.context_prompt_file(context_name);
+        let current_mtime = self.get_file_mtime(&prompt_path);
+
+        // Load stored mtime from context_meta
+        let meta = self.load_context_meta(context_name).unwrap_or_default();
+        let stored_mtime = meta.system_prompt_md_mtime;
+
+        // If mtimes differ (including None -> Some or Some -> None), prompt changed
+        if current_mtime != stored_mtime {
+            // Only log if the file actually exists (has content to log)
+            if prompt_path.exists() {
+                let content = fs::read_to_string(&prompt_path)?;
+
+                // Log system_prompt_changed event to transcript with full raw prompt
+                let entry = TranscriptEntry {
+                    id: Uuid::new_v4().to_string(),
+                    timestamp: now_timestamp(),
+                    from: "system".to_string(),
+                    to: context_name.to_string(),
+                    content, // Full raw prompt for history
+                    entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
+                    metadata: None,
+                };
+                self.append_to_transcript(context_name, &entry)?;
+            }
+
+            // Update mtime in context_meta
+            self.update_system_prompt_mtime(context_name)?;
+
+            // Mark context dirty so it rebuilds
+            self.mark_context_dirty(context_name)?;
+        }
+
+        Ok(())
+    }
+
+    /// Store the combined system prompt (with hook injections) in context_meta.
+    /// This allows reconstructing the full API request from context.jsonl + context_meta.json.
+    pub fn save_combined_system_prompt(
+        &self,
+        context_name: &str,
+        combined_prompt: &str,
+    ) -> io::Result<()> {
+        let mut meta = self.load_context_meta(context_name).unwrap_or_default();
+        meta.last_combined_prompt = Some(combined_prompt.to_string());
+        self.save_context_meta(context_name, &meta)
     }
 
     /// Load the reflection content from ~/.chibi/prompts/reflection.md
@@ -1585,7 +1639,6 @@ impl AppState {
             .entry_type(ENTRY_TYPE_COMPACTION)
             .metadata(EntryMetadata {
                 summary: Some(summary.to_string()),
-                hash: None,
                 transcript_anchor_id: None,
             })
             .build()
