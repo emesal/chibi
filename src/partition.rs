@@ -26,12 +26,13 @@
 //!
 //! ## Rotation Policy
 //!
-//! The active partition rotates when either threshold is reached:
+//! The active partition rotates when any threshold is reached:
 //! - **Entry count**: Default 1000 entries per partition
+//! - **Token count**: Default 100,000 estimated LLM tokens (~4 bytes/token)
 //! - **Age**: Default 30 days since first entry
 //!
 //! On rotation, the active partition is moved to `partitions/` and a bloom
-//! filter is built for efficient entry ID lookups.
+//! filter is built for term-based search lookups.
 //!
 //! ## Legacy Migration
 //!
@@ -40,12 +41,12 @@
 //!
 //! ## Bloom Filters
 //!
-//! Each archived partition can have an optional bloom filter (`.bloom` file)
-//! for probabilistic entry ID lookups. This enables fast "definitely not here"
-//! checks without reading partition files.
+//! Each archived partition has an optional bloom filter (`.bloom` file)
+//! containing tokenized content terms for search optimization. When searching,
+//! partitions whose bloom filter indicates no matching terms are skipped.
 //!
 //! Filter parameters are automatically optimized by fastbloom for the
-//! expected number of entries with <1% false positive rate.
+//! expected vocabulary size with <1% false positive rate.
 //!
 //! See: <https://github.com/tomtomwombat/fastbloom>
 
