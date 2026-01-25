@@ -298,3 +298,38 @@ Plugins receive these environment variables:
 - `CHIBI_VERBOSE=1` - Set when `-v` flag is used
 - `CHIBI_HOOK` - Hook point name (for hook calls)
 - `CHIBI_HOOK_DATA` - JSON data for hook calls
+
+## Storage Configuration
+
+Configure transcript partitioning in `~/.chibi/config.toml`:
+
+```toml
+[storage]
+# Rotate partition after N entries (default: 1000)
+partition_max_entries = 1000
+
+# Rotate partition after N estimated LLM tokens (default: 100000)
+partition_max_tokens = 100000
+
+# Rotate partition after N seconds (default: 2592000 = 30 days)
+partition_max_age_seconds = 2592000
+
+# Bytes per token for estimation heuristic (default: 3)
+# Lower values = more conservative (higher token estimates)
+# 3 handles mixed English/CJK content; use 4 for English-only
+bytes_per_token = 3
+
+# Build bloom filter indexes for search optimization (default: true)
+enable_bloom_filters = true
+```
+
+Per-context overrides in `~/.chibi/contexts/<name>/local.toml`:
+
+```toml
+[storage]
+partition_max_entries = 500
+partition_max_tokens = 50000
+bytes_per_token = 4  # Less conservative for this context
+```
+
+Partitions rotate when any threshold is reached. This keeps individual partition files manageable while enabling efficient search across conversation history.

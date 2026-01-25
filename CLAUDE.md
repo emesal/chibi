@@ -38,10 +38,10 @@ api/
   request.rs     Request body building, PromptOptions
 
 state/
-  mod.rs         AppState: all file I/O, config resolution
-  paths.rs       Path construction helpers
-  entries.rs     TranscriptEntry creation (builder pattern)
+  mod.rs         AppState: all file I/O, config resolution, entry creation
   jsonl.rs       JSONL file reading utilities
+
+partition.rs     Partitioned storage, manifest, bloom filters
 
 tools/
   mod.rs         Tool struct, public exports
@@ -102,8 +102,13 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
 │   └── continuation.md     # Post-compaction instructions
 ├── plugins/                 # Executable scripts (provide tools)
 └── contexts/<name>/
-    ├── context.jsonl       # LLM window (anchor + system_prompt + entries)
-    ├── transcript.jsonl    # Authoritative log (never truncated)
+    ├── context.jsonl       # LLM window (bounded by compaction)
+    ├── transcript/         # Authoritative log (partitioned, never truncated)
+    │   ├── manifest.json   # Partition metadata, timestamp ranges
+    │   ├── active.jsonl    # Current write partition
+    │   └── partitions/     # Archived read-only partitions
+    │       ├── <ts>-<ts>.jsonl
+    │       └── <ts>-<ts>.bloom
     ├── transcript.md       # Human-readable archive
     ├── context_meta.json   # Metadata (created_at)
     ├── local.toml          # Per-context config overrides
@@ -114,6 +119,21 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
     ├── system_prompt.md    # Context-specific system prompt
     └── .dirty              # Marker: prefix needs rebuild
 ```
+
+#### Partitioned Transcript Storage
+
+The transcript (authoritative log) uses time-partitioned JSONL with manifest tracking.
+Context files remain single JSONL files since compaction keeps them bounded.
+
+Partitions rotate when thresholds are reached (configurable in `[storage]` section):
+- Entry count exceeds `partition_max_entries` (default: 1000)
+- Age exceeds `partition_max_age_seconds` (default: 30 days)
+
+Legacy `transcript.jsonl` files are migrated automatically on first access.
+
+### Environment Variables
+
+- **CHIBI_HOME**: Override the default `~/.chibi` directory. Useful for testing or running multiple isolated instances.
 
 ### Entry Format (JSONL)
 
@@ -166,3 +186,23 @@ print("result")
 3. Global config.toml
 4. models.toml (for model-specific params)
 5. Defaults
+
+### Storage Configuration
+
+Global `config.toml`:
+```toml
+[storage]
+partition_max_entries = 1000        # Rotate after N entries
+partition_max_tokens = 100000       # Or after N estimated LLM tokens
+partition_max_age_seconds = 2592000 # Or after 30 days
+bytes_per_token = 3                 # Token estimation (lower = more conservative)
+enable_bloom_filters = true         # Build bloom indexes for search
+```
+
+Per-context override in `local.toml`:
+```toml
+[storage]
+partition_max_entries = 500         # More aggressive for busy contexts
+partition_max_tokens = 50000        # Lower token threshold
+bytes_per_token = 4                 # Less conservative for English-only content
+```

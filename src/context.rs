@@ -143,45 +143,6 @@ pub struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
-    /// Create a new transcript entry with auto-generated ID and current timestamp
-    #[allow(dead_code)]
-    pub fn new(
-        from: impl Into<String>,
-        to: impl Into<String>,
-        content: impl Into<String>,
-        entry_type: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: from.into(),
-            to: to.into(),
-            content: content.into(),
-            entry_type: entry_type.into(),
-            metadata: None,
-        }
-    }
-
-    /// Create a new transcript entry with metadata
-    #[allow(dead_code)]
-    pub fn with_metadata(
-        from: impl Into<String>,
-        to: impl Into<String>,
-        content: impl Into<String>,
-        entry_type: impl Into<String>,
-        metadata: EntryMetadata,
-    ) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            timestamp: now_timestamp(),
-            from: from.into(),
-            to: to.into(),
-            content: content.into(),
-            entry_type: entry_type.into(),
-            metadata: Some(metadata),
-        }
-    }
-
     /// Create a builder for constructing transcript entries
     pub fn builder() -> TranscriptEntryBuilder {
         TranscriptEntryBuilder::default()
@@ -521,8 +482,13 @@ mod tests {
     }
 
     #[test]
-    fn test_transcript_entry_new_constructor() {
-        let entry = TranscriptEntry::new("from", "to", "content", "custom_type");
+    fn test_transcript_entry_builder() {
+        let entry = TranscriptEntry::builder()
+            .from("from")
+            .to("to")
+            .content("content")
+            .entry_type("custom_type")
+            .build();
         assert_eq!(entry.from, "from");
         assert_eq!(entry.to, "to");
         assert_eq!(entry.content, "content");
@@ -532,13 +498,19 @@ mod tests {
     }
 
     #[test]
-    fn test_transcript_entry_with_metadata() {
+    fn test_transcript_entry_builder_with_metadata() {
         let metadata = EntryMetadata {
             summary: Some("summary".to_string()),
             hash: Some("abc123".to_string()),
             transcript_anchor_id: Some("anchor-id".to_string()),
         };
-        let entry = TranscriptEntry::with_metadata("from", "to", "content", "type", metadata);
+        let entry = TranscriptEntry::builder()
+            .from("from")
+            .to("to")
+            .content("content")
+            .entry_type("type")
+            .metadata(metadata)
+            .build();
         assert!(entry.metadata.is_some());
         let m = entry.metadata.unwrap();
         assert_eq!(m.summary, Some("summary".to_string()));

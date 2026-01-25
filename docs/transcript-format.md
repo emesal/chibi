@@ -1,18 +1,28 @@
 # Transcript Format
 
-Chibi maintains conversation history in two JSONL files plus a human-readable markdown archive.
+Chibi maintains conversation history using partitioned storage plus a human-readable markdown archive.
 
 ## File Roles
 
 ```
-transcript.jsonl    # Authoritative, append-only log of complete history
-context.jsonl       # LLM context window (derived from transcript.jsonl)
-transcript.md       # Human-readable archive (append-only)
+transcript/           # Authoritative, append-only log (partitioned)
+├── manifest.json     # Partition metadata and timestamp ranges
+├── active.jsonl      # Current write partition
+└── partitions/       # Archived read-only partitions
+    ├── <ts>-<ts>.jsonl
+    └── <ts>-<ts>.bloom  # Bloom filter for search
+context.jsonl         # LLM context window (derived from transcript)
+transcript.md         # Human-readable archive (append-only)
 ```
 
-### transcript.jsonl (Authoritative)
+### transcript/ (Authoritative)
 
-The authoritative record of all conversation history. Append-only—entries are never removed or modified. Contains anchor entries that mark significant events (context creation, compaction, archival).
+The authoritative record of all conversation history. Partitioned for scalability—entries are append-only and never modified. Contains anchor entries that mark significant events (context creation, compaction, archival).
+
+Partitions rotate when any threshold is reached:
+- Entry count (default: 1000)
+- Token count (default: 100,000 estimated LLM tokens)
+- Age (default: 30 days)
 
 ### context.jsonl (Derived)
 
@@ -210,9 +220,9 @@ The optional `metadata` field can contain:
 
 ## Context Rebuilding
 
-When the context is marked dirty (`.dirty` file exists), `context.jsonl` is rebuilt from `transcript.jsonl`:
+When the context is marked dirty (`.dirty` file exists), `context.jsonl` is rebuilt from the transcript:
 
-1. Find the last anchor entry in transcript.jsonl
+1. Find the last anchor entry across all transcript partitions
 2. Copy entries from that anchor to end
 3. Inject current system prompt as entry[1]
 4. Remove `.dirty` marker
@@ -260,20 +270,25 @@ Full API request bodies logged to the context directory:
 ### Viewing with jq
 
 ```bash
-# Pretty print all entries
-cat ~/.chibi/contexts/default/transcript.jsonl | jq '.'
+# Pretty print active partition
+cat ~/.chibi/contexts/default/transcript/active.jsonl | jq '.'
+
+# View all partitions (including archived)
+cat ~/.chibi/contexts/default/transcript/partitions/*.jsonl \
+    ~/.chibi/contexts/default/transcript/active.jsonl | jq '.'
 
 # Filter by entry type
-cat transcript.jsonl | jq 'select(.entry_type == "message")'
+cat transcript/active.jsonl | jq 'select(.entry_type == "message")'
 
 # Get just the content
-cat transcript.jsonl | jq -r '.content'
+cat transcript/active.jsonl | jq -r '.content'
 
-# Count entries by type
-cat transcript.jsonl | jq -s 'group_by(.entry_type) | map({type: .[0].entry_type, count: length})'
+# Count entries by type across all partitions
+cat transcript/partitions/*.jsonl transcript/active.jsonl 2>/dev/null | \
+    jq -s 'group_by(.entry_type) | map({type: .[0].entry_type, count: length})'
 
 # Find anchor entries
-cat transcript.jsonl | jq 'select(.entry_type == "context_created" or .entry_type == "compaction" or .entry_type == "archival")'
+cat transcript/active.jsonl | jq 'select(.entry_type == "context_created" or .entry_type == "compaction" or .entry_type == "archival")'
 ```
 
 ### Viewing with chibi

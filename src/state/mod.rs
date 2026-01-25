@@ -5,13 +5,8 @@
 //! - Configuration loading and resolution
 //! - Transcript and inbox operations
 
-// Submodules - utilities extracted for better organization
-// Future refactoring can migrate more functionality into these modules
-mod entries;
-mod jsonl;
-mod paths;
+pub mod jsonl;
 
-// Re-export submodule items for internal use
 use jsonl::read_jsonl_file;
 
 use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig};
@@ -20,6 +15,7 @@ use crate::context::{
     ENTRY_TYPE_CONTEXT_CREATED, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
     EntryMetadata, Message, TranscriptEntry, now_timestamp, validate_context_name,
 };
+use crate::partition::{PartitionManager, StorageConfig};
 use dirs_next::home_dir;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
@@ -32,8 +28,6 @@ pub struct AppState {
     pub models_config: ModelsConfig,
     pub state: ContextState,
     pub state_path: PathBuf,
-    #[allow(dead_code)]
-    pub chibi_dir: PathBuf,
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
     pub plugins_dir: PathBuf,
@@ -64,7 +58,6 @@ impl AppState {
             models_config: ModelsConfig::default(),
             state,
             state_path,
-            chibi_dir,
             contexts_dir,
             prompts_dir,
             plugins_dir,
@@ -72,9 +65,14 @@ impl AppState {
     }
 
     pub fn load() -> io::Result<Self> {
-        let home = home_dir()
-            .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Home directory not found"))?;
-        let chibi_dir = home.join(".chibi");
+        // Check CHIBI_HOME env var first, fall back to ~/.chibi
+        let chibi_dir = if let Ok(chibi_home) = std::env::var("CHIBI_HOME") {
+            PathBuf::from(chibi_home)
+        } else {
+            let home = home_dir()
+                .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Home directory not found"))?;
+            home.join(".chibi")
+        };
         let contexts_dir = chibi_dir.join("contexts");
         let prompts_dir = chibi_dir.join("prompts");
         let plugins_dir = chibi_dir.join("plugins");
@@ -143,7 +141,6 @@ impl AppState {
             models_config,
             state,
             state_path,
-            chibi_dir,
             contexts_dir,
             prompts_dir,
             plugins_dir,
@@ -182,9 +179,14 @@ impl AppState {
         self.transcript_md_file(name)
     }
 
-    /// Path to JSONL transcript (transcript.jsonl) - the authoritative log
-    pub fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
+    /// Path to JSONL transcript (transcript.jsonl) - legacy location
+    fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("transcript.jsonl")
+    }
+
+    /// Path to partitioned transcript directory
+    pub fn transcript_dir(&self, name: &str) -> PathBuf {
+        self.context_dir(name).join("transcript")
     }
 
     /// Path to dirty context marker file (.dirty)
@@ -240,15 +242,23 @@ impl AppState {
     }
 
     pub fn load_context(&self, name: &str) -> io::Result<Context> {
+        let context_dir = self.context_dir(name);
+        let manifest_path = context_dir.join("manifest.json");
+        let active_path = context_dir.join("active.jsonl");
         let context_jsonl = self.context_file(name);
         let context_json_old = self.context_file_old(name);
 
-        // Try to load from new JSONL format first
+        // Try to load from partitioned format first (manifest.json or active.jsonl)
+        if manifest_path.exists() || active_path.exists() {
+            return self.load_context_from_jsonl(name);
+        }
+
+        // Try to load from legacy JSONL format (context.jsonl)
         if context_jsonl.exists() {
             return self.load_context_from_jsonl(name);
         }
 
-        // Check if old format exists and migrate
+        // Check if very old format exists and migrate
         if context_json_old.exists() {
             return self.migrate_and_load_context(name);
         }
@@ -383,9 +393,32 @@ impl AppState {
         Ok(())
     }
 
-    /// Read all entries from transcript.jsonl
+    /// Migrate legacy transcript.jsonl to partitioned transcript/ directory
+    fn migrate_transcript_if_needed(&self, name: &str) -> io::Result<()> {
+        let legacy_path = self.transcript_jsonl_file(name);
+        let transcript_dir = self.transcript_dir(name);
+        let manifest_path = transcript_dir.join("manifest.json");
+
+        // Already migrated or no legacy file
+        if manifest_path.exists() || !legacy_path.exists() {
+            return Ok(());
+        }
+
+        // Create transcript directory and move legacy file
+        fs::create_dir_all(&transcript_dir)?;
+        let active_path = transcript_dir.join("active.jsonl");
+        fs::rename(&legacy_path, &active_path)?;
+
+        Ok(())
+    }
+
+    /// Read all entries from transcript (using partitioned storage)
     pub fn read_transcript_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        read_jsonl_file(&self.transcript_jsonl_file(name), "transcript")
+        self.migrate_transcript_if_needed(name)?;
+        let transcript_dir = self.transcript_dir(name);
+        let storage_config = self.get_storage_config(name)?;
+        let pm = PartitionManager::load_with_config(&transcript_dir, storage_config)?;
+        pm.read_all_entries()
     }
 
     /// Migrate from old context.json format to new context.jsonl format
@@ -434,9 +467,37 @@ impl AppState {
         })
     }
 
-    /// Read entries from context.jsonl
+    /// Get the resolved storage configuration for a context
+    fn get_storage_config(&self, name: &str) -> io::Result<StorageConfig> {
+        let local = self.load_local_config(name)?;
+        // Merge local overrides with global config
+        Ok(StorageConfig {
+            partition_max_entries: local
+                .storage
+                .partition_max_entries
+                .or(self.config.storage.partition_max_entries),
+            partition_max_age_seconds: local
+                .storage
+                .partition_max_age_seconds
+                .or(self.config.storage.partition_max_age_seconds),
+            partition_max_tokens: local
+                .storage
+                .partition_max_tokens
+                .or(self.config.storage.partition_max_tokens),
+            bytes_per_token: local
+                .storage
+                .bytes_per_token
+                .or(self.config.storage.bytes_per_token),
+            enable_bloom_filters: local
+                .storage
+                .enable_bloom_filters
+                .or(self.config.storage.enable_bloom_filters),
+        })
+    }
+
+    /// Read entries from context.jsonl (the LLM's working memory)
     pub fn read_context_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
-        read_jsonl_file(&self.context_file(name), "context")
+        read_jsonl_file(&self.context_file(name))
     }
 
     /// Write entries to context.jsonl (full rewrite)
@@ -448,14 +509,13 @@ impl AppState {
             .create(true)
             .truncate(true)
             .open(&path)?;
-        let mut writer = BufWriter::new(file);
 
+        let mut writer = BufWriter::new(file);
         for entry in entries {
             let json = serde_json::to_string(entry)
-                .map_err(|e| io::Error::other(format!("Failed to serialize entry: {}", e)))?;
+                .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
             writeln!(writer, "{}", json)?;
         }
-
         Ok(())
     }
 
@@ -466,7 +526,7 @@ impl AppState {
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
         let json = serde_json::to_string(entry)
-            .map_err(|e| io::Error::other(format!("Failed to serialize entry: {}", e)))?;
+            .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
         writeln!(file, "{}", json)?;
         Ok(())
     }
@@ -612,20 +672,21 @@ impl AppState {
         Ok(())
     }
 
-    /// Append a single entry to transcript.jsonl (the authoritative log)
+    /// Append a single entry to transcript (the authoritative log, using partitioned storage)
     pub fn append_to_transcript(
         &self,
         context_name: &str,
         entry: &TranscriptEntry,
     ) -> io::Result<()> {
         self.ensure_context_dir(context_name)?;
-        let path = self.transcript_jsonl_file(context_name);
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        self.migrate_transcript_if_needed(context_name)?;
+        let transcript_dir = self.transcript_dir(context_name);
+        let storage_config = self.get_storage_config(context_name)?;
+        let mut pm = PartitionManager::load_with_config(&transcript_dir, storage_config)?;
+        pm.append_entry(entry)?;
 
-        let json = serde_json::to_string(entry).map_err(|e| {
-            io::Error::other(format!("Failed to serialize transcript entry: {}", e))
-        })?;
-        writeln!(file, "{}", json)?;
+        // Check if rotation is needed after append
+        pm.rotate_if_needed()?;
         Ok(())
     }
 
@@ -1345,6 +1406,7 @@ mod tests {
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
             api: ApiParams::default(),
+            storage: StorageConfig::default(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)
@@ -1911,6 +1973,7 @@ mod tests {
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
             api: ApiParams::default(),
+            storage: StorageConfig::default(),
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -1962,6 +2025,7 @@ mod tests {
             lock_heartbeat_seconds: 30,
             rolling_compact_drop_percentage: 50.0,
             api: ApiParams::default(),
+            storage: StorageConfig::default(),
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -2034,6 +2098,7 @@ mod tests {
             context_window_limit: Some(16000),
             reflection_enabled: Some(false),
             api: None,
+            storage: StorageConfig::default(),
         };
         app.save_local_config("default", &local).unwrap();
 
