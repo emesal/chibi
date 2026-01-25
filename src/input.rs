@@ -64,12 +64,33 @@ pub enum DebugKey {
     RequestLog,
     /// Log response metadata (usage stats, model info) to response_meta.jsonl
     ResponseMeta,
-    /// Enable all debug features
+    /// Set destroy_at timestamp on the current context (e.g., "destroy_at=1234567890")
+    DestroyAt(u64),
+    /// Set destroy_after_seconds_inactive on the current context (e.g., "destroy_after_seconds_inactive=60")
+    DestroyAfterSecondsInactive(u64),
+    /// Enable all debug features (request_log, response_meta)
     All,
 }
 
 impl DebugKey {
     pub fn from_str(s: &str) -> Option<Self> {
+        // Check for parameterized debug keys first
+        if let Some(value) = s
+            .strip_prefix("destroy_at=")
+            .or_else(|| s.strip_prefix("destroy-at="))
+        {
+            return value.parse::<u64>().ok().map(DebugKey::DestroyAt);
+        }
+        if let Some(value) = s
+            .strip_prefix("destroy_after_seconds_inactive=")
+            .or_else(|| s.strip_prefix("destroy-after-seconds-inactive="))
+        {
+            return value
+                .parse::<u64>()
+                .ok()
+                .map(DebugKey::DestroyAfterSecondsInactive);
+        }
+
         match s {
             "request-log" | "request_log" => Some(DebugKey::RequestLog),
             "response-meta" | "response_meta" => Some(DebugKey::ResponseMeta),
@@ -294,6 +315,37 @@ mod tests {
     }
 
     #[test]
+    fn test_debug_key_from_str_destroy_at() {
+        assert_eq!(
+            DebugKey::from_str("destroy_at=1234567890"),
+            Some(DebugKey::DestroyAt(1234567890))
+        );
+        assert_eq!(
+            DebugKey::from_str("destroy-at=1234567890"),
+            Some(DebugKey::DestroyAt(1234567890))
+        );
+        // Invalid value
+        assert_eq!(DebugKey::from_str("destroy_at=invalid"), None);
+    }
+
+    #[test]
+    fn test_debug_key_from_str_destroy_after_seconds_inactive() {
+        assert_eq!(
+            DebugKey::from_str("destroy_after_seconds_inactive=60"),
+            Some(DebugKey::DestroyAfterSecondsInactive(60))
+        );
+        assert_eq!(
+            DebugKey::from_str("destroy-after-seconds-inactive=3600"),
+            Some(DebugKey::DestroyAfterSecondsInactive(3600))
+        );
+        // Invalid value
+        assert_eq!(
+            DebugKey::from_str("destroy_after_seconds_inactive=invalid"),
+            None
+        );
+    }
+
+    #[test]
     fn test_debug_key_from_str_invalid() {
         assert_eq!(DebugKey::from_str("invalid"), None);
         assert_eq!(DebugKey::from_str(""), None);
@@ -313,6 +365,15 @@ mod tests {
         let key = DebugKey::All;
         let json = serde_json::to_string(&key).unwrap();
         assert_eq!(json, r#""all""#);
+
+        // Parameterized variants serialize with their values
+        let key = DebugKey::DestroyAt(1234567890);
+        let json = serde_json::to_string(&key).unwrap();
+        assert!(json.contains("destroy_at"));
+
+        let key = DebugKey::DestroyAfterSecondsInactive(60);
+        let json = serde_json::to_string(&key).unwrap();
+        assert!(json.contains("destroy_after_seconds_inactive"));
     }
 
     #[test]

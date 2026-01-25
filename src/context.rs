@@ -56,14 +56,27 @@ impl Context {
 pub struct ContextEntry {
     pub name: String,
     pub created_at: u64,
+    /// Last time this context was used (0 = never updated)
+    #[serde(default)]
+    pub last_activity_at: u64,
+    /// Auto-destroy after this many seconds of inactivity (0 = disabled)
+    #[serde(default)]
+    pub destroy_after_seconds_inactive: u64,
+    /// Auto-destroy at this timestamp (0 = disabled)
+    #[serde(default)]
+    pub destroy_at: u64,
 }
 
 impl ContextEntry {
     #[allow(dead_code)]
     pub fn new(name: impl Into<String>) -> Self {
+        let now = now_timestamp();
         Self {
             name: name.into(),
-            created_at: now_timestamp(),
+            created_at: now,
+            last_activity_at: now,
+            destroy_after_seconds_inactive: 0,
+            destroy_at: 0,
         }
     }
 
@@ -71,7 +84,35 @@ impl ContextEntry {
         Self {
             name: name.into(),
             created_at,
+            last_activity_at: 0,
+            destroy_after_seconds_inactive: 0,
+            destroy_at: 0,
         }
+    }
+
+    /// Update last_activity_at to the current time
+    pub fn touch(&mut self) {
+        self.last_activity_at = now_timestamp();
+    }
+
+    /// Check if this context should be auto-destroyed
+    pub fn should_auto_destroy(&self) -> bool {
+        let now = now_timestamp();
+
+        // Check destroy_at (absolute timestamp)
+        if self.destroy_at >= 1 && now > self.destroy_at {
+            return true;
+        }
+
+        // Check inactivity timeout
+        if self.destroy_after_seconds_inactive >= 1 && self.last_activity_at >= 1 {
+            let deadline = self.last_activity_at + self.destroy_after_seconds_inactive;
+            if now > deadline {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
@@ -574,5 +615,120 @@ mod tests {
         assert!(json.contains("summary"));
         assert!(!json.contains("hash"));
         assert!(!json.contains("transcript_anchor_id"));
+    }
+
+    // === ContextEntry auto-destroy tests ===
+
+    #[test]
+    fn test_context_entry_new_initializes_all_fields() {
+        let entry = ContextEntry::new("test");
+        assert_eq!(entry.name, "test");
+        assert!(entry.created_at > 0);
+        assert!(entry.last_activity_at > 0);
+        assert_eq!(entry.destroy_after_seconds_inactive, 0);
+        assert_eq!(entry.destroy_at, 0);
+    }
+
+    #[test]
+    fn test_context_entry_with_created_at_defaults_auto_destroy_fields() {
+        let entry = ContextEntry::with_created_at("test", 1234567890);
+        assert_eq!(entry.name, "test");
+        assert_eq!(entry.created_at, 1234567890);
+        assert_eq!(entry.last_activity_at, 0);
+        assert_eq!(entry.destroy_after_seconds_inactive, 0);
+        assert_eq!(entry.destroy_at, 0);
+    }
+
+    #[test]
+    fn test_context_entry_touch_updates_last_activity() {
+        let mut entry = ContextEntry::with_created_at("test", 1234567890);
+        assert_eq!(entry.last_activity_at, 0);
+        entry.touch();
+        assert!(entry.last_activity_at > 0);
+    }
+
+    #[test]
+    fn test_context_entry_should_auto_destroy_disabled_by_default() {
+        let entry = ContextEntry::new("test");
+        // Both destroy_after_seconds_inactive and destroy_at are 0 (disabled)
+        assert!(!entry.should_auto_destroy());
+    }
+
+    #[test]
+    fn test_context_entry_should_auto_destroy_by_timestamp() {
+        let mut entry = ContextEntry::new("test");
+        // Set destroy_at to a past timestamp
+        entry.destroy_at = 1; // Way in the past
+        assert!(entry.should_auto_destroy());
+    }
+
+    #[test]
+    fn test_context_entry_should_auto_destroy_by_timestamp_future() {
+        let mut entry = ContextEntry::new("test");
+        // Set destroy_at to a future timestamp (year 2100)
+        entry.destroy_at = 4102444800;
+        assert!(!entry.should_auto_destroy());
+    }
+
+    #[test]
+    fn test_context_entry_should_auto_destroy_by_inactivity() {
+        let mut entry = ContextEntry::new("test");
+        // Set last_activity_at to way in the past
+        entry.last_activity_at = 1;
+        // Set a small inactivity timeout
+        entry.destroy_after_seconds_inactive = 60;
+        // Now (current time) > last_activity_at + 60 seconds
+        assert!(entry.should_auto_destroy());
+    }
+
+    #[test]
+    fn test_context_entry_should_not_auto_destroy_if_active() {
+        let mut entry = ContextEntry::new("test");
+        // Touch to set last_activity_at to now
+        entry.touch();
+        // Set a large inactivity timeout (1 hour)
+        entry.destroy_after_seconds_inactive = 3600;
+        // Should not auto-destroy since activity was just now
+        assert!(!entry.should_auto_destroy());
+    }
+
+    #[test]
+    fn test_context_entry_should_auto_destroy_inactivity_requires_activity() {
+        let mut entry = ContextEntry::with_created_at("test", 1);
+        // last_activity_at is 0 (never touched)
+        entry.destroy_after_seconds_inactive = 60;
+        // Should NOT auto-destroy because last_activity_at is 0
+        assert!(!entry.should_auto_destroy());
+    }
+
+    #[test]
+    fn test_context_entry_serde_defaults() {
+        // Simulate deserializing an old state.json without the new fields
+        let json = r#"{"name":"test","created_at":1234567890}"#;
+        let entry: ContextEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.name, "test");
+        assert_eq!(entry.created_at, 1234567890);
+        assert_eq!(entry.last_activity_at, 0); // Defaults to 0
+        assert_eq!(entry.destroy_after_seconds_inactive, 0); // Defaults to 0
+        assert_eq!(entry.destroy_at, 0); // Defaults to 0
+    }
+
+    #[test]
+    fn test_context_entry_serde_round_trip() {
+        let mut entry = ContextEntry::new("test");
+        entry.destroy_after_seconds_inactive = 3600;
+        entry.destroy_at = 1234567890;
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: ContextEntry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.name, entry.name);
+        assert_eq!(parsed.created_at, entry.created_at);
+        assert_eq!(parsed.last_activity_at, entry.last_activity_at);
+        assert_eq!(
+            parsed.destroy_after_seconds_inactive,
+            entry.destroy_after_seconds_inactive
+        );
+        assert_eq!(parsed.destroy_at, entry.destroy_at);
     }
 }
