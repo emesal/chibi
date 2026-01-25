@@ -11,7 +11,7 @@ mod logging;
 mod request;
 
 use crate::cache;
-use crate::config::ResolvedConfig;
+use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
 use crate::llm;
 use crate::output::OutputHandler;
@@ -36,6 +36,230 @@ use request::build_request_body;
 
 /// Maximum number of simultaneous tool calls allowed (prevents memory exhaustion from malicious responses)
 const MAX_TOOL_CALLS: usize = 100;
+
+/// Tool type classification for pre_api_tools hook
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolType {
+    Builtin,
+    File,
+    Plugin,
+}
+
+impl ToolType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ToolType::Builtin => "builtin",
+            ToolType::File => "file",
+            ToolType::Plugin => "plugin",
+        }
+    }
+}
+
+/// Built-in tool names (todos, goals, reflection, send_message)
+const BUILTIN_TOOL_NAMES: &[&str] = &[
+    "update_todos",
+    "update_goals",
+    "update_reflection",
+    "send_message",
+];
+
+/// File tool names (file_head, file_tail, file_lines, file_grep, cache_list)
+const FILE_TOOL_NAMES: &[&str] = &[
+    "file_head",
+    "file_tail",
+    "file_lines",
+    "file_grep",
+    "cache_list",
+];
+
+/// Classify a tool's type based on its name
+fn classify_tool_type(name: &str, plugin_names: &[&str]) -> ToolType {
+    if BUILTIN_TOOL_NAMES.contains(&name) {
+        ToolType::Builtin
+    } else if FILE_TOOL_NAMES.contains(&name) {
+        ToolType::File
+    } else if plugin_names.contains(&name) {
+        ToolType::Plugin
+    } else {
+        // Unknown tools default to plugin type
+        ToolType::Plugin
+    }
+}
+
+/// Build tool info list for pre_api_tools hook data
+fn build_tool_info_list(
+    all_tools: &[serde_json::Value],
+    plugin_tools: &[Tool],
+) -> Vec<serde_json::Value> {
+    let plugin_names: Vec<&str> = plugin_tools.iter().map(|t| t.name.as_str()).collect();
+
+    all_tools
+        .iter()
+        .filter_map(|tool| {
+            let name = tool
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())?;
+            let tool_type = classify_tool_type(name, &plugin_names);
+            Some(json!({
+                "name": name,
+                "type": tool_type.as_str(),
+            }))
+        })
+        .collect()
+}
+
+/// Filter tools based on config include/exclude lists
+fn filter_tools_by_config(
+    tools: Vec<serde_json::Value>,
+    config: &ToolsConfig,
+) -> Vec<serde_json::Value> {
+    let mut result = tools;
+
+    // Apply include filter first (if set, only these tools are considered)
+    if let Some(ref include) = config.include {
+        result.retain(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .is_some_and(|name| include.contains(&name.to_string()))
+        });
+    }
+
+    // Apply exclude filter (remove these tools from remaining)
+    if let Some(ref exclude) = config.exclude {
+        result.retain(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .is_some_and(|name| !exclude.contains(&name.to_string()))
+        });
+    }
+
+    result
+}
+
+/// Filter tools based on hook results
+/// Multiple hooks: includes are intersected, excludes are unioned
+fn filter_tools_from_hook_results(
+    tools: Vec<serde_json::Value>,
+    hook_results: &[(String, serde_json::Value)],
+    verbose: bool,
+    output: &OutputHandler,
+) -> Vec<serde_json::Value> {
+    if hook_results.is_empty() {
+        return tools;
+    }
+
+    let mut result = tools;
+
+    // Collect all includes and excludes from hook results
+    let mut all_includes: Option<Vec<String>> = None;
+    let mut all_excludes: Vec<String> = Vec::new();
+
+    for (hook_name, hook_result) in hook_results {
+        // Handle include lists (intersection)
+        if let Some(include) = hook_result.get("include").and_then(|v| v.as_array()) {
+            let include_names: Vec<String> = include
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+
+            output.diagnostic(
+                &format!(
+                    "[Hook pre_api_tools: {} include filter: {:?}]",
+                    hook_name, include_names
+                ),
+                verbose,
+            );
+
+            all_includes = Some(match all_includes {
+                Some(existing) => existing
+                    .into_iter()
+                    .filter(|name| include_names.contains(name))
+                    .collect(),
+                None => include_names,
+            });
+        }
+
+        // Handle exclude lists (union)
+        if let Some(exclude) = hook_result.get("exclude").and_then(|v| v.as_array()) {
+            let exclude_names: Vec<String> = exclude
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+
+            output.diagnostic(
+                &format!(
+                    "[Hook pre_api_tools: {} exclude filter: {:?}]",
+                    hook_name, exclude_names
+                ),
+                verbose,
+            );
+
+            for name in exclude_names {
+                if !all_excludes.contains(&name) {
+                    all_excludes.push(name);
+                }
+            }
+        }
+    }
+
+    // Apply collected includes (intersection)
+    if let Some(includes) = all_includes {
+        result.retain(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .is_some_and(|name| includes.contains(&name.to_string()))
+        });
+    }
+
+    // Apply collected excludes (union)
+    if !all_excludes.is_empty() {
+        result.retain(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .is_some_and(|name| !all_excludes.contains(&name.to_string()))
+        });
+    }
+
+    result
+}
+
+/// Apply request modifications from pre_api_request hook results
+/// Hook returns are merged (not replaced) into the request body
+fn apply_request_modifications(
+    mut request_body: serde_json::Value,
+    hook_results: &[(String, serde_json::Value)],
+    verbose: bool,
+    output: &OutputHandler,
+) -> serde_json::Value {
+    for (hook_name, hook_result) in hook_results {
+        if let Some(modifications) = hook_result.get("request_body")
+            && let Some(mods_obj) = modifications.as_object()
+        {
+            output.diagnostic(
+                &format!(
+                    "[Hook pre_api_request: {} modifying request (keys: {:?})]",
+                    hook_name,
+                    mods_obj.keys().collect::<Vec<_>>()
+                ),
+                verbose,
+            );
+
+            // Merge modifications into request body
+            if let Some(body_obj) = request_body.as_object_mut() {
+                for (key, value) in mods_obj {
+                    body_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
+    request_body
+}
 
 pub async fn send_prompt(
     app: &AppState,
@@ -280,8 +504,32 @@ async fn send_prompt_with_depth(
     all_tools.push(tools::file_grep_tool_to_api_format());
     all_tools.push(tools::cache_list_tool_to_api_format());
 
+    // Apply config-based tool filtering (from local.toml [tools] section)
+    all_tools = filter_tools_by_config(all_tools, &resolved_config.tools);
+
+    // Execute pre_api_tools hook - allows plugins to filter tools dynamically
+    let tool_info = build_tool_info_list(&all_tools, tools);
+    let hook_data = json!({
+        "context_name": context.name,
+        "tools": tool_info,
+        "recursion_depth": recursion_depth,
+    });
+    let hook_results =
+        tools::execute_hook(tools, tools::HookPoint::PreApiTools, &hook_data, verbose)?;
+    all_tools = filter_tools_from_hook_results(all_tools, &hook_results, verbose, output);
+
     // Build request with tools and API params from resolved config
     let mut request_body = build_request_body(resolved_config, &messages, Some(&all_tools), true);
+
+    // Execute pre_api_request hook - allows plugins to modify full request body
+    let hook_data = json!({
+        "context_name": context.name,
+        "request_body": request_body,
+        "recursion_depth": recursion_depth,
+    });
+    let hook_results =
+        tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data, verbose)?;
+    request_body = apply_request_modifications(request_body, &hook_results, verbose, output);
 
     // Track if we should recurse (continue_processing was called)
     let mut should_recurse = false;
@@ -760,5 +1008,389 @@ async fn send_prompt_with_depth(
         }
 
         return Ok(());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_tool_type_builtin() {
+        let plugin_names: Vec<&str> = vec!["my_plugin"];
+        assert_eq!(
+            classify_tool_type("update_todos", &plugin_names),
+            ToolType::Builtin
+        );
+        assert_eq!(
+            classify_tool_type("update_goals", &plugin_names),
+            ToolType::Builtin
+        );
+        assert_eq!(
+            classify_tool_type("update_reflection", &plugin_names),
+            ToolType::Builtin
+        );
+        assert_eq!(
+            classify_tool_type("send_message", &plugin_names),
+            ToolType::Builtin
+        );
+    }
+
+    #[test]
+    fn test_classify_tool_type_file() {
+        let plugin_names: Vec<&str> = vec!["my_plugin"];
+        assert_eq!(
+            classify_tool_type("file_head", &plugin_names),
+            ToolType::File
+        );
+        assert_eq!(
+            classify_tool_type("file_tail", &plugin_names),
+            ToolType::File
+        );
+        assert_eq!(
+            classify_tool_type("file_lines", &plugin_names),
+            ToolType::File
+        );
+        assert_eq!(
+            classify_tool_type("file_grep", &plugin_names),
+            ToolType::File
+        );
+        assert_eq!(
+            classify_tool_type("cache_list", &plugin_names),
+            ToolType::File
+        );
+    }
+
+    #[test]
+    fn test_classify_tool_type_plugin() {
+        let plugin_names: Vec<&str> = vec!["my_plugin", "other_plugin"];
+        assert_eq!(
+            classify_tool_type("my_plugin", &plugin_names),
+            ToolType::Plugin
+        );
+        assert_eq!(
+            classify_tool_type("other_plugin", &plugin_names),
+            ToolType::Plugin
+        );
+    }
+
+    #[test]
+    fn test_classify_tool_type_unknown_defaults_to_plugin() {
+        let plugin_names: Vec<&str> = vec!["known_plugin"];
+        assert_eq!(
+            classify_tool_type("unknown_tool", &plugin_names),
+            ToolType::Plugin
+        );
+    }
+
+    #[test]
+    fn test_tool_type_as_str() {
+        assert_eq!(ToolType::Builtin.as_str(), "builtin");
+        assert_eq!(ToolType::File.as_str(), "file");
+        assert_eq!(ToolType::Plugin.as_str(), "plugin");
+    }
+
+    #[test]
+    fn test_filter_tools_by_config_no_filters() {
+        let tools = vec![
+            json!({"function": {"name": "tool_a"}}),
+            json!({"function": {"name": "tool_b"}}),
+        ];
+        let config = ToolsConfig::default();
+        let result = filter_tools_by_config(tools.clone(), &config);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_tools_by_config_include() {
+        let tools = vec![
+            json!({"function": {"name": "tool_a"}}),
+            json!({"function": {"name": "tool_b"}}),
+            json!({"function": {"name": "tool_c"}}),
+        ];
+        let config = ToolsConfig {
+            include: Some(vec!["tool_a".to_string(), "tool_c".to_string()]),
+            exclude: None,
+        };
+        let result = filter_tools_by_config(tools, &config);
+        assert_eq!(result.len(), 2);
+
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+            })
+            .collect();
+        assert!(names.contains(&"tool_a"));
+        assert!(names.contains(&"tool_c"));
+        assert!(!names.contains(&"tool_b"));
+    }
+
+    #[test]
+    fn test_filter_tools_by_config_exclude() {
+        let tools = vec![
+            json!({"function": {"name": "tool_a"}}),
+            json!({"function": {"name": "tool_b"}}),
+            json!({"function": {"name": "tool_c"}}),
+        ];
+        let config = ToolsConfig {
+            include: None,
+            exclude: Some(vec!["tool_b".to_string()]),
+        };
+        let result = filter_tools_by_config(tools, &config);
+        assert_eq!(result.len(), 2);
+
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+            })
+            .collect();
+        assert!(names.contains(&"tool_a"));
+        assert!(names.contains(&"tool_c"));
+        assert!(!names.contains(&"tool_b"));
+    }
+
+    #[test]
+    fn test_filter_tools_by_config_include_and_exclude() {
+        // Exclude takes effect after include
+        let tools = vec![
+            json!({"function": {"name": "tool_a"}}),
+            json!({"function": {"name": "tool_b"}}),
+            json!({"function": {"name": "tool_c"}}),
+        ];
+        let config = ToolsConfig {
+            include: Some(vec![
+                "tool_a".to_string(),
+                "tool_b".to_string(),
+                "tool_c".to_string(),
+            ]),
+            exclude: Some(vec!["tool_b".to_string()]),
+        };
+        let result = filter_tools_by_config(tools, &config);
+        assert_eq!(result.len(), 2);
+
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+            })
+            .collect();
+        assert!(names.contains(&"tool_a"));
+        assert!(names.contains(&"tool_c"));
+    }
+
+    #[test]
+    fn test_filter_tools_from_hook_results_empty() {
+        let tools = vec![
+            json!({"function": {"name": "tool_a"}}),
+            json!({"function": {"name": "tool_b"}}),
+        ];
+        let hook_results: Vec<(String, serde_json::Value)> = vec![];
+        let output = OutputHandler::new(false);
+        let result = filter_tools_from_hook_results(tools.clone(), &hook_results, false, &output);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_tools_from_hook_results_exclude() {
+        let tools = vec![
+            json!({"function": {"name": "tool_a"}}),
+            json!({"function": {"name": "tool_b"}}),
+            json!({"function": {"name": "tool_c"}}),
+        ];
+        let hook_results = vec![("test_hook".to_string(), json!({"exclude": ["tool_b"]}))];
+        let output = OutputHandler::new(false);
+        let result = filter_tools_from_hook_results(tools, &hook_results, false, &output);
+        assert_eq!(result.len(), 2);
+
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+            })
+            .collect();
+        assert!(names.contains(&"tool_a"));
+        assert!(names.contains(&"tool_c"));
+    }
+
+    #[test]
+    fn test_filter_tools_from_hook_results_include() {
+        let tools = vec![
+            json!({"function": {"name": "tool_a"}}),
+            json!({"function": {"name": "tool_b"}}),
+            json!({"function": {"name": "tool_c"}}),
+        ];
+        let hook_results = vec![(
+            "test_hook".to_string(),
+            json!({"include": ["tool_a", "tool_c"]}),
+        )];
+        let output = OutputHandler::new(false);
+        let result = filter_tools_from_hook_results(tools, &hook_results, false, &output);
+        assert_eq!(result.len(), 2);
+
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+            })
+            .collect();
+        assert!(names.contains(&"tool_a"));
+        assert!(names.contains(&"tool_c"));
+    }
+
+    #[test]
+    fn test_filter_tools_multiple_hooks_excludes_union() {
+        let tools = vec![
+            json!({"function": {"name": "tool_a"}}),
+            json!({"function": {"name": "tool_b"}}),
+            json!({"function": {"name": "tool_c"}}),
+        ];
+        let hook_results = vec![
+            ("hook1".to_string(), json!({"exclude": ["tool_a"]})),
+            ("hook2".to_string(), json!({"exclude": ["tool_b"]})),
+        ];
+        let output = OutputHandler::new(false);
+        let result = filter_tools_from_hook_results(tools, &hook_results, false, &output);
+        assert_eq!(result.len(), 1);
+
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+            })
+            .collect();
+        assert!(names.contains(&"tool_c"));
+    }
+
+    #[test]
+    fn test_filter_tools_multiple_hooks_includes_intersect() {
+        let tools = vec![
+            json!({"function": {"name": "tool_a"}}),
+            json!({"function": {"name": "tool_b"}}),
+            json!({"function": {"name": "tool_c"}}),
+        ];
+        let hook_results = vec![
+            (
+                "hook1".to_string(),
+                json!({"include": ["tool_a", "tool_b"]}),
+            ),
+            (
+                "hook2".to_string(),
+                json!({"include": ["tool_a", "tool_c"]}),
+            ),
+        ];
+        let output = OutputHandler::new(false);
+        let result = filter_tools_from_hook_results(tools, &hook_results, false, &output);
+        assert_eq!(result.len(), 1);
+
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+            })
+            .collect();
+        assert!(names.contains(&"tool_a"));
+    }
+
+    #[test]
+    fn test_apply_request_modifications_empty() {
+        let request_body = json!({
+            "model": "test-model",
+            "temperature": 0.5,
+        });
+        let hook_results: Vec<(String, serde_json::Value)> = vec![];
+        let output = OutputHandler::new(false);
+        let result =
+            apply_request_modifications(request_body.clone(), &hook_results, false, &output);
+        assert_eq!(result, request_body);
+    }
+
+    #[test]
+    fn test_apply_request_modifications_merge() {
+        let request_body = json!({
+            "model": "test-model",
+            "temperature": 0.5,
+        });
+        let hook_results = vec![(
+            "test_hook".to_string(),
+            json!({"request_body": {"temperature": 0.8, "max_tokens": 1000}}),
+        )];
+        let output = OutputHandler::new(false);
+        let result = apply_request_modifications(request_body, &hook_results, false, &output);
+
+        assert_eq!(result["model"], "test-model");
+        assert_eq!(result["temperature"], 0.8);
+        assert_eq!(result["max_tokens"], 1000);
+    }
+
+    #[test]
+    fn test_apply_request_modifications_multiple_hooks() {
+        let request_body = json!({
+            "model": "test-model",
+            "temperature": 0.5,
+        });
+        let hook_results = vec![
+            (
+                "hook1".to_string(),
+                json!({"request_body": {"temperature": 0.7}}),
+            ),
+            (
+                "hook2".to_string(),
+                json!({"request_body": {"max_tokens": 500}}),
+            ),
+        ];
+        let output = OutputHandler::new(false);
+        let result = apply_request_modifications(request_body, &hook_results, false, &output);
+
+        assert_eq!(result["model"], "test-model");
+        assert_eq!(result["temperature"], 0.7);
+        assert_eq!(result["max_tokens"], 500);
+    }
+
+    #[test]
+    fn test_build_tool_info_list() {
+        use crate::tools::Tool;
+        use std::path::PathBuf;
+
+        let all_tools = vec![
+            json!({"function": {"name": "update_todos"}}),
+            json!({"function": {"name": "file_head"}}),
+            json!({"function": {"name": "my_plugin"}}),
+        ];
+        let plugin_tools = vec![Tool {
+            name: "my_plugin".to_string(),
+            description: "test".to_string(),
+            parameters: json!({}),
+            path: PathBuf::from("/test"),
+            hooks: vec![],
+        }];
+
+        let result = build_tool_info_list(&all_tools, &plugin_tools);
+        assert_eq!(result.len(), 3);
+
+        // Find each tool and verify its type
+        let todos = result.iter().find(|t| t["name"] == "update_todos").unwrap();
+        assert_eq!(todos["type"], "builtin");
+
+        let file_head = result.iter().find(|t| t["name"] == "file_head").unwrap();
+        assert_eq!(file_head["type"], "file");
+
+        let plugin = result.iter().find(|t| t["name"] == "my_plugin").unwrap();
+        assert_eq!(plugin["type"], "plugin");
     }
 }

@@ -32,6 +32,13 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 | `pre_tool` | Before executing a tool | Yes (arguments, can block) |
 | `post_tool` | After executing a tool | No |
 
+### API Request Lifecycle
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_api_tools` | Before tools are sent to API | Yes (filter tools) |
+| `pre_api_request` | Before API request is sent | Yes (modify request body) |
+
 ### Tool Output Caching
 
 | Hook | When | Can Modify |
@@ -136,6 +143,75 @@ When a hook fires, registered plugins are called with environment variables:
   "inject": "content to add to system prompt"
 }
 ```
+
+### pre_api_tools
+
+Called before tools are sent to the API. Allows dynamic filtering of which tools the LLM can use.
+
+```json
+{
+  "context_name": "default",
+  "tools": [
+    {"name": "update_todos", "type": "builtin"},
+    {"name": "file_head", "type": "file"},
+    {"name": "my_plugin", "type": "plugin"}
+  ],
+  "recursion_depth": 0
+}
+```
+
+Tool types are:
+- `builtin`: update_todos, update_goals, update_reflection, send_message
+- `file`: file_head, file_tail, file_lines, file_grep, cache_list
+- `plugin`: Tools loaded from the plugins directory
+
+**Can return (to filter tools):**
+```json
+{
+  "exclude": ["file_grep", "my_plugin"]
+}
+```
+
+Or to use allowlist mode:
+```json
+{
+  "include": ["update_todos", "update_goals"]
+}
+```
+
+When multiple hooks respond:
+- Includes are **intersected** (most restrictive wins)
+- Excludes are **unioned** (all excluded tools are removed)
+
+### pre_api_request
+
+Called after tools are filtered but before the HTTP request is sent. Allows modification of any part of the request body.
+
+```json
+{
+  "context_name": "default",
+  "request_body": {
+    "model": "anthropic/claude-sonnet-4",
+    "messages": [...],
+    "tools": [...],
+    "temperature": 0.7,
+    ...
+  },
+  "recursion_depth": 0
+}
+```
+
+**Can return (to modify request):**
+```json
+{
+  "request_body": {
+    "temperature": 0.3,
+    "max_tokens": 2000
+  }
+}
+```
+
+Returned fields are **merged** into the request body, not replaced entirely. This allows targeted modifications without needing to echo back the entire body.
 
 ### pre_tool
 
@@ -398,6 +474,82 @@ fi
 echo '{}'
 ```
 
+## Example: Tool Filter
+
+A hook that restricts available tools dynamically:
+
+```bash
+#!/bin/bash
+# ~/.chibi/plugins/tool_filter
+
+if [[ "$1" == "--schema" ]]; then
+  cat <<'EOF'
+{
+  "name": "tool_filter",
+  "description": "Filters available tools based on context",
+  "parameters": {"type": "object", "properties": {}},
+  "hooks": ["pre_api_tools"]
+}
+EOF
+  exit 0
+fi
+
+if [[ "$CHIBI_HOOK" == "pre_api_tools" ]]; then
+  context=$(echo "$CHIBI_HOOK_DATA" | jq -r '.context_name')
+
+  # Restrict tools in "safe" context
+  if [[ "$context" == "safe" ]]; then
+    echo '{"include": ["update_todos", "update_goals"]}'
+    exit 0
+  fi
+
+  # Exclude file tools in all contexts
+  echo '{"exclude": ["file_head", "file_tail", "file_lines", "file_grep"]}'
+  exit 0
+fi
+
+echo '{}'
+```
+
+## Example: Temperature Override
+
+A hook that modifies API request parameters:
+
+```python
+#!/usr/bin/env python3
+# ~/.chibi/plugins/temp_override
+
+import sys
+import json
+import os
+
+if len(sys.argv) > 1 and sys.argv[1] == "--schema":
+    print(json.dumps({
+        "name": "temp_override",
+        "description": "Overrides temperature based on context",
+        "parameters": {"type": "object", "properties": {}},
+        "hooks": ["pre_api_request"]
+    }))
+    sys.exit(0)
+
+hook = os.environ.get("CHIBI_HOOK", "")
+if hook == "pre_api_request":
+    data = json.loads(os.environ.get("CHIBI_HOOK_DATA", "{}"))
+    context = data.get("context_name", "")
+
+    # Use low temperature for "coding" context
+    if context == "coding":
+        print(json.dumps({"request_body": {"temperature": 0.1}}))
+        sys.exit(0)
+
+    # Use high temperature for "creative" context
+    if context == "creative":
+        print(json.dumps({"request_body": {"temperature": 1.2}}))
+        sys.exit(0)
+
+print("{}")
+```
+
 ## Use Cases
 
 - **Logging** - Record all interactions for debugging or auditing
@@ -407,3 +559,5 @@ echo '{}'
 - **Backup** - Save state before destructive operations
 - **Security** - Block or modify dangerous operations
 - **Enrichment** - Add context or metadata to prompts
+- **Tool Restriction** - Filter available tools based on context or permissions
+- **API Customization** - Modify temperature, max_tokens, or other API parameters

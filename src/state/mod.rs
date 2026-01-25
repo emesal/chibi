@@ -9,7 +9,7 @@ pub mod jsonl;
 
 use jsonl::read_jsonl_file;
 
-use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig};
+use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
 use crate::context::{
     Context, ContextEntry, ContextMeta, ContextState, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION,
     ENTRY_TYPE_CONTEXT_CREATED, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
@@ -1483,6 +1483,7 @@ impl AppState {
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             api: api_params,
+            tools: ToolsConfig::default(),
         };
 
         // Apply local config overrides
@@ -1535,6 +1536,11 @@ impl AppState {
         // Apply context-level API params (Layer 3)
         if let Some(ref local_api) = local.api {
             resolved.api = resolved.api.merge_with(local_api);
+        }
+
+        // Apply context-level tool filtering config
+        if let Some(ref local_tools) = local.tools {
+            resolved.tools = local_tools.clone();
         }
 
         // Apply CLI overrides (highest priority)
@@ -2405,6 +2411,7 @@ mod tests {
             tool_cache_preview_chars: None,
             file_tools_allowed_paths: None,
             api: None,
+            tools: None,
             storage: StorageConfig::default(),
         };
         app.save_local_config("default", &local).unwrap();
