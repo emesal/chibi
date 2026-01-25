@@ -333,8 +333,8 @@ impl AppState {
     /// Cleanup old cache entries for all contexts
     pub fn cleanup_all_tool_caches(&self, max_age_days: u64) -> io::Result<usize> {
         let mut total_removed = 0;
-        for context_name in &self.state.contexts {
-            let removed = self.cleanup_tool_cache(context_name, max_age_days)?;
+        for context_entry in &self.state.contexts {
+            let removed = self.cleanup_tool_cache(&context_entry.name, max_age_days)?;
             total_removed += removed;
         }
         Ok(total_removed)
