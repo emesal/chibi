@@ -16,14 +16,15 @@ use crate::context::{
     EntryMetadata, Message, TranscriptEntry, is_valid_context_name, now_timestamp,
     validate_context_name,
 };
-use crate::partition::{PartitionManager, StorageConfig};
+use crate::partition::{ActiveState, PartitionManager, StorageConfig};
 use dirs_next::home_dir;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-#[derive(Debug)]
 pub struct AppState {
     pub config: Config,
     pub models_config: ModelsConfig,
@@ -33,6 +34,10 @@ pub struct AppState {
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
     pub plugins_dir: PathBuf,
+    /// Cache of active partition state per context, avoiding repeated file scans.
+    /// Uses interior mutability since caching is a side effect that doesn't change
+    /// logical state.
+    active_state_cache: RefCell<HashMap<String, ActiveState>>,
 }
 
 impl AppState {
@@ -64,6 +69,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            active_state_cache: RefCell::new(HashMap::new()),
         })
     }
 
@@ -155,6 +161,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            active_state_cache: RefCell::new(HashMap::new()),
         };
 
         // Sync state with filesystem (handles stale entries and orphan directories)
@@ -863,6 +870,9 @@ impl AppState {
     }
 
     /// Append a single entry to transcript (the authoritative log, using partitioned storage)
+    ///
+    /// Uses cached active state when available to avoid repeated file scans.
+    /// The cache is updated after each operation and invalidated on context clear/compaction.
     pub fn append_to_transcript(
         &self,
         context_name: &str,
@@ -872,11 +882,31 @@ impl AppState {
         self.migrate_transcript_if_needed(context_name)?;
         let transcript_dir = self.transcript_dir(context_name);
         let storage_config = self.get_storage_config(context_name)?;
-        let mut pm = PartitionManager::load_with_config(&transcript_dir, storage_config)?;
+
+        // Get cached state if available
+        let cached_state = self.active_state_cache.borrow().get(context_name).cloned();
+
+        let mut pm = PartitionManager::load_with_cached_state(
+            &transcript_dir,
+            storage_config,
+            cached_state,
+        )?;
         pm.append_entry(entry)?;
 
         // Check if rotation is needed after append
-        pm.rotate_if_needed()?;
+        let rotated = pm.rotate_if_needed()?;
+
+        // Update cache with new state (if rotated, state was reset)
+        if rotated {
+            // After rotation, remove from cache so next load re-scans the empty active partition
+            self.active_state_cache.borrow_mut().remove(context_name);
+        } else {
+            // Update cache with the modified state
+            self.active_state_cache
+                .borrow_mut()
+                .insert(context_name.to_string(), pm.active_state());
+        }
+
         Ok(())
     }
 
@@ -962,6 +992,9 @@ impl AppState {
         // Mark context dirty so it rebuilds with new anchor on next load
         self.mark_context_dirty(&context.name)?;
 
+        // Invalidate active state cache for this context
+        self.active_state_cache.borrow_mut().remove(&context.name);
+
         // Create fresh context (preserving nothing - full clear)
         let new_context = Context::new(self.state.current_context.clone());
 
@@ -1009,6 +1042,9 @@ impl AppState {
 
         // Remove the directory
         fs::remove_dir_all(&dir)?;
+
+        // Invalidate active state cache for the destroyed context
+        self.active_state_cache.borrow_mut().remove(name);
 
         // Update state
         new_state.contexts.retain(|e| e.name != name);
@@ -1293,6 +1329,9 @@ impl AppState {
 
         // Mark context dirty so it rebuilds with new anchor on next load
         self.mark_context_dirty(context_name)?;
+
+        // Invalidate active state cache for this context
+        self.active_state_cache.borrow_mut().remove(context_name);
 
         // Create fresh context
         let new_context = Context::new(context_name);
@@ -1668,6 +1707,10 @@ impl AppState {
         let compaction_anchor = self.create_compaction_anchor(context_name, summary);
         self.append_to_transcript(context_name, &compaction_anchor)?;
         self.mark_context_dirty(context_name)?;
+
+        // Invalidate active state cache after compaction (context content changed)
+        self.active_state_cache.borrow_mut().remove(context_name);
+
         Ok(())
     }
 }
