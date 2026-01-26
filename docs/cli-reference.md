@@ -177,6 +177,7 @@ Use `-n home` to inspect the resolved path.
 | `request-log` | Log full API request bodies to `requests.jsonl` |
 | `response-meta` | Log response metadata/usage stats to `response_meta.jsonl` |
 | `all` | Enable all logging features above |
+| `md=<FILENAME>` | Render a markdown file and quit (implies `-x`) |
 | `destroy_at=<TIMESTAMP>` | Set auto-destroy timestamp on current context |
 | `destroy_after_seconds_inactive=<SECS>` | Set inactivity timeout on current context |
 
@@ -185,6 +186,25 @@ Use `-n home` to inspect the resolved path.
 Debug output is written to files in the context directory:
 - `requests.jsonl` - Full API request bodies (with `request-log` or `all`)
 - `response_meta.jsonl` - Response metadata, usage stats, model info (with `response-meta` or `all`)
+
+### Markdown Rendering
+
+You can render a markdown file without invoking the LLM:
+
+```bash
+# Render a markdown file
+chibi --debug md=README.md
+
+# Works with any markdown file
+chibi --debug md=docs/guide.md
+```
+
+This is useful for:
+- Previewing markdown files with terminal rendering
+- Testing markdown rendering without starting a conversation
+- Quick markdown file viewing
+
+The feature automatically implies `-x` (no LLM invocation) and exits after rendering.
 
 ### Auto-Destroy (Test Cleanup)
 

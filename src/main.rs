@@ -799,6 +799,19 @@ async fn main() -> io::Result<()> {
 
     // CLI mode: parse to ChibiInput and use unified execution
     let input = cli::parse()?;
+
+    // Handle --debug md=<FILENAME> early (renders markdown and quits, implies -x)
+    if let Some(input::DebugKey::Md(ref path)) = input.flags.debug {
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            io::Error::new(
+                ErrorKind::NotFound,
+                format!("Failed to read file '{}': {}", path, e),
+            )
+        })?;
+        render_markdown_output(&content, true)?;
+        return Ok(());
+    }
+
     let verbose = input.flags.verbose;
     let mut app = AppState::load(home_override)?;
 

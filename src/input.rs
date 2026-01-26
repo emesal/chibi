@@ -69,6 +69,8 @@ pub enum DebugKey {
     DestroyAt(u64),
     /// Set destroy_after_seconds_inactive on the current context (e.g., "destroy_after_seconds_inactive=60")
     DestroyAfterSecondsInactive(u64),
+    /// Render a markdown file and quit (e.g., "md=README.md")
+    Md(String),
     /// Enable all debug features (request_log, response_meta)
     All,
 }
@@ -90,6 +92,11 @@ impl DebugKey {
                 .parse::<u64>()
                 .ok()
                 .map(DebugKey::DestroyAfterSecondsInactive);
+        }
+        if let Some(path) = s.strip_prefix("md=") {
+            if !path.is_empty() {
+                return Some(DebugKey::Md(path.to_string()));
+            }
         }
 
         match s {
@@ -348,6 +355,20 @@ mod tests {
             DebugKey::from_str("destroy_after_seconds_inactive=invalid"),
             None
         );
+    }
+
+    #[test]
+    fn test_debug_key_from_str_md() {
+        assert_eq!(
+            DebugKey::from_str("md=README.md"),
+            Some(DebugKey::Md("README.md".to_string()))
+        );
+        assert_eq!(
+            DebugKey::from_str("md=docs/guide.md"),
+            Some(DebugKey::Md("docs/guide.md".to_string()))
+        );
+        // Empty path should return None
+        assert_eq!(DebugKey::from_str("md="), None);
     }
 
     #[test]
