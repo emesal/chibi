@@ -14,7 +14,7 @@
       {
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "chibi";
-          version = "0.5.0";
+          version = "0.5.0-dev";
           src = ./.;
 
           cargoLock = {
