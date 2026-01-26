@@ -543,7 +543,10 @@ async fn send_prompt_with_depth(
         let response = llm::send_streaming_request(resolved_config, request_body.clone()).await?;
 
         let mut stream = response.bytes_stream();
-        let mut md = MarkdownStream::new(resolved_config.render_markdown);
+        let mut md = MarkdownStream::new(crate::markdown::MarkdownConfig {
+            render_markdown: resolved_config.render_markdown,
+            render_images: resolved_config.render_images,
+        });
         let mut full_response = String::new();
         let mut is_first_content = true;
         let json_mode = output.is_json_mode();

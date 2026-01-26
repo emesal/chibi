@@ -63,6 +63,7 @@ chibi -v "Read my Cargo.toml"
 
 - **[Getting Started](docs/getting-started.md)** - Installation and first steps
 - **[Configuration](docs/configuration.md)** - Full config reference including API parameters
+- **[Images](docs/images.md)** - Image rendering in the terminal
 - **[Contexts](docs/contexts.md)** - Managing multiple conversations
 - **[Plugins](docs/plugins.md)** - Creating tools for the LLM
 - **[Hooks](docs/hooks.md)** - Lifecycle event system

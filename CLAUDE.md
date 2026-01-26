@@ -33,7 +33,7 @@ config.rs        Config structs (Config, LocalConfig, ModelsConfig, ResolvedConf
 context.rs       Context, Message, TranscriptEntry, InboxEntry
 input.rs         ChibiInput, Command enum, Flags
 output.rs        OutputHandler (stdout/JSON modes)
-markdown.rs      Streaming markdown renderer (TTY detection, line buffering)
+markdown.rs      Streaming markdown renderer (TTY detection, line buffering, inline image rendering)
 lock.rs          Context locking with heartbeat
 inbox.rs         Inter-context messaging
 llm.rs           Low-level API request helpers

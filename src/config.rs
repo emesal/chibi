@@ -359,6 +359,10 @@ fn default_render_markdown() -> bool {
     true
 }
 
+fn default_render_images() -> bool {
+    true
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -402,6 +406,9 @@ pub struct Config {
     /// Render LLM output as formatted markdown in the terminal
     #[serde(default = "default_render_markdown")]
     pub render_markdown: bool,
+    /// Render local file images inline in the terminal
+    #[serde(default = "default_render_images")]
+    pub render_images: bool,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: ApiParams,
@@ -435,6 +442,8 @@ pub struct LocalConfig {
     pub file_tools_allowed_paths: Option<Vec<String>>,
     /// Render LLM output as formatted markdown in the terminal
     pub render_markdown: Option<bool>,
+    /// Render local file images inline in the terminal
+    pub render_images: Option<bool>,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
@@ -488,6 +497,8 @@ pub struct ResolvedConfig {
     pub file_tools_allowed_paths: Vec<String>,
     /// Render LLM output as formatted markdown in the terminal
     pub render_markdown: bool,
+    /// Render local file images inline in the terminal
+    pub render_images: bool,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
@@ -522,6 +533,7 @@ impl ResolvedConfig {
                 }
             }
             "render_markdown" => Some(self.render_markdown.to_string()),
+            "render_images" => Some(self.render_images.to_string()),
 
             // API params (api.*)
             "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
@@ -562,6 +574,7 @@ impl ResolvedConfig {
             "tool_cache_preview_chars",
             "file_tools_allowed_paths",
             "render_markdown",
+            "render_images",
             "max_recursion_depth",
             "reflection_enabled",
             // API params
@@ -1016,6 +1029,7 @@ mod tests {
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             render_markdown: true,
+            render_images: true,
             api: ApiParams {
                 temperature: Some(0.7),
                 max_tokens: Some(4096),

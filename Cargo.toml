@@ -23,6 +23,7 @@ tokio = { version = "1.49.0", features = ["full"] }
 toml = "0.9.11"
 uuid = { version = "1", features = ["v4"] }
 fs2 = "0.4"
+image = "0.24"
 imgcatr = "0.1.4"
 
 [lints.rust]

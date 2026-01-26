@@ -46,7 +46,10 @@ fn confirm_action(prompt: &str) -> bool {
 /// Uses markdown rendering when `render` is true and stdout is a TTY,
 /// otherwise outputs raw content.
 fn render_markdown_output(content: &str, render: bool) -> io::Result<()> {
-    let mut md = markdown::MarkdownStream::new(render);
+    let mut md = markdown::MarkdownStream::new(markdown::MarkdownConfig {
+        render_markdown: render,
+        render_images: render,
+    });
     md.write_chunk(content)?;
     md.finish()?;
     Ok(())

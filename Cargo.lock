@@ -216,6 +216,7 @@ dependencies = [
  "fastbloom",
  "fs2",
  "futures-util",
+ "image",
  "imgcatr",
  "regex",
  "reqwest",

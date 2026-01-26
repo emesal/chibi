@@ -1483,6 +1483,7 @@ impl AppState {
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             render_markdown: self.config.render_markdown,
+            render_images: self.config.render_images,
             api: api_params,
             tools: ToolsConfig::default(),
         };
@@ -1535,6 +1536,9 @@ impl AppState {
         }
         if let Some(render_markdown) = local.render_markdown {
             resolved.render_markdown = render_markdown;
+        }
+        if let Some(render_images) = local.render_images {
+            resolved.render_images = render_images;
         }
 
         // Apply context-level API params (Layer 3)
@@ -1705,6 +1709,7 @@ mod tests {
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             render_markdown: true,
+            render_images: true,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2281,6 +2286,7 @@ mod tests {
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             render_markdown: true,
+            render_images: true,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2339,6 +2345,7 @@ mod tests {
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             render_markdown: true,
+            render_images: true,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2418,6 +2425,7 @@ mod tests {
             tool_cache_preview_chars: None,
             file_tools_allowed_paths: None,
             render_markdown: None,
+            render_images: None,
             api: None,
             tools: None,
             storage: StorageConfig::default(),
