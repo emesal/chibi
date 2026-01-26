@@ -37,27 +37,39 @@ chibi -c new:bugfix
 
 ### Previous Context Reference
 
-Use `-` as a shortcut to reference the previous context:
+Use `-` as a shortcut to reference the previous context. When using `-c -`, it works just like `cd -` in bash - the current and previous contexts **swap places**, allowing you to toggle back and forth:
 
 ```bash
 chibi -c dev          # Switch to 'dev', previous='default'
 chibi -c production   # Switch to 'production', previous='dev'
-chibi -c -            # Switch back to 'dev'
-chibi -c -            # Switch back to 'production'
+chibi -c -            # Switch to 'dev', previous='production' (swapped!)
+chibi -c -            # Switch to 'production', previous='dev' (swapped back!)
 ```
 
-This works with any command that accepts a context name:
+**Swap Behavior:**
+The swap behavior means you can quickly toggle between two contexts:
+```bash
+chibi -c work         # Working on work project
+chibi -c personal     # Switch to personal project (work is now previous)
+chibi -c -            # Back to work (personal is now previous)
+chibi -c -            # Back to personal (work is now previous)
+# Keep toggling as needed!
+```
+
+**Using with Other Commands:**
+The `-` reference works with any command that accepts a context name:
 ```bash
 chibi -c staging      # Switch to staging
 chibi -D -            # Delete the previous context (production)
 chibi -G - 20         # Show last 20 log entries from previous context
-chibi -C - "query"    # Transiently run a query in previous context
+chibi -C - "query"    # Transiently run a query in previous context (no swap)
 ```
 
 **How it works:**
 - `state.json` tracks `previous_context` field
-- Only persistent switches (`-c`) update the `previous_context`
-- Transient switches (`-C`) use previous from state but don't update it
+- When using `-c -`, current and previous contexts swap (like `cd -`)
+- Transient switches (`-C -`) use previous but don't swap or persist changes
+- Other commands (`-D -`, `-G -`, etc.) just resolve to the previous context name
 - `-` is a reserved name and cannot be used as an actual context name
 - Error if no previous context exists (e.g., on first invocation)
 

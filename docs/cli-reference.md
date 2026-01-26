@@ -27,14 +27,23 @@ The special context name `-` can be used to reference the previous context in an
 ```bash
 chibi -c dev          # Switch to 'dev', previous='default'
 chibi -c production   # Switch to 'production', previous='dev'
-chibi -c -            # Switch back to 'dev'
+chibi -c -            # Switch to 'dev', previous='production' (swaps!)
+chibi -c -            # Switch to 'production', previous='dev' (swaps back!)
+```
+
+**Swap Behavior (like `cd -`):**
+When using `-c -` to switch contexts, the current and previous contexts swap places, just like the `cd -` command in bash. This allows you to toggle back and forth between two contexts repeatedly:
+```bash
+chibi -c work         # current='work', previous='personal'
+chibi -c -            # current='personal', previous='work'
+chibi -c -            # current='work', previous='personal'
 ```
 
 **Notes:**
 - `-` is a reserved name and cannot be used as a literal context name
 - If no previous context exists (first invocation), you'll get an error: "No previous context available"
-- Only persistent switches (`-c`) update `previous_context` in state.json
-- Transient switches (`-C`) don't persist the change but can still use `-` to reference the saved previous context
+- Only persistent switches (`-c`) update `previous_context` in state.json and use swap behavior
+- Transient switches (`-C -`) resolve to previous context but don't swap or persist changes
 - Works with all context name parameters: `-D -` deletes previous context, `-G - 10` shows previous context's log, etc.
 
 ## Inspection & History

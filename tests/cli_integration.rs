@@ -961,3 +961,74 @@ fn integration_previous_context_with_new() {
         "Should switch back to first_ctx"
     );
 }
+
+#[test]
+fn integration_previous_context_swaps_like_cd() {
+    let temp_home = setup_test_home();
+
+    // Switch to context "swap_a"
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "swap_a",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Switch to context "swap_b"
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "swap_b",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Now we're in swap_b, previous is swap_a
+    // Use "-c -" to go back to swap_a
+    let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "-", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output1.status.success());
+    let stdout1 = String::from_utf8_lossy(&output1.stdout);
+    assert!(
+        stdout1.contains("swap_a"),
+        "Should be in swap_a after first -c -"
+    );
+
+    // Use "-c -" again - should go back to swap_b (swap behavior)
+    let output2 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "-", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output2.status.success());
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    assert!(
+        stdout2.contains("swap_b"),
+        "Should be in swap_b after second -c - (swap behavior)"
+    );
+
+    // Use "-c -" once more - should be back in swap_a
+    let output3 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "-", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output3.status.success());
+    let stdout3 = String::from_utf8_lossy(&output3.stdout);
+    assert!(
+        stdout3.contains("swap_a"),
+        "Should be in swap_a after third -c - (swap behavior)"
+    );
+}

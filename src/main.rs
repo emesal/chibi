@@ -310,6 +310,8 @@ async fn execute_from_input(
     match &input.context {
         ContextSelection::Current => {}
         ContextSelection::Transient { name } => {
+            // For transient, we don't swap - just switch temporarily
+            // (transient doesn't persist previous_context changes)
             let actual_name = resolve_context_name(app, name)?;
             let prev_context = app.state.current_context.clone();
             app.state.switch_context(actual_name)?;
@@ -348,9 +350,19 @@ async fn execute_from_input(
             );
         }
         ContextSelection::Switch { name, persistent } => {
-            let actual_name = resolve_context_name(app, name)?;
+            // Special case: if name is "-", swap current and previous contexts
             let prev_context = app.state.current_context.clone();
-            app.state.switch_context(actual_name)?;
+            if name == "-" {
+                // Resolve previous context
+                let previous = resolve_previous_context(app)?;
+                // Swap: set current to previous, and previous to what was current
+                app.state.current_context = previous;
+                app.state.previous_context = Some(prev_context.clone());
+            } else {
+                // Normal switch: resolve name and use standard switch logic
+                let actual_name = resolve_context_name(app, name)?;
+                app.state.switch_context(actual_name)?;
+            }
 
             // Ensure ContextEntry exists in state.contexts before proceeding
             let current_ctx_name = app.state.current_context.clone();
