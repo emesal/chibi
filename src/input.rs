@@ -94,9 +94,10 @@ impl DebugKey {
                 .map(DebugKey::DestroyAfterSecondsInactive);
         }
         if let Some(path) = s.strip_prefix("md=")
-            && !path.is_empty() {
-                return Some(DebugKey::Md(path.to_string()));
-            }
+            && !path.is_empty()
+        {
+            return Some(DebugKey::Md(path.to_string()));
+        }
 
         match s {
             "request-log" | "request_log" => Some(DebugKey::RequestLog),
