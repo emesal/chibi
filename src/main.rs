@@ -14,7 +14,9 @@ mod state;
 mod tools;
 
 use cli::Inspectable;
-use context::{Context, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT};
+use context::{
+    Context, ContextEntry, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
+};
 use input::{ChibiInput, Command, ContextSelection, UsernameOverride};
 use output::OutputHandler;
 use state::AppState;
@@ -294,6 +296,20 @@ async fn execute_from_input(
             let actual_name = resolve_context_name(app, name)?;
             let prev_context = app.state.current_context.clone();
             app.state.switch_context(actual_name)?;
+
+            // Ensure ContextEntry exists in state.contexts before proceeding
+            let current_ctx_name = app.state.current_context.clone();
+            if !app
+                .state
+                .contexts
+                .iter()
+                .any(|e| e.name == current_ctx_name)
+            {
+                app.state
+                    .contexts
+                    .push(ContextEntry::new(current_ctx_name.clone()));
+            }
+
             if !app.context_dir(&app.state.current_context).exists() {
                 let new_context = Context::new(app.state.current_context.clone());
                 app.save_current_context(&new_context)?;
@@ -318,6 +334,20 @@ async fn execute_from_input(
             let actual_name = resolve_context_name(app, name)?;
             let prev_context = app.state.current_context.clone();
             app.state.switch_context(actual_name)?;
+
+            // Ensure ContextEntry exists in state.contexts before proceeding
+            let current_ctx_name = app.state.current_context.clone();
+            if !app
+                .state
+                .contexts
+                .iter()
+                .any(|e| e.name == current_ctx_name)
+            {
+                app.state
+                    .contexts
+                    .push(ContextEntry::new(current_ctx_name.clone()));
+            }
+
             if !app.context_dir(&app.state.current_context).exists() {
                 let new_context = Context::new(app.state.current_context.clone());
                 app.save_current_context(&new_context)?;
