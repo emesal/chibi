@@ -45,6 +45,7 @@ chibi -c -            # current='work', previous='personal'
 - Only persistent switches (`-c`) update `previous_context` in state.json and use swap behavior
 - Transient switches (`-C -`) resolve to previous context but don't swap or persist changes
 - Works with all context name parameters: `-D -` deletes previous context, `-G - 10` shows previous context's log, etc.
+- Attached flag syntax works: both `-xc-` and `-xc -` are valid
 
 ## Inspection & History
 
