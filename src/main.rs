@@ -224,8 +224,7 @@ fn show_log(
     for entry in selected {
         match entry.entry_type.as_str() {
             ENTRY_TYPE_MESSAGE => {
-                let header = format!("[{}]: ", entry.from.to_uppercase());
-                print!("{}", header);
+                println!("[{}]", entry.from.to_uppercase());
                 render_markdown_output(&entry.content, render_markdown)?;
                 println!();
             }
