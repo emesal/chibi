@@ -3135,7 +3135,8 @@ not valid json at all
 
         // Finalize compaction (writes another entry via append_to_transcript,
         // then invalidates cache)
-        app.finalize_compaction("test-context", "Test summary").unwrap();
+        app.finalize_compaction("test-context", "Test summary")
+            .unwrap();
 
         // Cache should be invalidated
         assert!(
@@ -3150,7 +3151,8 @@ not valid json at all
 
         // Create the "default" context with messages so clear_context has something to clear
         let mut ctx = Context::new("default");
-        ctx.messages.push(Message::new("user".to_string(), "Hello".to_string()));
+        ctx.messages
+            .push(Message::new("user".to_string(), "Hello".to_string()));
         app.save_current_context(&ctx).unwrap();
 
         // Populate cache explicitly
@@ -3175,7 +3177,8 @@ not valid json at all
 
         // Create context with messages
         let mut ctx = Context::new("test-context");
-        ctx.messages.push(Message::new("user".to_string(), "Hello".to_string()));
+        ctx.messages
+            .push(Message::new("user".to_string(), "Hello".to_string()));
         app.save_context(&ctx).unwrap();
 
         // Append to transcript to populate cache

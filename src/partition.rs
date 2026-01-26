@@ -1418,7 +1418,10 @@ mod tests {
 
         // State should match what we cached
         assert_eq!(pm.active_state().entry_count, cached_state.entry_count);
-        assert_eq!(pm.active_state().first_entry_ts, cached_state.first_entry_ts);
+        assert_eq!(
+            pm.active_state().first_entry_ts,
+            cached_state.first_entry_ts
+        );
     }
 
     #[test]
@@ -1435,8 +1438,7 @@ mod tests {
         }
 
         // Load without cached state - should scan file
-        let pm =
-            PartitionManager::load_with_cached_state(temp_dir.path(), config, None).unwrap();
+        let pm = PartitionManager::load_with_cached_state(temp_dir.path(), config, None).unwrap();
 
         assert_eq!(pm.active_state().entry_count, 2);
     }
@@ -1454,12 +1456,9 @@ mod tests {
         };
 
         // But the file doesn't exist - cache should be invalidated
-        let pm = PartitionManager::load_with_cached_state(
-            temp_dir.path(),
-            config,
-            Some(stale_cache),
-        )
-        .unwrap();
+        let pm =
+            PartitionManager::load_with_cached_state(temp_dir.path(), config, Some(stale_cache))
+                .unwrap();
 
         // Should have detected stale cache and returned default state
         assert_eq!(pm.active_state().entry_count, 0);
@@ -1516,7 +1515,10 @@ mod tests {
         let tmp_path = temp_dir.path().join("manifest.tmp");
 
         assert!(manifest_path.exists(), "manifest.json should exist");
-        assert!(!tmp_path.exists(), "manifest.tmp should not exist after atomic write");
+        assert!(
+            !tmp_path.exists(),
+            "manifest.tmp should not exist after atomic write"
+        );
     }
 
     // === File locking tests (Issue #2) ===
