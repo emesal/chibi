@@ -5,10 +5,11 @@
 //! or JSON input.
 
 use crate::cli::Inspectable;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// What operation to perform (mutually exclusive commands)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Command {
     /// Send a prompt to the LLM
@@ -57,7 +58,7 @@ pub enum Command {
 }
 
 /// Debug feature keys
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DebugKey {
     /// Log all API requests to requests.jsonl
@@ -101,7 +102,7 @@ impl DebugKey {
 }
 
 /// Behavioral modifiers (flags that affect how commands run)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Flags {
     /// Show verbose output (-v)
     #[serde(default)]
@@ -118,7 +119,7 @@ pub struct Flags {
 }
 
 /// Context selection mode
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextSelection {
     /// Use the current context (no switch)
@@ -140,7 +141,7 @@ fn default_true() -> bool {
 }
 
 /// Username override mode
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UsernameOverride {
     /// Persistent username (-u): saves to local.toml
@@ -151,7 +152,7 @@ pub enum UsernameOverride {
 
 /// Unified input from CLI or JSON
 /// This is the main type that represents a fully parsed user request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ChibiInput {
     /// The command to execute
     pub command: Command,

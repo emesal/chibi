@@ -692,6 +692,13 @@ fn extract_home_override(args: &[String]) -> Option<std::path::PathBuf> {
 async fn main() -> io::Result<()> {
     // Check for early flags (before full CLI parsing)
     let args: Vec<String> = std::env::args().collect();
+    // --json-schema: print the JSON schema for --json-config input and exit immediately
+    if args.iter().any(|a| a == "--json-schema") {
+        let schema = schemars::schema_for!(ChibiInput);
+        println!("{}", serde_json::to_string_pretty(&schema).unwrap());
+        return Ok(());
+    }
+
     let is_json_config = args.iter().any(|a| a == "--json-config");
     let cli_json_output = args.iter().any(|a| a == "--json-output");
     let home_override = extract_home_override(&args);

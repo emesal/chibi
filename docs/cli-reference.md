@@ -73,6 +73,7 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 |------|-------------|
 | `--json-config` | Read input as JSON from stdin (for programmatic use) |
 | `--json-output` | Output in JSONL format (structured output) |
+| `--json-schema` | Print the JSON schema for `--json-config` input and exit |
 
 ### JSON Input Format (--json-config)
 
@@ -107,6 +108,16 @@ When using `--json-config`, pass a JSON object to stdin:
 **Home directory:** Use `--home` alongside `--json-config` (cannot be set in JSON):
 ```bash
 echo '{"command": "list_contexts"}' | chibi --home /path/to/alt --json-config
+```
+
+### JSON Schema (--json-schema)
+
+Print the full JSON Schema describing the input format accepted by `--json-config`, then exit. This is useful for editor integration, validation, and code generation. All other flags are ignored.
+
+```bash
+chibi --json-schema              # Print schema to stdout
+chibi --json-schema > schema.json  # Save to file
+chibi --json-schema | jq .definitions.Command  # Inspect a specific type
 ```
 
 ## Directory Override
