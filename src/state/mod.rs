@@ -992,13 +992,13 @@ impl AppState {
         // Mark context dirty so it rebuilds with new anchor on next load
         self.mark_context_dirty(&context.name)?;
 
-        // Invalidate active state cache for this context
-        self.active_state_cache.borrow_mut().remove(&context.name);
-
         // Create fresh context (preserving nothing - full clear)
         let new_context = Context::new(self.state.current_context.clone());
-
         self.save_current_context(&new_context)?;
+
+        // Invalidate active state cache after all writes are complete,
+        // so the next append re-scans fresh state from disk
+        self.active_state_cache.borrow_mut().remove(&context.name);
         Ok(())
     }
 
@@ -1330,12 +1330,8 @@ impl AppState {
         // Mark context dirty so it rebuilds with new anchor on next load
         self.mark_context_dirty(context_name)?;
 
-        // Invalidate active state cache for this context
-        self.active_state_cache.borrow_mut().remove(context_name);
-
         // Create fresh context
         let new_context = Context::new(context_name);
-
         self.save_context(&new_context)?;
 
         // Ensure the context is tracked in state (like clear_context does via save_current_context)
@@ -1352,6 +1348,10 @@ impl AppState {
             ));
             new_state.save(&self.state_path)?;
         }
+
+        // Invalidate active state cache after all writes are complete,
+        // so the next append re-scans fresh state from disk
+        self.active_state_cache.borrow_mut().remove(context_name);
 
         Ok(())
     }
@@ -3031,5 +3031,165 @@ not valid json at all
         let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
         assert!(destroyed.is_empty());
         assert!(app.context_dir("keep-context").exists());
+    }
+
+    // === Active state caching tests (Issue #1) ===
+
+    #[test]
+    fn test_append_to_transcript_caches_state() {
+        let (app, _temp) = create_test_app();
+
+        // Create context (save_context writes a context_created anchor, populating the cache)
+        let ctx = Context::new("test-context");
+        app.save_context(&ctx).unwrap();
+        let count_after_save = app
+            .active_state_cache
+            .borrow()
+            .get("test-context")
+            .map(|s| s.entry_count())
+            .unwrap_or(0);
+
+        // Append an explicit entry
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry).unwrap();
+
+        // Cache should exist and have incremented
+        let cache = app.active_state_cache.borrow();
+        assert!(
+            cache.contains_key("test-context"),
+            "cache should contain entry after append"
+        );
+        assert_eq!(
+            cache.get("test-context").unwrap().entry_count(),
+            count_after_save + 1,
+            "cache entry_count should increment by 1 after append"
+        );
+    }
+
+    #[test]
+    fn test_append_to_transcript_updates_cache_incrementally() {
+        let (app, _temp) = create_test_app();
+
+        // Create context
+        let ctx = Context::new("test-context");
+        app.save_context(&ctx).unwrap();
+
+        let entry1 = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry1).unwrap();
+        let count_after_first = app
+            .active_state_cache
+            .borrow()
+            .get("test-context")
+            .unwrap()
+            .entry_count();
+
+        let entry2 = app.create_user_message_entry("World", "testuser");
+        app.append_to_transcript("test-context", &entry2).unwrap();
+
+        // Cache should have incremented by exactly 1 from the second append
+        let cache = app.active_state_cache.borrow();
+        assert_eq!(
+            cache.get("test-context").unwrap().entry_count(),
+            count_after_first + 1,
+            "cache should increment by 1 after each append"
+        );
+    }
+
+    #[test]
+    fn test_destroy_context_invalidates_cache() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create context and populate cache
+        let ctx = Context::new("test-context");
+        app.save_context(&ctx).unwrap();
+
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry).unwrap();
+
+        // Verify cache has entry
+        assert!(app.active_state_cache.borrow().contains_key("test-context"));
+
+        // Destroy context
+        app.destroy_context("test-context").unwrap();
+
+        // Cache should be invalidated
+        assert!(
+            !app.active_state_cache.borrow().contains_key("test-context"),
+            "cache should be invalidated after destroy_context"
+        );
+    }
+
+    #[test]
+    fn test_finalize_compaction_invalidates_cache() {
+        let (app, _temp) = create_test_app();
+
+        // Create context and populate cache
+        let ctx = Context::new("test-context");
+        app.save_context(&ctx).unwrap();
+
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry).unwrap();
+
+        // Verify cache has entry
+        assert!(app.active_state_cache.borrow().contains_key("test-context"));
+
+        // Finalize compaction (writes another entry via append_to_transcript,
+        // then invalidates cache)
+        app.finalize_compaction("test-context", "Test summary").unwrap();
+
+        // Cache should be invalidated
+        assert!(
+            !app.active_state_cache.borrow().contains_key("test-context"),
+            "cache should be invalidated after finalize_compaction"
+        );
+    }
+
+    #[test]
+    fn test_clear_context_invalidates_cache() {
+        let (app, _temp) = create_test_app();
+
+        // Create the "default" context with messages so clear_context has something to clear
+        let mut ctx = Context::new("default");
+        ctx.messages.push(Message::new("user".to_string(), "Hello".to_string()));
+        app.save_current_context(&ctx).unwrap();
+
+        // Populate cache explicitly
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("default", &entry).unwrap();
+        assert!(app.active_state_cache.borrow().contains_key("default"));
+
+        // clear_context writes archival anchor and saves fresh context (both populate
+        // cache), then invalidates the cache as the final step
+        app.clear_context().unwrap();
+
+        // Cache should be absent after clear
+        assert!(
+            !app.active_state_cache.borrow().contains_key("default"),
+            "cache should be invalidated after clear_context"
+        );
+    }
+
+    #[test]
+    fn test_clear_context_by_name_invalidates_cache() {
+        let (app, _temp) = create_test_app();
+
+        // Create context with messages
+        let mut ctx = Context::new("test-context");
+        ctx.messages.push(Message::new("user".to_string(), "Hello".to_string()));
+        app.save_context(&ctx).unwrap();
+
+        // Append to transcript to populate cache
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry).unwrap();
+        assert!(app.active_state_cache.borrow().contains_key("test-context"));
+
+        // clear_context_by_name saves fresh context then invalidates cache last
+        app.clear_context_by_name("test-context").unwrap();
+
+        // Cache should be absent after clear
+        assert!(
+            !app.active_state_cache.borrow().contains_key("test-context"),
+            "cache should be invalidated after clear_context_by_name"
+        );
     }
 }
