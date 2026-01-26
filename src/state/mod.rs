@@ -21,7 +21,7 @@ use dirs_next::home_dir;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
+use std::io::{self, BufReader, ErrorKind, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -642,7 +642,7 @@ impl AppState {
 
         // If summary was in old context but not in file, save it
         if !old_context.summary.is_empty() && !summary_path.exists() {
-            fs::write(&summary_path, &old_context.summary)?;
+            crate::safe_io::atomic_write_text(&summary_path, &old_context.summary)?;
         }
 
         // Remove old context.json file
@@ -690,23 +690,19 @@ impl AppState {
         read_jsonl_file(&self.context_file(name))
     }
 
-    /// Write entries to context.jsonl (full rewrite)
+    /// Write entries to context.jsonl (full rewrite, atomic)
     pub fn write_context_entries(&self, name: &str, entries: &[TranscriptEntry]) -> io::Result<()> {
         self.ensure_context_dir(name)?;
         let path = self.context_file(name);
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
 
-        let mut writer = BufWriter::new(file);
+        let mut content = String::new();
         for entry in entries {
             let json = serde_json::to_string(entry)
                 .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
-            writeln!(writer, "{}", json)?;
+            content.push_str(&json);
+            content.push('\n');
         }
-        Ok(())
+        crate::safe_io::atomic_write_text(&path, &content)
     }
 
     /// Append a single entry to context.jsonl
@@ -747,17 +743,11 @@ impl AppState {
             .unwrap_or_else(now_timestamp)
     }
 
-    /// Save context metadata
+    /// Save context metadata (atomic write)
     fn save_context_meta(&self, name: &str, meta: &ContextMeta) -> io::Result<()> {
         self.ensure_context_dir(name)?;
         let path = self.context_meta_file(name);
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
-        serde_json::to_writer_pretty(BufWriter::new(file), meta)
-            .map_err(|e| io::Error::other(format!("Failed to save context meta: {}", e)))
+        crate::safe_io::atomic_write_json(&path, meta)
     }
 
     /// Convert transcript entries to messages (for backwards compat)
@@ -841,7 +831,7 @@ impl AppState {
         // Save summary to separate file
         let summary_path = self.summary_file(&context.name);
         if !context.summary.is_empty() {
-            fs::write(&summary_path, &context.summary)?;
+            crate::safe_io::atomic_write_text(&summary_path, &context.summary)?;
         } else if summary_path.exists() {
             // Remove empty summary file
             fs::remove_file(&summary_path)?;
@@ -1176,7 +1166,7 @@ impl AppState {
             None
         };
 
-        fs::write(&prompt_path, content)?;
+        crate::safe_io::atomic_write_text(&prompt_path, content)?;
 
         // Only log change and invalidate if content actually changed
         if old_content.as_deref() != Some(content) {
@@ -1408,16 +1398,16 @@ impl AppState {
         }
     }
 
-    /// Save todos for a context
+    /// Save todos for a context (atomic write)
     pub fn save_todos(&self, context_name: &str, content: &str) -> io::Result<()> {
         self.ensure_context_dir(context_name)?;
-        fs::write(self.todos_file(context_name), content)
+        crate::safe_io::atomic_write_text(&self.todos_file(context_name), content)
     }
 
-    /// Save goals for a context
+    /// Save goals for a context (atomic write)
     pub fn save_goals(&self, context_name: &str, content: &str) -> io::Result<()> {
         self.ensure_context_dir(context_name)?;
-        fs::write(self.goals_file(context_name), content)
+        crate::safe_io::atomic_write_text(&self.goals_file(context_name), content)
     }
 
     /// Load todos for current context
@@ -1461,7 +1451,7 @@ impl AppState {
         }
     }
 
-    /// Save local config for a context
+    /// Save local config for a context (atomic write)
     pub fn save_local_config(
         &self,
         context_name: &str,
@@ -1471,7 +1461,7 @@ impl AppState {
         let path = self.local_config_file(context_name);
         let content = toml::to_string_pretty(local_config)
             .map_err(|e| io::Error::other(format!("Failed to serialize local.toml: {}", e)))?;
-        fs::write(&path, content)
+        crate::safe_io::atomic_write_text(&path, &content)
     }
 
     /// Resolve model name using models.toml aliases

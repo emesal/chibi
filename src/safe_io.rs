@@ -66,6 +66,13 @@ pub fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()>
     atomic_write(path, &json)
 }
 
+/// Atomically write a string to a file.
+///
+/// Convenience wrapper around [`atomic_write()`] for text content.
+pub fn atomic_write_text(path: &Path, content: &str) -> io::Result<()> {
+    atomic_write(path, content.as_bytes())
+}
+
 /// Atomically write bytes to a file.
 ///
 /// Writes to a temporary file (`.tmp` suffix) with fsync, then renames to the
@@ -86,8 +93,14 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    // Write to temporary file with .tmp suffix
-    let tmp_path = path.with_extension("tmp");
+    // Write to temporary file with unique suffix to avoid races between concurrent writers.
+    // Uses PID + a hash of the thread ID for cross-thread uniqueness.
+    let tid = format!("{:?}", std::thread::current().id());
+    let tid_hash: u32 = tid
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    let unique_id = std::process::id() ^ tid_hash;
+    let tmp_path = path.with_extension(format!("tmp.{}", unique_id));
 
     let mut file = OpenOptions::new()
         .write(true)
@@ -225,6 +238,24 @@ mod tests {
 
         let contents = fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "hello world");
+    }
+
+    #[test]
+    fn test_atomic_write_text() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.txt");
+
+        atomic_write_text(&path, "hello world").unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "hello world");
+
+        // Verify no temp files left behind
+        let dir_entries: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(dir_entries.len(), 1, "only the target file should exist");
     }
 
     #[test]
@@ -398,5 +429,94 @@ mod tests {
             result.is_some(),
             "should acquire after other thread releases"
         );
+    }
+
+    #[test]
+    fn test_atomic_write_text_roundtrip() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.txt");
+
+        let content = "line 1\nline 2\nline 3\n";
+        atomic_write_text(&path, content).unwrap();
+
+        let read_back = fs::read_to_string(&path).unwrap();
+        assert_eq!(read_back, content);
+
+        // Verify no temp files remain
+        let dir_entries: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(dir_entries.len(), 1, "only the target file should exist");
+    }
+
+    #[test]
+    fn test_concurrent_atomic_writes_produce_valid_files() {
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        let path = Arc::new(temp_dir.path().join("test.json"));
+
+        let handles: Vec<_> = (0..10)
+            .map(|i| {
+                let path = Arc::clone(&path);
+                thread::spawn(move || {
+                    let data = serde_json::json!({"thread": i, "data": "x".repeat(100)});
+                    atomic_write_json(&path, &data).unwrap();
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // File should be valid JSON (one of the writes won)
+        let content = fs::read_to_string(&*path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(parsed.get("thread").is_some());
+    }
+
+    #[test]
+    fn test_concurrent_locked_appends_produce_valid_lines() {
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        let path = Arc::new(temp_dir.path().join("append.jsonl"));
+        let lock_path = Arc::new(temp_dir.path().join(".append.lock"));
+
+        let handles: Vec<_> = (0..10)
+            .map(|i| {
+                let path = Arc::clone(&path);
+                let lock_path = Arc::clone(&lock_path);
+                thread::spawn(move || {
+                    for j in 0..10 {
+                        let _lock = FileLock::acquire(&lock_path).unwrap();
+                        let mut file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&*path)
+                            .unwrap();
+                        writeln!(file, "{{\"thread\":{},\"seq\":{}}}", i, j).unwrap();
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // All 100 lines should be valid JSON - lock prevents interleaving
+        let content = fs::read_to_string(&*path).unwrap();
+        let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 100);
+        for line in &lines {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(line).is_ok(),
+                "Line should be valid JSON: {}",
+                line
+            );
+        }
     }
 }

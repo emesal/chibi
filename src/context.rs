@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::io::{self, ErrorKind};
-use std::path::PathBuf;
+use std::path::Path;
 use uuid::Uuid;
 
 /// Generate a new UUID for message IDs (used as serde default)
@@ -134,19 +134,8 @@ impl ContextState {
         Ok(())
     }
 
-    pub fn save(&self, state_path: &PathBuf) -> io::Result<()> {
-        use std::fs::OpenOptions;
-        use std::io::BufWriter;
-
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(state_path)?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, self)
-            .map_err(|e| io::Error::other(format!("Failed to save state: {}", e)))?;
-        Ok(())
+    pub fn save(&self, state_path: &Path) -> io::Result<()> {
+        crate::safe_io::atomic_write_json(state_path, self)
     }
 }
 
@@ -738,5 +727,67 @@ mod tests {
             entry.destroy_after_seconds_inactive
         );
         assert_eq!(parsed.destroy_at, entry.destroy_at);
+    }
+
+    #[test]
+    fn test_context_state_save_atomic() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state.json");
+
+        let state = ContextState {
+            contexts: vec![ContextEntry::new("default")],
+            current_context: "default".to_string(),
+            previous_context: None,
+        };
+
+        state.save(&state_path).unwrap();
+
+        // Verify the file exists and is valid JSON
+        let content = std::fs::read_to_string(&state_path).unwrap();
+        let parsed: ContextState = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.current_context, "default");
+
+        // Verify no temp files left behind (temp files use .tmp.{id} extension)
+        let parent = state_path.parent().unwrap();
+        let tmp_files: Vec<_> = std::fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(tmp_files.is_empty(), "temp files should not remain");
+    }
+
+    #[test]
+    fn test_context_state_save_concurrent_writes() {
+        use std::sync::Arc;
+        use std::thread;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = Arc::new(temp_dir.path().join("state.json"));
+
+        let handles: Vec<_> = (0..10)
+            .map(|i| {
+                let path = Arc::clone(&state_path);
+                thread::spawn(move || {
+                    let state = ContextState {
+                        contexts: vec![ContextEntry::new(&format!("ctx-{}", i))],
+                        current_context: format!("ctx-{}", i),
+                        previous_context: None,
+                    };
+                    state.save(&path).unwrap();
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // The file should be valid JSON (one of the writes won)
+        let content = std::fs::read_to_string(&*state_path).unwrap();
+        let parsed: ContextState = serde_json::from_str(&content).unwrap();
+        assert!(parsed.current_context.starts_with("ctx-"));
     }
 }

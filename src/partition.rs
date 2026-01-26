@@ -939,7 +939,7 @@ fn build_bloom_filter(entries: &[TranscriptEntry], partition_path: &Path) -> io:
     let bloom_path = partition_path.with_extension("bloom");
     let serialized =
         serde_json::to_vec(&bloom).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    fs::write(&bloom_path, serialized)?;
+    crate::safe_io::atomic_write(&bloom_path, &serialized)?;
     Ok(bloom_path)
 }
 

@@ -70,13 +70,13 @@ impl ContextLock {
         })
     }
 
-    /// Write current Unix timestamp to the lock file
+    /// Write current Unix timestamp to the lock file (atomic)
     fn touch(path: &Path) -> io::Result<()> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        fs::write(path, timestamp.to_string())
+        crate::safe_io::atomic_write_text(path, &timestamp.to_string())
     }
 
     /// Check if a lock file is stale (older than 1.5x heartbeat interval)

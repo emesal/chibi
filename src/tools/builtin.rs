@@ -8,7 +8,6 @@
 //! - recurse: Signal to continue processing
 
 use crate::state::AppState;
-use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::Path;
 
@@ -145,7 +144,7 @@ pub fn execute_reflection_tool(
     }
 
     let reflection_path = prompts_dir.join("reflection.md");
-    fs::write(&reflection_path, content)?;
+    crate::safe_io::atomic_write_text(&reflection_path, content)?;
 
     Ok(format!(
         "Reflection updated successfully ({} characters).",
