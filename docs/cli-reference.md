@@ -92,6 +92,7 @@ chibi -c -            # current='work', previous='personal'
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
 | `-x, --no-chibi` | Don't invoke the LLM |
 | `-X, --force-chibi` | Force LLM invocation (overrides implied -x) |
+| `--raw` | Disable markdown rendering (plain text output) |
 | `-h, --help` | Show help message |
 | `--version` | Show version |
 
@@ -114,6 +115,8 @@ When using `--json-config`, pass a JSON object to stdin:
   "flags": { "verbose": true }
 }
 ```
+
+**Flags:** `"verbose"`, `"json_output"`, `"no_chibi"`, `"raw"`
 
 **Simple commands:** `"list_contexts"`, `"list_current_context"`, `"no_op"`
 

@@ -104,6 +104,16 @@ auto_cleanup_cache = true
 tool_cache_preview_chars = 500
 
 # =============================================================================
+# Output Rendering
+# =============================================================================
+
+# Render LLM output as formatted markdown in the terminal (default: true)
+# When true and stdout is a TTY, output is rendered with formatting (headers,
+# bold, code blocks, etc.). When false or piped, raw text is emitted.
+# Can also be disabled per-invocation with --raw.
+render_markdown = true
+
+# =============================================================================
 # Built-in file operations
 # =============================================================================
 
@@ -249,6 +259,9 @@ tool_cache_max_age_days = 14
 auto_cleanup_cache = false
 tool_cache_preview_chars = 1000
 file_tools_allowed_paths = ["~/projects"]
+
+# Disable markdown rendering for this context
+# render_markdown = false
 
 # Context-specific API parameters
 [api]

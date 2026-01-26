@@ -33,6 +33,7 @@ config.rs        Config structs (Config, LocalConfig, ModelsConfig, ResolvedConf
 context.rs       Context, Message, TranscriptEntry, InboxEntry
 input.rs         ChibiInput, Command enum, Flags
 output.rs        OutputHandler (stdout/JSON modes)
+markdown.rs      Streaming markdown renderer (TTY detection, line buffering)
 lock.rs          Context locking with heartbeat
 inbox.rs         Inter-context messaging
 llm.rs           Low-level API request helpers
@@ -107,7 +108,7 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
 
 ```
 ~/.chibi/
-├── config.toml              # Required: api_key, model, context_window_limit, warn_threshold_percent
+├── config.toml              # Required: api_key, model, context_window_limit, warn_threshold_percent, render_markdown
 ├── models.toml              # Model aliases, context windows, API params
 ├── state.json               # Current context name, context list (created_at, activity, auto-destroy)
 ├── prompts/
@@ -196,7 +197,8 @@ print("result")
 
 ### CLI Conventions
 
-- stdout: LLM output only (pipeable)
+- stdout: LLM output only (pipeable); markdown-rendered when TTY, raw when piped
+- `--raw` flag or `render_markdown = false` disables markdown rendering
 - stderr: Diagnostics (with `-v`)
 - Plugins: args via `CHIBI_TOOL_ARGS` env var, stdin free for user interaction
 - Hooks: `CHIBI_HOOK` + `CHIBI_HOOK_DATA` env vars
