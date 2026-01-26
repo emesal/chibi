@@ -772,7 +772,7 @@ mod tests {
                 let path = Arc::clone(&state_path);
                 thread::spawn(move || {
                     let state = ContextState {
-                        contexts: vec![ContextEntry::new(&format!("ctx-{}", i))],
+                        contexts: vec![ContextEntry::new(format!("ctx-{}", i))],
                         current_context: format!("ctx-{}", i),
                         previous_context: None,
                     };
