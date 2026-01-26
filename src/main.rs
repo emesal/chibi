@@ -42,6 +42,16 @@ fn confirm_action(prompt: &str) -> bool {
     matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
+/// Render markdown content to stdout if appropriate.
+/// Uses markdown rendering when `render` is true and stdout is a TTY,
+/// otherwise outputs raw content.
+fn render_markdown_output(content: &str, render: bool) -> io::Result<()> {
+    let mut md = markdown::MarkdownStream::new(render);
+    md.write_chunk(content)?;
+    md.finish()?;
+    Ok(())
+}
+
 /// Generate a unique context name for `-c new` or `-c new:prefix`
 /// Format: [prefix_]YYYYMMDD_HHMMSS[_N]
 fn generate_new_context_name(app: &AppState, prefix: Option<&str>) -> String {
@@ -104,13 +114,21 @@ fn resolve_context_name(app: &AppState, name: &str) -> io::Result<String> {
     }
 }
 
-/// Display inspectable content for a context
 fn inspect_context(
     app: &AppState,
     context_name: &str,
     thing: &Inspectable,
     resolved_config: Option<&config::ResolvedConfig>,
 ) -> io::Result<()> {
+    // Resolve config if not provided (needed for render_markdown setting)
+    let config_holder;
+    let config = if let Some(cfg) = resolved_config {
+        cfg
+    } else {
+        config_holder = app.resolve_config(None, None)?;
+        &config_holder
+    };
+
     match thing {
         Inspectable::List => {
             println!("Inspectable items:");
@@ -145,7 +163,7 @@ fn inspect_context(
             if todos.is_empty() {
                 println!("(no todos)");
             } else {
-                print!("{}", todos);
+                render_markdown_output(&todos, config.render_markdown)?;
                 if !todos.ends_with('\n') {
                     println!();
                 }
@@ -156,7 +174,7 @@ fn inspect_context(
             if goals.is_empty() {
                 println!("(no goals)");
             } else {
-                print!("{}", goals);
+                render_markdown_output(&goals, config.render_markdown)?;
                 if !goals.ends_with('\n') {
                     println!();
                 }
@@ -165,21 +183,10 @@ fn inspect_context(
         Inspectable::Home => {
             println!("{}", app.chibi_dir.display());
         }
-        Inspectable::ConfigField(field_path) => {
-            if let Some(config) = resolved_config {
-                match config.get_field(field_path) {
-                    Some(value) => println!("{}", value),
-                    None => println!("(not set)"),
-                }
-            } else {
-                // Need to resolve config to inspect config fields
-                let config = app.resolve_config(None, None)?;
-                match config.get_field(field_path) {
-                    Some(value) => println!("{}", value),
-                    None => println!("(not set)"),
-                }
-            }
-        }
+        Inspectable::ConfigField(field_path) => match config.get_field(field_path) {
+            Some(value) => println!("{}", value),
+            None => println!("(not set)"),
+        },
     }
     Ok(())
 }
@@ -187,7 +194,13 @@ fn inspect_context(
 /// Show log entries for a context
 /// - Without verbose: shows messages, with condensed tool call summaries
 /// - With verbose: shows all entries with full content
-fn show_log(app: &AppState, context_name: &str, num: isize, verbose: bool) -> io::Result<()> {
+fn show_log(
+    app: &AppState,
+    context_name: &str,
+    num: isize,
+    verbose: bool,
+    render_markdown: bool,
+) -> io::Result<()> {
     let entries = app.read_jsonl_transcript(context_name)?;
 
     // Select entries based on num parameter
@@ -211,7 +224,10 @@ fn show_log(app: &AppState, context_name: &str, num: isize, verbose: bool) -> io
     for entry in selected {
         match entry.entry_type.as_str() {
             ENTRY_TYPE_MESSAGE => {
-                println!("[{}]: {}\n", entry.from.to_uppercase(), entry.content);
+                let header = format!("[{}]: ", entry.from.to_uppercase());
+                print!("{}", header);
+                render_markdown_output(&entry.content, render_markdown)?;
+                println!();
             }
             ENTRY_TYPE_TOOL_CALL => {
                 if verbose {
@@ -567,7 +583,8 @@ async fn execute_from_input(
                 Some(n) => resolve_context_name(app, n)?,
                 None => app.state.current_context.clone(),
             };
-            show_log(app, &ctx_name, *count, verbose)?;
+            let config = app.resolve_config(None, None)?;
+            show_log(app, &ctx_name, *count, verbose, config.render_markdown)?;
             did_action = true;
         }
         Command::Inspect { context, thing } => {
