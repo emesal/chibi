@@ -74,23 +74,24 @@ chibi -v "Read my Cargo.toml"
 
 ```bash
 # Contexts
-chibi -c <name>       # Switch context
-chibi -C <name>       # Transient context (one-off)
-chibi -L              # List contexts
-chibi -l              # Current context info
+chibi -c <name>           # Switch to context (persistent)
+chibi -C <name>           # Use context for this invocation only
+chibi -L                  # List all contexts
+chibi -l                  # Current context info
 
 # History
-chibi -a              # Archive current context
-chibi -z              # Compact current context
-chibi -g 10           # Show last 10 log entries
+chibi -a                  # Archive current context
+chibi -z                  # Compact current context
+chibi -g 10               # Show last 10 log entries
 
 # System prompts
-chibi -y "prompt"     # Set current context's prompt
-chibi -n system_prompt # View current prompt
+chibi -y "prompt"         # Set current context's prompt
+chibi -n system_prompt    # View current prompt
 
 # Tools
-chibi -v              # Verbose (see tool calls)
-chibi -p plugin args  # Run plugin directly
+chibi -v                  # Verbose mode
+chibi -x                  # Force-disable the LLM
+chibi -X                  # Force-enable the LLM
 ```
 
 See [CLI Reference](docs/cli-reference.md) for the complete list.
@@ -115,21 +116,35 @@ See [chibi-plugins](https://github.com/emesal/chibi-plugins) for ready-to-use pl
 
 ## Storage
 
+The .toml and .md files are intended to be modified by humans. Editing other
+files might break things in unexpected and unpleasant ways.
+
 ```
 ~/.chibi/
-├── config.toml           # Global configuration
-├── models.toml           # Model metadata (optional)
-├── prompts/              # System prompts
-│   ├── chibi.md          # Default prompt
-│   └── reflection.md     # LLM's persistent memory
-├── plugins/              # Plugin scripts
+├── config.toml             # Required: api_key, model, context_window_limit, warn_threshold_percent
+├── models.toml             # Model aliases, context windows, API params
+├── state.json              # Application state
+├── prompts/
+│   ├── chibi.md            # Default system prompt
+│   ├── reflection.md       # LLM's persistent memory
+│   ├── compaction.md       # Compaction instructions
+│   └── continuation.md     # Post-compaction instructions
+├── plugins/                # Executable scripts (provide tools)
 └── contexts/<name>/
-    ├── context.jsonl     # Conversation history
-    ├── local.toml        # Per-context config
-    ├── todos.md          # Current todos
-    ├── goals.md          # Current goals
-    ├── system_prompt.md  # Custom prompt (optional)
-    └── tool_cache/       # Cached large tool outputs
+    ├── context.jsonl       # LLM window (bounded by compaction)
+    ├── transcript/         # Authoritative log (partitioned, never truncated)
+    │   ├── manifest.json   # Partition metadata, timestamp ranges
+    │   ├── active.jsonl    # Current write partition
+    │   └── partitions/     # Archived read-only partitions
+    ├── transcript.md       # Human-readable archive
+    ├── context_meta.json   # Metadata (system_prompt_md_mtime, last_combined_prompt)
+    ├── local.toml          # Per-context config overrides
+    ├── summary.md          # Conversation summary
+    ├── todos.md            # Current todos
+    ├── goals.md            # Current goals
+    ├── inbox.jsonl         # Messages from other contexts
+    ├── system_prompt.md    # Context-specific system prompt
+    └── tool_cache/         # Cached large tool outputs
 ```
 
 ## License
