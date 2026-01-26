@@ -8,6 +8,7 @@ mod input;
 mod json_input;
 mod llm;
 mod lock;
+mod markdown;
 mod output;
 mod partition;
 mod state;

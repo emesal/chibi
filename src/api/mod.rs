@@ -20,7 +20,7 @@ use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
 use serde_json::json;
 use std::io::{self, ErrorKind};
-use tokio::io::{AsyncWriteExt, stdout};
+use crate::markdown::MarkdownStream;
 use uuid::Uuid;
 
 // Re-export submodule items
@@ -543,7 +543,7 @@ async fn send_prompt_with_depth(
         let response = llm::send_streaming_request(resolved_config, request_body.clone()).await?;
 
         let mut stream = response.bytes_stream();
-        let mut stdout = stdout();
+        let mut md = MarkdownStream::new();
         let mut full_response = String::new();
         let mut is_first_content = true;
         let json_mode = output.is_json_mode();
@@ -603,8 +603,7 @@ async fn send_prompt_with_depth(
                                         full_response.push_str(remaining);
                                         // Only stream in normal mode
                                         if !json_mode {
-                                            stdout.write_all(remaining.as_bytes()).await?;
-                                            stdout.flush().await?;
+                                            md.write_chunk(remaining)?;
                                         }
                                     }
                                     continue;
@@ -614,8 +613,7 @@ async fn send_prompt_with_depth(
                             full_response.push_str(content);
                             // Only stream in normal mode
                             if !json_mode {
-                                stdout.write_all(content.as_bytes()).await?;
-                                stdout.flush().await?;
+                                md.write_chunk(content)?;
                             }
                         }
 
@@ -661,6 +659,11 @@ async fn send_prompt_with_depth(
         // Log response metadata if debug logging is enabled
         if let Some(ref meta) = response_meta {
             log_response_meta_if_enabled(app, debug, meta);
+        }
+
+        // Flush any remaining markdown buffer
+        if !json_mode {
+            md.finish()?;
         }
 
         // If we have tool calls, execute them and continue the loop
