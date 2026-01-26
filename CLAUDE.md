@@ -108,7 +108,7 @@ Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.
 
 ```
 ~/.chibi/
-├── config.toml              # Required: api_key, model, context_window_limit, warn_threshold_percent, render_markdown
+├── config.toml              # Required: api_key, model, context_window_limit, warn_threshold_percent
 ├── models.toml              # Model aliases, context windows, API params
 ├── state.json               # Current context name, context list (created_at, activity, auto-destroy)
 ├── prompts/
