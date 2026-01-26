@@ -1482,6 +1482,7 @@ impl AppState {
             auto_cleanup_cache: self.config.auto_cleanup_cache,
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
+            render_markdown: self.config.render_markdown,
             api: api_params,
             tools: ToolsConfig::default(),
         };
@@ -1531,6 +1532,9 @@ impl AppState {
         }
         if let Some(ref file_tools_allowed_paths) = local.file_tools_allowed_paths {
             resolved.file_tools_allowed_paths = file_tools_allowed_paths.clone();
+        }
+        if let Some(render_markdown) = local.render_markdown {
+            resolved.render_markdown = render_markdown;
         }
 
         // Apply context-level API params (Layer 3)
@@ -1700,6 +1704,7 @@ mod tests {
             auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
+            render_markdown: true,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2275,6 +2280,7 @@ mod tests {
             auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
+            render_markdown: true,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2332,6 +2338,7 @@ mod tests {
             auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
+            render_markdown: true,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2410,6 +2417,7 @@ mod tests {
             auto_cleanup_cache: None,
             tool_cache_preview_chars: None,
             file_tools_allowed_paths: None,
+            render_markdown: None,
             api: None,
             tools: None,
             storage: StorageConfig::default(),

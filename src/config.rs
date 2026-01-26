@@ -355,6 +355,10 @@ fn default_tool_cache_preview_chars() -> usize {
     500
 }
 
+fn default_render_markdown() -> bool {
+    true
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -395,6 +399,9 @@ pub struct Config {
     /// Paths allowed for file tools (empty = cache only)
     #[serde(default)]
     pub file_tools_allowed_paths: Vec<String>,
+    /// Render LLM output as formatted markdown in the terminal
+    #[serde(default = "default_render_markdown")]
+    pub render_markdown: bool,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: ApiParams,
@@ -426,6 +433,8 @@ pub struct LocalConfig {
     pub tool_cache_preview_chars: Option<usize>,
     /// Paths allowed for file tools (empty = cache only)
     pub file_tools_allowed_paths: Option<Vec<String>>,
+    /// Render LLM output as formatted markdown in the terminal
+    pub render_markdown: Option<bool>,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
@@ -477,6 +486,8 @@ pub struct ResolvedConfig {
     pub tool_cache_preview_chars: usize,
     /// Paths allowed for file tools (empty = cache only)
     pub file_tools_allowed_paths: Vec<String>,
+    /// Render LLM output as formatted markdown in the terminal
+    pub render_markdown: bool,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
@@ -510,6 +521,7 @@ impl ResolvedConfig {
                     Some(self.file_tools_allowed_paths.join(", "))
                 }
             }
+            "render_markdown" => Some(self.render_markdown.to_string()),
 
             // API params (api.*)
             "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
@@ -549,6 +561,7 @@ impl ResolvedConfig {
             "auto_cleanup_cache",
             "tool_cache_preview_chars",
             "file_tools_allowed_paths",
+            "render_markdown",
             "max_recursion_depth",
             "reflection_enabled",
             // API params
@@ -1002,6 +1015,7 @@ mod tests {
             auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
+            render_markdown: true,
             api: ApiParams {
                 temperature: Some(0.7),
                 max_tokens: Some(4096),

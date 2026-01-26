@@ -36,10 +36,12 @@ pub struct MarkdownStream {
 }
 
 impl MarkdownStream {
-    /// Auto-detects TTY. If terminal: creates streamdown pipeline.
-    /// If piped: passthrough mode (raw bytes to stdout).
-    pub fn new() -> Self {
-        let pipeline = if io::stdout().is_terminal() {
+    /// Creates a new markdown stream.
+    ///
+    /// When `render` is true and stdout is a TTY, creates a streamdown
+    /// pipeline for formatted output. Otherwise, raw passthrough.
+    pub fn new(render: bool) -> Self {
+        let pipeline = if render && io::stdout().is_terminal() {
             let width = streamdown_render::terminal_width();
             Some(RenderPipeline {
                 parser: Parser::new(),

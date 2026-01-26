@@ -14,13 +14,13 @@ use crate::cache;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
 use crate::llm;
+use crate::markdown::MarkdownStream;
 use crate::output::OutputHandler;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
 use serde_json::json;
 use std::io::{self, ErrorKind};
-use crate::markdown::MarkdownStream;
 use uuid::Uuid;
 
 // Re-export submodule items
@@ -543,7 +543,7 @@ async fn send_prompt_with_depth(
         let response = llm::send_streaming_request(resolved_config, request_body.clone()).await?;
 
         let mut stream = response.bytes_stream();
-        let mut md = MarkdownStream::new();
+        let mut md = MarkdownStream::new(resolved_config.render_markdown);
         let mut full_response = String::new();
         let mut is_first_content = true;
         let json_mode = output.is_json_mode();

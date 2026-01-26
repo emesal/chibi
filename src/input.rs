@@ -113,6 +113,9 @@ pub struct Flags {
     /// Don't invoke the LLM (-x)
     #[serde(default)]
     pub no_chibi: bool,
+    /// Disable markdown rendering (--raw)
+    #[serde(default)]
+    pub raw: bool,
     /// Debug feature to enable
     #[serde(default)]
     pub debug: Option<DebugKey>,
@@ -267,6 +270,7 @@ mod tests {
             verbose: true,
             json_output: true,
             no_chibi: false,
+            raw: false,
             debug: Some(DebugKey::RequestLog),
         };
         let json = serde_json::to_string(&flags).unwrap();
@@ -562,6 +566,7 @@ mod tests {
                 verbose: true,
                 json_output: true,
                 no_chibi: true,
+                raw: false,
                 debug: Some(DebugKey::All),
             },
             context: ContextSelection::Switch {

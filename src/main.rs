@@ -657,7 +657,10 @@ async fn execute_from_input(
                 Some(UsernameOverride::Transient(u)) => (None, Some(u.as_str())),
                 None => (None, None),
             };
-            let resolved = app.resolve_config(persistent_username, transient_username)?;
+            let mut resolved = app.resolve_config(persistent_username, transient_username)?;
+            if input.flags.raw {
+                resolved.render_markdown = false;
+            }
             let use_reflection = app.config.reflection_enabled;
 
             // Acquire context lock

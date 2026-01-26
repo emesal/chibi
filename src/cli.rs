@@ -262,6 +262,10 @@ pub struct Cli {
     #[arg(long = "json-output")]
     pub json_output: bool,
 
+    /// Disable markdown rendering (raw output)
+    #[arg(long = "raw")]
+    pub raw: bool,
+
     // === Debug options ===
     /// Enable debug features (request-log, response-meta, all)
     #[arg(long = "debug", value_name = "KEY")]
@@ -564,6 +568,7 @@ impl Cli {
             verbose: self.verbose,
             json_output: self.json_output,
             no_chibi,
+            raw: self.raw,
             debug,
         };
 
