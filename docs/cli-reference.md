@@ -6,7 +6,7 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 
 | Flag | Description |
 |------|-------------|
-| `-c, --switch-context <NAME>` | Switch to a context (persistent); `new` for auto-name, `new:prefix` for prefixed |
+| `-c, --switch-context <NAME>` | Switch to a context (persistent); `new` for auto-name, `new:prefix` for prefixed, `-` for previous |
 | `-C, --transient-context <NAME>` | Use context for this invocation only (doesn't change global state) |
 | `-l, --list-current-context` | Show current context info (name, message count, todos, goals) |
 | `-L, --list-contexts` | List all contexts (shows `[active]` or `[stale]` lock status) |
@@ -18,6 +18,24 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 | `-Z, --compact-context <CTX>` | Compact specified context (simple archive) |
 | `-r, --rename-current-context <NEW>` | Rename current context |
 | `-R, --rename-context <OLD> <NEW>` | Rename specified context |
+
+### Previous Context Reference
+
+The special context name `-` can be used to reference the previous context in any command that accepts a context name (`-c`, `-C`, `-D`, `-A`, `-Z`, `-R`, `-G`, `-N`, `-Y`, `--clear-cache-for`). The previous context is tracked in `state.json` and updated whenever you use `-c` to switch contexts.
+
+**Examples:**
+```bash
+chibi -c dev          # Switch to 'dev', previous='default'
+chibi -c production   # Switch to 'production', previous='dev'
+chibi -c -            # Switch back to 'dev'
+```
+
+**Notes:**
+- `-` is a reserved name and cannot be used as a literal context name
+- If no previous context exists (first invocation), you'll get an error: "No previous context available"
+- Only persistent switches (`-c`) update `previous_context` in state.json
+- Transient switches (`-C`) don't persist the change but can still use `-` to reference the saved previous context
+- Works with all context name parameters: `-D -` deletes previous context, `-G - 10` shows previous context's log, etc.
 
 ## Inspection & History
 

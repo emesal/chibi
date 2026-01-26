@@ -692,3 +692,272 @@ fn integration_home_flag_attached_with_json_config() {
         "--home=path should work with --json-config"
     );
 }
+
+// =============================================================================
+// Previous context reference (-) tests
+// =============================================================================
+
+#[test]
+fn integration_switch_to_previous_context() {
+    let temp_home = setup_test_home();
+
+    // Switch to context "prev_test_1"
+    let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "prev_test_1",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output1.status.success());
+
+    // Switch to context "prev_test_2"
+    let output2 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "prev_test_2",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output2.status.success());
+
+    // Switch back using "-"
+    let output3 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "-", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output3.status.success());
+    let stdout = String::from_utf8_lossy(&output3.stdout);
+    assert!(
+        stdout.contains("prev_test_1"),
+        "Should switch back to prev_test_1"
+    );
+}
+
+#[test]
+fn integration_previous_context_error_when_none() {
+    let temp_home = setup_test_home();
+
+    // Try "-c -" without any prior switches
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "-", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Should fail
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("No previous context") || stderr.contains("previous context"));
+}
+
+#[test]
+fn integration_context_name_dash_is_invalid() {
+    let temp_home = setup_test_home();
+
+    // Create a temporary context first
+    let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "temp_ctx",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output1.status.success());
+
+    // Try to rename it to "-"
+    let output2 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-R", "temp_ctx", "-"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Should fail
+    assert!(!output2.status.success());
+    let stderr = String::from_utf8_lossy(&output2.stderr);
+    assert!(stderr.contains("reserved") || stderr.contains("Invalid"));
+}
+
+#[test]
+fn integration_transient_switch_to_previous() {
+    let temp_home = setup_test_home();
+
+    // Create and switch to contexts
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "trans_1",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "trans_2",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Use "-C -" to transiently use previous
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-C", "-", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("trans_1"), "Should transiently use trans_1");
+}
+
+#[test]
+fn integration_delete_previous_context() {
+    let temp_home = setup_test_home();
+
+    // Create contexts
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "del_test_1",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "del_test_2",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Delete previous context (del_test_1) using "-D -"
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-D", "-"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn integration_archive_previous_context() {
+    let temp_home = setup_test_home();
+
+    // Create contexts
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "arch_test_1",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "arch_test_2",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Archive previous context (arch_test_1) using "-A -"
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-A", "-"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    if !output.status.success() {
+        eprintln!(
+            "Archive failed with stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(output.status.success());
+}
+
+#[test]
+fn integration_previous_context_with_new() {
+    let temp_home = setup_test_home();
+
+    // Switch to a context
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "first_ctx",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Create a new context
+    let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args([
+            "--debug",
+            "destroy_after_seconds_inactive=1",
+            "-c",
+            "new",
+            "-l",
+        ])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output1.status.success());
+
+    // Switch back using "-"
+    let output2 = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "-", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output2.status.success());
+    let stdout = String::from_utf8_lossy(&output2.stdout);
+    assert!(
+        stdout.contains("first_ctx"),
+        "Should switch back to first_ctx"
+    );
+}

@@ -18,9 +18,12 @@ chibi "Tell me about ownership"
 
 # Switch to another context
 chibi -c web-project
+
+# Switch back to previous context
+chibi -c -
 ```
 
-The current context is persisted in `~/.chibi/state.json`.
+The current context is persisted in `~/.chibi/state.json`, along with the `previous_context` for quick switching.
 
 ### Auto-Named Contexts
 
@@ -31,6 +34,32 @@ chibi -c new
 # Create with a prefix (e.g., bugfix_20240115_143022)
 chibi -c new:bugfix
 ```
+
+### Previous Context Reference
+
+Use `-` as a shortcut to reference the previous context:
+
+```bash
+chibi -c dev          # Switch to 'dev', previous='default'
+chibi -c production   # Switch to 'production', previous='dev'
+chibi -c -            # Switch back to 'dev'
+chibi -c -            # Switch back to 'production'
+```
+
+This works with any command that accepts a context name:
+```bash
+chibi -c staging      # Switch to staging
+chibi -D -            # Delete the previous context (production)
+chibi -G - 20         # Show last 20 log entries from previous context
+chibi -C - "query"    # Transiently run a query in previous context
+```
+
+**How it works:**
+- `state.json` tracks `previous_context` field
+- Only persistent switches (`-c`) update the `previous_context`
+- Transient switches (`-C`) use previous from state but don't update it
+- `-` is a reserved name and cannot be used as an actual context name
+- Error if no previous context exists (e.g., on first invocation)
 
 ## Transient Contexts
 
