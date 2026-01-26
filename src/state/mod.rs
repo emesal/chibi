@@ -2830,6 +2830,40 @@ not valid json at all
         assert!(!result);
     }
 
+    #[test]
+    fn test_touch_context_with_destroy_settings_on_new_context() {
+        let (mut app, _temp) = create_test_app();
+
+        // Simulate what happens when switching to a new context with debug settings:
+        // 1. Context entry is added to state.contexts (our fix)
+        app.state
+            .contexts
+            .push(ContextEntry::new("new-test-context"));
+
+        // 2. Debug settings are applied via touch_context_with_destroy_settings
+        let result = app
+            .touch_context_with_destroy_settings("new-test-context", None, Some(60))
+            .unwrap();
+        assert!(
+            result,
+            "Should successfully apply debug settings to new context"
+        );
+
+        // 3. Verify the destroy settings were actually saved
+        let entry = app
+            .state
+            .contexts
+            .iter()
+            .find(|e| e.name == "new-test-context")
+            .unwrap();
+        assert_eq!(entry.destroy_after_seconds_inactive, 60);
+        assert_eq!(entry.destroy_at, 0);
+        assert!(
+            entry.last_activity_at > 0,
+            "last_activity_at should be updated by touch"
+        );
+    }
+
     // === Auto-destroy tests ===
 
     #[test]
