@@ -10,9 +10,10 @@ escape codes, which work in most modern terminals.
 - **Local file paths** (relative or absolute): `./diagram.png`,
   `/tmp/chart.jpg`
 - **`file://` URLs**: `file:///home/user/image.png`
+- **Data URIs**: `data:image/png;base64,...`
 
-Remote URLs (`http://`, `https://`) and data URIs are not yet supported
-and will fall back to the placeholder display.
+Remote URLs (`http://`, `https://`) are not yet supported and will fall
+back to the placeholder display.
 
 ## Configuration
 

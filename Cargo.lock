@@ -210,6 +210,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 name = "chibi"
 version = "0.5.0-dev"
 dependencies = [
+ "base64",
  "chrono",
  "clap",
  "dirs-next",

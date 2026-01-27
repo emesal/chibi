@@ -1,5 +1,6 @@
 use std::io::{self, IsTerminal, Write};
 
+use base64::Engine;
 use streamdown_parser::{ParseEvent, Parser};
 use streamdown_render::Renderer;
 
@@ -148,24 +149,45 @@ impl MarkdownStream {
     }
 }
 
-/// Attempt to render a local file image inline using truecolor ANSI output.
+/// Decode a `data:image/...;base64,...` URI into a `DynamicImage`.
 ///
-/// Returns `Ok(())` if the image was successfully rendered, or an error
-/// if the image could not be loaded or is not a local file.
-fn try_render_image(url: &str, alt: &str, term_width: usize) -> io::Result<()> {
-    // Strip file:// prefix if present
-    let path = if let Some(stripped) = url.strip_prefix("file://") {
-        stripped
-    } else if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:")
-    {
-        return Err(io::Error::other("remote/data URLs not supported"));
-    } else {
-        // Treat as local file path
-        url
-    };
+/// Expects the input with the `data:` prefix already stripped (i.e., starts
+/// with `image/...`).
+fn decode_data_uri_image(rest: &str) -> io::Result<image::DynamicImage> {
+    let (mime, payload) = rest
+        .split_once(";base64,")
+        .ok_or_else(|| io::Error::other("data URI missing ;base64, delimiter"))?;
 
-    let img = image::open(path)
-        .map_err(|e| io::Error::other(format!("Failed to open image {}: {}", path, e)))?;
+    if !mime.starts_with("image/") {
+        return Err(io::Error::other(format!(
+            "data URI MIME type is not an image: {}",
+            mime
+        )));
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| io::Error::other(format!("invalid base64 in data URI: {}", e)))?;
+
+    image::load_from_memory(&bytes)
+        .map_err(|e| io::Error::other(format!("failed to decode image from data URI: {}", e)))
+}
+
+/// Attempt to render an image inline using truecolor ANSI output.
+///
+/// Supports local file paths, `file://` URLs, and `data:image/...;base64,...`
+/// URIs. Returns `Ok(())` if the image was successfully rendered, or an error
+/// if the image could not be loaded.
+fn try_render_image(url: &str, alt: &str, term_width: usize) -> io::Result<()> {
+    let img = if let Some(rest) = url.strip_prefix("data:") {
+        decode_data_uri_image(rest)?
+    } else if url.starts_with("http://") || url.starts_with("https://") {
+        return Err(io::Error::other("remote URLs not supported"));
+    } else {
+        let path = url.strip_prefix("file://").unwrap_or(url);
+        image::open(path)
+            .map_err(|e| io::Error::other(format!("Failed to open image {}: {}", path, e)))?
+    };
 
     let (orig_w, orig_h) = (img.width(), img.height());
     let term_w = term_width as u32;
@@ -193,4 +215,78 @@ fn try_render_image(url: &str, alt: &str, term_width: usize) -> io::Result<()> {
     stdout.flush()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Encode raw bytes as a data URI string for test helpers.
+    fn make_data_uri(mime: &str, data: &[u8]) -> String {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+        format!("data:{};base64,{}", mime, encoded)
+    }
+
+    /// Build a valid 1x1 red PNG in memory.
+    fn tiny_png() -> Vec<u8> {
+        use std::io::Cursor;
+        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([255, 0, 0]));
+        let mut buf = Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageOutputFormat::Png)
+            .expect("encoding 1x1 PNG");
+        buf.into_inner()
+    }
+
+    #[test]
+    fn decode_valid_png_data_uri() {
+        let uri = make_data_uri("image/png", &tiny_png());
+        let rest = uri.strip_prefix("data:").unwrap();
+        let img = decode_data_uri_image(rest).expect("should decode valid PNG data URI");
+        assert_eq!(img.width(), 1);
+        assert_eq!(img.height(), 1);
+    }
+
+    #[test]
+    fn decode_missing_base64_delimiter() {
+        let err = decode_data_uri_image("image/png,abc").unwrap_err();
+        assert!(
+            err.to_string().contains("missing ;base64, delimiter"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn decode_non_image_mime() {
+        let err = decode_data_uri_image("text/plain;base64,dGVzdA==").unwrap_err();
+        assert!(
+            err.to_string().contains("not an image"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn decode_invalid_base64() {
+        let err = decode_data_uri_image("image/png;base64,!!!not-base64!!!").unwrap_err();
+        assert!(
+            err.to_string().contains("invalid base64"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn decode_valid_base64_but_not_image() {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"not image bytes");
+        let input = format!("image/png;base64,{}", encoded);
+        let err = decode_data_uri_image(&input).unwrap_err();
+        assert!(
+            err.to_string().contains("failed to decode image"),
+            "unexpected error: {}",
+            err
+        );
+    }
 }
