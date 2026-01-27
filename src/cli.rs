@@ -430,6 +430,10 @@ impl Cli {
             args: v.get(1..).unwrap_or(&[]).to_vec(),
         });
 
+        // Parse debug key to check for md=<file>
+        let debug_key = self.debug.as_ref().and_then(|s| DebugKey::from_str(s));
+        let debug_implies_no_chibi = matches!(debug_key, Some(DebugKey::Md(_)));
+
         // Compute implied no_chibi based on flags
         let implies_no_chibi = self.list_current_context
             || self.list_contexts
@@ -444,7 +448,8 @@ impl Cli {
             || inspect.is_some()
             || set_system_prompt.is_some()
             || plugin.is_some()
-            || call_tool.is_some();
+            || call_tool.is_some()
+            || debug_implies_no_chibi;
 
         let mut no_chibi = self.no_chibi || implies_no_chibi;
         if self.force_chibi {
@@ -561,15 +566,12 @@ impl Cli {
             Command::NoOp
         };
 
-        // Parse debug key
-        let debug = self.debug.as_ref().and_then(|s| DebugKey::from_str(s));
-
         let flags = Flags {
             verbose: self.verbose,
             json_output: self.json_output,
             no_chibi,
             raw: self.raw,
-            debug,
+            debug: debug_key,
         };
 
         Ok(ChibiInput {
@@ -1468,5 +1470,34 @@ mod tests {
         // Invalid paths should return None
         assert_eq!(Inspectable::from_str("api.nonexistent"), None);
         assert_eq!(Inspectable::from_str("foo.bar.baz"), None);
+    }
+
+    // === Debug flag tests ===
+
+    #[test]
+    fn test_debug_md_implies_no_chibi() {
+        let input = parse_input("--debug md=README.md").unwrap();
+        assert!(input.flags.no_chibi); // should imply -x
+        assert!(matches!(
+            input.flags.debug,
+            Some(DebugKey::Md(ref path)) if path == "README.md"
+        ));
+    }
+
+    #[test]
+    fn test_debug_md_can_be_overridden_with_force_chibi() {
+        let input = parse_input("-X --debug md=README.md").unwrap();
+        assert!(!input.flags.no_chibi); // -X should override
+        assert!(matches!(
+            input.flags.debug,
+            Some(DebugKey::Md(ref path)) if path == "README.md"
+        ));
+    }
+
+    #[test]
+    fn test_debug_request_log_does_not_imply_no_chibi() {
+        let input = parse_input("--debug request-log").unwrap();
+        assert!(!input.flags.no_chibi); // should NOT imply -x
+        assert!(matches!(input.flags.debug, Some(DebugKey::RequestLog)));
     }
 }
