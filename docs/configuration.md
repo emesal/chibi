@@ -114,6 +114,42 @@ tool_cache_preview_chars = 500
 render_markdown = true
 
 # =============================================================================
+# Image Rendering
+# =============================================================================
+
+# Render images inline in the terminal (default: true)
+# When false, images show as [🖼 alt text] placeholders
+render_images = true
+
+# Image rendering mode (default: "auto")
+# Options: "auto", "truecolor", "ansi", "ascii", "placeholder"
+image_render_mode = "auto"
+
+# Enable individual rendering modes (default: all true)
+# Controls which modes are available for auto-detection and explicit selection
+image_enable_truecolor = true    # 24-bit color (best quality)
+image_enable_ansi = true          # 16-color ANSI (compatible)
+image_enable_ascii = true         # ASCII art (universal)
+
+# Maximum bytes to download for remote images (default: 10485760 = 10 MB)
+image_max_download_bytes = 10485760
+
+# Timeout in seconds for fetching remote images (default: 5)
+image_fetch_timeout_seconds = 5
+
+# Allow fetching images over plain HTTP (default: false)
+image_allow_http = false
+
+# Maximum image height in terminal lines (default: 25)
+image_max_height_lines = 25
+
+# Percentage of terminal width to use for images (default: 80)
+image_max_width_percent = 80
+
+# Image alignment: "left", "center", or "right" (default: "center")
+image_alignment = "center"
+
+# =============================================================================
 # Built-in file operations
 # =============================================================================
 
@@ -359,6 +395,10 @@ Each layer can override specific values while inheriting others.
 ## Environment Variables
 
 Chibi does not use environment variables for configuration. All settings come from the config files described above.
+
+Chibi reads these environment variables for feature detection:
+- `COLORTERM` - Checked for truecolor support (`truecolor` or `24bit`)
+- `TERM` - Checked for color capability level (`truecolor`, `256color`, `color`)
 
 Plugins receive these environment variables:
 - `CHIBI_TOOL_ARGS` - JSON arguments for tool calls

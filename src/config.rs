@@ -387,6 +387,22 @@ fn default_image_alignment() -> String {
     "center".to_string()
 }
 
+fn default_image_render_mode() -> String {
+    "auto".to_string()
+}
+
+fn default_image_enable_truecolor() -> bool {
+    true
+}
+
+fn default_image_enable_ansi() -> bool {
+    true
+}
+
+fn default_image_enable_ascii() -> bool {
+    true
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -451,6 +467,18 @@ pub struct Config {
     /// Image alignment: "left", "center", or "right" (default: "center")
     #[serde(default = "default_image_alignment")]
     pub image_alignment: String,
+    /// Image rendering mode: "auto", "truecolor", "ansi", "ascii", "placeholder"
+    #[serde(default = "default_image_render_mode")]
+    pub image_render_mode: String,
+    /// Enable truecolor (24-bit) rendering
+    #[serde(default = "default_image_enable_truecolor")]
+    pub image_enable_truecolor: bool,
+    /// Enable ANSI (16-color) rendering
+    #[serde(default = "default_image_enable_ansi")]
+    pub image_enable_ansi: bool,
+    /// Enable ASCII art rendering
+    #[serde(default = "default_image_enable_ascii")]
+    pub image_enable_ascii: bool,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: ApiParams,
@@ -498,6 +526,11 @@ pub struct LocalConfig {
     pub image_max_width_percent: Option<u32>,
     /// Image alignment: "left", "center", or "right"
     pub image_alignment: Option<String>,
+    /// Image rendering mode override
+    pub image_render_mode: Option<String>,
+    pub image_enable_truecolor: Option<bool>,
+    pub image_enable_ansi: Option<bool>,
+    pub image_enable_ascii: Option<bool>,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
@@ -565,6 +598,10 @@ pub struct ResolvedConfig {
     pub image_max_width_percent: u32,
     /// Image alignment: "left", "center", or "right"
     pub image_alignment: String,
+    pub image_render_mode: String,
+    pub image_enable_truecolor: bool,
+    pub image_enable_ansi: bool,
+    pub image_enable_ascii: bool,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
@@ -606,6 +643,10 @@ impl ResolvedConfig {
             "image_max_height_lines" => Some(self.image_max_height_lines.to_string()),
             "image_max_width_percent" => Some(self.image_max_width_percent.to_string()),
             "image_alignment" => Some(self.image_alignment.clone()),
+            "image_render_mode" => Some(self.image_render_mode.clone()),
+            "image_enable_truecolor" => Some(self.image_enable_truecolor.to_string()),
+            "image_enable_ansi" => Some(self.image_enable_ansi.to_string()),
+            "image_enable_ascii" => Some(self.image_enable_ascii.to_string()),
 
             // API params (api.*)
             "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
@@ -653,6 +694,10 @@ impl ResolvedConfig {
             "image_max_height_lines",
             "image_max_width_percent",
             "image_alignment",
+            "image_render_mode",
+            "image_enable_truecolor",
+            "image_enable_ansi",
+            "image_enable_ascii",
             "max_recursion_depth",
             "reflection_enabled",
             // API params
@@ -1118,6 +1163,10 @@ mod tests {
             image_max_height_lines: 25,
             image_max_width_percent: 80,
             image_alignment: "center".to_string(),
+            image_render_mode: "auto".to_string(),
+            image_enable_truecolor: true,
+            image_enable_ansi: true,
+            image_enable_ascii: true,
             api: ApiParams {
                 temperature: Some(0.7),
                 max_tokens: Some(4096),

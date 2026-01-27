@@ -1,6 +1,7 @@
 use std::io::{self, IsTerminal, Write};
 
 use base64::Engine;
+use image::GenericImageView;
 use streamdown_parser::{ParseEvent, Parser};
 use streamdown_render::Renderer;
 
@@ -14,6 +15,10 @@ pub struct MarkdownConfig {
     pub image_max_height_lines: u32,
     pub image_max_width_percent: u32,
     pub image_alignment: String,
+    pub image_render_mode: String,
+    pub image_enable_truecolor: bool,
+    pub image_enable_ansi: bool,
+    pub image_enable_ascii: bool,
 }
 
 /// Grouped fetch settings passed into image rendering functions.
@@ -28,6 +33,23 @@ struct ImageDisplayConfig {
     max_height_lines: u32,
     max_width_percent: u32,
     alignment: String,
+}
+
+/// Terminal rendering capabilities detected from environment
+#[derive(Debug, Clone, Copy)]
+enum TerminalCapability {
+    Truecolor,
+    Ansi256,
+    Ansi16,
+}
+
+/// Resolved image rendering mode after capability detection
+#[derive(Debug, Clone, Copy)]
+enum ImageRenderMode {
+    Truecolor,
+    Ansi,
+    Ascii,
+    Placeholder,
 }
 
 /// Zero-sized newtype so `Renderer<StdoutWriter>` can persist across the stream
@@ -68,6 +90,69 @@ pub struct MarkdownStream {
     terminal_width: usize,
     fetch_config: ImageFetchConfig,
     display_config: ImageDisplayConfig,
+    render_mode: ImageRenderMode,
+}
+
+/// Detect terminal rendering capabilities from environment variables
+fn detect_terminal_capability() -> TerminalCapability {
+    // Check COLORTERM for truecolor support
+    if let Ok(colorterm) = std::env::var("COLORTERM") {
+        let ct = colorterm.to_lowercase();
+        if ct.contains("truecolor") || ct.contains("24bit") {
+            return TerminalCapability::Truecolor;
+        }
+    }
+
+    // Check TERM for color support level
+    if let Ok(term) = std::env::var("TERM") {
+        let t = term.to_lowercase();
+        if t.contains("truecolor") || t.contains("24bit") {
+            return TerminalCapability::Truecolor;
+        }
+        if t.contains("256color") {
+            return TerminalCapability::Ansi256;
+        }
+        if t.contains("color") {
+            return TerminalCapability::Ansi16;
+        }
+    }
+
+    // Default to basic ANSI if we can't determine capability
+    TerminalCapability::Ansi16
+}
+
+/// Resolve the rendering mode based on config and terminal capabilities
+fn resolve_render_mode(
+    mode: &str,
+    enable_truecolor: bool,
+    enable_ansi: bool,
+    enable_ascii: bool,
+) -> ImageRenderMode {
+    match mode {
+        "truecolor" if enable_truecolor => ImageRenderMode::Truecolor,
+        "ansi" if enable_ansi => ImageRenderMode::Ansi,
+        "ascii" if enable_ascii => ImageRenderMode::Ascii,
+        "placeholder" => ImageRenderMode::Placeholder,
+        "auto" => {
+            let cap = detect_terminal_capability();
+            match cap {
+                TerminalCapability::Truecolor if enable_truecolor => ImageRenderMode::Truecolor,
+                TerminalCapability::Truecolor
+                | TerminalCapability::Ansi256
+                | TerminalCapability::Ansi16
+                    if enable_ansi =>
+                {
+                    ImageRenderMode::Ansi
+                }
+                _ if enable_ascii => ImageRenderMode::Ascii,
+                _ => ImageRenderMode::Placeholder,
+            }
+        }
+        _ => {
+            // Invalid mode or disabled, fallback to auto logic
+            resolve_render_mode("auto", enable_truecolor, enable_ansi, enable_ascii)
+        }
+    }
 }
 
 impl MarkdownStream {
@@ -89,6 +174,14 @@ impl MarkdownStream {
             (None, 80)
         };
 
+        // Determine rendering mode
+        let render_mode = resolve_render_mode(
+            &config.image_render_mode,
+            config.image_enable_truecolor,
+            config.image_enable_ansi,
+            config.image_enable_ascii,
+        );
+
         MarkdownStream {
             line_buffer: String::new(),
             pipeline,
@@ -104,6 +197,7 @@ impl MarkdownStream {
                 max_width_percent: config.image_max_width_percent,
                 alignment: config.image_alignment,
             },
+            render_mode,
         }
     }
 
@@ -115,11 +209,20 @@ impl MarkdownStream {
         terminal_width: usize,
         fetch_config: &ImageFetchConfig,
         display_config: &ImageDisplayConfig,
+        render_mode: ImageRenderMode,
     ) -> io::Result<()> {
         for event in events {
             if render_images
                 && let ParseEvent::Image { alt, url } = event
-                && try_render_image(url, alt, terminal_width, fetch_config, display_config).is_ok()
+                && try_render_image(
+                    url,
+                    alt,
+                    terminal_width,
+                    fetch_config,
+                    display_config,
+                    render_mode,
+                )
+                .is_ok()
             {
                 continue;
             }
@@ -163,6 +266,7 @@ impl MarkdownStream {
                 self.terminal_width,
                 &self.fetch_config,
                 &self.display_config,
+                self.render_mode,
             )?;
         }
 
@@ -187,6 +291,7 @@ impl MarkdownStream {
                 self.terminal_width,
                 &self.fetch_config,
                 &self.display_config,
+                self.render_mode,
             )?;
         }
 
@@ -199,6 +304,7 @@ impl MarkdownStream {
             self.terminal_width,
             &self.fetch_config,
             &self.display_config,
+            self.render_mode,
         )?;
 
         Ok(())
@@ -336,19 +442,21 @@ async fn fetch_image_bytes(
     Ok(buf)
 }
 
-/// Attempt to render an image inline using truecolor ANSI output.
-///
-/// Supports local file paths, `file://` URLs, `data:image/...;base64,...`
-/// URIs, and remote `https://` (and optionally `http://`) URLs.
-/// Returns `Ok(())` if the image was successfully rendered, or an error
-/// if the image could not be loaded.
+/// Attempt to render an image inline with the appropriate mode
 fn try_render_image(
     url: &str,
     _alt: &str,
     term_width: usize,
     fetch_config: &ImageFetchConfig,
     display_config: &ImageDisplayConfig,
+    render_mode: ImageRenderMode,
 ) -> io::Result<()> {
+    // Early return for placeholder mode
+    if matches!(render_mode, ImageRenderMode::Placeholder) {
+        return Err(io::Error::other("placeholder mode"));
+    }
+
+    // Load the image
     let img = if let Some(rest) = url.strip_prefix("data:") {
         decode_data_uri_image(rest)?
     } else if url.starts_with("http://") || url.starts_with("https://") {
@@ -385,34 +493,39 @@ fn try_render_image(
 
     let resized = imgcatr::ops::resize_image(&img, (new_w, new_h));
 
-    // Calculate alignment padding
-    let image_cols = new_w as usize;
-    let pad = match display_config.alignment.as_str() {
-        "center" => term_width.saturating_sub(image_cols) / 2,
-        "right" => term_width.saturating_sub(image_cols),
-        _ => 0, // "left" or anything else
-    };
+    // Render with the appropriate mode
+    match render_mode {
+        ImageRenderMode::Truecolor => render_truecolor(&resized, term_width, display_config),
+        ImageRenderMode::Ansi => render_ansi(&resized, term_width, display_config),
+        ImageRenderMode::Ascii => render_ascii(&resized, term_width, display_config),
+        ImageRenderMode::Placeholder => unreachable!(),
+    }
+}
+
+/// Render image with 24-bit truecolor ANSI codes
+fn render_truecolor(
+    img: &image::DynamicImage,
+    term_width: usize,
+    display_config: &ImageDisplayConfig,
+) -> io::Result<()> {
+    let new_w = img.width() as usize;
+    let new_h = img.height() as usize;
+    let pad = calculate_padding(new_w, term_width, &display_config.alignment);
 
     let mut stdout = io::stdout().lock();
-    // Spacing before image
     writeln!(stdout)?;
 
     if pad == 0 {
-        imgcatr::ops::write_ansi_truecolor(&mut stdout, &resized);
+        imgcatr::ops::write_ansi_truecolor(&mut stdout, img);
     } else {
         let padding: String = " ".repeat(pad);
-        // Reimplement write_ansi_truecolor with per-row padding.
-        // The truecolor renderer outputs two pixel rows per terminal line
-        // using upper-half-block characters with fg/bg colors.
-        let (w, h) = (resized.width() as usize, resized.height() as usize);
-        let pixels = resized.to_rgba8();
+        let pixels = img.to_rgba8();
         let mut y = 0;
-        while y + 1 < h {
+        while y + 1 < new_h {
             write!(stdout, "{}", padding)?;
-            for x in 0..w {
+            for x in 0..new_w {
                 let top = pixels.get_pixel(x as u32, y as u32);
                 let bot = pixels.get_pixel(x as u32, (y + 1) as u32);
-                // Upper half block: fg = top pixel, bg = bottom pixel
                 write!(
                     stdout,
                     "\x1b[38;2;{};{};{};48;2;{};{};{}m\u{2580}",
@@ -422,10 +535,9 @@ fn try_render_image(
             writeln!(stdout, "\x1b[0m")?;
             y += 2;
         }
-        // Handle odd height (last row with no bottom pixel)
-        if y < h {
+        if y < new_h {
             write!(stdout, "{}", padding)?;
-            for x in 0..w {
+            for x in 0..new_w {
                 let top = pixels.get_pixel(x as u32, y as u32);
                 write!(
                     stdout,
@@ -439,8 +551,102 @@ fn try_render_image(
 
     writeln!(stdout)?;
     stdout.flush()?;
-
     Ok(())
+}
+
+/// Render image with 16-color ANSI codes
+fn render_ansi(
+    img: &image::DynamicImage,
+    term_width: usize,
+    display_config: &ImageDisplayConfig,
+) -> io::Result<()> {
+    let new_w = img.width() as usize;
+    let pad = calculate_padding(new_w, term_width, &display_config.alignment);
+
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout)?;
+
+    // Use imgcatr's ANSI color approximation
+    use imgcatr::util::ANSI_COLOURS_WHITE_BG;
+
+    if pad == 0 {
+        imgcatr::ops::write_ansi(&mut stdout, img, &ANSI_COLOURS_WHITE_BG);
+    } else {
+        // Manual rendering with padding
+        let padding: String = " ".repeat(pad);
+        let colourtable = imgcatr::ops::create_colourtable(
+            img,
+            &ANSI_COLOURS_WHITE_BG,
+            imgcatr::util::bg_colours_for(&ANSI_COLOURS_WHITE_BG),
+        );
+
+        for line in colourtable {
+            write!(stdout, "{}", padding)?;
+            for (upper_clr, lower_clr) in line {
+                write!(
+                    stdout,
+                    "{}{}\u{2580}",
+                    imgcatr::util::ANSI_COLOUR_ESCAPES[upper_clr],
+                    imgcatr::util::ANSI_BG_COLOUR_ESCAPES[lower_clr]
+                )?;
+            }
+            writeln!(stdout, "{}", imgcatr::util::ANSI_RESET_ATTRIBUTES)?;
+        }
+    }
+
+    writeln!(stdout)?;
+    stdout.flush()?;
+    Ok(())
+}
+
+/// Render image as ASCII art
+fn render_ascii(
+    img: &image::DynamicImage,
+    term_width: usize,
+    display_config: &ImageDisplayConfig,
+) -> io::Result<()> {
+    let (width, height) = img.dimensions();
+    let pad = calculate_padding(width as usize / 2, term_width, &display_config.alignment);
+    let padding: String = " ".repeat(pad);
+
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout)?;
+
+    // Convert to RGBA8 to ensure we can read pixels safely
+    let img = img.to_rgba8();
+
+    for y in (0..height).step_by(2) {
+        write!(stdout, "{}", padding)?;
+        for x in (0..width).step_by(1) {
+            let pix = img.get_pixel(x, y);
+            let mut intensity = pix[0] / 3 + pix[1] / 3 + pix[2] / 3;
+            // Handle transparency
+            if pix[3] == 0 {
+                intensity = 0;
+            }
+            write!(stdout, "{}", ascii_char(intensity))?;
+        }
+        writeln!(stdout)?;
+    }
+
+    writeln!(stdout)?;
+    stdout.flush()?;
+    Ok(())
+}
+
+/// Map intensity to ASCII character
+fn ascii_char(intensity: u8) -> &'static str {
+    let index = (intensity / 32).min(7);
+    [" ", ".", ",", "-", "~", "+", "=", "@"][index as usize]
+}
+
+/// Calculate left padding for image alignment
+fn calculate_padding(image_cols: usize, term_width: usize, alignment: &str) -> usize {
+    match alignment {
+        "center" => term_width.saturating_sub(image_cols) / 2,
+        "right" => term_width.saturating_sub(image_cols),
+        _ => 0, // "left" or anything else
+    }
 }
 
 #[cfg(test)]
@@ -580,6 +786,7 @@ mod tests {
             80,
             &config,
             &display,
+            ImageRenderMode::Truecolor,
         )
         .unwrap_err();
         assert!(

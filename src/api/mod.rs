@@ -552,6 +552,10 @@ async fn send_prompt_with_depth(
             image_max_height_lines: resolved_config.image_max_height_lines,
             image_max_width_percent: resolved_config.image_max_width_percent,
             image_alignment: resolved_config.image_alignment.clone(),
+            image_render_mode: resolved_config.image_render_mode.clone(),
+            image_enable_truecolor: resolved_config.image_enable_truecolor,
+            image_enable_ansi: resolved_config.image_enable_ansi,
+            image_enable_ascii: resolved_config.image_enable_ascii,
         });
         let mut full_response = String::new();
         let mut is_first_content = true;

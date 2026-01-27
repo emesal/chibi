@@ -1490,6 +1490,10 @@ impl AppState {
             image_max_height_lines: self.config.image_max_height_lines,
             image_max_width_percent: self.config.image_max_width_percent,
             image_alignment: self.config.image_alignment.clone(),
+            image_render_mode: self.config.image_render_mode.clone(),
+            image_enable_truecolor: self.config.image_enable_truecolor,
+            image_enable_ansi: self.config.image_enable_ansi,
+            image_enable_ascii: self.config.image_enable_ascii,
             api: api_params,
             tools: ToolsConfig::default(),
         };
@@ -1563,6 +1567,18 @@ impl AppState {
         }
         if let Some(ref image_alignment) = local.image_alignment {
             resolved.image_alignment = image_alignment.clone();
+        }
+        if let Some(ref image_render_mode) = local.image_render_mode {
+            resolved.image_render_mode = image_render_mode.clone();
+        }
+        if let Some(image_enable_truecolor) = local.image_enable_truecolor {
+            resolved.image_enable_truecolor = image_enable_truecolor;
+        }
+        if let Some(image_enable_ansi) = local.image_enable_ansi {
+            resolved.image_enable_ansi = image_enable_ansi;
+        }
+        if let Some(image_enable_ascii) = local.image_enable_ascii {
+            resolved.image_enable_ascii = image_enable_ascii;
         }
 
         // Apply context-level API params (Layer 3)
@@ -1740,6 +1756,10 @@ mod tests {
             image_max_height_lines: 25,
             image_max_width_percent: 80,
             image_alignment: "center".to_string(),
+            image_render_mode: "auto".to_string(),
+            image_enable_truecolor: true,
+            image_enable_ansi: true,
+            image_enable_ascii: true,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2323,6 +2343,10 @@ mod tests {
             image_max_height_lines: 25,
             image_max_width_percent: 80,
             image_alignment: "center".to_string(),
+            image_render_mode: "auto".to_string(),
+            image_enable_truecolor: true,
+            image_enable_ansi: true,
+            image_enable_ascii: true,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2388,6 +2412,10 @@ mod tests {
             image_max_height_lines: 25,
             image_max_width_percent: 80,
             image_alignment: "center".to_string(),
+            image_render_mode: "auto".to_string(),
+            image_enable_truecolor: true,
+            image_enable_ansi: true,
+            image_enable_ascii: true,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2474,6 +2502,10 @@ mod tests {
             image_max_height_lines: None,
             image_max_width_percent: None,
             image_alignment: None,
+            image_render_mode: None,
+            image_enable_truecolor: None,
+            image_enable_ansi: None,
+            image_enable_ascii: None,
             api: None,
             tools: None,
             storage: StorageConfig::default(),

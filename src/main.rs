@@ -55,6 +55,10 @@ fn render_markdown_output(content: &str, config: &markdown::MarkdownConfig) -> i
         image_max_height_lines: config.image_max_height_lines,
         image_max_width_percent: config.image_max_width_percent,
         image_alignment: config.image_alignment.clone(),
+        image_render_mode: config.image_render_mode.clone(),
+        image_enable_truecolor: config.image_enable_truecolor,
+        image_enable_ansi: config.image_enable_ansi,
+        image_enable_ascii: config.image_enable_ascii,
     });
     md.write_chunk(content)?;
     md.finish()?;
@@ -72,6 +76,10 @@ fn md_config_from_resolved(config: &config::ResolvedConfig) -> markdown::Markdow
         image_max_height_lines: config.image_max_height_lines,
         image_max_width_percent: config.image_max_width_percent,
         image_alignment: config.image_alignment.clone(),
+        image_render_mode: config.image_render_mode.clone(),
+        image_enable_truecolor: config.image_enable_truecolor,
+        image_enable_ansi: config.image_enable_ansi,
+        image_enable_ascii: config.image_enable_ascii,
     }
 }
 
@@ -86,6 +94,10 @@ fn md_config_defaults(render: bool) -> markdown::MarkdownConfig {
         image_max_height_lines: 25,
         image_max_width_percent: 80,
         image_alignment: "center".to_string(),
+        image_render_mode: "auto".to_string(),
+        image_enable_truecolor: true,
+        image_enable_ansi: true,
+        image_enable_ascii: true,
     }
 }
 

@@ -79,6 +79,62 @@ image_max_width_percent = 80
 image_alignment = "center"
 ```
 
+### Rendering modes
+
+```toml
+# Image rendering mode (default: "auto")
+# Options: "auto", "truecolor", "ansi", "ascii", "placeholder"
+image_render_mode = "auto"
+
+# Enable individual rendering modes (default: all enabled)
+# These control which modes are available to "auto" detection
+# and whether explicit mode selection works
+image_enable_truecolor = true   # 24-bit color (best quality)
+image_enable_ansi = true         # 16-color ANSI (compatible)
+image_enable_ascii = true        # ASCII art (universal)
+```
+
+**Mode descriptions:**
+
+- **`auto`** (default) - Automatically detect terminal capabilities:
+  - Checks `COLORTERM` environment variable for `truecolor` or `24bit`
+  - Checks `TERM` environment variable for color support level
+  - Falls back through enabled modes: truecolor → ansi → ascii → placeholder
+
+- **`truecolor`** - Force 24-bit (16.7M colors) ANSI rendering. Best quality
+  but requires modern terminal support. Falls back to placeholder if
+  `image_enable_truecolor = false`.
+
+- **`ansi`** - Force 16-color ANSI rendering. Compatible with most terminals
+  since the 1990s. Lower quality than truecolor but universally supported.
+
+- **`ascii`** - Force ASCII art rendering. Works in any terminal, including
+  those without color support. Uses 8 characters to represent intensity:
+  ` .,-~+=@`
+
+- **`placeholder`** - Disable inline rendering entirely. Images show as
+  `[🖼 alt text]` placeholders.
+
+**Disabling rendering modes:**
+
+Set any `image_enable_*` option to `false` to disable that mode. This affects
+both auto-detection and explicit mode selection:
+
+```toml
+# Disable truecolor (useful for old terminals)
+image_enable_truecolor = false
+
+# Now auto mode will skip to ansi
+image_render_mode = "auto"
+
+# Or force a specific mode (ansi/ascii only)
+image_render_mode = "ansi"
+```
+
+If you explicitly select a disabled mode (e.g., `image_render_mode =
+"truecolor"` with `image_enable_truecolor = false`), chibi falls back to
+auto-detection logic.
+
 All settings can be overridden per-context in `local.toml`.
 
 ## Interaction with other settings
@@ -100,12 +156,55 @@ serves as a replacement for the image, not a caption).
 
 ## Terminal compatibility
 
-Image rendering uses 24-bit (truecolor) ANSI escape codes. Most modern
-terminals support this, including:
+Image rendering supports three modes with different compatibility levels:
+
+### Truecolor mode (default on modern terminals)
+
+Uses 24-bit (16.7M colors) ANSI escape codes. Supported by:
 
 - kitty, iTerm2, WezTerm, Alacritty, Windows Terminal
 - xterm (with `--enable-truecolor`)
+- Most terminals from ~2016 onwards
 
-Terminals that don't support truecolor will display garbled output for
-images. In that case, disable image rendering with
-`render_images = false`.
+Enable explicitly with `image_render_mode = "truecolor"` or rely on
+auto-detection via `COLORTERM` and `TERM` environment variables.
+
+### ANSI mode (fallback for older terminals)
+
+Uses 16-color ANSI codes (8 colors + bright variants). Supported by virtually
+all color terminals since the 1990s:
+
+- All modern terminals (truecolor-capable terminals also support ANSI)
+- xterm, urxvt, gnome-terminal, konsole (without truecolor)
+- PuTTY, macOS Terminal.app
+- Linux virtual console (with framebuffer)
+
+Enable with `image_render_mode = "ansi"`.
+
+### ASCII mode (universal fallback)
+
+Uses ASCII characters to represent image intensity. Works in any terminal,
+including:
+
+- Non-color terminals
+- Serial consoles
+- Text-mode virtual terminals
+- Screen readers (though usefulness varies)
+
+Enable with `image_render_mode = "ascii"`.
+
+### Auto-detection
+
+By default (`image_render_mode = "auto"`), chibi detects terminal
+capabilities:
+
+1. Checks `$COLORTERM` for `truecolor` or `24bit` → truecolor mode
+2. Checks `$TERM` for `truecolor`, `24bit` → truecolor mode
+3. Checks `$TERM` for `256color` or `color` → ansi mode
+4. Falls back to ansi mode (safe default for unknown terminals)
+
+Then applies the fallback chain based on enabled modes: truecolor → ansi →
+ascii → placeholder.
+
+To force a specific mode regardless of detection, set `image_render_mode`
+explicitly.
