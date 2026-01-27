@@ -220,6 +220,10 @@ fn default_auto_compact() -> bool {
     false
 }
 
+fn default_verbose() -> bool {
+    false
+}
+
 fn default_auto_compact_threshold() -> f32 {
     80.0
 }
@@ -314,6 +318,9 @@ pub struct Config {
     /// Storage configuration for partitioned context storage
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Show verbose output by default
+    #[serde(default = "default_verbose")]
+    pub verbose: bool,
 }
 
 /// Per-context config from ~/.chibi/contexts/<name>/local.toml
@@ -345,6 +352,8 @@ pub struct LocalConfig {
     /// Per-context storage configuration overrides
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Show verbose output by default
+    pub verbose: Option<bool>,
 }
 
 /// Model metadata from ~/.chibi/models.toml
@@ -389,6 +398,8 @@ pub struct ResolvedConfig {
     pub file_tools_allowed_paths: Vec<String>,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
+    /// Show verbose output by default
+    pub verbose: bool,
 }
 
 impl ResolvedConfig {
@@ -418,6 +429,7 @@ impl ResolvedConfig {
                     Some(self.file_tools_allowed_paths.join(", "))
                 }
             }
+            "verbose" => Some(self.verbose.to_string()),
 
             // API params (api.*)
             "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
@@ -459,6 +471,7 @@ impl ResolvedConfig {
             "file_tools_allowed_paths",
             "max_recursion_depth",
             "reflection_enabled",
+            "verbose",
             // API params
             "api.temperature",
             "api.max_tokens",
@@ -826,6 +839,7 @@ mod tests {
                 top_p: Some(0.9),
                 ..Default::default()
             },
+            verbose: false,
         }
     }
 

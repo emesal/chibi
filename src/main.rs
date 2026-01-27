@@ -718,8 +718,14 @@ async fn main() -> io::Result<()> {
             input.flags.json_output = true;
         }
 
-        let output = OutputHandler::new(input.flags.json_output);
         let mut app = AppState::load(home_override)?;
+
+        // Apply config verbose setting if not explicitly set in JSON input
+        if !input.flags.verbose {
+            input.flags.verbose = app.config.verbose;
+        }
+
+        let output = OutputHandler::new(input.flags.json_output);
 
         let tools = tools::load_tools(&app.plugins_dir, input.flags.verbose)?;
         output.diagnostic(
@@ -731,9 +737,15 @@ async fn main() -> io::Result<()> {
     }
 
     // CLI mode: parse to ChibiInput and use unified execution
-    let input = cli::parse()?;
-    let verbose = input.flags.verbose;
+    let mut input = cli::parse()?;
     let mut app = AppState::load(home_override)?;
+
+    // Apply config verbose setting if CLI flag not explicitly set
+    // (CLI flag -v takes precedence over config)
+    if !input.flags.verbose {
+        input.flags.verbose = app.config.verbose;
+    }
+    let verbose = input.flags.verbose;
 
     // Load tools
     let tools = tools::load_tools(&app.plugins_dir, verbose)?;

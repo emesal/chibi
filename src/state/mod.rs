@@ -1483,6 +1483,7 @@ impl AppState {
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             api: api_params,
+            verbose: self.config.verbose,
         };
 
         // Apply local config overrides
@@ -1530,6 +1531,9 @@ impl AppState {
         }
         if let Some(ref file_tools_allowed_paths) = local.file_tools_allowed_paths {
             resolved.file_tools_allowed_paths = file_tools_allowed_paths.clone();
+        }
+        if let Some(verbose) = local.verbose {
+            resolved.verbose = verbose;
         }
 
         // Apply context-level API params (Layer 3)
@@ -1696,6 +1700,7 @@ mod tests {
             file_tools_allowed_paths: vec![],
             api: ApiParams::default(),
             storage: StorageConfig::default(),
+            verbose: false,
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)
@@ -2271,6 +2276,7 @@ mod tests {
             file_tools_allowed_paths: vec![],
             api: ApiParams::default(),
             storage: StorageConfig::default(),
+            verbose: false,
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -2328,6 +2334,7 @@ mod tests {
             file_tools_allowed_paths: vec![],
             api: ApiParams::default(),
             storage: StorageConfig::default(),
+            verbose: false,
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -2406,6 +2413,7 @@ mod tests {
             file_tools_allowed_paths: None,
             api: None,
             storage: StorageConfig::default(),
+            verbose: None,
         };
         app.save_local_config("default", &local).unwrap();
 

@@ -692,3 +692,127 @@ fn integration_home_flag_attached_with_json_config() {
         "--home=path should work with --json-config"
     );
 }
+
+#[test]
+fn integration_verbose_config_setting() {
+    // Test that verbose can be set in config.toml
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    // Create config with verbose = true
+    std::fs::write(
+        home.join("config.toml"),
+        r#"
+api_key = "test-key"
+model = "test-model"
+context_window_limit = 8000
+warn_threshold_percent = 75.0
+verbose = true
+"#,
+    )
+    .unwrap();
+
+    // Create a plugin to see verbose output
+    let plugins_dir = home.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).unwrap();
+    let plugin_path = plugins_dir.join("test_tool");
+    std::fs::write(
+        &plugin_path,
+        r#"#!/bin/bash
+if [ "$1" = "--schema" ]; then
+    echo '{"name":"test_tool","description":"Test","parameters":{"type":"object","properties":{},"required":[]}}'
+    exit 0
+fi
+echo "result"
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&plugin_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // Run command - should show verbose output
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--home")
+        .arg(home)
+        .arg("-L")
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("[Loaded 1 tool(s): test_tool]"),
+        "Expected verbose output with verbose=true config, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn integration_verbose_cli_flag_overrides_config() {
+    // Test that -v CLI flag overrides verbose = false in config
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    // Create config with verbose = false
+    std::fs::write(
+        home.join("config.toml"),
+        r#"
+api_key = "test-key"
+model = "test-model"
+context_window_limit = 8000
+warn_threshold_percent = 75.0
+verbose = false
+"#,
+    )
+    .unwrap();
+
+    // Create a plugin to see verbose output
+    let plugins_dir = home.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).unwrap();
+    let plugin_path = plugins_dir.join("test_tool");
+    std::fs::write(
+        &plugin_path,
+        r#"#!/bin/bash
+if [ "$1" = "--schema" ]; then
+    echo '{"name":"test_tool","description":"Test","parameters":{"type":"object","properties":{},"required":[]}}'
+    exit 0
+fi
+echo "result"
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&plugin_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // Run without -v flag - should not show verbose output
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--home")
+        .arg(home)
+        .arg("-L")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("[Loaded"),
+        "Should not show verbose output with verbose=false config and no -v flag"
+    );
+
+    // Run with -v flag - should show verbose output (CLI flag overrides config)
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--home")
+        .arg(home)
+        .arg("-L")
+        .arg("-v")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("[Loaded 1 tool(s): test_tool]"),
+        "Expected verbose output with -v flag even though config has verbose=false"
+    );
+}
