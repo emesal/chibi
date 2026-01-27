@@ -107,11 +107,7 @@ chibi -X                  # Force-enable the LLM
 
 See [CLI Reference](docs/cli-reference.md) for the complete list.
 
-<div align="center">
-    <br>
-    <img src="docs/images/explain_this.png" width="62%">
-    <br>
-</div>
+![chibi explain this girl](docs/images/explain_this.png)
 
 ## Example Plugins
 
