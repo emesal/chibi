@@ -15,7 +15,7 @@ pub struct PluginInvocation {
 }
 
 /// Inspectable things via -n/-N
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Inspectable {
     // File-based items (context-specific)
@@ -300,6 +300,7 @@ const CLI_AFTER_HELP: &str = r#"EXAMPLES:
   chibi -x -c test                Switch context without LLM
   chibi -X -L                     List contexts then invoke LLM
   chibi -a hello                  Archive history, then send prompt
+  chibi --json-schema             Print JSON schema for --json-config
 
 FLAG BEHAVIOR:
   Some flags imply --no-chibi (operations that produce output or
