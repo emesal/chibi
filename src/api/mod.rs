@@ -546,6 +546,9 @@ async fn send_prompt_with_depth(
         let mut md = MarkdownStream::new(crate::markdown::MarkdownConfig {
             render_markdown: resolved_config.render_markdown,
             render_images: resolved_config.render_images,
+            image_max_download_bytes: resolved_config.image_max_download_bytes,
+            image_fetch_timeout_seconds: resolved_config.image_fetch_timeout_seconds,
+            image_allow_http: resolved_config.image_allow_http,
         });
         let mut full_response = String::new();
         let mut is_first_content = true;

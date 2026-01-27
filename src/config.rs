@@ -363,6 +363,18 @@ fn default_render_images() -> bool {
     true
 }
 
+fn default_image_max_download_bytes() -> usize {
+    10 * 1024 * 1024
+}
+
+fn default_image_fetch_timeout_seconds() -> u64 {
+    5
+}
+
+fn default_image_allow_http() -> bool {
+    false
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -409,6 +421,15 @@ pub struct Config {
     /// Render local file images inline in the terminal
     #[serde(default = "default_render_images")]
     pub render_images: bool,
+    /// Maximum bytes to download for remote images
+    #[serde(default = "default_image_max_download_bytes")]
+    pub image_max_download_bytes: usize,
+    /// Timeout in seconds for fetching remote images
+    #[serde(default = "default_image_fetch_timeout_seconds")]
+    pub image_fetch_timeout_seconds: u64,
+    /// Allow fetching images over plain HTTP (default: false, HTTPS only)
+    #[serde(default = "default_image_allow_http")]
+    pub image_allow_http: bool,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: ApiParams,
@@ -444,6 +465,12 @@ pub struct LocalConfig {
     pub render_markdown: Option<bool>,
     /// Render local file images inline in the terminal
     pub render_images: Option<bool>,
+    /// Maximum bytes to download for remote images
+    pub image_max_download_bytes: Option<usize>,
+    /// Timeout in seconds for fetching remote images
+    pub image_fetch_timeout_seconds: Option<u64>,
+    /// Allow fetching images over plain HTTP (default: false, HTTPS only)
+    pub image_allow_http: Option<bool>,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
@@ -499,6 +526,12 @@ pub struct ResolvedConfig {
     pub render_markdown: bool,
     /// Render local file images inline in the terminal
     pub render_images: bool,
+    /// Maximum bytes to download for remote images
+    pub image_max_download_bytes: usize,
+    /// Timeout in seconds for fetching remote images
+    pub image_fetch_timeout_seconds: u64,
+    /// Allow fetching images over plain HTTP (default: false, HTTPS only)
+    pub image_allow_http: bool,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
@@ -534,6 +567,9 @@ impl ResolvedConfig {
             }
             "render_markdown" => Some(self.render_markdown.to_string()),
             "render_images" => Some(self.render_images.to_string()),
+            "image_max_download_bytes" => Some(self.image_max_download_bytes.to_string()),
+            "image_fetch_timeout_seconds" => Some(self.image_fetch_timeout_seconds.to_string()),
+            "image_allow_http" => Some(self.image_allow_http.to_string()),
 
             // API params (api.*)
             "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
@@ -575,6 +611,9 @@ impl ResolvedConfig {
             "file_tools_allowed_paths",
             "render_markdown",
             "render_images",
+            "image_max_download_bytes",
+            "image_fetch_timeout_seconds",
+            "image_allow_http",
             "max_recursion_depth",
             "reflection_enabled",
             // API params
@@ -1030,6 +1069,9 @@ mod tests {
             file_tools_allowed_paths: vec![],
             render_markdown: true,
             render_images: true,
+            image_max_download_bytes: 10 * 1024 * 1024,
+            image_fetch_timeout_seconds: 5,
+            image_allow_http: false,
             api: ApiParams {
                 temperature: Some(0.7),
                 max_tokens: Some(4096),

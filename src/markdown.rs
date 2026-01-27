@@ -8,6 +8,16 @@ use streamdown_render::Renderer;
 pub struct MarkdownConfig {
     pub render_markdown: bool,
     pub render_images: bool,
+    pub image_max_download_bytes: usize,
+    pub image_fetch_timeout_seconds: u64,
+    pub image_allow_http: bool,
+}
+
+/// Grouped fetch settings passed into image rendering functions.
+struct ImageFetchConfig {
+    max_download_bytes: usize,
+    fetch_timeout_seconds: u64,
+    allow_http: bool,
 }
 
 /// Zero-sized newtype so `Renderer<StdoutWriter>` can persist across the stream
@@ -39,12 +49,14 @@ struct RenderPipeline {
 /// through directly (matching previous behavior exactly).
 ///
 /// When `render_images` is enabled, standalone `ParseEvent::Image` events
-/// for local files are rendered inline using truecolor ANSI escape codes.
+/// are rendered inline using truecolor ANSI escape codes. Remote images
+/// (HTTPS, and optionally HTTP) are fetched with configurable limits.
 pub struct MarkdownStream {
     line_buffer: String,
     pipeline: Option<RenderPipeline>,
     render_images: bool,
     terminal_width: usize,
+    fetch_config: ImageFetchConfig,
 }
 
 impl MarkdownStream {
@@ -71,6 +83,11 @@ impl MarkdownStream {
             pipeline,
             render_images: config.render_images,
             terminal_width,
+            fetch_config: ImageFetchConfig {
+                max_download_bytes: config.image_max_download_bytes,
+                fetch_timeout_seconds: config.image_fetch_timeout_seconds,
+                allow_http: config.image_allow_http,
+            },
         }
     }
 
@@ -80,11 +97,12 @@ impl MarkdownStream {
         events: &[ParseEvent],
         render_images: bool,
         terminal_width: usize,
+        fetch_config: &ImageFetchConfig,
     ) -> io::Result<()> {
         for event in events {
             if render_images
                 && let ParseEvent::Image { alt, url } = event
-                && try_render_image(url, alt, terminal_width).is_ok()
+                && try_render_image(url, alt, terminal_width, fetch_config).is_ok()
             {
                 continue;
             }
@@ -121,7 +139,13 @@ impl MarkdownStream {
             self.line_buffer = self.line_buffer[newline_pos + 1..].to_string();
 
             let events = pipeline.parser.parse_line(&line);
-            Self::render_events(pipeline, &events, self.render_images, self.terminal_width)?;
+            Self::render_events(
+                pipeline,
+                &events,
+                self.render_images,
+                self.terminal_width,
+                &self.fetch_config,
+            )?;
         }
 
         Ok(())
@@ -138,12 +162,24 @@ impl MarkdownStream {
         if !self.line_buffer.is_empty() {
             let line = std::mem::take(&mut self.line_buffer);
             let events = pipeline.parser.parse_line(&line);
-            Self::render_events(pipeline, &events, self.render_images, self.terminal_width)?;
+            Self::render_events(
+                pipeline,
+                &events,
+                self.render_images,
+                self.terminal_width,
+                &self.fetch_config,
+            )?;
         }
 
         // Finalize parser (close any open blocks)
         let events = pipeline.parser.finalize();
-        Self::render_events(pipeline, &events, self.render_images, self.terminal_width)?;
+        Self::render_events(
+            pipeline,
+            &events,
+            self.render_images,
+            self.terminal_width,
+            &self.fetch_config,
+        )?;
 
         Ok(())
     }
@@ -173,16 +209,129 @@ fn decode_data_uri_image(rest: &str) -> io::Result<image::DynamicImage> {
         .map_err(|e| io::Error::other(format!("failed to decode image from data URI: {}", e)))
 }
 
+/// Fetch a remote image over HTTP(S) and decode it.
+fn fetch_remote_image(url: &str, config: &ImageFetchConfig) -> io::Result<image::DynamicImage> {
+    if url.starts_with("http://") && !config.allow_http {
+        return Err(io::Error::other(
+            "plain HTTP image URLs are not allowed (set image_allow_http = true to enable)",
+        ));
+    }
+
+    let bytes = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(fetch_image_bytes(
+            url,
+            config.max_download_bytes,
+            config.fetch_timeout_seconds,
+            config.allow_http,
+        ))
+    })?;
+
+    image::load_from_memory(&bytes)
+        .map_err(|e| io::Error::other(format!("failed to decode fetched image: {}", e)))
+}
+
+/// Asynchronously fetch image bytes from a URL with size and timeout limits.
+async fn fetch_image_bytes(
+    url: &str,
+    max_bytes: usize,
+    timeout_seconds: u64,
+    allow_http: bool,
+) -> io::Result<Vec<u8>> {
+    use futures_util::StreamExt;
+
+    // Build a redirect policy that prevents HTTPS→HTTP downgrades
+    let redirect_policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 5 {
+            attempt.error("too many redirects (max 5)")
+        } else if !allow_http {
+            // Block HTTPS→HTTP downgrade
+            if let Some(prev) = attempt.previous().last()
+                && prev.scheme() == "https"
+                && attempt.url().scheme() == "http"
+            {
+                return attempt.error("redirect from HTTPS to HTTP is not allowed");
+            }
+            attempt.follow()
+        } else {
+            attempt.follow()
+        }
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_seconds))
+        .redirect(redirect_policy)
+        .build()
+        .map_err(|e| io::Error::other(format!("failed to build HTTP client: {}", e)))?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| io::Error::other(format!("image fetch failed: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err(io::Error::other(format!(
+            "image fetch returned HTTP {}",
+            response.status()
+        )));
+    }
+
+    // Validate Content-Type if present
+    if let Some(ct) = response.headers().get(reqwest::header::CONTENT_TYPE)
+        && let Ok(ct_str) = ct.to_str()
+        && !ct_str.starts_with("image/")
+    {
+        return Err(io::Error::other(format!(
+            "remote URL Content-Type is not an image: {}",
+            ct_str
+        )));
+    }
+
+    // Early reject if Content-Length exceeds limit
+    if let Some(len) = response.content_length()
+        && len as usize > max_bytes
+    {
+        return Err(io::Error::other(format!(
+            "image too large: Content-Length {} exceeds limit {}",
+            len, max_bytes
+        )));
+    }
+
+    // Stream body with size enforcement
+    let mut stream = response.bytes_stream();
+    let mut buf = Vec::new();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk =
+            chunk_result.map_err(|e| io::Error::other(format!("image download error: {}", e)))?;
+        if buf.len() + chunk.len() > max_bytes {
+            return Err(io::Error::other(format!(
+                "image download exceeded size limit of {} bytes",
+                max_bytes
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+
+    Ok(buf)
+}
+
 /// Attempt to render an image inline using truecolor ANSI output.
 ///
-/// Supports local file paths, `file://` URLs, and `data:image/...;base64,...`
-/// URIs. Returns `Ok(())` if the image was successfully rendered, or an error
+/// Supports local file paths, `file://` URLs, `data:image/...;base64,...`
+/// URIs, and remote `https://` (and optionally `http://`) URLs.
+/// Returns `Ok(())` if the image was successfully rendered, or an error
 /// if the image could not be loaded.
-fn try_render_image(url: &str, alt: &str, term_width: usize) -> io::Result<()> {
+fn try_render_image(
+    url: &str,
+    alt: &str,
+    term_width: usize,
+    fetch_config: &ImageFetchConfig,
+) -> io::Result<()> {
     let img = if let Some(rest) = url.strip_prefix("data:") {
         decode_data_uri_image(rest)?
     } else if url.starts_with("http://") || url.starts_with("https://") {
-        return Err(io::Error::other("remote URLs not supported"));
+        fetch_remote_image(url, fetch_config)?
     } else {
         let path = url.strip_prefix("file://").unwrap_or(url);
         image::open(path)
@@ -238,6 +387,14 @@ mod tests {
         buf.into_inner()
     }
 
+    fn default_fetch_config() -> ImageFetchConfig {
+        ImageFetchConfig {
+            max_download_bytes: 10 * 1024 * 1024,
+            fetch_timeout_seconds: 5,
+            allow_http: false,
+        }
+    }
+
     #[test]
     fn decode_valid_png_data_uri() {
         let uri = make_data_uri("image/png", &tiny_png());
@@ -286,6 +443,56 @@ mod tests {
         assert!(
             err.to_string().contains("failed to decode image"),
             "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn fetch_rejects_http_when_not_allowed() {
+        let config = ImageFetchConfig {
+            allow_http: false,
+            ..default_fetch_config()
+        };
+        let err = fetch_remote_image("http://example.com/image.png", &config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("plain HTTP image URLs are not allowed"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn fetch_allows_http_when_configured() {
+        // http://example.com/image.png won't resolve to an actual image,
+        // but the point is it should NOT be rejected by the protocol check.
+        let config = ImageFetchConfig {
+            allow_http: true,
+            fetch_timeout_seconds: 1,
+            ..default_fetch_config()
+        };
+        let err = fetch_remote_image("http://example.com/nonexistent.png", &config);
+        // Should fail with a network/HTTP error, not a protocol error
+        if let Err(e) = err {
+            assert!(
+                !e.to_string()
+                    .contains("plain HTTP image URLs are not allowed"),
+                "should not reject http:// when allow_http is true, got: {}",
+                e
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn try_render_image_dispatches_https() {
+        // https URL should attempt fetch (and fail in test env), not return
+        // "remote URLs not supported"
+        let config = default_fetch_config();
+        let err = try_render_image("https://example.com/nonexistent.png", "test", 80, &config)
+            .unwrap_err();
+        assert!(
+            !err.to_string().contains("remote URLs not supported"),
+            "should dispatch to fetch path, got: {}",
             err
         );
     }

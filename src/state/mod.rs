@@ -1484,6 +1484,9 @@ impl AppState {
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             render_markdown: self.config.render_markdown,
             render_images: self.config.render_images,
+            image_max_download_bytes: self.config.image_max_download_bytes,
+            image_fetch_timeout_seconds: self.config.image_fetch_timeout_seconds,
+            image_allow_http: self.config.image_allow_http,
             api: api_params,
             tools: ToolsConfig::default(),
         };
@@ -1539,6 +1542,15 @@ impl AppState {
         }
         if let Some(render_images) = local.render_images {
             resolved.render_images = render_images;
+        }
+        if let Some(image_max_download_bytes) = local.image_max_download_bytes {
+            resolved.image_max_download_bytes = image_max_download_bytes;
+        }
+        if let Some(image_fetch_timeout_seconds) = local.image_fetch_timeout_seconds {
+            resolved.image_fetch_timeout_seconds = image_fetch_timeout_seconds;
+        }
+        if let Some(image_allow_http) = local.image_allow_http {
+            resolved.image_allow_http = image_allow_http;
         }
 
         // Apply context-level API params (Layer 3)
@@ -1710,6 +1722,9 @@ mod tests {
             file_tools_allowed_paths: vec![],
             render_markdown: true,
             render_images: true,
+            image_max_download_bytes: 10 * 1024 * 1024,
+            image_fetch_timeout_seconds: 5,
+            image_allow_http: false,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2287,6 +2302,9 @@ mod tests {
             file_tools_allowed_paths: vec![],
             render_markdown: true,
             render_images: true,
+            image_max_download_bytes: 10 * 1024 * 1024,
+            image_fetch_timeout_seconds: 5,
+            image_allow_http: false,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2346,6 +2364,9 @@ mod tests {
             file_tools_allowed_paths: vec![],
             render_markdown: true,
             render_images: true,
+            image_max_download_bytes: 10 * 1024 * 1024,
+            image_fetch_timeout_seconds: 5,
+            image_allow_http: false,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2426,6 +2447,9 @@ mod tests {
             file_tools_allowed_paths: None,
             render_markdown: None,
             render_images: None,
+            image_max_download_bytes: None,
+            image_fetch_timeout_seconds: None,
+            image_allow_http: None,
             api: None,
             tools: None,
             storage: StorageConfig::default(),

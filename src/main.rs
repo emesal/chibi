@@ -43,16 +43,41 @@ fn confirm_action(prompt: &str) -> bool {
 }
 
 /// Render markdown content to stdout if appropriate.
-/// Uses markdown rendering when `render` is true and stdout is a TTY,
+/// Uses markdown rendering when enabled and stdout is a TTY,
 /// otherwise outputs raw content.
-fn render_markdown_output(content: &str, render: bool) -> io::Result<()> {
+fn render_markdown_output(content: &str, config: &markdown::MarkdownConfig) -> io::Result<()> {
     let mut md = markdown::MarkdownStream::new(markdown::MarkdownConfig {
-        render_markdown: render,
-        render_images: render,
+        render_markdown: config.render_markdown,
+        render_images: config.render_images,
+        image_max_download_bytes: config.image_max_download_bytes,
+        image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
+        image_allow_http: config.image_allow_http,
     });
     md.write_chunk(content)?;
     md.finish()?;
     Ok(())
+}
+
+/// Build a MarkdownConfig from a ResolvedConfig.
+fn md_config_from_resolved(config: &config::ResolvedConfig) -> markdown::MarkdownConfig {
+    markdown::MarkdownConfig {
+        render_markdown: config.render_markdown,
+        render_images: config.render_images,
+        image_max_download_bytes: config.image_max_download_bytes,
+        image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
+        image_allow_http: config.image_allow_http,
+    }
+}
+
+/// Build a MarkdownConfig with safe defaults (used when no config is loaded).
+fn md_config_defaults(render: bool) -> markdown::MarkdownConfig {
+    markdown::MarkdownConfig {
+        render_markdown: render,
+        render_images: render,
+        image_max_download_bytes: 10 * 1024 * 1024,
+        image_fetch_timeout_seconds: 5,
+        image_allow_http: false,
+    }
 }
 
 /// Generate a unique context name for `-c new` or `-c new:prefix`
@@ -166,7 +191,8 @@ fn inspect_context(
             if todos.is_empty() {
                 println!("(no todos)");
             } else {
-                render_markdown_output(&todos, config.render_markdown)?;
+                let md_cfg = md_config_from_resolved(config);
+                render_markdown_output(&todos, &md_cfg)?;
                 if !todos.ends_with('\n') {
                     println!();
                 }
@@ -177,7 +203,8 @@ fn inspect_context(
             if goals.is_empty() {
                 println!("(no goals)");
             } else {
-                render_markdown_output(&goals, config.render_markdown)?;
+                let md_cfg = md_config_from_resolved(config);
+                render_markdown_output(&goals, &md_cfg)?;
                 if !goals.ends_with('\n') {
                     println!();
                 }
@@ -202,7 +229,7 @@ fn show_log(
     context_name: &str,
     num: isize,
     verbose: bool,
-    render_markdown: bool,
+    resolved_config: &config::ResolvedConfig,
 ) -> io::Result<()> {
     let entries = app.read_jsonl_transcript(context_name)?;
 
@@ -228,7 +255,8 @@ fn show_log(
         match entry.entry_type.as_str() {
             ENTRY_TYPE_MESSAGE => {
                 println!("[{}]", entry.from.to_uppercase());
-                render_markdown_output(&entry.content, render_markdown)?;
+                let md_cfg = md_config_from_resolved(resolved_config);
+                render_markdown_output(&entry.content, &md_cfg)?;
                 println!();
             }
             ENTRY_TYPE_TOOL_CALL => {
@@ -586,7 +614,7 @@ async fn execute_from_input(
                 None => app.state.current_context.clone(),
             };
             let config = app.resolve_config(None, None)?;
-            show_log(app, &ctx_name, *count, verbose, config.render_markdown)?;
+            show_log(app, &ctx_name, *count, verbose, &config)?;
             did_action = true;
         }
         Command::Inspect { context, thing } => {
@@ -808,7 +836,8 @@ async fn main() -> io::Result<()> {
                 format!("Failed to read file '{}': {}", path, e),
             )
         })?;
-        render_markdown_output(&content, true)?;
+        let md_cfg = md_config_defaults(true);
+        render_markdown_output(&content, &md_cfg)?;
         return Ok(());
     }
 
