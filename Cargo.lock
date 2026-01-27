@@ -2042,6 +2042,7 @@ version = "0.1.4"
 dependencies = [
  "base64",
  "crossterm",
+ "serde",
  "streamdown-ansi",
  "streamdown-config",
  "streamdown-core",

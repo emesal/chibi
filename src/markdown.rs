@@ -23,6 +23,7 @@ pub struct MarkdownConfig {
     pub image_cache_dir: Option<std::path::PathBuf>,
     pub image_cache_max_bytes: u64,
     pub image_cache_max_age_days: u64,
+    pub markdown_style: crate::config::MarkdownStyle,
 }
 
 /// Grouped fetch settings passed into image rendering functions.
@@ -171,10 +172,11 @@ impl MarkdownStream {
         let (pipeline, terminal_width) =
             if config.render_markdown && (config.force_render || io::stdout().is_terminal()) {
                 let width = streamdown_render::terminal_width();
+                let style = config.markdown_style.to_render_style();
                 (
                     Some(RenderPipeline {
                         parser: Parser::new(),
-                        renderer: Renderer::new(StdoutWriter, width),
+                        renderer: Renderer::with_style(StdoutWriter, width, style),
                     }),
                     width,
                 )

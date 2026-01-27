@@ -64,6 +64,7 @@ fn render_markdown_output(content: &str, config: &markdown::MarkdownConfig) -> i
         image_cache_dir: config.image_cache_dir.clone(),
         image_cache_max_bytes: config.image_cache_max_bytes,
         image_cache_max_age_days: config.image_cache_max_age_days,
+        markdown_style: config.markdown_style.clone(),
     });
     md.write_chunk(content)?;
     md.finish()?;
@@ -97,6 +98,7 @@ fn md_config_from_resolved(
         },
         image_cache_max_bytes: config.image_cache_max_bytes,
         image_cache_max_age_days: config.image_cache_max_age_days,
+        markdown_style: config.markdown_style.clone(),
     }
 }
 
@@ -119,6 +121,7 @@ fn md_config_defaults(render: bool) -> markdown::MarkdownConfig {
         image_cache_dir: None,
         image_cache_max_bytes: 104_857_600,
         image_cache_max_age_days: 30,
+        markdown_style: config::MarkdownStyle::default(),
     }
 }
 

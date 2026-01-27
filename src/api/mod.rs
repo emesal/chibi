@@ -564,6 +564,7 @@ async fn send_prompt_with_depth(
             },
             image_cache_max_bytes: resolved_config.image_cache_max_bytes,
             image_cache_max_age_days: resolved_config.image_cache_max_age_days,
+            markdown_style: resolved_config.markdown_style.clone(),
         });
         let mut full_response = String::new();
         let mut is_first_content = true;

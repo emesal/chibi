@@ -413,6 +413,55 @@ fn default_image_cache_max_age_days() -> u64 {
     30
 }
 
+/// Markdown rendering color scheme
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarkdownStyle {
+    /// Bright/highlight color (for h2 headings, emphasis)
+    pub bright: String,
+    /// Heading color (for h3 headings)
+    pub head: String,
+    /// Symbol color (for bullets, language labels, borders)
+    pub symbol: String,
+    /// Grey/muted color (for borders, dim text)
+    pub grey: String,
+    /// Dark background color (for code blocks)
+    pub dark: String,
+    /// Mid background color (for table headers)
+    pub mid: String,
+    /// Light background color
+    pub light: String,
+}
+
+impl Default for MarkdownStyle {
+    /// Commodore 128 inspired color scheme (VICE palette)
+    fn default() -> Self {
+        Self {
+            bright: "#FFFF54".to_string(), // Light Yellow - for emphasis
+            head: "#54FF54".to_string(),   // Light Green - for h3 headers
+            symbol: "#7ABFC7".to_string(), // Cyan - for bullets, language labels
+            grey: "#808080".to_string(),   // Grey - for borders, muted text
+            dark: "#000000".to_string(),   // Black - code block background
+            mid: "#3E31A2".to_string(),    // Blue - table headers
+            light: "#352879".to_string(),  // Dark Blue - alternate backgrounds
+        }
+    }
+}
+
+impl MarkdownStyle {
+    /// Convert to streamdown RenderStyle
+    pub fn to_render_style(&self) -> streamdown_render::RenderStyle {
+        streamdown_render::RenderStyle {
+            bright: self.bright.clone(),
+            head: self.head.clone(),
+            symbol: self.symbol.clone(),
+            grey: self.grey.clone(),
+            dark: self.dark.clone(),
+            mid: self.mid.clone(),
+            light: self.light.clone(),
+        }
+    }
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -504,6 +553,9 @@ pub struct Config {
     /// Storage configuration for partitioned context storage
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Markdown rendering color scheme (Commodore 128 theme by default)
+    #[serde(default)]
+    pub markdown_style: MarkdownStyle,
 }
 
 /// Per-context config from ~/.chibi/contexts/<name>/local.toml
@@ -565,6 +617,8 @@ pub struct LocalConfig {
     /// Per-context storage configuration overrides
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Markdown rendering color scheme override
+    pub markdown_style: Option<MarkdownStyle>,
 }
 
 /// Model metadata from ~/.chibi/models.toml
@@ -637,6 +691,8 @@ pub struct ResolvedConfig {
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
     pub tools: ToolsConfig,
+    /// Markdown rendering color scheme
+    pub markdown_style: MarkdownStyle,
 }
 
 impl ResolvedConfig {
@@ -1232,6 +1288,7 @@ mod tests {
                 ..Default::default()
             },
             tools: ToolsConfig::default(),
+            markdown_style: MarkdownStyle::default(),
         }
     }
 
@@ -1478,6 +1535,128 @@ mod tests {
         // Should include deeply nested reasoning config
         assert!(fields.contains(&"api.reasoning.effort"));
         assert!(fields.contains(&"api.reasoning.enabled"));
+    }
+
+    // ========== MarkdownStyle tests ==========
+
+    #[test]
+    fn test_markdown_style_default() {
+        let style = MarkdownStyle::default();
+        assert_eq!(style.bright, "#FFFF54");
+        assert_eq!(style.head, "#54FF54");
+        assert_eq!(style.symbol, "#7ABFC7");
+        assert_eq!(style.grey, "#808080");
+        assert_eq!(style.dark, "#000000");
+        assert_eq!(style.mid, "#3E31A2");
+        assert_eq!(style.light, "#352879");
+    }
+
+    #[test]
+    fn test_markdown_style_to_render_style() {
+        let style = MarkdownStyle {
+            bright: "#FF0000".to_string(),
+            head: "#00FF00".to_string(),
+            symbol: "#0000FF".to_string(),
+            grey: "#888888".to_string(),
+            dark: "#000000".to_string(),
+            mid: "#444444".to_string(),
+            light: "#CCCCCC".to_string(),
+        };
+        
+        let render_style = style.to_render_style();
+        assert_eq!(render_style.bright, "#FF0000");
+        assert_eq!(render_style.head, "#00FF00");
+        assert_eq!(render_style.symbol, "#0000FF");
+        assert_eq!(render_style.grey, "#888888");
+        assert_eq!(render_style.dark, "#000000");
+        assert_eq!(render_style.mid, "#444444");
+        assert_eq!(render_style.light, "#CCCCCC");
+    }
+
+    #[test]
+    fn test_markdown_style_serialization() {
+        let toml_str = r##"
+            bright = "#FFFF00"
+            head = "#00FFFF"
+            symbol = "#FF00FF"
+            grey = "#999999"
+            dark = "#111111"
+            mid = "#222222"
+            light = "#333333"
+        "##;
+        let style: MarkdownStyle = toml::from_str(toml_str).unwrap();
+        assert_eq!(style.bright, "#FFFF00");
+        assert_eq!(style.head, "#00FFFF");
+        assert_eq!(style.symbol, "#FF00FF");
+    }
+
+    #[test]
+    fn test_config_with_markdown_style() {
+        let toml_str = r##"
+            api_key = "test-key"
+            model = "gpt-4"
+            context_window_limit = 8000
+            warn_threshold_percent = 75.0
+
+            [markdown_style]
+            bright = "#FF0000"
+            head = "#00FF00"
+            symbol = "#0000FF"
+            grey = "#808080"
+            dark = "#000000"
+            mid = "#444444"
+            light = "#888888"
+        "##;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.markdown_style.bright, "#FF0000");
+        assert_eq!(config.markdown_style.head, "#00FF00");
+        assert_eq!(config.markdown_style.symbol, "#0000FF");
+    }
+
+    #[test]
+    fn test_config_markdown_style_defaults() {
+        let toml_str = r#"
+            api_key = "test-key"
+            model = "gpt-4"
+            context_window_limit = 8000
+            warn_threshold_percent = 75.0
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        // Should use Commodore 128 defaults
+        assert_eq!(config.markdown_style.bright, "#FFFF54");
+        assert_eq!(config.markdown_style.head, "#54FF54");
+        assert_eq!(config.markdown_style.symbol, "#7ABFC7");
+    }
+
+    #[test]
+    fn test_local_config_with_markdown_style() {
+        let toml_str = r##"
+            model = "claude-3"
+
+            [markdown_style]
+            bright = "#ABCDEF"
+            head = "#FEDCBA"
+            symbol = "#123456"
+            grey = "#654321"
+            dark = "#000000"
+            mid = "#111111"
+            light = "#222222"
+        "##;
+        let local: LocalConfig = toml::from_str(toml_str).unwrap();
+        assert!(local.markdown_style.is_some());
+        let style = local.markdown_style.unwrap();
+        assert_eq!(style.bright, "#ABCDEF");
+        assert_eq!(style.head, "#FEDCBA");
+        assert_eq!(style.symbol, "#123456");
+    }
+
+    #[test]
+    fn test_local_config_markdown_style_none() {
+        let toml_str = r#"
+            model = "claude-3"
+        "#;
+        let local: LocalConfig = toml::from_str(toml_str).unwrap();
+        assert!(local.markdown_style.is_none());
     }
 
     #[test]

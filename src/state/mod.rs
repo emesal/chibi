@@ -1499,6 +1499,7 @@ impl AppState {
             image_cache_max_age_days: self.config.image_cache_max_age_days,
             api: api_params,
             tools: ToolsConfig::default(),
+            markdown_style: self.config.markdown_style.clone(),
         };
 
         // Apply local config overrides
@@ -1591,6 +1592,9 @@ impl AppState {
         }
         if let Some(v) = local.image_cache_max_age_days {
             resolved.image_cache_max_age_days = v;
+        }
+        if let Some(ref markdown_style) = local.markdown_style {
+            resolved.markdown_style = markdown_style.clone();
         }
 
         // Apply context-level API params (Layer 3)
@@ -1735,6 +1739,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MarkdownStyle;
     use crate::context::InboxEntry;
     use tempfile::TempDir;
 
@@ -1777,6 +1782,7 @@ mod tests {
             image_cache_max_age_days: 30,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
+            markdown_style: MarkdownStyle::default(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)
@@ -2367,6 +2373,7 @@ mod tests {
             image_cache_max_age_days: 30,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
+            markdown_style: MarkdownStyle::default(),
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -2439,6 +2446,7 @@ mod tests {
             image_cache_max_age_days: 30,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
+            markdown_style: MarkdownStyle::default(),
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -2533,6 +2541,7 @@ mod tests {
             api: None,
             tools: None,
             storage: StorageConfig::default(),
+            markdown_style: None,
         };
         app.save_local_config("default", &local).unwrap();
 

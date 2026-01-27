@@ -72,12 +72,14 @@ chibi -v "Read my Cargo.toml"
 - **[Getting Started](docs/getting-started.md)** - Installation and first steps
 - **[Configuration](docs/configuration.md)** - Full config reference including API parameters
 - **[Images](docs/images.md)** - Image rendering in the terminal
+- **[Markdown Themes](docs/markdown-themes.md)** - Customizable color schemes for markdown rendering
 - **[Contexts](docs/contexts.md)** - Managing multiple conversations
 - **[Plugins](docs/plugins.md)** - Creating tools for the LLM
 - **[Hooks](docs/hooks.md)** - Lifecycle event system
 - **[Agentic Workflows](docs/agentic.md)** - Autonomous multi-step processing
 - **[CLI Reference](docs/cli-reference.md)** - All command flags
 - **[Transcript Format](docs/transcript-format.md)** - JSONL format specification
+- **[Upgrade Notes](docs/upgrade-notes.md)** - Version migration guides
 
 ## Command Overview
 
