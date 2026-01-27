@@ -52,6 +52,9 @@ fn render_markdown_output(content: &str, config: &markdown::MarkdownConfig) -> i
         image_max_download_bytes: config.image_max_download_bytes,
         image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
         image_allow_http: config.image_allow_http,
+        image_max_height_lines: config.image_max_height_lines,
+        image_max_width_percent: config.image_max_width_percent,
+        image_alignment: config.image_alignment.clone(),
     });
     md.write_chunk(content)?;
     md.finish()?;
@@ -66,6 +69,9 @@ fn md_config_from_resolved(config: &config::ResolvedConfig) -> markdown::Markdow
         image_max_download_bytes: config.image_max_download_bytes,
         image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
         image_allow_http: config.image_allow_http,
+        image_max_height_lines: config.image_max_height_lines,
+        image_max_width_percent: config.image_max_width_percent,
+        image_alignment: config.image_alignment.clone(),
     }
 }
 
@@ -77,6 +83,9 @@ fn md_config_defaults(render: bool) -> markdown::MarkdownConfig {
         image_max_download_bytes: 10 * 1024 * 1024,
         image_fetch_timeout_seconds: 5,
         image_allow_http: false,
+        image_max_height_lines: 25,
+        image_max_width_percent: 80,
+        image_alignment: "center".to_string(),
     }
 }
 

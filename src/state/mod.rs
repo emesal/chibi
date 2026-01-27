@@ -1487,6 +1487,9 @@ impl AppState {
             image_max_download_bytes: self.config.image_max_download_bytes,
             image_fetch_timeout_seconds: self.config.image_fetch_timeout_seconds,
             image_allow_http: self.config.image_allow_http,
+            image_max_height_lines: self.config.image_max_height_lines,
+            image_max_width_percent: self.config.image_max_width_percent,
+            image_alignment: self.config.image_alignment.clone(),
             api: api_params,
             tools: ToolsConfig::default(),
         };
@@ -1551,6 +1554,15 @@ impl AppState {
         }
         if let Some(image_allow_http) = local.image_allow_http {
             resolved.image_allow_http = image_allow_http;
+        }
+        if let Some(image_max_height_lines) = local.image_max_height_lines {
+            resolved.image_max_height_lines = image_max_height_lines;
+        }
+        if let Some(image_max_width_percent) = local.image_max_width_percent {
+            resolved.image_max_width_percent = image_max_width_percent;
+        }
+        if let Some(ref image_alignment) = local.image_alignment {
+            resolved.image_alignment = image_alignment.clone();
         }
 
         // Apply context-level API params (Layer 3)
@@ -1725,6 +1737,9 @@ mod tests {
             image_max_download_bytes: 10 * 1024 * 1024,
             image_fetch_timeout_seconds: 5,
             image_allow_http: false,
+            image_max_height_lines: 25,
+            image_max_width_percent: 80,
+            image_alignment: "center".to_string(),
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2305,6 +2320,9 @@ mod tests {
             image_max_download_bytes: 10 * 1024 * 1024,
             image_fetch_timeout_seconds: 5,
             image_allow_http: false,
+            image_max_height_lines: 25,
+            image_max_width_percent: 80,
+            image_alignment: "center".to_string(),
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2367,6 +2385,9 @@ mod tests {
             image_max_download_bytes: 10 * 1024 * 1024,
             image_fetch_timeout_seconds: 5,
             image_allow_http: false,
+            image_max_height_lines: 25,
+            image_max_width_percent: 80,
+            image_alignment: "center".to_string(),
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2450,6 +2471,9 @@ mod tests {
             image_max_download_bytes: None,
             image_fetch_timeout_seconds: None,
             image_allow_http: None,
+            image_max_height_lines: None,
+            image_max_width_percent: None,
+            image_alignment: None,
             api: None,
             tools: None,
             storage: StorageConfig::default(),
@@ -2468,6 +2492,34 @@ mod tests {
         assert!((resolved.warn_threshold_percent - 85.0).abs() < f32::EPSILON);
         assert_eq!(resolved.context_window_limit, 16000);
         assert!(!resolved.reflection_enabled);
+    }
+
+    #[test]
+    fn test_resolve_config_image_display_local_overrides() {
+        let (app, _temp) = create_test_app();
+
+        let local = LocalConfig {
+            image_max_height_lines: Some(10),
+            image_max_width_percent: Some(50),
+            image_alignment: Some("left".to_string()),
+            ..Default::default()
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+        assert_eq!(resolved.image_max_height_lines, 10);
+        assert_eq!(resolved.image_max_width_percent, 50);
+        assert_eq!(resolved.image_alignment, "left");
+    }
+
+    #[test]
+    fn test_resolve_config_image_display_defaults() {
+        let (app, _temp) = create_test_app();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+        assert_eq!(resolved.image_max_height_lines, 25);
+        assert_eq!(resolved.image_max_width_percent, 80);
+        assert_eq!(resolved.image_alignment, "center");
     }
 
     // === Transcript entry creation tests ===

@@ -11,6 +11,9 @@ pub struct MarkdownConfig {
     pub image_max_download_bytes: usize,
     pub image_fetch_timeout_seconds: u64,
     pub image_allow_http: bool,
+    pub image_max_height_lines: u32,
+    pub image_max_width_percent: u32,
+    pub image_alignment: String,
 }
 
 /// Grouped fetch settings passed into image rendering functions.
@@ -18,6 +21,13 @@ struct ImageFetchConfig {
     max_download_bytes: usize,
     fetch_timeout_seconds: u64,
     allow_http: bool,
+}
+
+/// Display settings for rendered images.
+struct ImageDisplayConfig {
+    max_height_lines: u32,
+    max_width_percent: u32,
+    alignment: String,
 }
 
 /// Zero-sized newtype so `Renderer<StdoutWriter>` can persist across the stream
@@ -57,6 +67,7 @@ pub struct MarkdownStream {
     render_images: bool,
     terminal_width: usize,
     fetch_config: ImageFetchConfig,
+    display_config: ImageDisplayConfig,
 }
 
 impl MarkdownStream {
@@ -88,6 +99,11 @@ impl MarkdownStream {
                 fetch_timeout_seconds: config.image_fetch_timeout_seconds,
                 allow_http: config.image_allow_http,
             },
+            display_config: ImageDisplayConfig {
+                max_height_lines: config.image_max_height_lines,
+                max_width_percent: config.image_max_width_percent,
+                alignment: config.image_alignment,
+            },
         }
     }
 
@@ -98,11 +114,12 @@ impl MarkdownStream {
         render_images: bool,
         terminal_width: usize,
         fetch_config: &ImageFetchConfig,
+        display_config: &ImageDisplayConfig,
     ) -> io::Result<()> {
         for event in events {
             if render_images
                 && let ParseEvent::Image { alt, url } = event
-                && try_render_image(url, alt, terminal_width, fetch_config).is_ok()
+                && try_render_image(url, alt, terminal_width, fetch_config, display_config).is_ok()
             {
                 continue;
             }
@@ -145,6 +162,7 @@ impl MarkdownStream {
                 self.render_images,
                 self.terminal_width,
                 &self.fetch_config,
+                &self.display_config,
             )?;
         }
 
@@ -168,6 +186,7 @@ impl MarkdownStream {
                 self.render_images,
                 self.terminal_width,
                 &self.fetch_config,
+                &self.display_config,
             )?;
         }
 
@@ -179,6 +198,7 @@ impl MarkdownStream {
             self.render_images,
             self.terminal_width,
             &self.fetch_config,
+            &self.display_config,
         )?;
 
         Ok(())
@@ -324,9 +344,10 @@ async fn fetch_image_bytes(
 /// if the image could not be loaded.
 fn try_render_image(
     url: &str,
-    alt: &str,
+    _alt: &str,
     term_width: usize,
     fetch_config: &ImageFetchConfig,
+    display_config: &ImageDisplayConfig,
 ) -> io::Result<()> {
     let img = if let Some(rest) = url.strip_prefix("data:") {
         decode_data_uri_image(rest)?
@@ -340,10 +361,22 @@ fn try_render_image(
 
     let (orig_w, orig_h) = (img.width(), img.height());
     let term_w = term_width as u32;
-    // image_resized_size expects (image_size, term_size, preserve_aspect)
-    // term_size height: use a large value so width is the binding constraint
-    let (new_w, mut new_h) =
-        imgcatr::ops::image_resized_size((orig_w, orig_h), (term_w, 1000), true);
+
+    // Apply width percent constraint
+    let effective_width = term_w * display_config.max_width_percent.min(100) / 100;
+    // Height limit in pixels (truecolor renderer prints 2 pixels per terminal line)
+    let max_height_pixels = display_config.max_height_lines * 2;
+
+    let (new_w, mut new_h) = imgcatr::ops::image_resized_size(
+        (orig_w, orig_h),
+        (effective_width, max_height_pixels),
+        true,
+    );
+
+    // Clamp height if it still exceeds the limit
+    if new_h > max_height_pixels {
+        new_h = max_height_pixels;
+    }
 
     // Ensure height is even (truecolor renderer prints pixel pairs)
     if new_h % 2 != 0 {
@@ -352,14 +385,58 @@ fn try_render_image(
 
     let resized = imgcatr::ops::resize_image(&img, (new_w, new_h));
 
+    // Calculate alignment padding
+    let image_cols = new_w as usize;
+    let pad = match display_config.alignment.as_str() {
+        "center" => term_width.saturating_sub(image_cols) / 2,
+        "right" => term_width.saturating_sub(image_cols),
+        _ => 0, // "left" or anything else
+    };
+
     let mut stdout = io::stdout().lock();
     // Spacing before image
     writeln!(stdout)?;
-    imgcatr::ops::write_ansi_truecolor(&mut stdout, &resized);
-    // Alt text below image (dimmed) if non-empty
-    if !alt.is_empty() {
-        write!(stdout, "\x1b[2m{}\x1b[0m", alt)?;
+
+    if pad == 0 {
+        imgcatr::ops::write_ansi_truecolor(&mut stdout, &resized);
+    } else {
+        let padding: String = " ".repeat(pad);
+        // Reimplement write_ansi_truecolor with per-row padding.
+        // The truecolor renderer outputs two pixel rows per terminal line
+        // using upper-half-block characters with fg/bg colors.
+        let (w, h) = (resized.width() as usize, resized.height() as usize);
+        let pixels = resized.to_rgba8();
+        let mut y = 0;
+        while y + 1 < h {
+            write!(stdout, "{}", padding)?;
+            for x in 0..w {
+                let top = pixels.get_pixel(x as u32, y as u32);
+                let bot = pixels.get_pixel(x as u32, (y + 1) as u32);
+                // Upper half block: fg = top pixel, bg = bottom pixel
+                write!(
+                    stdout,
+                    "\x1b[38;2;{};{};{};48;2;{};{};{}m\u{2580}",
+                    top[0], top[1], top[2], bot[0], bot[1], bot[2]
+                )?;
+            }
+            writeln!(stdout, "\x1b[0m")?;
+            y += 2;
+        }
+        // Handle odd height (last row with no bottom pixel)
+        if y < h {
+            write!(stdout, "{}", padding)?;
+            for x in 0..w {
+                let top = pixels.get_pixel(x as u32, y as u32);
+                write!(
+                    stdout,
+                    "\x1b[38;2;{};{};{}m\u{2580}",
+                    top[0], top[1], top[2]
+                )?;
+            }
+            writeln!(stdout, "\x1b[0m")?;
+        }
     }
+
     writeln!(stdout)?;
     stdout.flush()?;
 
@@ -392,6 +469,14 @@ mod tests {
             max_download_bytes: 10 * 1024 * 1024,
             fetch_timeout_seconds: 5,
             allow_http: false,
+        }
+    }
+
+    fn default_display_config() -> ImageDisplayConfig {
+        ImageDisplayConfig {
+            max_height_lines: 25,
+            max_width_percent: 80,
+            alignment: "center".to_string(),
         }
     }
 
@@ -488,8 +573,15 @@ mod tests {
         // https URL should attempt fetch (and fail in test env), not return
         // "remote URLs not supported"
         let config = default_fetch_config();
-        let err = try_render_image("https://example.com/nonexistent.png", "test", 80, &config)
-            .unwrap_err();
+        let display = default_display_config();
+        let err = try_render_image(
+            "https://example.com/nonexistent.png",
+            "test",
+            80,
+            &config,
+            &display,
+        )
+        .unwrap_err();
         assert!(
             !err.to_string().contains("remote URLs not supported"),
             "should dispatch to fetch path, got: {}",

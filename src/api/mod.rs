@@ -549,6 +549,9 @@ async fn send_prompt_with_depth(
             image_max_download_bytes: resolved_config.image_max_download_bytes,
             image_fetch_timeout_seconds: resolved_config.image_fetch_timeout_seconds,
             image_allow_http: resolved_config.image_allow_http,
+            image_max_height_lines: resolved_config.image_max_height_lines,
+            image_max_width_percent: resolved_config.image_max_width_percent,
+            image_alignment: resolved_config.image_alignment.clone(),
         });
         let mut full_response = String::new();
         let mut is_first_content = true;

@@ -375,6 +375,18 @@ fn default_image_allow_http() -> bool {
     false
 }
 
+fn default_image_max_height_lines() -> u32 {
+    25
+}
+
+fn default_image_max_width_percent() -> u32 {
+    80
+}
+
+fn default_image_alignment() -> String {
+    "center".to_string()
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -430,6 +442,15 @@ pub struct Config {
     /// Allow fetching images over plain HTTP (default: false, HTTPS only)
     #[serde(default = "default_image_allow_http")]
     pub image_allow_http: bool,
+    /// Maximum image height in terminal lines (default: 25)
+    #[serde(default = "default_image_max_height_lines")]
+    pub image_max_height_lines: u32,
+    /// Percentage of terminal width to use for images (default: 80)
+    #[serde(default = "default_image_max_width_percent")]
+    pub image_max_width_percent: u32,
+    /// Image alignment: "left", "center", or "right" (default: "center")
+    #[serde(default = "default_image_alignment")]
+    pub image_alignment: String,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: ApiParams,
@@ -471,6 +492,12 @@ pub struct LocalConfig {
     pub image_fetch_timeout_seconds: Option<u64>,
     /// Allow fetching images over plain HTTP (default: false, HTTPS only)
     pub image_allow_http: Option<bool>,
+    /// Maximum image height in terminal lines
+    pub image_max_height_lines: Option<u32>,
+    /// Percentage of terminal width to use for images
+    pub image_max_width_percent: Option<u32>,
+    /// Image alignment: "left", "center", or "right"
+    pub image_alignment: Option<String>,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
@@ -532,6 +559,12 @@ pub struct ResolvedConfig {
     pub image_fetch_timeout_seconds: u64,
     /// Allow fetching images over plain HTTP (default: false, HTTPS only)
     pub image_allow_http: bool,
+    /// Maximum image height in terminal lines
+    pub image_max_height_lines: u32,
+    /// Percentage of terminal width to use for images
+    pub image_max_width_percent: u32,
+    /// Image alignment: "left", "center", or "right"
+    pub image_alignment: String,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
@@ -570,6 +603,9 @@ impl ResolvedConfig {
             "image_max_download_bytes" => Some(self.image_max_download_bytes.to_string()),
             "image_fetch_timeout_seconds" => Some(self.image_fetch_timeout_seconds.to_string()),
             "image_allow_http" => Some(self.image_allow_http.to_string()),
+            "image_max_height_lines" => Some(self.image_max_height_lines.to_string()),
+            "image_max_width_percent" => Some(self.image_max_width_percent.to_string()),
+            "image_alignment" => Some(self.image_alignment.clone()),
 
             // API params (api.*)
             "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
@@ -614,6 +650,9 @@ impl ResolvedConfig {
             "image_max_download_bytes",
             "image_fetch_timeout_seconds",
             "image_allow_http",
+            "image_max_height_lines",
+            "image_max_width_percent",
+            "image_alignment",
             "max_recursion_depth",
             "reflection_enabled",
             // API params
@@ -703,6 +742,10 @@ mod tests {
         assert!(config.reflection_enabled);
         assert_eq!(config.max_recursion_depth, 30);
         assert_eq!(config.username, "user");
+        // Image display defaults
+        assert_eq!(config.image_max_height_lines, 25);
+        assert_eq!(config.image_max_width_percent, 80);
+        assert_eq!(config.image_alignment, "center");
     }
 
     #[test]
@@ -1072,6 +1115,9 @@ mod tests {
             image_max_download_bytes: 10 * 1024 * 1024,
             image_fetch_timeout_seconds: 5,
             image_allow_http: false,
+            image_max_height_lines: 25,
+            image_max_width_percent: 80,
+            image_alignment: "center".to_string(),
             api: ApiParams {
                 temperature: Some(0.7),
                 max_tokens: Some(4096),
@@ -1253,6 +1299,33 @@ mod tests {
         assert_eq!(config.get_field("api.reasoning.nonexistent"), None);
     }
 
+    #[test]
+    fn test_resolved_config_get_field_image_max_height_lines() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image_max_height_lines"),
+            Some("25".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_image_max_width_percent() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image_max_width_percent"),
+            Some("80".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_image_alignment() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image_alignment"),
+            Some("center".to_string())
+        );
+    }
+
     // List all inspectable fields
 
     #[test]
@@ -1264,6 +1337,10 @@ mod tests {
         assert!(fields.contains(&"context_window_limit"));
         assert!(fields.contains(&"auto_compact"));
         assert!(fields.contains(&"reflection_enabled"));
+        // Should include image display fields
+        assert!(fields.contains(&"image_max_height_lines"));
+        assert!(fields.contains(&"image_max_width_percent"));
+        assert!(fields.contains(&"image_alignment"));
         // Should include nested API params
         assert!(fields.contains(&"api.temperature"));
         assert!(fields.contains(&"api.max_tokens"));

@@ -66,7 +66,20 @@ image_fetch_timeout_seconds = 5
 image_allow_http = false
 ```
 
-All three settings can be overridden per-context in `local.toml`.
+### Display options
+
+```toml
+# Maximum image height in terminal lines (default: 25)
+image_max_height_lines = 25
+
+# Percentage of terminal width to use for images (default: 80)
+image_max_width_percent = 80
+
+# Image alignment: "left", "center", or "right" (default: "center")
+image_alignment = "center"
+```
+
+All settings can be overridden per-context in `local.toml`.
 
 ## Interaction with other settings
 
@@ -80,6 +93,10 @@ All three settings can be overridden per-context in `local.toml`.
 When image rendering is disabled or an image cannot be loaded (e.g.,
 missing file, unsupported format, network error), the image falls back
 to the standard placeholder: `[🖼 alt text]`.
+
+Alt text is only shown in this fallback placeholder. When the image is
+successfully rendered, alt text is omitted to avoid visual noise (it
+serves as a replacement for the image, not a caption).
 
 ## Terminal compatibility
 
