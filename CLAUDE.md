@@ -14,11 +14,24 @@
 ## Build Commands
 
 ```bash
+# First time setup - initialize submodules
+git submodule update --init --recursive
+
 cargo build              # Debug build
 cargo build --release    # Release build
 cargo install --path .   # Install to ~/.cargo/bin
 cargo run -- <args>      # Run with arguments
 ```
+
+## Dependencies
+
+Chibi uses git submodules for vendored dependencies:
+
+- `vendor/streamdown-rs/` - Forked markdown renderer with custom patches
+  - Path dependencies in Cargo.toml point to `vendor/streamdown-rs/crates/*`
+  - Fork maintained at: https://github.com/emesal/streamdown-rs
+
+When cloning chibi, always use `--recurse-submodules` or run `git submodule update --init --recursive`.
 
 ## Architecture
 

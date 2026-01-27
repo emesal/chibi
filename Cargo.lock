@@ -1999,7 +1999,6 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "streamdown-ansi"
 version = "0.1.4"
-source = "git+https://github.com/emesal/streamdown-rs#1aed32f5a155c2ea0bafa640995db0815e7c4038"
 dependencies = [
  "crossterm",
  "regex",
@@ -2009,7 +2008,6 @@ dependencies = [
 [[package]]
 name = "streamdown-config"
 version = "0.1.4"
-source = "git+https://github.com/emesal/streamdown-rs#1aed32f5a155c2ea0bafa640995db0815e7c4038"
 dependencies = [
  "crossterm",
  "directories",
@@ -2022,7 +2020,6 @@ dependencies = [
 [[package]]
 name = "streamdown-core"
 version = "0.1.4"
-source = "git+https://github.com/emesal/streamdown-rs#1aed32f5a155c2ea0bafa640995db0815e7c4038"
 dependencies = [
  "regex",
  "serde",
@@ -2032,7 +2029,6 @@ dependencies = [
 [[package]]
 name = "streamdown-parser"
 version = "0.1.4"
-source = "git+https://github.com/emesal/streamdown-rs#1aed32f5a155c2ea0bafa640995db0815e7c4038"
 dependencies = [
  "regex",
  "streamdown-ansi",
@@ -2043,7 +2039,6 @@ dependencies = [
 [[package]]
 name = "streamdown-render"
 version = "0.1.4"
-source = "git+https://github.com/emesal/streamdown-rs#1aed32f5a155c2ea0bafa640995db0815e7c4038"
 dependencies = [
  "base64",
  "crossterm",
@@ -2058,7 +2053,6 @@ dependencies = [
 [[package]]
 name = "streamdown-syntax"
 version = "0.1.4"
-source = "git+https://github.com/emesal/streamdown-rs#1aed32f5a155c2ea0bafa640995db0815e7c4038"
 dependencies = [
  "streamdown-core",
  "syntect",

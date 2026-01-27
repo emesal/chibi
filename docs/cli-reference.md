@@ -177,7 +177,8 @@ Use `-n home` to inspect the resolved path.
 | `request-log` | Log full API request bodies to `requests.jsonl` |
 | `response-meta` | Log response metadata/usage stats to `response_meta.jsonl` |
 | `all` | Enable all logging features above |
-| `md=<FILENAME>` | Render a markdown file and quit (implies `-x`) |
+| `md=<FILENAME>` | Render a markdown file and quit (implies `-x`, forces rendering even without TTY) |
+| `force-markdown` | Force markdown rendering even when stdout is not a TTY |
 | `destroy_at=<TIMESTAMP>` | Set auto-destroy timestamp on current context |
 | `destroy_after_seconds_inactive=<SECS>` | Set inactivity timeout on current context |
 
@@ -204,7 +205,23 @@ This is useful for:
 - Testing markdown rendering without starting a conversation
 - Quick markdown file viewing
 
-The feature automatically implies `-x` (no LLM invocation) and exits after rendering.
+The `md=<FILENAME>` feature automatically:
+- Implies `-x` (no LLM invocation) and exits after rendering
+- Forces markdown rendering even when stdout is not a TTY (e.g., when piped or in CI)
+
+#### Force Markdown Rendering
+
+By default, markdown rendering only activates when stdout is a TTY (terminal). To force rendering even when piped or redirected:
+
+```bash
+# Force markdown rendering in a normal conversation
+chibi --debug force-markdown "Tell me about Rust"
+
+# Useful for piping formatted output
+chibi --debug force-markdown "List the files" | less -R
+```
+
+Note: `--debug md=<file>` automatically forces rendering, so you don't need to combine them.
 
 ### Auto-Destroy (Test Cleanup)
 

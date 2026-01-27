@@ -545,6 +545,7 @@ async fn send_prompt_with_depth(
         let mut stream = response.bytes_stream();
         let mut md = MarkdownStream::new(crate::markdown::MarkdownConfig {
             render_markdown: resolved_config.render_markdown,
+            force_render: false,
             render_images: resolved_config.render_images,
             image_max_download_bytes: resolved_config.image_max_download_bytes,
             image_fetch_timeout_seconds: resolved_config.image_fetch_timeout_seconds,

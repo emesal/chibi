@@ -49,6 +49,7 @@ fn confirm_action(prompt: &str) -> bool {
 fn render_markdown_output(content: &str, config: &markdown::MarkdownConfig) -> io::Result<()> {
     let mut md = markdown::MarkdownStream::new(markdown::MarkdownConfig {
         render_markdown: config.render_markdown,
+        force_render: config.force_render,
         render_images: config.render_images,
         image_max_download_bytes: config.image_max_download_bytes,
         image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
@@ -73,9 +74,11 @@ fn render_markdown_output(content: &str, config: &markdown::MarkdownConfig) -> i
 fn md_config_from_resolved(
     config: &config::ResolvedConfig,
     chibi_dir: &std::path::Path,
+    force_render: bool,
 ) -> markdown::MarkdownConfig {
     markdown::MarkdownConfig {
         render_markdown: config.render_markdown,
+        force_render,
         render_images: config.render_images,
         image_max_download_bytes: config.image_max_download_bytes,
         image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
@@ -101,6 +104,7 @@ fn md_config_from_resolved(
 fn md_config_defaults(render: bool) -> markdown::MarkdownConfig {
     markdown::MarkdownConfig {
         render_markdown: render,
+        force_render: false,
         render_images: render,
         image_max_download_bytes: 10 * 1024 * 1024,
         image_fetch_timeout_seconds: 5,
@@ -185,6 +189,7 @@ fn inspect_context(
     context_name: &str,
     thing: &Inspectable,
     resolved_config: Option<&config::ResolvedConfig>,
+    force_markdown: bool,
 ) -> io::Result<()> {
     // Resolve config if not provided (needed for render_markdown setting)
     let config_holder;
@@ -229,7 +234,7 @@ fn inspect_context(
             if todos.is_empty() {
                 println!("(no todos)");
             } else {
-                let md_cfg = md_config_from_resolved(config, &app.chibi_dir);
+                let md_cfg = md_config_from_resolved(config, &app.chibi_dir, force_markdown);
                 render_markdown_output(&todos, &md_cfg)?;
                 if !todos.ends_with('\n') {
                     println!();
@@ -241,7 +246,7 @@ fn inspect_context(
             if goals.is_empty() {
                 println!("(no goals)");
             } else {
-                let md_cfg = md_config_from_resolved(config, &app.chibi_dir);
+                let md_cfg = md_config_from_resolved(config, &app.chibi_dir, force_markdown);
                 render_markdown_output(&goals, &md_cfg)?;
                 if !goals.ends_with('\n') {
                     println!();
@@ -268,6 +273,7 @@ fn show_log(
     num: isize,
     verbose: bool,
     resolved_config: &config::ResolvedConfig,
+    force_markdown: bool,
 ) -> io::Result<()> {
     let entries = app.read_jsonl_transcript(context_name)?;
 
@@ -293,7 +299,7 @@ fn show_log(
         match entry.entry_type.as_str() {
             ENTRY_TYPE_MESSAGE => {
                 println!("[{}]", entry.from.to_uppercase());
-                let md_cfg = md_config_from_resolved(resolved_config, &app.chibi_dir);
+                let md_cfg = md_config_from_resolved(resolved_config, &app.chibi_dir, force_markdown);
                 render_markdown_output(&entry.content, &md_cfg)?;
                 println!();
             }
@@ -367,6 +373,7 @@ async fn execute_from_input(
     app: &mut AppState,
     tools: &[tools::Tool],
     output: &OutputHandler,
+    force_markdown: bool,
 ) -> io::Result<()> {
     let verbose = input.flags.verbose;
     let json_output = input.flags.json_output;
@@ -652,7 +659,7 @@ async fn execute_from_input(
                 None => app.state.current_context.clone(),
             };
             let config = app.resolve_config(None, None)?;
-            show_log(app, &ctx_name, *count, verbose, &config)?;
+            show_log(app, &ctx_name, *count, verbose, &config, force_markdown)?;
             did_action = true;
         }
         Command::Inspect { context, thing } => {
@@ -661,7 +668,7 @@ async fn execute_from_input(
                 None => app.state.current_context.clone(),
             };
             // Pass None for resolved_config - it will be resolved on demand if needed
-            inspect_context(app, &ctx_name, thing, None)?;
+            inspect_context(app, &ctx_name, thing, None, force_markdown)?;
             did_action = true;
         }
         Command::SetSystemPrompt { context, prompt } => {
@@ -883,7 +890,7 @@ async fn main() -> io::Result<()> {
             input.flags.verbose,
         );
 
-        return execute_from_input(input, &mut app, &tools, &output).await;
+        return execute_from_input(input, &mut app, &tools, &output, false).await;
     }
 
     // CLI mode: parse to ChibiInput and use unified execution
@@ -897,10 +904,14 @@ async fn main() -> io::Result<()> {
                 format!("Failed to read file '{}': {}", path, e),
             )
         })?;
-        let md_cfg = md_config_defaults(true);
+        let mut md_cfg = md_config_defaults(true);
+        md_cfg.force_render = true; // Always force rendering for --debug md=
         render_markdown_output(&content, &md_cfg)?;
         return Ok(());
     }
+
+    // Handle --debug force-markdown (sets force_render for the session)
+    let force_markdown = matches!(input.flags.debug, Some(input::DebugKey::ForceMarkdown));
 
     let verbose = input.flags.verbose;
     let mut app = AppState::load(home_override)?;
@@ -922,5 +933,5 @@ async fn main() -> io::Result<()> {
     // Use OutputHandler for CLI mode (non-JSON output)
     let output = OutputHandler::new(input.flags.json_output);
 
-    execute_from_input(input, &mut app, &tools, &output).await
+    execute_from_input(input, &mut app, &tools, &output, force_markdown).await
 }

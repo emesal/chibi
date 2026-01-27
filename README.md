@@ -21,6 +21,14 @@ CLI tool for conversing with AI models via OpenRouter. Maintains conversation st
 ### Install
 
 ```bash
+# Clone with submodules
+git clone --recurse-submodules https://github.com/emesal/chibi.git
+cd chibi
+
+# Or if already cloned, initialize submodules
+git submodule update --init --recursive
+
+# Build and install
 cargo install --path .
 ```
 

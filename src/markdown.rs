@@ -8,6 +8,7 @@ use streamdown_render::Renderer;
 /// Configuration for markdown stream rendering.
 pub struct MarkdownConfig {
     pub render_markdown: bool,
+    pub force_render: bool,
     pub render_images: bool,
     pub image_max_download_bytes: usize,
     pub image_fetch_timeout_seconds: u64,
@@ -167,7 +168,7 @@ impl MarkdownStream {
     /// When `render_markdown` is true and stdout is a TTY, creates a streamdown
     /// pipeline for formatted output. Otherwise, raw passthrough.
     pub fn new(config: MarkdownConfig) -> Self {
-        let (pipeline, terminal_width) = if config.render_markdown && io::stdout().is_terminal() {
+        let (pipeline, terminal_width) = if config.render_markdown && (config.force_render || io::stdout().is_terminal()) {
             let width = streamdown_render::terminal_width();
             (
                 Some(RenderPipeline {

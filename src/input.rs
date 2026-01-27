@@ -71,6 +71,8 @@ pub enum DebugKey {
     DestroyAfterSecondsInactive(u64),
     /// Render a markdown file and quit (e.g., "md=README.md")
     Md(String),
+    /// Force markdown rendering even when stdout is not a TTY
+    ForceMarkdown,
     /// Enable all debug features (request_log, response_meta)
     All,
 }
@@ -102,6 +104,7 @@ impl DebugKey {
         match s {
             "request-log" | "request_log" => Some(DebugKey::RequestLog),
             "response-meta" | "response_meta" => Some(DebugKey::ResponseMeta),
+            "force-markdown" | "force_markdown" => Some(DebugKey::ForceMarkdown),
             "all" => Some(DebugKey::All),
             _ => None,
         }
