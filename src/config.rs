@@ -216,6 +216,17 @@ impl ApiParams {
     }
 }
 
+/// Tool filtering configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolsConfig {
+    /// Allowlist - only these tools are available (if set)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    /// Blocklist - these tools are excluded
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
+}
+
 fn default_auto_compact() -> bool {
     false
 }
@@ -342,6 +353,9 @@ pub struct LocalConfig {
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
+    /// Tool filtering configuration (include/exclude lists)
+    #[serde(default)]
+    pub tools: Option<ToolsConfig>,
     /// Per-context storage configuration overrides
     #[serde(default)]
     pub storage: StorageConfig,
@@ -389,6 +403,8 @@ pub struct ResolvedConfig {
     pub file_tools_allowed_paths: Vec<String>,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
+    /// Tool filtering configuration (include/exclude lists)
+    pub tools: ToolsConfig,
 }
 
 impl ResolvedConfig {
@@ -826,6 +842,7 @@ mod tests {
                 top_p: Some(0.9),
                 ..Default::default()
             },
+            tools: ToolsConfig::default(),
         }
     }
 
