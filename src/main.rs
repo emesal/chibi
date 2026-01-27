@@ -299,7 +299,8 @@ fn show_log(
         match entry.entry_type.as_str() {
             ENTRY_TYPE_MESSAGE => {
                 println!("[{}]", entry.from.to_uppercase());
-                let md_cfg = md_config_from_resolved(resolved_config, &app.chibi_dir, force_markdown);
+                let md_cfg =
+                    md_config_from_resolved(resolved_config, &app.chibi_dir, force_markdown);
                 render_markdown_output(&entry.content, &md_cfg)?;
                 println!();
             }

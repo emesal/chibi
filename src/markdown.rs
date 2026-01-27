@@ -168,18 +168,19 @@ impl MarkdownStream {
     /// When `render_markdown` is true and stdout is a TTY, creates a streamdown
     /// pipeline for formatted output. Otherwise, raw passthrough.
     pub fn new(config: MarkdownConfig) -> Self {
-        let (pipeline, terminal_width) = if config.render_markdown && (config.force_render || io::stdout().is_terminal()) {
-            let width = streamdown_render::terminal_width();
-            (
-                Some(RenderPipeline {
-                    parser: Parser::new(),
-                    renderer: Renderer::new(StdoutWriter, width),
-                }),
-                width,
-            )
-        } else {
-            (None, 80)
-        };
+        let (pipeline, terminal_width) =
+            if config.render_markdown && (config.force_render || io::stdout().is_terminal()) {
+                let width = streamdown_render::terminal_width();
+                (
+                    Some(RenderPipeline {
+                        parser: Parser::new(),
+                        renderer: Renderer::new(StdoutWriter, width),
+                    }),
+                    width,
+                )
+            } else {
+                (None, 80)
+            };
 
         // Determine rendering mode
         let render_mode = resolve_render_mode(
@@ -355,10 +356,11 @@ fn fetch_remote_image(url: &str, config: &ImageFetchConfig) -> io::Result<image:
 
     // Try cache first
     if let Some(ref cache_dir) = config.cache_dir
-        && let Some(cached) = crate::image_cache::cache_get(cache_dir, url) {
-            return image::load_from_memory(&cached)
-                .map_err(|e| io::Error::other(format!("failed to decode cached image: {}", e)));
-        }
+        && let Some(cached) = crate::image_cache::cache_get(cache_dir, url)
+    {
+        return image::load_from_memory(&cached)
+            .map_err(|e| io::Error::other(format!("failed to decode cached image: {}", e)));
+    }
 
     // Fetch from network
     let bytes = tokio::task::block_in_place(|| {
