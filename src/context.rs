@@ -151,6 +151,10 @@ impl ContextState {
 }
 
 pub fn is_valid_context_name(name: &str) -> bool {
+    // Reject reserved name
+    if name == "-" {
+        return false;
+    }
     !name.is_empty()
         && name
             .chars()
@@ -158,6 +162,12 @@ pub fn is_valid_context_name(name: &str) -> bool {
 }
 
 pub fn validate_context_name(name: &str) -> io::Result<()> {
+    if name == "-" {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Invalid context name '-'. This is a reserved name used to reference the previous context.",
+        ));
+    }
     if !is_valid_context_name(name) {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
@@ -347,6 +357,16 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_context_name_rejects_dash() {
+        let result = validate_context_name("-");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("reserved name"));
+        assert!(err.to_string().contains("previous context"));
+    }
+
+    #[test]
     fn test_now_timestamp_is_reasonable() {
         let ts = now_timestamp();
         // Should be after Jan 1, 2024 (1704067200)
@@ -449,7 +469,8 @@ mod tests {
     fn test_context_name_leading_dash() {
         // Leading dash could be problematic with CLI parsing
         assert!(is_valid_context_name("-mycontext"));
-        assert!(is_valid_context_name("-"));
+        // Single dash is reserved for previous context reference
+        assert!(!is_valid_context_name("-"));
     }
 
     #[test]

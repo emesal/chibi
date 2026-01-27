@@ -69,9 +69,26 @@ fn generate_new_context_name(app: &AppState, prefix: Option<&str>) -> String {
     }
 }
 
-/// Resolve "new" or "new:prefix" context names
+/// Resolve previous context reference
+fn resolve_previous_context(app: &AppState) -> io::Result<String> {
+    app.state
+        .previous_context
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::InvalidInput,
+                "No previous context available (use -c to switch contexts first)",
+            )
+        })
+}
+
+/// Resolve "new" or "new:prefix" or "-" context names
 fn resolve_context_name(app: &AppState, name: &str) -> io::Result<String> {
-    if name == "new" {
+    if name == "-" {
+        resolve_previous_context(app)
+    } else if name == "new" {
         Ok(generate_new_context_name(app, None))
     } else if let Some(prefix) = name.strip_prefix("new:") {
         if prefix.is_empty() {
@@ -293,6 +310,8 @@ async fn execute_from_input(
     match &input.context {
         ContextSelection::Current => {}
         ContextSelection::Transient { name } => {
+            // For transient, we don't swap - just switch temporarily
+            // (transient doesn't persist previous_context changes)
             let actual_name = resolve_context_name(app, name)?;
             let prev_context = app.state.current_context.clone();
             app.state.switch_context(actual_name)?;
@@ -331,9 +350,19 @@ async fn execute_from_input(
             );
         }
         ContextSelection::Switch { name, persistent } => {
-            let actual_name = resolve_context_name(app, name)?;
+            // Special case: if name is "-", swap current and previous contexts
             let prev_context = app.state.current_context.clone();
-            app.state.switch_context(actual_name)?;
+            if name == "-" {
+                // Resolve previous context
+                let previous = resolve_previous_context(app)?;
+                // Swap: set current to previous, and previous to what was current
+                app.state.current_context = previous;
+                app.state.previous_context = Some(prev_context.clone());
+            } else {
+                // Normal switch: resolve name and use standard switch logic
+                let actual_name = resolve_context_name(app, name)?;
+                app.state.switch_context(actual_name)?;
+            }
 
             // Ensure ContextEntry exists in state.contexts before proceeding
             let current_ctx_name = app.state.current_context.clone();
@@ -456,9 +485,10 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::DestroyContext { name } => {
-            let ctx_name = name
-                .clone()
-                .unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = match name {
+                Some(n) => resolve_context_name(app, n)?,
+                None => app.state.current_context.clone(),
+            };
 
             // Check if context exists before prompting
             if !app.context_dir(&ctx_name).exists() {
@@ -483,9 +513,10 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::ArchiveHistory { name } => {
-            let ctx_name = name
-                .clone()
-                .unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = match name {
+                Some(n) => resolve_context_name(app, n)?,
+                None => app.state.current_context.clone(),
+            };
             if name.is_none() {
                 let context = app.get_current_context()?;
                 let hook_data = serde_json::json!({
@@ -511,7 +542,8 @@ async fn execute_from_input(
         }
         Command::CompactContext { name } => {
             if let Some(ctx_name) = name {
-                api::compact_context_by_name(app, ctx_name, verbose).await?;
+                let resolved_name = resolve_context_name(app, ctx_name)?;
+                api::compact_context_by_name(app, &resolved_name, verbose).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
                 // Compute resolved config for the current context
@@ -521,32 +553,36 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::RenameContext { old, new } => {
-            let old_name = old
-                .clone()
-                .unwrap_or_else(|| app.state.current_context.clone());
+            let old_name = match old {
+                Some(n) => resolve_context_name(app, n)?,
+                None => app.state.current_context.clone(),
+            };
             app.rename_context(&old_name, new)?;
             output.emit_result(&format!("Renamed context '{}' to '{}'", old_name, new));
             did_action = true;
         }
         Command::ShowLog { context, count } => {
-            let ctx_name = context
-                .clone()
-                .unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = match context {
+                Some(n) => resolve_context_name(app, n)?,
+                None => app.state.current_context.clone(),
+            };
             show_log(app, &ctx_name, *count, verbose)?;
             did_action = true;
         }
         Command::Inspect { context, thing } => {
-            let ctx_name = context
-                .clone()
-                .unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = match context {
+                Some(n) => resolve_context_name(app, n)?,
+                None => app.state.current_context.clone(),
+            };
             // Pass None for resolved_config - it will be resolved on demand if needed
             inspect_context(app, &ctx_name, thing, None)?;
             did_action = true;
         }
         Command::SetSystemPrompt { context, prompt } => {
-            let ctx_name = context
-                .clone()
-                .unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = match context {
+                Some(n) => resolve_context_name(app, n)?,
+                None => app.state.current_context.clone(),
+            };
             set_prompt_for_context(app, &ctx_name, prompt, verbose)?;
             did_action = true;
         }
@@ -590,9 +626,10 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::ClearCache { name } => {
-            let ctx_name = name
-                .clone()
-                .unwrap_or_else(|| app.state.current_context.clone());
+            let ctx_name = match name {
+                Some(n) => resolve_context_name(app, n)?,
+                None => app.state.current_context.clone(),
+            };
             app.clear_tool_cache(&ctx_name)?;
             output.emit_result(&format!("Cleared tool cache for context '{}'", ctx_name));
             did_action = true;
