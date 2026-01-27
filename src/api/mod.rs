@@ -556,6 +556,13 @@ async fn send_prompt_with_depth(
             image_enable_truecolor: resolved_config.image_enable_truecolor,
             image_enable_ansi: resolved_config.image_enable_ansi,
             image_enable_ascii: resolved_config.image_enable_ascii,
+            image_cache_dir: if resolved_config.image_cache_enabled {
+                Some(app.chibi_dir.join("image_cache"))
+            } else {
+                None
+            },
+            image_cache_max_bytes: resolved_config.image_cache_max_bytes,
+            image_cache_max_age_days: resolved_config.image_cache_max_age_days,
         });
         let mut full_response = String::new();
         let mut is_first_content = true;

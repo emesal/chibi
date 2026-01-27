@@ -1494,6 +1494,9 @@ impl AppState {
             image_enable_truecolor: self.config.image_enable_truecolor,
             image_enable_ansi: self.config.image_enable_ansi,
             image_enable_ascii: self.config.image_enable_ascii,
+            image_cache_enabled: self.config.image_cache_enabled,
+            image_cache_max_bytes: self.config.image_cache_max_bytes,
+            image_cache_max_age_days: self.config.image_cache_max_age_days,
             api: api_params,
             tools: ToolsConfig::default(),
         };
@@ -1579,6 +1582,15 @@ impl AppState {
         }
         if let Some(image_enable_ascii) = local.image_enable_ascii {
             resolved.image_enable_ascii = image_enable_ascii;
+        }
+        if let Some(v) = local.image_cache_enabled {
+            resolved.image_cache_enabled = v;
+        }
+        if let Some(v) = local.image_cache_max_bytes {
+            resolved.image_cache_max_bytes = v;
+        }
+        if let Some(v) = local.image_cache_max_age_days {
+            resolved.image_cache_max_age_days = v;
         }
 
         // Apply context-level API params (Layer 3)
@@ -1760,6 +1772,9 @@ mod tests {
             image_enable_truecolor: true,
             image_enable_ansi: true,
             image_enable_ascii: true,
+            image_cache_enabled: true,
+            image_cache_max_bytes: 104_857_600,
+            image_cache_max_age_days: 30,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2347,6 +2362,9 @@ mod tests {
             image_enable_truecolor: true,
             image_enable_ansi: true,
             image_enable_ascii: true,
+            image_cache_enabled: true,
+            image_cache_max_bytes: 104_857_600,
+            image_cache_max_age_days: 30,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2416,6 +2434,9 @@ mod tests {
             image_enable_truecolor: true,
             image_enable_ansi: true,
             image_enable_ascii: true,
+            image_cache_enabled: true,
+            image_cache_max_bytes: 104_857_600,
+            image_cache_max_age_days: 30,
             api: ApiParams::default(),
             storage: StorageConfig::default(),
         };
@@ -2506,6 +2527,9 @@ mod tests {
             image_enable_truecolor: None,
             image_enable_ansi: None,
             image_enable_ascii: None,
+            image_cache_enabled: None,
+            image_cache_max_bytes: None,
+            image_cache_max_age_days: None,
             api: None,
             tools: None,
             storage: StorageConfig::default(),
@@ -2552,6 +2576,34 @@ mod tests {
         assert_eq!(resolved.image_max_height_lines, 25);
         assert_eq!(resolved.image_max_width_percent, 80);
         assert_eq!(resolved.image_alignment, "center");
+    }
+
+    #[test]
+    fn test_resolve_config_image_cache_defaults() {
+        let (app, _temp) = create_test_app();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+        assert!(resolved.image_cache_enabled);
+        assert_eq!(resolved.image_cache_max_bytes, 104_857_600);
+        assert_eq!(resolved.image_cache_max_age_days, 30);
+    }
+
+    #[test]
+    fn test_resolve_config_image_cache_local_overrides() {
+        let (app, _temp) = create_test_app();
+
+        let local = LocalConfig {
+            image_cache_enabled: Some(false),
+            image_cache_max_bytes: Some(50_000_000),
+            image_cache_max_age_days: Some(7),
+            ..Default::default()
+        };
+        app.save_local_config("default", &local).unwrap();
+
+        let resolved = app.resolve_config(None, None).unwrap();
+        assert!(!resolved.image_cache_enabled);
+        assert_eq!(resolved.image_cache_max_bytes, 50_000_000);
+        assert_eq!(resolved.image_cache_max_age_days, 7);
     }
 
     // === Transcript entry creation tests ===

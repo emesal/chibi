@@ -66,6 +66,30 @@ image_fetch_timeout_seconds = 5
 image_allow_http = false
 ```
 
+### Image cache
+
+Remote images are cached locally to avoid re-fetching on log review,
+compaction replay, or repeated renders. The cache lives at
+`~/.chibi/image_cache/` and is content-addressed by SHA-256 of the URL.
+
+```toml
+# Enable/disable image caching (default: true)
+image_cache_enabled = true
+
+# Maximum total cache size in bytes (default: 104857600 = 100 MB)
+image_cache_max_bytes = 104857600
+
+# Maximum age of cached images in days (default: 30)
+image_cache_max_age_days = 30
+```
+
+Eviction runs automatically at exit:
+1. Entries older than `image_cache_max_age_days` are removed first.
+2. If total size still exceeds `image_cache_max_bytes`, the
+   least-recently-accessed entries are removed until under the limit.
+
+Cache writes are best-effort — failures never block rendering.
+
 ### Display options
 
 ```toml

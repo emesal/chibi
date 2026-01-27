@@ -403,6 +403,16 @@ fn default_image_enable_ascii() -> bool {
     true
 }
 
+fn default_image_cache_enabled() -> bool {
+    true
+}
+fn default_image_cache_max_bytes() -> u64 {
+    104_857_600 // 100 MB
+}
+fn default_image_cache_max_age_days() -> u64 {
+    30
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -479,6 +489,15 @@ pub struct Config {
     /// Enable ASCII art rendering
     #[serde(default = "default_image_enable_ascii")]
     pub image_enable_ascii: bool,
+    /// Enable image cache for remote images
+    #[serde(default = "default_image_cache_enabled")]
+    pub image_cache_enabled: bool,
+    /// Maximum total size of image cache in bytes
+    #[serde(default = "default_image_cache_max_bytes")]
+    pub image_cache_max_bytes: u64,
+    /// Maximum age of cached images in days
+    #[serde(default = "default_image_cache_max_age_days")]
+    pub image_cache_max_age_days: u64,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: ApiParams,
@@ -531,6 +550,12 @@ pub struct LocalConfig {
     pub image_enable_truecolor: Option<bool>,
     pub image_enable_ansi: Option<bool>,
     pub image_enable_ascii: Option<bool>,
+    /// Enable image cache for remote images
+    pub image_cache_enabled: Option<bool>,
+    /// Maximum total size of image cache in bytes
+    pub image_cache_max_bytes: Option<u64>,
+    /// Maximum age of cached images in days
+    pub image_cache_max_age_days: Option<u64>,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
@@ -602,6 +627,12 @@ pub struct ResolvedConfig {
     pub image_enable_truecolor: bool,
     pub image_enable_ansi: bool,
     pub image_enable_ascii: bool,
+    /// Enable image cache for remote images
+    pub image_cache_enabled: bool,
+    /// Maximum total size of image cache in bytes
+    pub image_cache_max_bytes: u64,
+    /// Maximum age of cached images in days
+    pub image_cache_max_age_days: u64,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
@@ -647,6 +678,9 @@ impl ResolvedConfig {
             "image_enable_truecolor" => Some(self.image_enable_truecolor.to_string()),
             "image_enable_ansi" => Some(self.image_enable_ansi.to_string()),
             "image_enable_ascii" => Some(self.image_enable_ascii.to_string()),
+            "image_cache_enabled" => Some(self.image_cache_enabled.to_string()),
+            "image_cache_max_bytes" => Some(self.image_cache_max_bytes.to_string()),
+            "image_cache_max_age_days" => Some(self.image_cache_max_age_days.to_string()),
 
             // API params (api.*)
             "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
@@ -698,6 +732,9 @@ impl ResolvedConfig {
             "image_enable_truecolor",
             "image_enable_ansi",
             "image_enable_ascii",
+            "image_cache_enabled",
+            "image_cache_max_bytes",
+            "image_cache_max_age_days",
             "max_recursion_depth",
             "reflection_enabled",
             // API params
@@ -791,6 +828,10 @@ mod tests {
         assert_eq!(config.image_max_height_lines, 25);
         assert_eq!(config.image_max_width_percent, 80);
         assert_eq!(config.image_alignment, "center");
+        // Image cache defaults
+        assert!(config.image_cache_enabled);
+        assert_eq!(config.image_cache_max_bytes, 104_857_600);
+        assert_eq!(config.image_cache_max_age_days, 30);
     }
 
     #[test]
@@ -808,6 +849,9 @@ mod tests {
             max_recursion_depth = 20
             username = "alice"
             lock_heartbeat_seconds = 60
+            image_cache_enabled = false
+            image_cache_max_bytes = 50000000
+            image_cache_max_age_days = 7
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.auto_compact);
@@ -818,6 +862,9 @@ mod tests {
         assert_eq!(config.max_recursion_depth, 20);
         assert_eq!(config.username, "alice");
         assert_eq!(config.lock_heartbeat_seconds, 60);
+        assert!(!config.image_cache_enabled);
+        assert_eq!(config.image_cache_max_bytes, 50_000_000);
+        assert_eq!(config.image_cache_max_age_days, 7);
     }
 
     #[test]
@@ -1167,6 +1214,9 @@ mod tests {
             image_enable_truecolor: true,
             image_enable_ansi: true,
             image_enable_ascii: true,
+            image_cache_enabled: true,
+            image_cache_max_bytes: 104_857_600,
+            image_cache_max_age_days: 30,
             api: ApiParams {
                 temperature: Some(0.7),
                 max_tokens: Some(4096),
@@ -1375,6 +1425,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_resolved_config_get_field_image_cache_enabled() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image_cache_enabled"),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_image_cache_max_bytes() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image_cache_max_bytes"),
+            Some("104857600".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_image_cache_max_age_days() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image_cache_max_age_days"),
+            Some("30".to_string())
+        );
+    }
+
     // List all inspectable fields
 
     #[test]
@@ -1390,6 +1467,10 @@ mod tests {
         assert!(fields.contains(&"image_max_height_lines"));
         assert!(fields.contains(&"image_max_width_percent"));
         assert!(fields.contains(&"image_alignment"));
+        // Should include image cache fields
+        assert!(fields.contains(&"image_cache_enabled"));
+        assert!(fields.contains(&"image_cache_max_bytes"));
+        assert!(fields.contains(&"image_cache_max_age_days"));
         // Should include nested API params
         assert!(fields.contains(&"api.temperature"));
         assert!(fields.contains(&"api.max_tokens"));

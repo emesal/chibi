@@ -19,6 +19,9 @@ pub struct MarkdownConfig {
     pub image_enable_truecolor: bool,
     pub image_enable_ansi: bool,
     pub image_enable_ascii: bool,
+    pub image_cache_dir: Option<std::path::PathBuf>,
+    pub image_cache_max_bytes: u64,
+    pub image_cache_max_age_days: u64,
 }
 
 /// Grouped fetch settings passed into image rendering functions.
@@ -26,6 +29,9 @@ struct ImageFetchConfig {
     max_download_bytes: usize,
     fetch_timeout_seconds: u64,
     allow_http: bool,
+    cache_dir: Option<std::path::PathBuf>,
+    cache_max_bytes: u64,
+    cache_max_age_days: u64,
 }
 
 /// Display settings for rendered images.
@@ -191,6 +197,9 @@ impl MarkdownStream {
                 max_download_bytes: config.image_max_download_bytes,
                 fetch_timeout_seconds: config.image_fetch_timeout_seconds,
                 allow_http: config.image_allow_http,
+                cache_dir: config.image_cache_dir,
+                cache_max_bytes: config.image_cache_max_bytes,
+                cache_max_age_days: config.image_cache_max_age_days,
             },
             display_config: ImageDisplayConfig {
                 max_height_lines: config.image_max_height_lines,
@@ -343,6 +352,14 @@ fn fetch_remote_image(url: &str, config: &ImageFetchConfig) -> io::Result<image:
         ));
     }
 
+    // Try cache first
+    if let Some(ref cache_dir) = config.cache_dir
+        && let Some(cached) = crate::image_cache::cache_get(cache_dir, url) {
+            return image::load_from_memory(&cached)
+                .map_err(|e| io::Error::other(format!("failed to decode cached image: {}", e)));
+        }
+
+    // Fetch from network
     let bytes = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(fetch_image_bytes(
             url,
@@ -351,6 +368,17 @@ fn fetch_remote_image(url: &str, config: &ImageFetchConfig) -> io::Result<image:
             config.allow_http,
         ))
     })?;
+
+    // Store in cache (best-effort)
+    if let Some(ref cache_dir) = config.cache_dir {
+        let _ = crate::image_cache::cache_put(
+            cache_dir,
+            url,
+            &bytes,
+            config.cache_max_bytes,
+            config.cache_max_age_days,
+        );
+    }
 
     image::load_from_memory(&bytes)
         .map_err(|e| io::Error::other(format!("failed to decode fetched image: {}", e)))
@@ -675,6 +703,9 @@ mod tests {
             max_download_bytes: 10 * 1024 * 1024,
             fetch_timeout_seconds: 5,
             allow_http: false,
+            cache_dir: None,
+            cache_max_bytes: 104_857_600,
+            cache_max_age_days: 30,
         }
     }
 

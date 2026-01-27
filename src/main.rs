@@ -3,6 +3,7 @@ mod cache;
 mod cli;
 mod config;
 mod context;
+mod image_cache;
 mod inbox;
 mod input;
 mod json_input;
@@ -59,6 +60,9 @@ fn render_markdown_output(content: &str, config: &markdown::MarkdownConfig) -> i
         image_enable_truecolor: config.image_enable_truecolor,
         image_enable_ansi: config.image_enable_ansi,
         image_enable_ascii: config.image_enable_ascii,
+        image_cache_dir: config.image_cache_dir.clone(),
+        image_cache_max_bytes: config.image_cache_max_bytes,
+        image_cache_max_age_days: config.image_cache_max_age_days,
     });
     md.write_chunk(content)?;
     md.finish()?;
@@ -66,7 +70,10 @@ fn render_markdown_output(content: &str, config: &markdown::MarkdownConfig) -> i
 }
 
 /// Build a MarkdownConfig from a ResolvedConfig.
-fn md_config_from_resolved(config: &config::ResolvedConfig) -> markdown::MarkdownConfig {
+fn md_config_from_resolved(
+    config: &config::ResolvedConfig,
+    chibi_dir: &std::path::Path,
+) -> markdown::MarkdownConfig {
     markdown::MarkdownConfig {
         render_markdown: config.render_markdown,
         render_images: config.render_images,
@@ -80,6 +87,13 @@ fn md_config_from_resolved(config: &config::ResolvedConfig) -> markdown::Markdow
         image_enable_truecolor: config.image_enable_truecolor,
         image_enable_ansi: config.image_enable_ansi,
         image_enable_ascii: config.image_enable_ascii,
+        image_cache_dir: if config.image_cache_enabled {
+            Some(chibi_dir.join("image_cache"))
+        } else {
+            None
+        },
+        image_cache_max_bytes: config.image_cache_max_bytes,
+        image_cache_max_age_days: config.image_cache_max_age_days,
     }
 }
 
@@ -98,6 +112,9 @@ fn md_config_defaults(render: bool) -> markdown::MarkdownConfig {
         image_enable_truecolor: true,
         image_enable_ansi: true,
         image_enable_ascii: true,
+        image_cache_dir: None,
+        image_cache_max_bytes: 104_857_600,
+        image_cache_max_age_days: 30,
     }
 }
 
@@ -212,7 +229,7 @@ fn inspect_context(
             if todos.is_empty() {
                 println!("(no todos)");
             } else {
-                let md_cfg = md_config_from_resolved(config);
+                let md_cfg = md_config_from_resolved(config, &app.chibi_dir);
                 render_markdown_output(&todos, &md_cfg)?;
                 if !todos.ends_with('\n') {
                     println!();
@@ -224,7 +241,7 @@ fn inspect_context(
             if goals.is_empty() {
                 println!("(no goals)");
             } else {
-                let md_cfg = md_config_from_resolved(config);
+                let md_cfg = md_config_from_resolved(config, &app.chibi_dir);
                 render_markdown_output(&goals, &md_cfg)?;
                 if !goals.ends_with('\n') {
                     println!();
@@ -276,7 +293,7 @@ fn show_log(
         match entry.entry_type.as_str() {
             ENTRY_TYPE_MESSAGE => {
                 println!("[{}]", entry.from.to_uppercase());
-                let md_cfg = md_config_from_resolved(resolved_config);
+                let md_cfg = md_config_from_resolved(resolved_config, &app.chibi_dir);
                 render_markdown_output(&entry.content, &md_cfg)?;
                 println!();
             }
@@ -769,6 +786,29 @@ async fn execute_from_input(
                 ),
                 verbose,
             );
+        }
+    }
+
+    // Image cache cleanup (global, size-bounded)
+    if resolved.image_cache_enabled {
+        let image_cache_dir = app.chibi_dir.join("image_cache");
+        match image_cache::cleanup_image_cache(
+            &image_cache_dir,
+            resolved.image_cache_max_bytes,
+            resolved.image_cache_max_age_days,
+        ) {
+            Ok(removed) if removed > 0 => {
+                output.diagnostic(
+                    &format!(
+                        "[Image cache cleanup: removed {} entries (max {} days, max {} MB)]",
+                        removed,
+                        resolved.image_cache_max_age_days,
+                        resolved.image_cache_max_bytes / (1024 * 1024),
+                    ),
+                    verbose,
+                );
+            }
+            _ => {}
         }
     }
 
