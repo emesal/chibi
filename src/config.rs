@@ -35,28 +35,76 @@ impl ReasoningEffort {
 }
 
 /// Reasoning configuration for models that support extended thinking
-/// Either `effort` OR `max_tokens` should be set, not both (mutually exclusive)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Either `effort` OR `max_tokens` should be set, not both (mutually exclusive).
+/// If both are provided during deserialization, `max_tokens` wins and `effort` is cleared.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(into = "ReasoningConfigRaw")]
 pub struct ReasoningConfig {
     /// Effort level (mutually exclusive with max_tokens)
     /// Supported by: OpenAI o1/o3/GPT-5 series, Grok models
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffort>,
 
     /// Maximum tokens for reasoning (mutually exclusive with effort)
     /// Supported by: Gemini thinking models, Anthropic, some Qwen models
     /// Anthropic: min 1024, max 128000
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<usize>,
 
     /// Exclude reasoning from response (model still reasons internally)
     /// Default: false
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<bool>,
 
     /// Explicitly enable reasoning (defaults to medium effort if true)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+}
+
+/// Raw deserialization target for ReasoningConfig.
+/// Mutual exclusivity is enforced during From conversion.
+#[derive(Deserialize, Serialize)]
+struct ReasoningConfigRaw {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    effort: Option<ReasoningEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+}
+
+impl From<ReasoningConfigRaw> for ReasoningConfig {
+    fn from(raw: ReasoningConfigRaw) -> Self {
+        let mut config = ReasoningConfig {
+            effort: raw.effort,
+            max_tokens: raw.max_tokens,
+            exclude: raw.exclude,
+            enabled: raw.enabled,
+        };
+        if config.enforce_mutual_exclusivity() {
+            eprintln!("[WARN] reasoning: both effort and max_tokens set, using max_tokens");
+        }
+        config
+    }
+}
+
+impl From<ReasoningConfig> for ReasoningConfigRaw {
+    fn from(config: ReasoningConfig) -> Self {
+        ReasoningConfigRaw {
+            effort: config.effort,
+            max_tokens: config.max_tokens,
+            exclude: config.exclude,
+            enabled: config.enabled,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ReasoningConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = ReasoningConfigRaw::deserialize(deserializer)?;
+        Ok(ReasoningConfig::from(raw))
+    }
 }
 
 impl ReasoningConfig {
@@ -68,32 +116,42 @@ impl ReasoningConfig {
             && self.enabled.is_none()
     }
 
+    /// Enforce mutual exclusivity: effort and max_tokens cannot both be set.
+    /// When both are present, max_tokens wins (it's the more explicit/specific setting).
+    /// Returns true if a conflict was resolved.
+    pub fn enforce_mutual_exclusivity(&mut self) -> bool {
+        if self.effort.is_some() && self.max_tokens.is_some() {
+            self.effort = None;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Merge with another ReasoningConfig, where `other` takes precedence
     pub fn merge_with(&self, other: &ReasoningConfig) -> ReasoningConfig {
-        // Start with merged values, then enforce mutual exclusivity
-        let mut effort = other.effort.or(self.effort);
-        let mut max_tokens = other.max_tokens.or(self.max_tokens);
+        let effort = other.effort.or(self.effort);
+        let max_tokens = other.max_tokens.or(self.max_tokens);
 
-        // If both are set (invalid state), prioritize what's in `other` and clear the conflicting one
-        // If other has effort, max_tokens should be None
-        // If other has max_tokens, effort should be None
-        // If other has neither, check self
-        if other.effort.is_some() {
-            max_tokens = None;
-        } else if other.max_tokens.is_some() {
-            effort = None;
-        } else if self.effort.is_some() && self.max_tokens.is_some() {
-            // Edge case: self has both (shouldn't happen in practice)
-            // Keep effort, clear max_tokens
-            max_tokens = None;
-        }
-
-        ReasoningConfig {
+        let mut merged = ReasoningConfig {
             effort,
             max_tokens,
             exclude: other.exclude.or(self.exclude),
             enabled: other.enabled.or(self.enabled),
+        };
+
+        // If the override explicitly sets one side, the other must be cleared
+        if other.effort.is_some() {
+            merged.max_tokens = None;
+        } else if other.max_tokens.is_some() {
+            merged.effort = None;
+        } else {
+            // Neither side was explicitly overridden — if self somehow had both,
+            // enforce the invariant
+            merged.enforce_mutual_exclusivity();
         }
+
+        merged
     }
 }
 
@@ -838,6 +896,63 @@ mod tests {
             merged.max_tokens.is_none(),
             "max_tokens should be None when effort is set"
         );
+    }
+
+    #[test]
+    fn test_reasoning_config_deserialize_both_fields_keeps_max_tokens() {
+        // If a user writes both effort and max_tokens in TOML, max_tokens wins
+        let toml_str = r#"
+            effort = "high"
+            max_tokens = 16000
+        "#;
+        let config: ReasoningConfig = toml::from_str(toml_str).unwrap();
+        assert!(
+            config.effort.is_none(),
+            "effort should be cleared when both are deserialized"
+        );
+        assert_eq!(config.max_tokens, Some(16000));
+    }
+
+    #[test]
+    fn test_reasoning_config_merge_self_has_both() {
+        // If self somehow has both (e.g. constructed manually), merging with
+        // empty override should enforce mutual exclusivity
+        let base = ReasoningConfig {
+            effort: Some(ReasoningEffort::High),
+            max_tokens: Some(8000),
+            ..Default::default()
+        };
+        let empty_override = ReasoningConfig::default();
+
+        let merged = base.merge_with(&empty_override);
+        assert!(
+            !(merged.effort.is_some() && merged.max_tokens.is_some()),
+            "merged config must not have both effort and max_tokens"
+        );
+        // max_tokens wins per enforce_mutual_exclusivity
+        assert_eq!(merged.max_tokens, Some(8000));
+        assert!(merged.effort.is_none());
+    }
+
+    #[test]
+    fn test_reasoning_config_enforce_mutual_exclusivity() {
+        let mut config = ReasoningConfig {
+            effort: Some(ReasoningEffort::High),
+            max_tokens: Some(16000),
+            ..Default::default()
+        };
+        let had_conflict = config.enforce_mutual_exclusivity();
+        assert!(had_conflict);
+        assert!(config.effort.is_none());
+        assert_eq!(config.max_tokens, Some(16000));
+
+        // No conflict case
+        let mut config2 = ReasoningConfig {
+            effort: Some(ReasoningEffort::Medium),
+            ..Default::default()
+        };
+        assert!(!config2.enforce_mutual_exclusivity());
+        assert_eq!(config2.effort, Some(ReasoningEffort::Medium));
     }
 
     #[test]
