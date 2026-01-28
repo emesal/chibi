@@ -275,7 +275,7 @@ impl MarkdownStream {
 
         // Process all complete lines
         while let Some(newline_pos) = self.line_buffer.find('\n') {
-            let line = self.line_buffer[..newline_pos].to_string();
+            let line = self.line_buffer[..newline_pos].trim_end_matches('\r').to_string();
             self.line_buffer = self.line_buffer[newline_pos + 1..].to_string();
 
             let events = pipeline.parser.parse_line(&line);
@@ -303,7 +303,8 @@ impl MarkdownStream {
         // Flush any remaining partial line
         if !self.line_buffer.is_empty() {
             let line = std::mem::take(&mut self.line_buffer);
-            let events = pipeline.parser.parse_line(&line);
+            let line = line.trim_end_matches('\r');
+            let events = pipeline.parser.parse_line(line);
             Self::render_events(
                 pipeline,
                 &events,
