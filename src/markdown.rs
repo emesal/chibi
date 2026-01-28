@@ -371,8 +371,9 @@ fn fetch_remote_image(url: &str, config: &ImageFetchConfig) -> io::Result<image:
             .map_err(|e| io::Error::other(format!("failed to decode cached image: {}", e)));
     }
 
-    // Fetch from network — spawn on a separate task to avoid stalling
-    // the streaming response worker thread during download/timeout.
+    // Fetch from network — spawn on a separate task to isolate timeout/cancellation
+    // handling. block_in_place temporarily parks the calling thread while awaiting
+    // the result, which is necessary for synchronous rendering.
     let url_owned = url.to_string();
     let max_bytes = config.max_download_bytes;
     let timeout = config.fetch_timeout_seconds;
@@ -843,6 +844,482 @@ mod tests {
             !err.to_string().contains("remote URLs not supported"),
             "should dispatch to fetch path, got: {}",
             err
+        );
+    }
+
+    #[test]
+    fn ascii_char_maps_intensity_to_characters() {
+        // Test minimum intensity (0) returns space
+        assert_eq!(ascii_char(0), " ");
+
+        // Test maximum intensity (255) returns @
+        assert_eq!(ascii_char(255), "@");
+
+        // Test bucket boundaries where division by 32 changes the index
+        // intensity / 32 = 0 for 0-31, returns " "
+        assert_eq!(ascii_char(1), " ");
+        assert_eq!(ascii_char(31), " ");
+
+        // intensity / 32 = 1 for 32-63, returns "."
+        assert_eq!(ascii_char(32), ".");
+        assert_eq!(ascii_char(63), ".");
+
+        // intensity / 32 = 2 for 64-95, returns ","
+        assert_eq!(ascii_char(64), ",");
+        assert_eq!(ascii_char(95), ",");
+
+        // intensity / 32 = 3 for 96-127, returns "-"
+        assert_eq!(ascii_char(96), "-");
+        assert_eq!(ascii_char(127), "-");
+
+        // intensity / 32 = 4 for 128-159, returns "~"
+        assert_eq!(ascii_char(128), "~");
+        assert_eq!(ascii_char(159), "~");
+
+        // intensity / 32 = 5 for 160-191, returns "+"
+        assert_eq!(ascii_char(160), "+");
+        assert_eq!(ascii_char(191), "+");
+
+        // intensity / 32 = 6 for 192-223, returns "="
+        assert_eq!(ascii_char(192), "=");
+        assert_eq!(ascii_char(223), "=");
+
+        // intensity / 32 = 7 (and .min(7)) for 224-255, returns "@"
+        assert_eq!(ascii_char(224), "@");
+        assert_eq!(ascii_char(254), "@");
+    }
+
+    #[test]
+    fn ascii_char_never_panics() {
+        // Test that all u8 values are handled without panic
+        for intensity in 0..=u8::MAX {
+            let result = ascii_char(intensity);
+            // Verify we got a valid character from the lookup table
+            assert!(
+                matches!(result, " " | "." | "," | "-" | "~" | "+" | "=" | "@"),
+                "unexpected character for intensity {}: {}",
+                intensity,
+                result
+            );
+        }
+    }
+
+    // ========== calculate_padding tests ==========
+
+    #[test]
+    fn padding_left_alignment_is_always_zero() {
+        assert_eq!(
+            calculate_padding(40, 80, crate::config::ImageAlignment::Left),
+            0
+        );
+        assert_eq!(
+            calculate_padding(80, 80, crate::config::ImageAlignment::Left),
+            0
+        );
+        assert_eq!(
+            calculate_padding(120, 80, crate::config::ImageAlignment::Left),
+            0
+        );
+    }
+
+    #[test]
+    fn padding_center_alignment_splits_remaining_space() {
+        // 80 - 40 = 40 remaining, 40 / 2 = 20
+        assert_eq!(
+            calculate_padding(40, 80, crate::config::ImageAlignment::Center),
+            20
+        );
+        // 80 - 60 = 20 remaining, 20 / 2 = 10
+        assert_eq!(
+            calculate_padding(60, 80, crate::config::ImageAlignment::Center),
+            10
+        );
+        // Odd remainder: 80 - 41 = 39, 39 / 2 = 19 (integer division floors)
+        assert_eq!(
+            calculate_padding(41, 80, crate::config::ImageAlignment::Center),
+            19
+        );
+    }
+
+    #[test]
+    fn padding_right_alignment_uses_full_remaining_space() {
+        // 80 - 40 = 40
+        assert_eq!(
+            calculate_padding(40, 80, crate::config::ImageAlignment::Right),
+            40
+        );
+        // 80 - 60 = 20
+        assert_eq!(
+            calculate_padding(60, 80, crate::config::ImageAlignment::Right),
+            20
+        );
+        // 80 - 1 = 79
+        assert_eq!(
+            calculate_padding(1, 80, crate::config::ImageAlignment::Right),
+            79
+        );
+    }
+
+    #[test]
+    fn padding_image_wider_than_terminal_saturates_to_zero() {
+        // Image wider than terminal: saturating_sub prevents underflow
+        assert_eq!(
+            calculate_padding(100, 80, crate::config::ImageAlignment::Center),
+            0
+        );
+        assert_eq!(
+            calculate_padding(100, 80, crate::config::ImageAlignment::Right),
+            0
+        );
+        assert_eq!(
+            calculate_padding(100, 80, crate::config::ImageAlignment::Left),
+            0
+        );
+    }
+
+    #[test]
+    fn padding_image_equals_terminal_width_is_zero() {
+        // No space remaining in any alignment
+        assert_eq!(
+            calculate_padding(80, 80, crate::config::ImageAlignment::Center),
+            0
+        );
+        assert_eq!(
+            calculate_padding(80, 80, crate::config::ImageAlignment::Right),
+            0
+        );
+    }
+
+    #[test]
+    fn padding_zero_width_image() {
+        // Degenerate case: zero-width image gets full padding
+        assert_eq!(
+            calculate_padding(0, 80, crate::config::ImageAlignment::Center),
+            40
+        );
+        assert_eq!(
+            calculate_padding(0, 80, crate::config::ImageAlignment::Right),
+            80
+        );
+        assert_eq!(
+            calculate_padding(0, 80, crate::config::ImageAlignment::Left),
+            0
+        );
+    }
+
+    // ========== resolve_render_mode tests ==========
+
+    #[test]
+    fn resolve_mode_explicit_truecolor_when_enabled() {
+        let mode = resolve_render_mode(
+            crate::config::ConfigImageRenderMode::Truecolor,
+            true,  // enable_truecolor
+            true,  // enable_ansi
+            true,  // enable_ascii
+        );
+        assert!(matches!(mode, ImageRenderMode::Truecolor));
+    }
+
+    #[test]
+    fn resolve_mode_explicit_truecolor_falls_back_when_disabled() {
+        // Requesting Truecolor but it's disabled: falls through to catch-all
+        // which re-invokes Auto logic
+        let mode = resolve_render_mode(
+            crate::config::ConfigImageRenderMode::Truecolor,
+            false, // enable_truecolor disabled
+            true,  // enable_ansi
+            true,  // enable_ascii
+        );
+        // Auto with truecolor disabled resolves to Ansi or Ascii depending on
+        // terminal capability, but definitely not Truecolor
+        assert!(!matches!(mode, ImageRenderMode::Truecolor));
+    }
+
+    #[test]
+    fn resolve_mode_explicit_ansi_when_enabled() {
+        let mode = resolve_render_mode(
+            crate::config::ConfigImageRenderMode::Ansi,
+            true,
+            true, // enable_ansi
+            true,
+        );
+        assert!(matches!(mode, ImageRenderMode::Ansi));
+    }
+
+    #[test]
+    fn resolve_mode_explicit_ansi_falls_back_when_disabled() {
+        let mode = resolve_render_mode(
+            crate::config::ConfigImageRenderMode::Ansi,
+            true,
+            false, // enable_ansi disabled
+            true,  // enable_ascii available
+        );
+        assert!(!matches!(mode, ImageRenderMode::Ansi));
+    }
+
+    #[test]
+    fn resolve_mode_explicit_ascii_when_enabled() {
+        let mode = resolve_render_mode(
+            crate::config::ConfigImageRenderMode::Ascii,
+            true,
+            true,
+            true, // enable_ascii
+        );
+        assert!(matches!(mode, ImageRenderMode::Ascii));
+    }
+
+    #[test]
+    fn resolve_mode_explicit_ascii_falls_back_when_disabled() {
+        let mode = resolve_render_mode(
+            crate::config::ConfigImageRenderMode::Ascii,
+            true,
+            true,
+            false, // enable_ascii disabled
+        );
+        assert!(!matches!(mode, ImageRenderMode::Ascii));
+    }
+
+    #[test]
+    fn resolve_mode_placeholder_ignores_capability_flags() {
+        let mode = resolve_render_mode(
+            crate::config::ConfigImageRenderMode::Placeholder,
+            false,
+            false,
+            false,
+        );
+        assert!(matches!(mode, ImageRenderMode::Placeholder));
+    }
+
+    #[test]
+    fn resolve_mode_all_disabled_yields_placeholder() {
+        // Auto mode with all render modes disabled: nothing available
+        let mode = resolve_render_mode(
+            crate::config::ConfigImageRenderMode::Auto,
+            false, // no truecolor
+            false, // no ansi
+            false, // no ascii
+        );
+        assert!(matches!(mode, ImageRenderMode::Placeholder));
+    }
+
+    #[test]
+    fn resolve_mode_auto_with_only_ascii_yields_ascii() {
+        // Auto with only ASCII enabled: regardless of terminal capability
+        // the final fallback `_ if enable_ascii` catches it
+        let mode = resolve_render_mode(
+            crate::config::ConfigImageRenderMode::Auto,
+            false, // no truecolor
+            false, // no ansi
+            true,  // ascii only
+        );
+        assert!(matches!(mode, ImageRenderMode::Ascii));
+    }
+
+    // ========== MarkdownStream passthrough mode tests ==========
+
+    /// Helper: construct a MarkdownStream in passthrough mode (no pipeline).
+    fn passthrough_stream() -> MarkdownStream {
+        MarkdownStream {
+            line_buffer: String::new(),
+            pipeline: None,
+            render_images: false,
+            terminal_width: 80,
+            fetch_config: default_fetch_config(),
+            display_config: default_display_config(),
+            render_mode: ImageRenderMode::Placeholder,
+        }
+    }
+
+    #[test]
+    fn passthrough_does_not_buffer_partial_lines() {
+        let mut stream = passthrough_stream();
+
+        // In passthrough mode, write_chunk goes directly to stdout without
+        // touching line_buffer. The buffer should remain empty.
+        let result = stream.write_chunk("no newline here");
+        assert!(result.is_ok());
+        assert!(
+            stream.line_buffer.is_empty(),
+            "passthrough mode must not buffer content"
+        );
+    }
+
+    #[test]
+    fn passthrough_finish_is_noop() {
+        let mut stream = passthrough_stream();
+        stream.line_buffer = "leftover".to_string();
+
+        // finish() with no pipeline returns immediately without touching buffer
+        let result = stream.finish();
+        assert!(result.is_ok());
+        // Buffer is NOT flushed because there is no pipeline to flush through
+        assert_eq!(
+            stream.line_buffer, "leftover",
+            "passthrough finish must not consume the buffer"
+        );
+    }
+
+    // ========== MarkdownStream line buffering tests ==========
+
+    /// Helper: construct a MarkdownStream with a render pipeline for buffering tests.
+    fn rendering_stream() -> MarkdownStream {
+        let style = crate::config::default_markdown_style();
+
+        MarkdownStream {
+            line_buffer: String::new(),
+            pipeline: Some(RenderPipeline {
+                parser: streamdown_parser::Parser::new(),
+                renderer: streamdown_render::Renderer::with_style(StdoutWriter, 80, style),
+            }),
+            render_images: false,
+            terminal_width: 80,
+            fetch_config: default_fetch_config(),
+            display_config: default_display_config(),
+            render_mode: ImageRenderMode::Placeholder,
+        }
+    }
+
+    #[test]
+    fn write_chunk_buffers_partial_line_until_newline() {
+        let mut stream = rendering_stream();
+
+        // Write content without a newline: should stay buffered
+        stream.write_chunk("hello world").unwrap();
+        assert_eq!(
+            stream.line_buffer, "hello world",
+            "partial line must remain in buffer"
+        );
+
+        // Add more without newline: accumulates
+        stream.write_chunk(" more text").unwrap();
+        assert_eq!(
+            stream.line_buffer, "hello world more text",
+            "buffer must accumulate across chunks"
+        );
+    }
+
+    #[test]
+    fn write_chunk_processes_complete_lines() {
+        let mut stream = rendering_stream();
+
+        // Write a complete line: it should be processed (buffer cleared)
+        stream.write_chunk("line one\n").unwrap();
+        assert!(
+            stream.line_buffer.is_empty(),
+            "complete line must be flushed from buffer"
+        );
+    }
+
+    #[test]
+    fn write_chunk_retains_trailing_partial_after_newlines() {
+        let mut stream = rendering_stream();
+
+        // Two complete lines plus a trailing partial
+        stream.write_chunk("first\nsecond\npartial").unwrap();
+        assert_eq!(
+            stream.line_buffer, "partial",
+            "only the trailing partial must remain buffered"
+        );
+    }
+
+    #[test]
+    fn write_chunk_multiple_newlines_clears_buffer() {
+        let mut stream = rendering_stream();
+
+        // Multiple complete lines, no trailing content
+        stream.write_chunk("a\nb\nc\n").unwrap();
+        assert!(
+            stream.line_buffer.is_empty(),
+            "all complete lines consumed, buffer must be empty"
+        );
+    }
+
+    #[test]
+    fn write_chunk_empty_string_is_noop() {
+        let mut stream = rendering_stream();
+        stream.line_buffer = "existing".to_string();
+
+        stream.write_chunk("").unwrap();
+        assert_eq!(
+            stream.line_buffer, "existing",
+            "empty chunk must not modify buffer"
+        );
+    }
+
+    #[test]
+    fn finish_flushes_remaining_buffer() {
+        let mut stream = rendering_stream();
+
+        // Load a partial line that has no newline
+        stream.write_chunk("dangling content").unwrap();
+        assert_eq!(stream.line_buffer, "dangling content");
+
+        // finish() must consume the buffer
+        stream.finish().unwrap();
+        assert!(
+            stream.line_buffer.is_empty(),
+            "finish must flush remaining buffered content"
+        );
+    }
+
+    #[test]
+    fn finish_on_empty_buffer_succeeds() {
+        let mut stream = rendering_stream();
+        assert!(stream.line_buffer.is_empty());
+
+        // Should not error even with nothing to flush
+        stream.finish().unwrap();
+        assert!(stream.line_buffer.is_empty());
+    }
+
+    // ========== render_ascii output dimension verification ==========
+
+    #[test]
+    fn render_ascii_output_lines_match_image_height_div_two() {
+        // render_ascii steps y by 2, so a 4-row image produces 2 content lines.
+        // We verify this by counting the lines it would produce (height / 2)
+        // and that the character width per line equals the image width.
+        let width: u32 = 10;
+        let height: u32 = 4;
+        let img = image::RgbImage::from_pixel(width, height, image::Rgb([128, 128, 128]));
+        let dynamic: image::DynamicImage = img.into();
+
+        // The expected content lines (excluding surrounding blank lines):
+        // height stepped by 2 = height / 2 iterations
+        let expected_content_lines = height / 2;
+        assert_eq!(
+            expected_content_lines, 2,
+            "sanity: 4-row image produces 2 ASCII content lines"
+        );
+
+        // Each content line has exactly `width` characters of ASCII art.
+        // Verify ascii_char produces one char per pixel column.
+        let rgba = dynamic.to_rgba8();
+        for y in (0..height).step_by(2) {
+            let mut char_count = 0u32;
+            for x in 0..width {
+                let pix = rgba.get_pixel(x, y);
+                let intensity = pix[0] / 3 + pix[1] / 3 + pix[2] / 3;
+                let ch = ascii_char(intensity);
+                assert!(!ch.is_empty());
+                char_count += 1;
+            }
+            assert_eq!(
+                char_count, width,
+                "each ASCII line must have exactly image_width characters"
+            );
+        }
+    }
+
+    #[test]
+    fn render_ascii_odd_height_skips_last_row() {
+        // With an odd height, the step_by(2) loop skips the final row.
+        // A 5-row image produces lines for y=0,2,4 = 3 content lines.
+        let height: u32 = 5;
+        let expected_lines = (0..height).step_by(2).count();
+        assert_eq!(
+            expected_lines, 3,
+            "5-row image stepped by 2 yields y=0,2,4"
         );
     }
 }

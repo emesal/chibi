@@ -46,9 +46,12 @@ pub fn cache_get(cache_dir: &Path, url: &str) -> Option<Vec<u8>> {
     let meta_bytes = fs::read(&meta).ok()?;
     let mut metadata: ImageCacheMetadata = serde_json::from_slice(&meta_bytes).ok()?;
 
-    // Best-effort update of last_accessed_at
+    // Best-effort update of last_accessed_at using atomic write pattern
     metadata.last_accessed_at = now_unix();
-    let _ = fs::write(&meta, serde_json::to_string(&metadata).unwrap_or_default());
+    let meta_tmp = cache_dir.join(format!("{}.meta.json.tmp", key));
+    if let Ok(json_str) = serde_json::to_string(&metadata) {
+        let _ = fs::write(&meta_tmp, json_str).and_then(|_| fs::rename(&meta_tmp, &meta));
+    }
 
     Some(bytes)
 }
