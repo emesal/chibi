@@ -543,29 +543,12 @@ async fn send_prompt_with_depth(
         let response = llm::send_streaming_request(resolved_config, request_body.clone()).await?;
 
         let mut stream = response.bytes_stream();
-        let mut md = MarkdownStream::new(crate::markdown::MarkdownConfig {
-            render_markdown: resolved_config.render_markdown,
-            force_render: false,
-            render_images: resolved_config.render_images,
-            image_max_download_bytes: resolved_config.image_max_download_bytes,
-            image_fetch_timeout_seconds: resolved_config.image_fetch_timeout_seconds,
-            image_allow_http: resolved_config.image_allow_http,
-            image_max_height_lines: resolved_config.image_max_height_lines,
-            image_max_width_percent: resolved_config.image_max_width_percent,
-            image_alignment: resolved_config.image_alignment.clone(),
-            image_render_mode: resolved_config.image_render_mode.clone(),
-            image_enable_truecolor: resolved_config.image_enable_truecolor,
-            image_enable_ansi: resolved_config.image_enable_ansi,
-            image_enable_ascii: resolved_config.image_enable_ascii,
-            image_cache_dir: if resolved_config.image_cache_enabled {
-                Some(app.chibi_dir.join("image_cache"))
-            } else {
-                None
-            },
-            image_cache_max_bytes: resolved_config.image_cache_max_bytes,
-            image_cache_max_age_days: resolved_config.image_cache_max_age_days,
-            markdown_style: resolved_config.markdown_style.clone(),
-        });
+        let md_config = crate::markdown::MarkdownConfig::from_resolved(
+            resolved_config,
+            &app.chibi_dir,
+            options.force_render,
+        );
+        let mut md = MarkdownStream::new(md_config);
         let mut full_response = String::new();
         let mut is_first_content = true;
         let json_mode = output.is_json_mode();

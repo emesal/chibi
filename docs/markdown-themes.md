@@ -79,6 +79,6 @@ light = "#3E3D32"    # Light grey
 
 - All colors must be specified as hex values (e.g., `#RRGGBB`)
 - Changes take effect immediately on next chibi run
-- Invalid hex colors will fall back to defaults
+- Invalid hex colors may produce unexpected rendering results
 - The streamdown-rs renderer handles all color application
 - Colors are applied to ANSI terminal output via escape codes

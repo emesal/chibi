@@ -109,6 +109,14 @@ impl DebugKey {
             _ => None,
         }
     }
+
+    /// Parse a comma-separated list of debug keys (e.g. "request-log,force-markdown,md=README.md").
+    /// Invalid segments are silently ignored.
+    pub fn parse_list(s: &str) -> Vec<Self> {
+        s.split(',')
+            .filter_map(|segment| Self::from_str(segment.trim()))
+            .collect()
+    }
 }
 
 /// Behavioral modifiers (flags that affect how commands run)
@@ -126,9 +134,9 @@ pub struct Flags {
     /// Disable markdown rendering (--raw)
     #[serde(default)]
     pub raw: bool,
-    /// Debug feature to enable
+    /// Debug features to enable (supports comma-separated list)
     #[serde(default)]
-    pub debug: Option<DebugKey>,
+    pub debug: Vec<DebugKey>,
 }
 
 /// Context selection mode
@@ -215,7 +223,7 @@ mod tests {
     #[test]
     fn test_default_input_no_debug() {
         let input = ChibiInput::default();
-        assert!(input.flags.debug.is_none());
+        assert!(input.flags.debug.is_empty());
     }
 
     // === ContextSelection tests ===
@@ -271,7 +279,7 @@ mod tests {
         assert!(!flags.verbose);
         assert!(!flags.json_output);
         assert!(!flags.no_chibi);
-        assert!(flags.debug.is_none());
+        assert!(flags.debug.is_empty());
     }
 
     #[test]
@@ -281,7 +289,7 @@ mod tests {
             json_output: true,
             no_chibi: false,
             raw: false,
-            debug: Some(DebugKey::RequestLog),
+            debug: vec![DebugKey::RequestLog],
         };
         let json = serde_json::to_string(&flags).unwrap();
         assert!(json.contains("verbose"));
@@ -379,6 +387,46 @@ mod tests {
         assert_eq!(DebugKey::from_str("invalid"), None);
         assert_eq!(DebugKey::from_str(""), None);
         assert_eq!(DebugKey::from_str("REQUEST_LOG"), None); // case sensitive
+    }
+
+    #[test]
+    fn test_debug_key_parse_list_single() {
+        assert_eq!(
+            DebugKey::parse_list("request-log"),
+            vec![DebugKey::RequestLog]
+        );
+    }
+
+    #[test]
+    fn test_debug_key_parse_list_multiple() {
+        assert_eq!(
+            DebugKey::parse_list("request-log,force-markdown"),
+            vec![DebugKey::RequestLog, DebugKey::ForceMarkdown]
+        );
+    }
+
+    #[test]
+    fn test_debug_key_parse_list_with_parameterized() {
+        assert_eq!(
+            DebugKey::parse_list("force-markdown,md=README.md"),
+            vec![
+                DebugKey::ForceMarkdown,
+                DebugKey::Md("README.md".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_debug_key_parse_list_ignores_invalid() {
+        assert_eq!(
+            DebugKey::parse_list("request-log,invalid,force-markdown"),
+            vec![DebugKey::RequestLog, DebugKey::ForceMarkdown]
+        );
+    }
+
+    #[test]
+    fn test_debug_key_parse_list_empty() {
+        assert_eq!(DebugKey::parse_list(""), Vec::<DebugKey>::new());
     }
 
     #[test]
@@ -591,7 +639,7 @@ mod tests {
                 json_output: true,
                 no_chibi: true,
                 raw: false,
-                debug: Some(DebugKey::All),
+                debug: vec![DebugKey::All],
             },
             context: ContextSelection::Switch {
                 name: "coding".to_string(),
@@ -609,7 +657,7 @@ mod tests {
         assert!(deserialized.flags.verbose);
         assert!(deserialized.flags.json_output);
         assert!(deserialized.flags.no_chibi);
-        assert_eq!(deserialized.flags.debug, Some(DebugKey::All));
+        assert_eq!(deserialized.flags.debug, vec![DebugKey::All]);
         assert!(
             matches!(deserialized.context, ContextSelection::Switch { ref name, persistent: false } if name == "coding")
         );

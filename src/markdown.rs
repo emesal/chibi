@@ -6,6 +6,7 @@ use streamdown_parser::{ParseEvent, Parser};
 use streamdown_render::Renderer;
 
 /// Configuration for markdown stream rendering.
+#[derive(Clone)]
 pub struct MarkdownConfig {
     pub render_markdown: bool,
     pub force_render: bool,
@@ -24,6 +25,39 @@ pub struct MarkdownConfig {
     pub image_cache_max_bytes: u64,
     pub image_cache_max_age_days: u64,
     pub markdown_style: crate::config::MarkdownStyle,
+}
+
+impl MarkdownConfig {
+    /// Build a MarkdownConfig from a ResolvedConfig.
+    pub fn from_resolved(
+        config: &crate::config::ResolvedConfig,
+        chibi_dir: &std::path::Path,
+        force_render: bool,
+    ) -> Self {
+        Self {
+            render_markdown: config.render_markdown,
+            force_render,
+            render_images: config.render_images,
+            image_max_download_bytes: config.image_max_download_bytes,
+            image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
+            image_allow_http: config.image_allow_http,
+            image_max_height_lines: config.image_max_height_lines,
+            image_max_width_percent: config.image_max_width_percent,
+            image_alignment: config.image_alignment.clone(),
+            image_render_mode: config.image_render_mode.clone(),
+            image_enable_truecolor: config.image_enable_truecolor,
+            image_enable_ansi: config.image_enable_ansi,
+            image_enable_ascii: config.image_enable_ascii,
+            image_cache_dir: if config.image_cache_enabled {
+                Some(chibi_dir.join("image_cache"))
+            } else {
+                None
+            },
+            image_cache_max_bytes: config.image_cache_max_bytes,
+            image_cache_max_age_days: config.image_cache_max_age_days,
+            markdown_style: config.markdown_style.clone(),
+        }
+    }
 }
 
 /// Grouped fetch settings passed into image rendering functions.
@@ -172,7 +206,7 @@ impl MarkdownStream {
         let (pipeline, terminal_width) =
             if config.render_markdown && (config.force_render || io::stdout().is_terminal()) {
                 let width = streamdown_render::terminal_width();
-                let style = config.markdown_style.to_render_style();
+                let style = config.markdown_style.clone();
                 (
                     Some(RenderPipeline {
                         parser: Parser::new(),

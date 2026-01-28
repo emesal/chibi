@@ -168,7 +168,7 @@ Use `-n home` to inspect the resolved path.
 
 | Flag | Description |
 |------|-------------|
-| `--debug <KEY>` | Enable debug features (see below) |
+| `--debug <KEY[,KEY,...]>` | Enable debug features (comma-separated, see below) |
 
 ### Debug Keys
 
@@ -222,6 +222,18 @@ chibi --debug force-markdown "List the files" | less -R
 ```
 
 Note: `--debug md=<file>` automatically forces rendering, so you don't need to combine them.
+
+### Combining Debug Keys
+
+Multiple debug keys can be combined with commas:
+
+```bash
+# Enable request logging and force markdown rendering
+chibi --debug request-log,force-markdown "Tell me about Rust"
+
+# Log requests and response metadata
+chibi --debug request-log,response-meta "Hello"
+```
 
 ### Auto-Destroy (Test Cleanup)
 

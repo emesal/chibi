@@ -413,52 +413,20 @@ fn default_image_cache_max_age_days() -> u64 {
     30
 }
 
-/// Markdown rendering color scheme
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MarkdownStyle {
-    /// Bright/highlight color (for h2 headings, emphasis)
-    pub bright: String,
-    /// Heading color (for h3 headings)
-    pub head: String,
-    /// Symbol color (for bullets, language labels, borders)
-    pub symbol: String,
-    /// Grey/muted color (for borders, dim text)
-    pub grey: String,
-    /// Dark background color (for code blocks)
-    pub dark: String,
-    /// Mid background color (for table headers)
-    pub mid: String,
-    /// Light background color
-    pub light: String,
-}
+/// Markdown rendering color scheme (re-exported from streamdown-render).
+/// Chibi uses the Commodore 128 (VICE palette) defaults via `default_markdown_style()`.
+pub type MarkdownStyle = streamdown_render::RenderStyle;
 
-impl Default for MarkdownStyle {
-    /// Commodore 128 inspired color scheme (VICE palette)
-    fn default() -> Self {
-        Self {
-            bright: "#FFFF54".to_string(), // Light Yellow - for emphasis
-            head: "#54FF54".to_string(),   // Light Green - for h3 headers
-            symbol: "#7ABFC7".to_string(), // Cyan - for bullets, language labels
-            grey: "#808080".to_string(),   // Grey - for borders, muted text
-            dark: "#000000".to_string(),   // Black - code block background
-            mid: "#3E31A2".to_string(),    // Blue - table headers
-            light: "#352879".to_string(),  // Dark Blue - alternate backgrounds
-        }
-    }
-}
-
-impl MarkdownStyle {
-    /// Convert to streamdown RenderStyle
-    pub fn to_render_style(&self) -> streamdown_render::RenderStyle {
-        streamdown_render::RenderStyle {
-            bright: self.bright.clone(),
-            head: self.head.clone(),
-            symbol: self.symbol.clone(),
-            grey: self.grey.clone(),
-            dark: self.dark.clone(),
-            mid: self.mid.clone(),
-            light: self.light.clone(),
-        }
+/// Commodore 128 inspired color scheme (VICE palette)
+pub fn default_markdown_style() -> MarkdownStyle {
+    MarkdownStyle {
+        bright: "#FFFF54".to_string(), // Light Yellow - for emphasis
+        head: "#54FF54".to_string(),   // Light Green - for h3 headers
+        symbol: "#7ABFC7".to_string(), // Cyan - for bullets, language labels
+        grey: "#808080".to_string(),   // Grey - for borders, muted text
+        dark: "#000000".to_string(),   // Black - code block background
+        mid: "#3E31A2".to_string(),    // Blue - table headers
+        light: "#352879".to_string(),  // Dark Blue - alternate backgrounds
     }
 }
 
@@ -554,7 +522,7 @@ pub struct Config {
     #[serde(default)]
     pub storage: StorageConfig,
     /// Markdown rendering color scheme (Commodore 128 theme by default)
-    #[serde(default)]
+    #[serde(default = "default_markdown_style")]
     pub markdown_style: MarkdownStyle,
 }
 
@@ -1288,7 +1256,7 @@ mod tests {
                 ..Default::default()
             },
             tools: ToolsConfig::default(),
-            markdown_style: MarkdownStyle::default(),
+            markdown_style: default_markdown_style(),
         }
     }
 
@@ -1541,7 +1509,7 @@ mod tests {
 
     #[test]
     fn test_markdown_style_default() {
-        let style = MarkdownStyle::default();
+        let style = default_markdown_style();
         assert_eq!(style.bright, "#FFFF54");
         assert_eq!(style.head, "#54FF54");
         assert_eq!(style.symbol, "#7ABFC7");
@@ -1552,7 +1520,8 @@ mod tests {
     }
 
     #[test]
-    fn test_markdown_style_to_render_style() {
+    fn test_markdown_style_is_render_style() {
+        // MarkdownStyle is a type alias for RenderStyle, so values work directly
         let style = MarkdownStyle {
             bright: "#FF0000".to_string(),
             head: "#00FF00".to_string(),
@@ -1562,15 +1531,13 @@ mod tests {
             mid: "#444444".to_string(),
             light: "#CCCCCC".to_string(),
         };
-        
-        let render_style = style.to_render_style();
-        assert_eq!(render_style.bright, "#FF0000");
-        assert_eq!(render_style.head, "#00FF00");
-        assert_eq!(render_style.symbol, "#0000FF");
-        assert_eq!(render_style.grey, "#888888");
-        assert_eq!(render_style.dark, "#000000");
-        assert_eq!(render_style.mid, "#444444");
-        assert_eq!(render_style.light, "#CCCCCC");
+        assert_eq!(style.bright, "#FF0000");
+        assert_eq!(style.head, "#00FF00");
+        assert_eq!(style.symbol, "#0000FF");
+        assert_eq!(style.grey, "#888888");
+        assert_eq!(style.dark, "#000000");
+        assert_eq!(style.mid, "#444444");
+        assert_eq!(style.light, "#CCCCCC");
     }
 
     #[test]

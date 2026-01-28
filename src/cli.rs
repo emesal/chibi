@@ -430,9 +430,13 @@ impl Cli {
             args: v.get(1..).unwrap_or(&[]).to_vec(),
         });
 
-        // Parse debug key to check for md=<file>
-        let debug_key = self.debug.as_ref().and_then(|s| DebugKey::from_str(s));
-        let debug_implies_no_chibi = matches!(debug_key, Some(DebugKey::Md(_)));
+        // Parse debug keys (comma-separated) to check for md=<file>
+        let debug_keys = self
+            .debug
+            .as_ref()
+            .map(|s| DebugKey::parse_list(s))
+            .unwrap_or_default();
+        let debug_implies_no_chibi = debug_keys.iter().any(|k| matches!(k, DebugKey::Md(_)));
 
         // Compute implied no_chibi based on flags
         let implies_no_chibi = self.list_current_context
@@ -571,7 +575,7 @@ impl Cli {
             json_output: self.json_output,
             no_chibi,
             raw: self.raw,
-            debug: debug_key,
+            debug: debug_keys,
         };
 
         Ok(ChibiInput {
@@ -1478,26 +1482,58 @@ mod tests {
     fn test_debug_md_implies_no_chibi() {
         let input = parse_input("--debug md=README.md").unwrap();
         assert!(input.flags.no_chibi); // should imply -x
-        assert!(matches!(
-            input.flags.debug,
-            Some(DebugKey::Md(ref path)) if path == "README.md"
-        ));
+        assert!(
+            input
+                .flags
+                .debug
+                .iter()
+                .any(|k| matches!(k, DebugKey::Md(path) if path == "README.md"))
+        );
     }
 
     #[test]
     fn test_debug_md_can_be_overridden_with_force_chibi() {
         let input = parse_input("-X --debug md=README.md").unwrap();
         assert!(!input.flags.no_chibi); // -X should override
-        assert!(matches!(
-            input.flags.debug,
-            Some(DebugKey::Md(ref path)) if path == "README.md"
-        ));
+        assert!(
+            input
+                .flags
+                .debug
+                .iter()
+                .any(|k| matches!(k, DebugKey::Md(path) if path == "README.md"))
+        );
     }
 
     #[test]
     fn test_debug_request_log_does_not_imply_no_chibi() {
         let input = parse_input("--debug request-log").unwrap();
         assert!(!input.flags.no_chibi); // should NOT imply -x
-        assert!(matches!(input.flags.debug, Some(DebugKey::RequestLog)));
+        assert!(
+            input
+                .flags
+                .debug
+                .iter()
+                .any(|k| matches!(k, DebugKey::RequestLog))
+        );
+    }
+
+    #[test]
+    fn test_debug_comma_separated() {
+        let input = parse_input("--debug request-log,force-markdown").unwrap();
+        assert_eq!(input.flags.debug.len(), 2);
+        assert!(
+            input
+                .flags
+                .debug
+                .iter()
+                .any(|k| matches!(k, DebugKey::RequestLog))
+        );
+        assert!(
+            input
+                .flags
+                .debug
+                .iter()
+                .any(|k| matches!(k, DebugKey::ForceMarkdown))
+        );
     }
 }

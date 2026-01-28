@@ -46,26 +46,8 @@ fn confirm_action(prompt: &str) -> bool {
 /// Render markdown content to stdout if appropriate.
 /// Uses markdown rendering when enabled and stdout is a TTY,
 /// otherwise outputs raw content.
-fn render_markdown_output(content: &str, config: &markdown::MarkdownConfig) -> io::Result<()> {
-    let mut md = markdown::MarkdownStream::new(markdown::MarkdownConfig {
-        render_markdown: config.render_markdown,
-        force_render: config.force_render,
-        render_images: config.render_images,
-        image_max_download_bytes: config.image_max_download_bytes,
-        image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
-        image_allow_http: config.image_allow_http,
-        image_max_height_lines: config.image_max_height_lines,
-        image_max_width_percent: config.image_max_width_percent,
-        image_alignment: config.image_alignment.clone(),
-        image_render_mode: config.image_render_mode.clone(),
-        image_enable_truecolor: config.image_enable_truecolor,
-        image_enable_ansi: config.image_enable_ansi,
-        image_enable_ascii: config.image_enable_ascii,
-        image_cache_dir: config.image_cache_dir.clone(),
-        image_cache_max_bytes: config.image_cache_max_bytes,
-        image_cache_max_age_days: config.image_cache_max_age_days,
-        markdown_style: config.markdown_style.clone(),
-    });
+fn render_markdown_output(content: &str, config: markdown::MarkdownConfig) -> io::Result<()> {
+    let mut md = markdown::MarkdownStream::new(config);
     md.write_chunk(content)?;
     md.finish()?;
     Ok(())
@@ -77,29 +59,7 @@ fn md_config_from_resolved(
     chibi_dir: &std::path::Path,
     force_render: bool,
 ) -> markdown::MarkdownConfig {
-    markdown::MarkdownConfig {
-        render_markdown: config.render_markdown,
-        force_render,
-        render_images: config.render_images,
-        image_max_download_bytes: config.image_max_download_bytes,
-        image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
-        image_allow_http: config.image_allow_http,
-        image_max_height_lines: config.image_max_height_lines,
-        image_max_width_percent: config.image_max_width_percent,
-        image_alignment: config.image_alignment.clone(),
-        image_render_mode: config.image_render_mode.clone(),
-        image_enable_truecolor: config.image_enable_truecolor,
-        image_enable_ansi: config.image_enable_ansi,
-        image_enable_ascii: config.image_enable_ascii,
-        image_cache_dir: if config.image_cache_enabled {
-            Some(chibi_dir.join("image_cache"))
-        } else {
-            None
-        },
-        image_cache_max_bytes: config.image_cache_max_bytes,
-        image_cache_max_age_days: config.image_cache_max_age_days,
-        markdown_style: config.markdown_style.clone(),
-    }
+    markdown::MarkdownConfig::from_resolved(config, chibi_dir, force_render)
 }
 
 /// Build a MarkdownConfig with safe defaults (used when no config is loaded).
@@ -121,7 +81,7 @@ fn md_config_defaults(render: bool) -> markdown::MarkdownConfig {
         image_cache_dir: None,
         image_cache_max_bytes: 104_857_600,
         image_cache_max_age_days: 30,
-        markdown_style: config::MarkdownStyle::default(),
+        markdown_style: config::default_markdown_style(),
     }
 }
 
@@ -238,7 +198,7 @@ fn inspect_context(
                 println!("(no todos)");
             } else {
                 let md_cfg = md_config_from_resolved(config, &app.chibi_dir, force_markdown);
-                render_markdown_output(&todos, &md_cfg)?;
+                render_markdown_output(&todos, md_cfg)?;
                 if !todos.ends_with('\n') {
                     println!();
                 }
@@ -250,7 +210,7 @@ fn inspect_context(
                 println!("(no goals)");
             } else {
                 let md_cfg = md_config_from_resolved(config, &app.chibi_dir, force_markdown);
-                render_markdown_output(&goals, &md_cfg)?;
+                render_markdown_output(&goals, md_cfg)?;
                 if !goals.ends_with('\n') {
                     println!();
                 }
@@ -304,7 +264,7 @@ fn show_log(
                 println!("[{}]", entry.from.to_uppercase());
                 let md_cfg =
                     md_config_from_resolved(resolved_config, &app.chibi_dir, force_markdown);
-                render_markdown_output(&entry.content, &md_cfg)?;
+                render_markdown_output(&entry.content, md_cfg)?;
                 println!();
             }
             ENTRY_TYPE_TOOL_CALL => {
@@ -501,14 +461,14 @@ async fn execute_from_input(
 
     // Touch the current context to update last_activity_at and apply debug destroy settings
     let current_ctx = app.state.current_context.clone();
-    let debug_destroy_at = match &input.flags.debug {
-        Some(input::DebugKey::DestroyAt(ts)) => Some(*ts),
+    let debug_destroy_at = input.flags.debug.iter().find_map(|k| match k {
+        input::DebugKey::DestroyAt(ts) => Some(*ts),
         _ => None,
-    };
-    let debug_destroy_after = match &input.flags.debug {
-        Some(input::DebugKey::DestroyAfterSecondsInactive(secs)) => Some(*secs),
+    });
+    let debug_destroy_after = input.flags.debug.iter().find_map(|k| match k {
+        input::DebugKey::DestroyAfterSecondsInactive(secs) => Some(*secs),
         _ => None,
-    };
+    });
     if app.touch_context_with_destroy_settings(
         &current_ctx,
         debug_destroy_at,
@@ -768,7 +728,8 @@ async fn execute_from_input(
                 verbose,
                 use_reflection,
                 json_output,
-                input.flags.debug.as_ref(),
+                &input.flags.debug,
+                force_markdown,
             );
             api::send_prompt(app, prompt.clone(), tools, &resolved, &options).await?;
             did_action = true;
@@ -901,7 +862,10 @@ async fn main() -> io::Result<()> {
     let input = cli::parse()?;
 
     // Handle --debug md=<FILENAME> early (renders markdown and quits, implies -x)
-    if let Some(input::DebugKey::Md(ref path)) = input.flags.debug {
+    if let Some(path) = input.flags.debug.iter().find_map(|k| match k {
+        input::DebugKey::Md(p) => Some(p),
+        _ => None,
+    }) {
         let content = std::fs::read_to_string(path).map_err(|e| {
             io::Error::new(
                 ErrorKind::NotFound,
@@ -910,12 +874,16 @@ async fn main() -> io::Result<()> {
         })?;
         let mut md_cfg = md_config_defaults(true);
         md_cfg.force_render = true; // Always force rendering for --debug md=
-        render_markdown_output(&content, &md_cfg)?;
+        render_markdown_output(&content, md_cfg)?;
         return Ok(());
     }
 
     // Handle --debug force-markdown (sets force_render for the session)
-    let force_markdown = matches!(input.flags.debug, Some(input::DebugKey::ForceMarkdown));
+    let force_markdown = input
+        .flags
+        .debug
+        .iter()
+        .any(|k| matches!(k, input::DebugKey::ForceMarkdown));
 
     let verbose = input.flags.verbose;
     let mut app = AppState::load(home_override)?;
