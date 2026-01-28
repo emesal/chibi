@@ -860,8 +860,14 @@ async fn main() -> io::Result<()> {
                 format!("Failed to read file '{}': {}", path, e),
             )
         })?;
-        // CLI debug feature: always enable markdown rendering, but respect TTY detection
-        let md_cfg = md_config_defaults(true);
+        // Check if force-markdown is also specified
+        let force_render = input
+            .flags
+            .debug
+            .iter()
+            .any(|k| matches!(k, input::DebugKey::ForceMarkdown));
+        let mut md_cfg = md_config_defaults(true);
+        md_cfg.force_render = force_render;
         render_markdown_output(&content, md_cfg)?;
         return Ok(());
     }
