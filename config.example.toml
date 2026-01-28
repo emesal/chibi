@@ -20,7 +20,7 @@ api_key = "your-openrouter-api-key-here"
 # - meta-llama/llama-3.3-70b-instruct:free
 #
 # See models.example.toml for free model options with context window sizes
-model = "anthropic/claude-sonnet-4"
+model = "arcee-ai/trinity-large-preview:free"
 
 # Context window limit (tokens)
 # Used for calculating when to warn about approaching limits

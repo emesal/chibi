@@ -111,6 +111,12 @@ context_window = 131072
 [models."qwen/qwq-32b:free".api.reasoning]
 max_tokens = 16000
 
+[models."arcee-ai/trinity-large-preview:free"]
+context_window = 131000
+
+[models."arcee-ai/trinity-large-preview:free".api.reasoning]
+max_tokens = 16000
+
 # =============================================================================
 # xAI Grok Models (effort-based reasoning)
 # =============================================================================
