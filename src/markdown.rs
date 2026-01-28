@@ -1013,9 +1013,9 @@ mod tests {
     fn resolve_mode_explicit_truecolor_when_enabled() {
         let mode = resolve_render_mode(
             crate::config::ConfigImageRenderMode::Truecolor,
-            true,  // enable_truecolor
-            true,  // enable_ansi
-            true,  // enable_ascii
+            true, // enable_truecolor
+            true, // enable_ansi
+            true, // enable_ascii
         );
         assert!(matches!(mode, ImageRenderMode::Truecolor));
     }
@@ -1317,9 +1317,6 @@ mod tests {
         // A 5-row image produces lines for y=0,2,4 = 3 content lines.
         let height: u32 = 5;
         let expected_lines = (0..height).step_by(2).count();
-        assert_eq!(
-            expected_lines, 3,
-            "5-row image stepped by 2 yields y=0,2,4"
-        );
+        assert_eq!(expected_lines, 3, "5-row image stepped by 2 yields y=0,2,4");
     }
 }
