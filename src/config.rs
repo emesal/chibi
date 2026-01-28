@@ -70,9 +70,27 @@ impl ReasoningConfig {
 
     /// Merge with another ReasoningConfig, where `other` takes precedence
     pub fn merge_with(&self, other: &ReasoningConfig) -> ReasoningConfig {
+        // Start with merged values, then enforce mutual exclusivity
+        let mut effort = other.effort.or(self.effort);
+        let mut max_tokens = other.max_tokens.or(self.max_tokens);
+
+        // If both are set (invalid state), prioritize what's in `other` and clear the conflicting one
+        // If other has effort, max_tokens should be None
+        // If other has max_tokens, effort should be None
+        // If other has neither, check self
+        if other.effort.is_some() {
+            max_tokens = None;
+        } else if other.max_tokens.is_some() {
+            effort = None;
+        } else if self.effort.is_some() && self.max_tokens.is_some() {
+            // Edge case: self has both (shouldn't happen in practice)
+            // Keep effort, clear max_tokens
+            max_tokens = None;
+        }
+
         ReasoningConfig {
-            effort: other.effort.or(self.effort),
-            max_tokens: other.max_tokens.or(self.max_tokens),
+            effort,
+            max_tokens,
             exclude: other.exclude.or(self.exclude),
             enabled: other.enabled.or(self.enabled),
         }
@@ -779,6 +797,47 @@ mod tests {
         let merged = base.merge_with(&override_cfg);
         assert_eq!(merged.effort, Some(ReasoningEffort::High));
         assert_eq!(merged.exclude, Some(false)); // base preserved
+    }
+
+    #[test]
+    fn test_reasoning_config_merge_max_tokens_clears_effort() {
+        // Regression test: when max_tokens is set in config,
+        // the default effort from base must be cleared
+        let base = ReasoningConfig {
+            effort: Some(ReasoningEffort::Medium),
+            ..Default::default()
+        };
+        let override_cfg = ReasoningConfig {
+            max_tokens: Some(16000),
+            ..Default::default()
+        };
+
+        let merged = base.merge_with(&override_cfg);
+        assert!(
+            merged.effort.is_none(),
+            "effort should be None when max_tokens is set"
+        );
+        assert_eq!(merged.max_tokens, Some(16000));
+    }
+
+    #[test]
+    fn test_reasoning_config_merge_effort_clears_max_tokens() {
+        // Also test the reverse case
+        let base = ReasoningConfig {
+            max_tokens: Some(8000),
+            ..Default::default()
+        };
+        let override_cfg = ReasoningConfig {
+            effort: Some(ReasoningEffort::High),
+            ..Default::default()
+        };
+
+        let merged = base.merge_with(&override_cfg);
+        assert_eq!(merged.effort, Some(ReasoningEffort::High));
+        assert!(
+            merged.max_tokens.is_none(),
+            "max_tokens should be None when effort is set"
+        );
     }
 
     #[test]
