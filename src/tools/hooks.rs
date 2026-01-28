@@ -31,6 +31,8 @@ pub enum HookPoint {
     PostSendMessage,  // Observe delivery (read-only)
     PreCacheOutput,   // Before caching large tool output (can provide custom summary)
     PostCacheOutput,  // After output is cached (notification only)
+    PreApiTools,      // Before tools are sent to API (can filter tools)
+    PreApiRequest,    // Before API request is sent (can modify full request body)
 }
 
 /// Execute a hook on all tools that registered for it
@@ -101,7 +103,7 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
-    // All 19 hook points for testing
+    // All 21 hook points for testing
     const ALL_HOOKS: &[(&str, HookPoint)] = &[
         ("pre_message", HookPoint::PreMessage),
         ("post_message", HookPoint::PostMessage),
@@ -122,6 +124,8 @@ mod tests {
         ("post_send_message", HookPoint::PostSendMessage),
         ("pre_cache_output", HookPoint::PreCacheOutput),
         ("post_cache_output", HookPoint::PostCacheOutput),
+        ("pre_api_tools", HookPoint::PreApiTools),
+        ("pre_api_request", HookPoint::PreApiRequest),
     ];
 
     #[test]

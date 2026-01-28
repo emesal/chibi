@@ -15,7 +15,7 @@ pub struct PluginInvocation {
 }
 
 /// Inspectable things via -n/-N
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Inspectable {
     // File-based items (context-specific)
@@ -283,7 +283,8 @@ pub struct Cli {
 
     // === Positional: prompt ===
     /// The prompt to send (all remaining arguments)
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    /// Note: Use -- before prompts that start with - (e.g., chibi -- -starts-with-dash)
+    #[arg(trailing_var_arg = true)]
     pub prompt: Vec<String>,
 }
 
@@ -299,6 +300,7 @@ const CLI_AFTER_HELP: &str = r#"EXAMPLES:
   chibi -x -c test                Switch context without LLM
   chibi -X -L                     List contexts then invoke LLM
   chibi -a hello                  Archive history, then send prompt
+  chibi --json-schema             Print JSON schema for --json-config
 
 FLAG BEHAVIOR:
   Some flags imply --no-chibi (operations that produce output or
@@ -784,6 +786,35 @@ mod tests {
         let input = parse_input("-ccoding").unwrap();
         assert!(
             matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding")
+        );
+    }
+
+    #[test]
+    fn test_switch_context_attached_dash_works() {
+        // After removing allow_hyphen_values from prompt, -xc- now works correctly
+        let input = parse_input("-xc-").unwrap();
+        assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "-"));
+        assert!(input.flags.no_chibi);
+    }
+
+    #[test]
+    fn test_switch_context_dash_with_space_works() {
+        // With a space also works
+        let input = parse_input("-xc -").unwrap();
+        assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "-"));
+        assert!(input.flags.no_chibi);
+    }
+
+    #[test]
+    fn test_prompt_with_dash_requires_double_dash() {
+        // Prompts starting with - should use -- separator
+        let result = parse_cli("-starts-with-dash");
+        assert!(result.is_err());
+
+        // With --, it works
+        let input = parse_input("-- -starts-with-dash").unwrap();
+        assert!(
+            matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "-starts-with-dash")
         );
     }
 

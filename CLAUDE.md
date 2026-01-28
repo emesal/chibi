@@ -85,7 +85,7 @@ Defined in `tools/file_tools.rs`:
 
 ### Hooks
 
-19 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
+21 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
 
 ```
 on_start, on_end
@@ -98,6 +98,7 @@ pre_clear, post_clear
 pre_compact, post_compact
 pre_rolling_compact, post_rolling_compact
 pre_cache_output, post_cache_output
+pre_api_tools, pre_api_request
 ```
 
 Hook data passed via `CHIBI_HOOK` and `CHIBI_HOOK_DATA` env vars.

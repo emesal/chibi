@@ -257,6 +257,14 @@ max_tokens = 8000
 
 [api.reasoning]
 effort = "high"
+
+# Tool filtering (allowlist or blocklist)
+[tools]
+# Allowlist mode - only these tools are available
+# include = ["update_todos", "update_goals", "send_message"]
+
+# Or blocklist mode - these tools are excluded
+exclude = ["file_grep"]
 ```
 
 Set username via CLI (automatically saves to local.toml):
@@ -344,6 +352,34 @@ Plugins receive these environment variables:
 - `CHIBI_VERBOSE=1` - Set when `-v` flag is used
 - `CHIBI_HOOK` - Hook point name (for hook calls)
 - `CHIBI_HOOK_DATA` - JSON data for hook calls
+
+## Tool Filtering Configuration
+
+Control which tools are available to the LLM in `~/.chibi/contexts/<name>/local.toml`:
+
+```toml
+[tools]
+# Allowlist mode - only these tools are available
+# When set, only listed tools can be used
+include = ["update_todos", "update_goals", "update_reflection"]
+
+# OR blocklist mode - these tools are excluded
+# When set, listed tools are removed from available tools
+# exclude = ["file_grep", "file_head", "file_tail"]
+```
+
+**Tool Types:**
+- `builtin`: update_todos, update_goals, update_reflection, send_message
+- `file`: file_head, file_tail, file_lines, file_grep, cache_list
+- `plugin`: Tools loaded from the plugins directory
+
+**Filter Precedence:**
+1. Config `include` (if set, only these tools considered)
+2. Config `exclude` (remove from remaining)
+3. Hook `include` (intersect with remaining) - via `pre_api_tools` hook
+4. Hook `exclude` (remove from remaining) - via `pre_api_tools` hook
+
+For dynamic tool filtering based on context or other conditions, use the `pre_api_tools` hook. See [Hooks documentation](hooks.md).
 
 ## Storage Configuration
 
