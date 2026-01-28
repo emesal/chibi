@@ -85,12 +85,13 @@ Defined in `tools/file_tools.rs`:
 
 ### Hooks
 
-21 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
+23 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
 
 ```
 on_start, on_end
 pre_message, post_message
 pre_tool, post_tool
+pre_tool_output, post_tool_output
 pre_system_prompt, post_system_prompt
 pre_send_message, post_send_message
 on_context_switch

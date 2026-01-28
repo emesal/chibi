@@ -31,6 +31,8 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 |------|------|------------|
 | `pre_tool` | Before executing a tool | Yes (arguments, can block) |
 | `post_tool` | After executing a tool | No |
+| `pre_tool_output` | After tool execution, before caching | Yes (output, can block/replace) |
+| `post_tool_output` | After tool output is processed | No |
 
 ### API Request Lifecycle
 
@@ -249,6 +251,47 @@ Or to block execution:
 ```
 
 Note: `cached` is `true` if the output was cached due to size.
+
+### pre_tool_output
+
+Called immediately after a tool returns its output, before any caching decisions. Can modify or replace the output entirely.
+
+```json
+{
+  "tool_name": "read_file",
+  "arguments": {"path": "Cargo.toml"},
+  "output": "raw tool output..."
+}
+```
+
+**Can return (to modify output):**
+```json
+{
+  "output": "modified output..."
+}
+```
+
+Or to block/replace entirely:
+```json
+{
+  "block": true,
+  "message": "Replacement message shown to LLM"
+}
+```
+
+### post_tool_output
+
+Called after tool output processing (including any pre_tool_output modifications and caching decisions). Observe only.
+
+```json
+{
+  "tool_name": "read_file",
+  "arguments": {"path": "Cargo.toml"},
+  "output": "original output (after pre_tool_output modifications)",
+  "final_output": "what the LLM will see (may be truncated if cached)",
+  "cached": false
+}
+```
 
 ### pre_cache_output
 
