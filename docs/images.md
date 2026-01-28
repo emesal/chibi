@@ -21,11 +21,11 @@ Remote images (`https://` and optionally `http://`) are fetched at
 render time with the following safeguards:
 
 - **HTTPS only by default.** Plain `http://` URLs are rejected unless
-  `image_allow_http = true`.
-- **Size limit.** Downloads are capped at `image_max_download_bytes`
+  `allow_http = true`.
+- **Size limit.** Downloads are capped at `max_download_bytes`
   (default: 10 MB). Both `Content-Length` headers and streamed body
   size are checked.
-- **Timeout.** Fetches time out after `image_fetch_timeout_seconds`
+- **Timeout.** Fetches time out after `fetch_timeout_seconds`
   (default: 5 seconds).
 - **Content-Type check.** If the server provides a `Content-Type`
   header, it must start with `image/`.
@@ -44,26 +44,29 @@ Image rendering is enabled by default. To disable it, set
 **Global** (`~/.chibi/config.toml`):
 
 ```toml
+[image]
 render_images = false
 ```
 
 **Per-context** (`~/.chibi/contexts/<name>/local.toml`):
 
 ```toml
+[image]
 render_images = false
 ```
 
 ### Remote fetch settings
 
 ```toml
+[image]
 # Maximum bytes to download per image (default: 10485760 = 10 MB)
-image_max_download_bytes = 10485760
+max_download_bytes = 10485760
 
 # Timeout in seconds for each image fetch (default: 5)
-image_fetch_timeout_seconds = 5
+fetch_timeout_seconds = 5
 
 # Allow fetching images over plain HTTP (default: false)
-image_allow_http = false
+allow_http = false
 ```
 
 ### Image cache
@@ -73,19 +76,20 @@ compaction replay, or repeated renders. The cache lives at
 `~/.chibi/image_cache/` and is content-addressed by SHA-256 of the URL.
 
 ```toml
+[image]
 # Enable/disable image caching (default: true)
-image_cache_enabled = true
+cache_enabled = true
 
 # Maximum total cache size in bytes (default: 104857600 = 100 MB)
-image_cache_max_bytes = 104857600
+cache_max_bytes = 104857600
 
 # Maximum age of cached images in days (default: 30)
-image_cache_max_age_days = 30
+cache_max_age_days = 30
 ```
 
 Eviction runs automatically at exit:
-1. Entries older than `image_cache_max_age_days` are removed first.
-2. If total size still exceeds `image_cache_max_bytes`, the
+1. Entries older than `cache_max_age_days` are removed first.
+2. If total size still exceeds `cache_max_bytes`, the
    least-recently-accessed entries are removed until under the limit.
 
 Cache writes are best-effort — failures never block rendering.
@@ -93,29 +97,31 @@ Cache writes are best-effort — failures never block rendering.
 ### Display options
 
 ```toml
+[image]
 # Maximum image height in terminal lines (default: 25)
-image_max_height_lines = 25
+max_height_lines = 25
 
 # Percentage of terminal width to use for images (default: 80)
-image_max_width_percent = 80
+max_width_percent = 80
 
 # Image alignment: "left", "center", or "right" (default: "center")
-image_alignment = "center"
+alignment = "center"
 ```
 
 ### Rendering modes
 
 ```toml
+[image]
 # Image rendering mode (default: "auto")
 # Options: "auto", "truecolor", "ansi", "ascii", "placeholder"
-image_render_mode = "auto"
+render_mode = "auto"
 
 # Enable individual rendering modes (default: all enabled)
 # These control which modes are available to "auto" detection
 # and whether explicit mode selection works
-image_enable_truecolor = true   # 24-bit color (best quality)
-image_enable_ansi = true         # 16-color ANSI (compatible)
-image_enable_ascii = true        # ASCII art (universal)
+enable_truecolor = true   # 24-bit color (best quality)
+enable_ansi = true         # 16-color ANSI (compatible)
+enable_ascii = true        # ASCII art (universal)
 ```
 
 **Mode descriptions:**
@@ -127,7 +133,7 @@ image_enable_ascii = true        # ASCII art (universal)
 
 - **`truecolor`** - Force 24-bit (16.7M colors) ANSI rendering. Best quality
   but requires modern terminal support. Falls back to placeholder if
-  `image_enable_truecolor = false`.
+  `enable_truecolor = false`.
 
 - **`ansi`** - Force 16-color ANSI rendering. Compatible with most terminals
   since the 1990s. Lower quality than truecolor but universally supported.
@@ -141,22 +147,23 @@ image_enable_ascii = true        # ASCII art (universal)
 
 **Disabling rendering modes:**
 
-Set any `image_enable_*` option to `false` to disable that mode. This affects
+Set any `enable_*` option to `false` to disable that mode. This affects
 both auto-detection and explicit mode selection:
 
 ```toml
+[image]
 # Disable truecolor (useful for old terminals)
-image_enable_truecolor = false
+enable_truecolor = false
 
 # Now auto mode will skip to ansi
-image_render_mode = "auto"
+render_mode = "auto"
 
 # Or force a specific mode (ansi/ascii only)
-image_render_mode = "ansi"
+render_mode = "ansi"
 ```
 
-If you explicitly select a disabled mode (e.g., `image_render_mode =
-"truecolor"` with `image_enable_truecolor = false`), chibi falls back to
+If you explicitly select a disabled mode (e.g., `render_mode =
+"truecolor"` with `enable_truecolor = false`), chibi falls back to
 auto-detection logic.
 
 All settings can be overridden per-context in `local.toml`.
@@ -190,7 +197,7 @@ Uses 24-bit (16.7M colors) ANSI escape codes. Supported by:
 - xterm (with `--enable-truecolor`)
 - Most terminals from ~2016 onwards
 
-Enable explicitly with `image_render_mode = "truecolor"` or rely on
+Enable explicitly with `render_mode = "truecolor"` or rely on
 auto-detection via `COLORTERM` and `TERM` environment variables.
 
 ### ANSI mode (fallback for older terminals)
@@ -203,7 +210,7 @@ all color terminals since the 1990s:
 - PuTTY, macOS Terminal.app
 - Linux virtual console (with framebuffer)
 
-Enable with `image_render_mode = "ansi"`.
+Enable with `render_mode = "ansi"`.
 
 ### ASCII mode (universal fallback)
 
@@ -215,11 +222,11 @@ including:
 - Text-mode virtual terminals
 - Screen readers (though usefulness varies)
 
-Enable with `image_render_mode = "ascii"`.
+Enable with `render_mode = "ascii"`.
 
 ### Auto-detection
 
-By default (`image_render_mode = "auto"`), chibi detects terminal
+By default (`render_mode = "auto"`), chibi detects terminal
 capabilities:
 
 1. Checks `$COLORTERM` for `truecolor` or `24bit` → truecolor mode
@@ -230,5 +237,5 @@ capabilities:
 Then applies the fallback chain based on enabled modes: truecolor → ansi →
 ascii → placeholder.
 
-To force a specific mode regardless of detection, set `image_render_mode`
+To force a specific mode regardless of detection, set `render_mode`
 explicitly.

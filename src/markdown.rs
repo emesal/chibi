@@ -10,20 +10,8 @@ use streamdown_render::Renderer;
 pub struct MarkdownConfig {
     pub render_markdown: bool,
     pub force_render: bool,
-    pub render_images: bool,
-    pub image_max_download_bytes: usize,
-    pub image_fetch_timeout_seconds: u64,
-    pub image_allow_http: bool,
-    pub image_max_height_lines: u32,
-    pub image_max_width_percent: u32,
-    pub image_alignment: String,
-    pub image_render_mode: String,
-    pub image_enable_truecolor: bool,
-    pub image_enable_ansi: bool,
-    pub image_enable_ascii: bool,
+    pub image: crate::config::ImageConfig,
     pub image_cache_dir: Option<std::path::PathBuf>,
-    pub image_cache_max_bytes: u64,
-    pub image_cache_max_age_days: u64,
     pub markdown_style: crate::config::MarkdownStyle,
 }
 
@@ -37,24 +25,12 @@ impl MarkdownConfig {
         Self {
             render_markdown: config.render_markdown,
             force_render,
-            render_images: config.render_images,
-            image_max_download_bytes: config.image_max_download_bytes,
-            image_fetch_timeout_seconds: config.image_fetch_timeout_seconds,
-            image_allow_http: config.image_allow_http,
-            image_max_height_lines: config.image_max_height_lines,
-            image_max_width_percent: config.image_max_width_percent,
-            image_alignment: config.image_alignment.clone(),
-            image_render_mode: config.image_render_mode.clone(),
-            image_enable_truecolor: config.image_enable_truecolor,
-            image_enable_ansi: config.image_enable_ansi,
-            image_enable_ascii: config.image_enable_ascii,
-            image_cache_dir: if config.image_cache_enabled {
+            image: config.image.clone(),
+            image_cache_dir: if config.image.cache_enabled {
                 Some(chibi_dir.join("image_cache"))
             } else {
                 None
             },
-            image_cache_max_bytes: config.image_cache_max_bytes,
-            image_cache_max_age_days: config.image_cache_max_age_days,
             markdown_style: config.markdown_style.clone(),
         }
     }
@@ -74,7 +50,7 @@ struct ImageFetchConfig {
 struct ImageDisplayConfig {
     max_height_lines: u32,
     max_width_percent: u32,
-    alignment: String,
+    alignment: crate::config::ImageAlignment,
 }
 
 /// Terminal rendering capabilities detected from environment
@@ -100,10 +76,7 @@ struct StdoutWriter;
 
 impl Write for StdoutWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut lock = io::stdout().lock();
-        let n = lock.write(buf)?;
-        lock.flush()?;
-        Ok(n)
+        io::stdout().lock().write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -165,17 +138,18 @@ fn detect_terminal_capability() -> TerminalCapability {
 
 /// Resolve the rendering mode based on config and terminal capabilities
 fn resolve_render_mode(
-    mode: &str,
+    mode: crate::config::ConfigImageRenderMode,
     enable_truecolor: bool,
     enable_ansi: bool,
     enable_ascii: bool,
 ) -> ImageRenderMode {
+    use crate::config::ConfigImageRenderMode as CMode;
     match mode {
-        "truecolor" if enable_truecolor => ImageRenderMode::Truecolor,
-        "ansi" if enable_ansi => ImageRenderMode::Ansi,
-        "ascii" if enable_ascii => ImageRenderMode::Ascii,
-        "placeholder" => ImageRenderMode::Placeholder,
-        "auto" => {
+        CMode::Truecolor if enable_truecolor => ImageRenderMode::Truecolor,
+        CMode::Ansi if enable_ansi => ImageRenderMode::Ansi,
+        CMode::Ascii if enable_ascii => ImageRenderMode::Ascii,
+        CMode::Placeholder => ImageRenderMode::Placeholder,
+        CMode::Auto => {
             let cap = detect_terminal_capability();
             match cap {
                 TerminalCapability::Truecolor if enable_truecolor => ImageRenderMode::Truecolor,
@@ -191,8 +165,8 @@ fn resolve_render_mode(
             }
         }
         _ => {
-            // Invalid mode or disabled, fallback to auto logic
-            resolve_render_mode("auto", enable_truecolor, enable_ansi, enable_ascii)
+            // Disabled mode, fallback to auto logic
+            resolve_render_mode(CMode::Auto, enable_truecolor, enable_ansi, enable_ascii)
         }
     }
 }
@@ -220,29 +194,29 @@ impl MarkdownStream {
 
         // Determine rendering mode
         let render_mode = resolve_render_mode(
-            &config.image_render_mode,
-            config.image_enable_truecolor,
-            config.image_enable_ansi,
-            config.image_enable_ascii,
+            config.image.render_mode,
+            config.image.enable_truecolor,
+            config.image.enable_ansi,
+            config.image.enable_ascii,
         );
 
         MarkdownStream {
             line_buffer: String::new(),
             pipeline,
-            render_images: config.render_images,
+            render_images: config.image.render_images,
             terminal_width,
             fetch_config: ImageFetchConfig {
-                max_download_bytes: config.image_max_download_bytes,
-                fetch_timeout_seconds: config.image_fetch_timeout_seconds,
-                allow_http: config.image_allow_http,
+                max_download_bytes: config.image.max_download_bytes,
+                fetch_timeout_seconds: config.image.fetch_timeout_seconds,
+                allow_http: config.image.allow_http,
                 cache_dir: config.image_cache_dir,
-                cache_max_bytes: config.image_cache_max_bytes,
-                cache_max_age_days: config.image_cache_max_age_days,
+                cache_max_bytes: config.image.cache_max_bytes,
+                cache_max_age_days: config.image.cache_max_age_days,
             },
             display_config: ImageDisplayConfig {
-                max_height_lines: config.image_max_height_lines,
-                max_width_percent: config.image_max_width_percent,
-                alignment: config.image_alignment,
+                max_height_lines: config.image.max_height_lines,
+                max_width_percent: config.image.max_width_percent,
+                alignment: config.image.alignment,
             },
             render_mode,
         }
@@ -260,10 +234,9 @@ impl MarkdownStream {
     ) -> io::Result<()> {
         for event in events {
             if render_images
-                && let ParseEvent::Image { alt, url } = event
+                && let ParseEvent::Image { url, .. } = event
                 && try_render_image(
                     url,
-                    alt,
                     terminal_width,
                     fetch_config,
                     display_config,
@@ -398,14 +371,18 @@ fn fetch_remote_image(url: &str, config: &ImageFetchConfig) -> io::Result<image:
             .map_err(|e| io::Error::other(format!("failed to decode cached image: {}", e)));
     }
 
-    // Fetch from network
+    // Fetch from network — spawn on a separate task to avoid stalling
+    // the streaming response worker thread during download/timeout.
+    let url_owned = url.to_string();
+    let max_bytes = config.max_download_bytes;
+    let timeout = config.fetch_timeout_seconds;
+    let allow_http = config.allow_http;
     let bytes = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(fetch_image_bytes(
-            url,
-            config.max_download_bytes,
-            config.fetch_timeout_seconds,
-            config.allow_http,
-        ))
+        tokio::runtime::Handle::current().block_on(async {
+            tokio::task::spawn(fetch_image_bytes(url_owned, max_bytes, timeout, allow_http))
+                .await
+                .map_err(|e| io::Error::other(format!("image fetch task failed: {}", e)))?
+        })
     })?;
 
     // Store in cache (best-effort)
@@ -425,7 +402,7 @@ fn fetch_remote_image(url: &str, config: &ImageFetchConfig) -> io::Result<image:
 
 /// Asynchronously fetch image bytes from a URL with size and timeout limits.
 async fn fetch_image_bytes(
-    url: &str,
+    url: String,
     max_bytes: usize,
     timeout_seconds: u64,
     allow_http: bool,
@@ -512,7 +489,6 @@ async fn fetch_image_bytes(
 /// Attempt to render an image inline with the appropriate mode
 fn try_render_image(
     url: &str,
-    _alt: &str,
     term_width: usize,
     fetch_config: &ImageFetchConfig,
     display_config: &ImageDisplayConfig,
@@ -577,7 +553,7 @@ fn render_truecolor(
 ) -> io::Result<()> {
     let new_w = img.width() as usize;
     let new_h = img.height() as usize;
-    let pad = calculate_padding(new_w, term_width, &display_config.alignment);
+    let pad = calculate_padding(new_w, term_width, display_config.alignment);
 
     let mut stdout = io::stdout().lock();
     writeln!(stdout)?;
@@ -628,7 +604,7 @@ fn render_ansi(
     display_config: &ImageDisplayConfig,
 ) -> io::Result<()> {
     let new_w = img.width() as usize;
-    let pad = calculate_padding(new_w, term_width, &display_config.alignment);
+    let pad = calculate_padding(new_w, term_width, display_config.alignment);
 
     let mut stdout = io::stdout().lock();
     writeln!(stdout)?;
@@ -673,7 +649,7 @@ fn render_ascii(
     display_config: &ImageDisplayConfig,
 ) -> io::Result<()> {
     let (width, height) = img.dimensions();
-    let pad = calculate_padding(width as usize / 2, term_width, &display_config.alignment);
+    let pad = calculate_padding(width as usize, term_width, display_config.alignment);
     let padding: String = " ".repeat(pad);
 
     let mut stdout = io::stdout().lock();
@@ -708,11 +684,16 @@ fn ascii_char(intensity: u8) -> &'static str {
 }
 
 /// Calculate left padding for image alignment
-fn calculate_padding(image_cols: usize, term_width: usize, alignment: &str) -> usize {
+fn calculate_padding(
+    image_cols: usize,
+    term_width: usize,
+    alignment: crate::config::ImageAlignment,
+) -> usize {
+    use crate::config::ImageAlignment;
     match alignment {
-        "center" => term_width.saturating_sub(image_cols) / 2,
-        "right" => term_width.saturating_sub(image_cols),
-        _ => 0, // "left" or anything else
+        ImageAlignment::Center => term_width.saturating_sub(image_cols) / 2,
+        ImageAlignment::Right => term_width.saturating_sub(image_cols),
+        ImageAlignment::Left => 0,
     }
 }
 
@@ -752,7 +733,7 @@ mod tests {
         ImageDisplayConfig {
             max_height_lines: 25,
             max_width_percent: 80,
-            alignment: "center".to_string(),
+            alignment: crate::config::ImageAlignment::Center,
         }
     }
 
@@ -852,7 +833,6 @@ mod tests {
         let display = default_display_config();
         let err = try_render_image(
             "https://example.com/nonexistent.png",
-            "test",
             80,
             &config,
             &display,

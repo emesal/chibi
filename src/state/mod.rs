@@ -10,6 +10,8 @@ pub mod jsonl;
 use jsonl::read_jsonl_file;
 
 use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
+#[cfg(test)]
+use crate::config::{ImageAlignment, ImageConfig, ImageConfigOverride};
 use crate::context::{
     Context, ContextEntry, ContextMeta, ContextState, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION,
     ENTRY_TYPE_CONTEXT_CREATED, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
@@ -1483,20 +1485,7 @@ impl AppState {
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             render_markdown: self.config.render_markdown,
-            render_images: self.config.render_images,
-            image_max_download_bytes: self.config.image_max_download_bytes,
-            image_fetch_timeout_seconds: self.config.image_fetch_timeout_seconds,
-            image_allow_http: self.config.image_allow_http,
-            image_max_height_lines: self.config.image_max_height_lines,
-            image_max_width_percent: self.config.image_max_width_percent,
-            image_alignment: self.config.image_alignment.clone(),
-            image_render_mode: self.config.image_render_mode.clone(),
-            image_enable_truecolor: self.config.image_enable_truecolor,
-            image_enable_ansi: self.config.image_enable_ansi,
-            image_enable_ascii: self.config.image_enable_ascii,
-            image_cache_enabled: self.config.image_cache_enabled,
-            image_cache_max_bytes: self.config.image_cache_max_bytes,
-            image_cache_max_age_days: self.config.image_cache_max_age_days,
+            image: self.config.image.clone(),
             api: api_params,
             tools: ToolsConfig::default(),
             markdown_style: self.config.markdown_style.clone(),
@@ -1551,48 +1540,7 @@ impl AppState {
         if let Some(render_markdown) = local.render_markdown {
             resolved.render_markdown = render_markdown;
         }
-        if let Some(render_images) = local.render_images {
-            resolved.render_images = render_images;
-        }
-        if let Some(image_max_download_bytes) = local.image_max_download_bytes {
-            resolved.image_max_download_bytes = image_max_download_bytes;
-        }
-        if let Some(image_fetch_timeout_seconds) = local.image_fetch_timeout_seconds {
-            resolved.image_fetch_timeout_seconds = image_fetch_timeout_seconds;
-        }
-        if let Some(image_allow_http) = local.image_allow_http {
-            resolved.image_allow_http = image_allow_http;
-        }
-        if let Some(image_max_height_lines) = local.image_max_height_lines {
-            resolved.image_max_height_lines = image_max_height_lines;
-        }
-        if let Some(image_max_width_percent) = local.image_max_width_percent {
-            resolved.image_max_width_percent = image_max_width_percent;
-        }
-        if let Some(ref image_alignment) = local.image_alignment {
-            resolved.image_alignment = image_alignment.clone();
-        }
-        if let Some(ref image_render_mode) = local.image_render_mode {
-            resolved.image_render_mode = image_render_mode.clone();
-        }
-        if let Some(image_enable_truecolor) = local.image_enable_truecolor {
-            resolved.image_enable_truecolor = image_enable_truecolor;
-        }
-        if let Some(image_enable_ansi) = local.image_enable_ansi {
-            resolved.image_enable_ansi = image_enable_ansi;
-        }
-        if let Some(image_enable_ascii) = local.image_enable_ascii {
-            resolved.image_enable_ascii = image_enable_ascii;
-        }
-        if let Some(v) = local.image_cache_enabled {
-            resolved.image_cache_enabled = v;
-        }
-        if let Some(v) = local.image_cache_max_bytes {
-            resolved.image_cache_max_bytes = v;
-        }
-        if let Some(v) = local.image_cache_max_age_days {
-            resolved.image_cache_max_age_days = v;
-        }
+        resolved.image = resolved.image.merge_with(&local.image);
         if let Some(ref markdown_style) = local.markdown_style {
             resolved.markdown_style = markdown_style.clone();
         }
@@ -1766,20 +1714,7 @@ mod tests {
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             render_markdown: true,
-            render_images: true,
-            image_max_download_bytes: 10 * 1024 * 1024,
-            image_fetch_timeout_seconds: 5,
-            image_allow_http: false,
-            image_max_height_lines: 25,
-            image_max_width_percent: 80,
-            image_alignment: "center".to_string(),
-            image_render_mode: "auto".to_string(),
-            image_enable_truecolor: true,
-            image_enable_ansi: true,
-            image_enable_ascii: true,
-            image_cache_enabled: true,
-            image_cache_max_bytes: 104_857_600,
-            image_cache_max_age_days: 30,
+            image: ImageConfig::default(),
             api: ApiParams::default(),
             storage: StorageConfig::default(),
             markdown_style: MarkdownStyle::default(),
@@ -2357,20 +2292,7 @@ mod tests {
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             render_markdown: true,
-            render_images: true,
-            image_max_download_bytes: 10 * 1024 * 1024,
-            image_fetch_timeout_seconds: 5,
-            image_allow_http: false,
-            image_max_height_lines: 25,
-            image_max_width_percent: 80,
-            image_alignment: "center".to_string(),
-            image_render_mode: "auto".to_string(),
-            image_enable_truecolor: true,
-            image_enable_ansi: true,
-            image_enable_ascii: true,
-            image_cache_enabled: true,
-            image_cache_max_bytes: 104_857_600,
-            image_cache_max_age_days: 30,
+            image: ImageConfig::default(),
             api: ApiParams::default(),
             storage: StorageConfig::default(),
             markdown_style: MarkdownStyle::default(),
@@ -2430,20 +2352,7 @@ mod tests {
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
             render_markdown: true,
-            render_images: true,
-            image_max_download_bytes: 10 * 1024 * 1024,
-            image_fetch_timeout_seconds: 5,
-            image_allow_http: false,
-            image_max_height_lines: 25,
-            image_max_width_percent: 80,
-            image_alignment: "center".to_string(),
-            image_render_mode: "auto".to_string(),
-            image_enable_truecolor: true,
-            image_enable_ansi: true,
-            image_enable_ascii: true,
-            image_cache_enabled: true,
-            image_cache_max_bytes: 104_857_600,
-            image_cache_max_age_days: 30,
+            image: ImageConfig::default(),
             api: ApiParams::default(),
             storage: StorageConfig::default(),
             markdown_style: MarkdownStyle::default(),
@@ -2524,20 +2433,7 @@ mod tests {
             tool_cache_preview_chars: None,
             file_tools_allowed_paths: None,
             render_markdown: None,
-            render_images: None,
-            image_max_download_bytes: None,
-            image_fetch_timeout_seconds: None,
-            image_allow_http: None,
-            image_max_height_lines: None,
-            image_max_width_percent: None,
-            image_alignment: None,
-            image_render_mode: None,
-            image_enable_truecolor: None,
-            image_enable_ansi: None,
-            image_enable_ascii: None,
-            image_cache_enabled: None,
-            image_cache_max_bytes: None,
-            image_cache_max_age_days: None,
+            image: ImageConfigOverride::default(),
             api: None,
             tools: None,
             storage: StorageConfig::default(),
@@ -2564,17 +2460,20 @@ mod tests {
         let (app, _temp) = create_test_app();
 
         let local = LocalConfig {
-            image_max_height_lines: Some(10),
-            image_max_width_percent: Some(50),
-            image_alignment: Some("left".to_string()),
+            image: ImageConfigOverride {
+                max_height_lines: Some(10),
+                max_width_percent: Some(50),
+                alignment: Some(ImageAlignment::Left),
+                ..Default::default()
+            },
             ..Default::default()
         };
         app.save_local_config("default", &local).unwrap();
 
         let resolved = app.resolve_config(None, None).unwrap();
-        assert_eq!(resolved.image_max_height_lines, 10);
-        assert_eq!(resolved.image_max_width_percent, 50);
-        assert_eq!(resolved.image_alignment, "left");
+        assert_eq!(resolved.image.max_height_lines, 10);
+        assert_eq!(resolved.image.max_width_percent, 50);
+        assert_eq!(resolved.image.alignment, ImageAlignment::Left);
     }
 
     #[test]
@@ -2582,9 +2481,9 @@ mod tests {
         let (app, _temp) = create_test_app();
 
         let resolved = app.resolve_config(None, None).unwrap();
-        assert_eq!(resolved.image_max_height_lines, 25);
-        assert_eq!(resolved.image_max_width_percent, 80);
-        assert_eq!(resolved.image_alignment, "center");
+        assert_eq!(resolved.image.max_height_lines, 25);
+        assert_eq!(resolved.image.max_width_percent, 80);
+        assert_eq!(resolved.image.alignment, ImageAlignment::Center);
     }
 
     #[test]
@@ -2592,9 +2491,9 @@ mod tests {
         let (app, _temp) = create_test_app();
 
         let resolved = app.resolve_config(None, None).unwrap();
-        assert!(resolved.image_cache_enabled);
-        assert_eq!(resolved.image_cache_max_bytes, 104_857_600);
-        assert_eq!(resolved.image_cache_max_age_days, 30);
+        assert!(resolved.image.cache_enabled);
+        assert_eq!(resolved.image.cache_max_bytes, 104_857_600);
+        assert_eq!(resolved.image.cache_max_age_days, 30);
     }
 
     #[test]
@@ -2602,17 +2501,20 @@ mod tests {
         let (app, _temp) = create_test_app();
 
         let local = LocalConfig {
-            image_cache_enabled: Some(false),
-            image_cache_max_bytes: Some(50_000_000),
-            image_cache_max_age_days: Some(7),
+            image: ImageConfigOverride {
+                cache_enabled: Some(false),
+                cache_max_bytes: Some(50_000_000),
+                cache_max_age_days: Some(7),
+                ..Default::default()
+            },
             ..Default::default()
         };
         app.save_local_config("default", &local).unwrap();
 
         let resolved = app.resolve_config(None, None).unwrap();
-        assert!(!resolved.image_cache_enabled);
-        assert_eq!(resolved.image_cache_max_bytes, 50_000_000);
-        assert_eq!(resolved.image_cache_max_age_days, 7);
+        assert!(!resolved.image.cache_enabled);
+        assert_eq!(resolved.image.cache_max_bytes, 50_000_000);
+        assert_eq!(resolved.image.cache_max_age_days, 7);
     }
 
     // === Transcript entry creation tests ===

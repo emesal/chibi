@@ -67,20 +67,8 @@ fn md_config_defaults(render: bool) -> markdown::MarkdownConfig {
     markdown::MarkdownConfig {
         render_markdown: render,
         force_render: false,
-        render_images: render,
-        image_max_download_bytes: 10 * 1024 * 1024,
-        image_fetch_timeout_seconds: 5,
-        image_allow_http: false,
-        image_max_height_lines: 25,
-        image_max_width_percent: 80,
-        image_alignment: "center".to_string(),
-        image_render_mode: "auto".to_string(),
-        image_enable_truecolor: true,
-        image_enable_ansi: true,
-        image_enable_ascii: true,
+        image: config::ImageConfig::default(),
         image_cache_dir: None,
-        image_cache_max_bytes: 104_857_600,
-        image_cache_max_age_days: 30,
         markdown_style: config::default_markdown_style(),
     }
 }
@@ -762,20 +750,20 @@ async fn execute_from_input(
     }
 
     // Image cache cleanup (global, size-bounded)
-    if resolved.image_cache_enabled {
+    if resolved.image.cache_enabled {
         let image_cache_dir = app.chibi_dir.join("image_cache");
         match image_cache::cleanup_image_cache(
             &image_cache_dir,
-            resolved.image_cache_max_bytes,
-            resolved.image_cache_max_age_days,
+            resolved.image.cache_max_bytes,
+            resolved.image.cache_max_age_days,
         ) {
             Ok(removed) if removed > 0 => {
                 output.diagnostic(
                     &format!(
                         "[Image cache cleanup: removed {} entries (max {} days, max {} MB)]",
                         removed,
-                        resolved.image_cache_max_age_days,
-                        resolved.image_cache_max_bytes / (1024 * 1024),
+                        resolved.image.cache_max_age_days,
+                        resolved.image.cache_max_bytes / (1024 * 1024),
                     ),
                     verbose,
                 );
