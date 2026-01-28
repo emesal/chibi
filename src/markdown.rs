@@ -275,7 +275,9 @@ impl MarkdownStream {
 
         // Process all complete lines
         while let Some(newline_pos) = self.line_buffer.find('\n') {
-            let line = self.line_buffer[..newline_pos].trim_end_matches('\r').to_string();
+            let line = self.line_buffer[..newline_pos]
+                .trim_end_matches('\r')
+                .to_string();
             self.line_buffer = self.line_buffer[newline_pos + 1..].to_string();
 
             let events = pipeline.parser.parse_line(&line);
