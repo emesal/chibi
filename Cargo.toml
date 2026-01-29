@@ -1,6 +1,6 @@
 [package]
 name = "chibi"
-version = "0.5.1"
+version = "0.6.0-dev"
 edition = "2024"
 rust-version = "1.88"
 
