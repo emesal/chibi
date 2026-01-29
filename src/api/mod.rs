@@ -866,6 +866,56 @@ async fn send_prompt_with_depth(
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
 
+                // Execute pre_tool_output hooks (can modify or replace output)
+                let mut tool_result = tool_result;
+                let pre_output_hook_data = serde_json::json!({
+                    "tool_name": tc.name,
+                    "arguments": args,
+                    "output": tool_result,
+                });
+                let pre_output_hook_results = tools::execute_hook(
+                    tools,
+                    tools::HookPoint::PreToolOutput,
+                    &pre_output_hook_data,
+                    verbose,
+                )?;
+
+                for (hook_tool_name, result) in pre_output_hook_results {
+                    // Check for block signal (replaces output entirely)
+                    if result
+                        .get("block")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        let replacement = result
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Output blocked by hook")
+                            .to_string();
+                        output.diagnostic(
+                            &format!(
+                                "[Hook pre_tool_output: {} blocked output from {}]",
+                                hook_tool_name, tc.name
+                            ),
+                            verbose,
+                        );
+                        tool_result = replacement;
+                        break;
+                    }
+
+                    // Check for output modification
+                    if let Some(modified_output) = result.get("output").and_then(|v| v.as_str()) {
+                        output.diagnostic(
+                            &format!(
+                                "[Hook pre_tool_output: {} modified output from {}]",
+                                hook_tool_name, tc.name
+                            ),
+                            verbose,
+                        );
+                        tool_result = modified_output.to_string();
+                    }
+                }
+
                 // Check if output should be cached (for non-error results exceeding threshold)
                 // All tools are subject to caching - no exceptions
                 let (final_result, was_cached) = if !tool_result.starts_with("Error:")
@@ -904,6 +954,21 @@ async fn send_prompt_with_depth(
                 } else {
                     (tool_result.clone(), false)
                 };
+
+                // Execute post_tool_output hooks (observe only)
+                let post_output_hook_data = serde_json::json!({
+                    "tool_name": tc.name,
+                    "arguments": args,
+                    "output": tool_result,
+                    "final_output": final_result,
+                    "cached": was_cached,
+                });
+                let _ = tools::execute_hook(
+                    tools,
+                    tools::HookPoint::PostToolOutput,
+                    &post_output_hook_data,
+                    verbose,
+                );
 
                 // Log tool call and result to both transcript.jsonl and context.jsonl
                 // Note: We log the original tool_result to transcript, but use final_result for API
