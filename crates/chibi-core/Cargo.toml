@@ -1,0 +1,30 @@
+[package]
+name = "chibi-core"
+version = "0.6.0-dev"
+edition = "2024"
+rust-version = "1.88"
+
+[dependencies]
+chrono = "0.4"
+schemars = "0.8"
+dirs-next = "2.0.0"
+fastbloom = { version = "0.14", features = ["serde"] }
+futures-util = { version = "0.3.31", features = ["std"] }
+regex = "1"
+reqwest = { version = "0.13.1", features = ["json", "stream"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10"
+strum = { version = "0.27", features = ["derive"] }
+tokio = { version = "1.49.0", features = ["full"] }
+toml = "0.9.11"
+uuid = { version = "1", features = ["v4"] }
+fs2 = "0.4"
+base64 = "0.22"
+
+[lints.rust]
+dead_code = "deny"
+
+[dev-dependencies]
+serde_json = "1.0.149"
+tempfile = "3.19"

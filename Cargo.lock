@@ -207,26 +207,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
-name = "chibi"
+name = "chibi-cli"
+version = "0.6.0-dev"
+dependencies = [
+ "chibi-core",
+ "clap",
+ "futures-util",
+ "image",
+ "imgcatr",
+ "schemars",
+ "serde",
+ "serde_json",
+ "streamdown-parser",
+ "streamdown-render",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "chibi-core"
 version = "0.6.0-dev"
 dependencies = [
  "base64",
  "chrono",
- "clap",
  "dirs-next",
  "fastbloom",
  "fs2",
  "futures-util",
- "image",
- "imgcatr",
  "regex",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "sha2",
- "streamdown-parser",
- "streamdown-render",
  "strum",
  "tempfile",
  "tokio",
