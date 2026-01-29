@@ -1,5 +1,5 @@
 {
-  description = "Chibi - A CLI tool for conversing with LLMs via OpenRouter";
+  description = "Chibi - a minimal, composable building block for LLM interactions";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -14,7 +14,7 @@
       {
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "chibi";
-          version = "0.5.1-alpha";
+          version = "0.5.1";
           src = ./.;
 
           cargoLock = {
