@@ -329,6 +329,10 @@ fn default_reflection_enabled() -> bool {
     true
 }
 
+fn default_reflection_character_limit() -> usize {
+    10000
+}
+
 fn default_max_recursion_depth() -> usize {
     30
 }
@@ -382,6 +386,9 @@ pub struct Config {
     pub base_url: String,
     #[serde(default = "default_reflection_enabled")]
     pub reflection_enabled: bool,
+    /// Maximum characters for reflection tool output
+    #[serde(default = "default_reflection_character_limit")]
+    pub reflection_character_limit: usize,
     #[serde(default = "default_max_recursion_depth")]
     pub max_recursion_depth: usize,
     #[serde(default = "default_username")]
