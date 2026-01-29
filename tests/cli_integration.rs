@@ -228,17 +228,13 @@ fn integration_attached_arg_form() {
 /// Test that -c new creates a timestamped context name
 #[test]
 fn integration_switch_to_new_context() {
+    let temp_home = setup_test_home();
+
     // -c new should switch to a new auto-generated context
     // Since -c alone doesn't produce output without prompt, use -l to see the context
-    // Use --debug destroy_after_seconds_inactive=1 so the context is auto-cleaned
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
-            "-c",
-            "new",
-            "-l",
-        ])
+        .args(["-c", "new", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
 
@@ -280,15 +276,11 @@ fn integration_switch_to_new_context() {
 /// Test that -c new:prefix creates a prefixed timestamped context name
 #[test]
 fn integration_switch_to_new_context_with_prefix() {
-    // Use --debug destroy_after_seconds_inactive=1 so the context is auto-cleaned
+    let temp_home = setup_test_home();
+
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
-            "-c",
-            "new:myprefix",
-            "-l",
-        ])
+        .args(["-c", "new:myprefix", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
 
@@ -328,15 +320,11 @@ fn integration_new_context_empty_prefix_error() {
 /// Test transient context with -C new
 #[test]
 fn integration_transient_new_context() {
-    // Use --debug destroy_after_seconds_inactive=1 so the context is auto-cleaned
+    let temp_home = setup_test_home();
+
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
-            "-C",
-            "new",
-            "-l",
-        ])
+        .args(["-C", "new", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
 
@@ -443,13 +431,11 @@ fn integration_json_config_mode_context_switch() {
     use std::io::Write;
     use std::process::Stdio;
 
-    // Use --debug destroy_after_seconds_inactive=1 so the context is auto-cleaned
+    let temp_home = setup_test_home();
+
     let mut child = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
-            "--json-config",
-        ])
+        .arg("--json-config")
+        .env("CHIBI_HOME", temp_home.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
