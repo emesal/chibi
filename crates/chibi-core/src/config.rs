@@ -420,7 +420,7 @@ pub struct Config {
     pub storage: StorageConfig,
 }
 
-/// Per-context config from ~/.chibi/contexts/<name>/local.toml
+/// Per-context config from `~/.chibi/contexts/<name>/local.toml`
 /// Note: Core fields only. Presentation overrides are in CLI layer.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct LocalConfig {

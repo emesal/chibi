@@ -516,8 +516,8 @@ impl AppState {
 
     /// Rebuild context.jsonl from transcript.jsonl
     /// This creates a fresh context.jsonl with:
-    /// - [0] anchor entry (context_created or latest compaction/archival from transcript)
-    /// - [1..] entries from transcript since the anchor
+    /// - `[0]` anchor entry (context_created or latest compaction/archival from transcript)
+    /// - `[1..]` entries from transcript since the anchor
     ///
     /// Note: System prompt is NOT stored in context.jsonl. It lives in system_prompt.md
     /// (source of truth) and context_meta.json (last combined prompt sent to API).
