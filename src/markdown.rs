@@ -1,6 +1,10 @@
 use std::io::{self, IsTerminal, Write};
 
 use base64::Engine;
+
+/// Maximum line buffer size (1 MB). Lines exceeding this are force-flushed
+/// to prevent unbounded memory growth from malformed LLM responses.
+const MAX_LINE_BUFFER_BYTES: usize = 1024 * 1024;
 use image::GenericImageView;
 use streamdown_parser::{ParseEvent, Parser};
 use streamdown_render::Renderer;
@@ -281,6 +285,22 @@ impl MarkdownStream {
             self.line_buffer = self.line_buffer[newline_pos + 1..].to_string();
 
             let events = pipeline.parser.parse_line(&line);
+            Self::render_events(
+                pipeline,
+                &events,
+                self.render_images,
+                self.terminal_width,
+                &self.fetch_config,
+                &self.display_config,
+                self.render_mode,
+            )?;
+        }
+
+        // Prevent unbounded buffer growth: force-flush if buffer exceeds limit
+        if self.line_buffer.len() > MAX_LINE_BUFFER_BYTES {
+            let line = std::mem::take(&mut self.line_buffer);
+            let line = line.trim_end_matches('\r');
+            let events = pipeline.parser.parse_line(line);
             Self::render_events(
                 pipeline,
                 &events,

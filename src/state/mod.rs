@@ -708,6 +708,12 @@ impl AppState {
     }
 
     /// Append a single entry to context.jsonl
+    ///
+    /// # Durability
+    ///
+    /// Writes are flushed to disk via fsync to ensure durability and consistency
+    /// with the transcript (which also fsyncs). This prevents context.jsonl from
+    /// diverging from transcript.jsonl on crash.
     pub fn append_context_entry(&self, name: &str, entry: &TranscriptEntry) -> io::Result<()> {
         self.ensure_context_dir(name)?;
         let path = self.context_file(name);
@@ -716,6 +722,7 @@ impl AppState {
         let json = serde_json::to_string(entry)
             .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
         writeln!(file, "{}", json)?;
+        file.sync_all()?;
         Ok(())
     }
 
@@ -966,6 +973,16 @@ impl AppState {
         context.updated_at = now_timestamp();
     }
 
+    /// Clear the current context (archive history).
+    ///
+    /// # Concurrency
+    ///
+    /// This function is safe to call without holding a `ContextLock` because:
+    /// - Transcript writes use `FileLock` via `append_to_transcript`
+    /// - Context saves use atomic writes via `save_context`
+    ///
+    /// If another process is running `send_prompt`, the transcript operations
+    /// will serialize correctly via their respective locks.
     pub fn clear_context(&self) -> io::Result<()> {
         let context = self.get_current_context()?;
 

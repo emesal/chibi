@@ -1,5 +1,5 @@
-use std::fs;
-use std::io::{self, ErrorKind};
+use std::fs::{self, OpenOptions};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -18,27 +18,48 @@ impl ContextLock {
     /// Acquire a lock for the given context directory.
     /// If a stale lock exists, it will be cleaned up.
     /// Spawns a background thread to keep the lock fresh.
+    ///
+    /// # Atomicity
+    ///
+    /// Uses `O_CREAT | O_EXCL` semantics to ensure lock creation is atomic.
+    /// This prevents race conditions where two processes could both acquire
+    /// the same lock.
     pub fn acquire(context_dir: &Path, heartbeat_secs: u64) -> io::Result<Self> {
         let lock_path = context_dir.join(".lock");
 
-        // Check if lock exists and is stale
-        if lock_path.exists() {
-            if Self::is_stale(&lock_path, heartbeat_secs) {
-                // Clean up stale lock
-                fs::remove_file(&lock_path)?;
-            } else {
-                return Err(io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    format!(
-                        "Context is locked by another process. Lock file: {}",
-                        lock_path.display()
-                    ),
-                ));
+        // Retry loop for handling stale lock cleanup
+        const MAX_RETRIES: u32 = 3;
+        for attempt in 0..MAX_RETRIES {
+            // Try atomic lock creation (O_CREAT | O_EXCL)
+            match Self::try_create_lock(&lock_path) {
+                Ok(()) => break, // Successfully created lock
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                    // Lock file exists - check if stale
+                    if Self::is_stale(&lock_path, heartbeat_secs) {
+                        // Try to remove stale lock (may race with other processes)
+                        if let Err(remove_err) = fs::remove_file(&lock_path) {
+                            // Another process may have removed it, or it's gone
+                            if remove_err.kind() != ErrorKind::NotFound {
+                                return Err(remove_err);
+                            }
+                        }
+                        // Retry lock creation
+                        if attempt + 1 < MAX_RETRIES {
+                            continue;
+                        }
+                    }
+                    // Lock is held by another active process
+                    return Err(io::Error::new(
+                        ErrorKind::AlreadyExists,
+                        format!(
+                            "Context is locked by another process. Lock file: {}",
+                            lock_path.display()
+                        ),
+                    ));
+                }
+                Err(e) => return Err(e),
             }
         }
-
-        // Create the lock file with current timestamp
-        Self::touch(&lock_path)?;
 
         // Start heartbeat thread with condvar for clean shutdown
         let stop_signal = Arc::new((Mutex::new(false), Condvar::new()));
@@ -70,11 +91,35 @@ impl ContextLock {
         })
     }
 
+    /// Atomically create lock file with timestamp using O_CREAT | O_EXCL.
+    /// Returns `AlreadyExists` error if lock file already exists.
+    fn try_create_lock(path: &Path) -> io::Result<()> {
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+
+        // O_CREAT | O_EXCL: fail atomically if file already exists
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true) // This is the key: fails if file exists
+            .open(path)?;
+
+        write!(file, "{}", timestamp)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
     /// Write current Unix timestamp to the lock file (atomic)
     fn touch(path: &Path) -> io::Result<()> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::ZERO)
             .as_secs();
         crate::safe_io::atomic_write_text(path, &timestamp.to_string())
     }
@@ -98,7 +143,7 @@ impl ContextLock {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::ZERO)
             .as_secs();
 
         // Stale if older than 1.5x heartbeat interval
@@ -339,5 +384,48 @@ mod tests {
         // 50 seconds old should be stale
         fs::write(&lock_path, (now - 50).to_string()).unwrap();
         assert!(ContextLock::is_stale(&lock_path, 30));
+    }
+
+    #[test]
+    fn test_try_create_lock_atomic_exclusive() {
+        let temp_dir = create_test_dir();
+        let lock_path = temp_dir.path().join(".lock");
+
+        // First creation should succeed
+        assert!(ContextLock::try_create_lock(&lock_path).is_ok());
+        assert!(lock_path.exists());
+
+        // Second creation should fail with AlreadyExists
+        let result = ContextLock::try_create_lock(&lock_path);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn test_acquire_retries_on_stale_lock() {
+        let temp_dir = create_test_dir();
+        let lock_path = temp_dir.path().join(".lock");
+
+        // Create a stale lock (60 seconds old)
+        let old = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 60;
+        fs::write(&lock_path, old.to_string()).unwrap();
+
+        // acquire() should clean up stale lock and succeed
+        let lock = ContextLock::acquire(temp_dir.path(), 30).unwrap();
+
+        // Verify the lock file has a fresh timestamp
+        let content = fs::read_to_string(&lock_path).unwrap();
+        let timestamp: u64 = content.trim().parse().unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(now - timestamp < 5, "Lock timestamp should be fresh");
+
+        drop(lock);
     }
 }
