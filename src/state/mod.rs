@@ -708,6 +708,12 @@ impl AppState {
     }
 
     /// Append a single entry to context.jsonl
+    ///
+    /// # Durability
+    ///
+    /// Writes are flushed to disk via fsync to ensure durability and consistency
+    /// with the transcript (which also fsyncs). This prevents context.jsonl from
+    /// diverging from transcript.jsonl on crash.
     pub fn append_context_entry(&self, name: &str, entry: &TranscriptEntry) -> io::Result<()> {
         self.ensure_context_dir(name)?;
         let path = self.context_file(name);
@@ -716,6 +722,7 @@ impl AppState {
         let json = serde_json::to_string(entry)
             .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
         writeln!(file, "{}", json)?;
+        file.sync_all()?;
         Ok(())
     }
 
