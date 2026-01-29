@@ -555,6 +555,216 @@ fn integration_json_schema_no_home_needed() {
     assert_eq!(schema["title"], "ChibiInput");
 }
 
+/// Test --json-schema documents all Command variants
+#[test]
+fn integration_json_schema_all_command_variants() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-schema")
+        .output()
+        .expect("failed to run chibi");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let command_def = serde_json::to_string(&schema["definitions"]["Command"]).unwrap();
+
+    // All 17 Command variants should be documented
+    let expected_commands = [
+        "send_prompt",
+        "list_contexts",
+        "list_current_context",
+        "destroy_context",
+        "archive_history",
+        "compact_context",
+        "rename_context",
+        "show_log",
+        "inspect",
+        "set_system_prompt",
+        "run_plugin",
+        "call_tool",
+        "clear_cache",
+        "cleanup_cache",
+        "show_help",
+        "show_version",
+        "no_op",
+    ];
+
+    for cmd in expected_commands {
+        assert!(
+            command_def.contains(cmd),
+            "Command '{}' should be in schema",
+            cmd
+        );
+    }
+}
+
+/// Test --json-schema documents all type definitions
+#[test]
+fn integration_json_schema_all_definitions() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-schema")
+        .output()
+        .expect("failed to run chibi");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let definitions = &schema["definitions"];
+
+    // All supporting types should be defined
+    assert!(definitions["Command"].is_object(), "Command should be defined");
+    assert!(
+        definitions["ContextSelection"].is_object(),
+        "ContextSelection should be defined"
+    );
+    assert!(
+        definitions["UsernameOverride"].is_object(),
+        "UsernameOverride should be defined"
+    );
+    assert!(definitions["Flags"].is_object(), "Flags should be defined");
+    assert!(
+        definitions["DebugKey"].is_object(),
+        "DebugKey should be defined"
+    );
+    assert!(
+        definitions["Inspectable"].is_object(),
+        "Inspectable should be defined"
+    );
+}
+
+/// Test --json-schema documents ContextSelection variants
+#[test]
+fn integration_json_schema_context_selection_variants() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-schema")
+        .output()
+        .expect("failed to run chibi");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let ctx_def = serde_json::to_string(&schema["definitions"]["ContextSelection"]).unwrap();
+
+    assert!(ctx_def.contains("current"), "should have 'current' variant");
+    assert!(ctx_def.contains("switch"), "should have 'switch' variant");
+    assert!(
+        ctx_def.contains("transient"),
+        "should have 'transient' variant"
+    );
+}
+
+/// Test --json-schema documents DebugKey variants
+#[test]
+fn integration_json_schema_debug_key_variants() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-schema")
+        .output()
+        .expect("failed to run chibi");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let debug_def = serde_json::to_string(&schema["definitions"]["DebugKey"]).unwrap();
+
+    let expected_keys = [
+        "request_log",
+        "response_meta",
+        "destroy_at",
+        "destroy_after_seconds_inactive",
+        "force_markdown",
+        "all",
+    ];
+
+    for key in expected_keys {
+        assert!(
+            debug_def.contains(key),
+            "DebugKey '{}' should be in schema",
+            key
+        );
+    }
+}
+
+/// Test --json-schema documents Flags with defaults
+#[test]
+fn integration_json_schema_flags_with_defaults() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-schema")
+        .output()
+        .expect("failed to run chibi");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let flags_def = &schema["definitions"]["Flags"];
+
+    // Should have all flag properties
+    let props = &flags_def["properties"];
+    assert!(props["verbose"].is_object(), "should have verbose");
+    assert!(props["json_output"].is_object(), "should have json_output");
+    assert!(props["no_chibi"].is_object(), "should have no_chibi");
+    assert!(props["raw"].is_object(), "should have raw");
+    assert!(props["debug"].is_object(), "should have debug");
+
+    // Check defaults are documented
+    assert_eq!(props["verbose"]["default"], false);
+    assert_eq!(props["json_output"]["default"], false);
+    assert_eq!(props["no_chibi"]["default"], false);
+    assert_eq!(props["raw"]["default"], false);
+}
+
+/// Test --json-schema marks command as required
+#[test]
+fn integration_json_schema_required_fields() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-schema")
+        .output()
+        .expect("failed to run chibi");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    // command should be required at top level
+    let required = schema["required"].as_array().unwrap();
+    assert!(
+        required.iter().any(|v| v == "command"),
+        "command should be required"
+    );
+
+    // flags, context, username_override should NOT be required (have defaults)
+    assert!(
+        !required.iter().any(|v| v == "flags"),
+        "flags should not be required"
+    );
+    assert!(
+        !required.iter().any(|v| v == "context"),
+        "context should not be required"
+    );
+}
+
+/// Test --json-schema documents Inspectable variants including ConfigField
+#[test]
+fn integration_json_schema_inspectable_variants() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .arg("--json-schema")
+        .output()
+        .expect("failed to run chibi");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let insp_def = serde_json::to_string(&schema["definitions"]["Inspectable"]).unwrap();
+
+    // Named variants
+    assert!(
+        insp_def.contains("system_prompt"),
+        "should have system_prompt"
+    );
+    assert!(insp_def.contains("reflection"), "should have reflection");
+    assert!(insp_def.contains("todos"), "should have todos");
+    assert!(insp_def.contains("goals"), "should have goals");
+    assert!(insp_def.contains("home"), "should have home");
+    assert!(insp_def.contains("list"), "should have list");
+    // ConfigField is untagged, represented as a string type
+    assert!(
+        insp_def.contains("config_field"),
+        "should have config_field"
+    );
+}
+
 // =============================================================================
 // Inspect config fields tests (issue #18)
 // =============================================================================

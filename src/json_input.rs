@@ -354,4 +354,221 @@ mod tests {
             matches!(input.username_override, Some(UsernameOverride::Transient(ref u)) if u == "alice")
         );
     }
+
+    // === Missing command tests ===
+
+    #[test]
+    fn test_parse_clear_cache_current() {
+        let json = r#"{"command": {"clear_cache": {}}}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(input.command, Command::ClearCache { name: None }));
+    }
+
+    #[test]
+    fn test_parse_clear_cache_named() {
+        let json = r#"{"command": {"clear_cache": {"name": "myctx"}}}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.command,
+            Command::ClearCache { name: Some(ref n) } if n == "myctx"
+        ));
+    }
+
+    #[test]
+    fn test_parse_cleanup_cache() {
+        let json = r#"{"command": "cleanup_cache"}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(input.command, Command::CleanupCache));
+    }
+
+    // === Inspectable variant tests ===
+
+    #[test]
+    fn test_parse_inspect_system_prompt() {
+        let json = r#"{"command": {"inspect": {"thing": "system_prompt"}}}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.command,
+            Command::Inspect { thing: Inspectable::SystemPrompt, .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_inspect_reflection() {
+        let json = r#"{"command": {"inspect": {"thing": "reflection"}}}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.command,
+            Command::Inspect { thing: Inspectable::Reflection, .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_inspect_home() {
+        let json = r#"{"command": {"inspect": {"thing": "home"}}}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.command,
+            Command::Inspect { thing: Inspectable::Home, .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_inspect_list() {
+        let json = r#"{"command": {"inspect": {"thing": "list"}}}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.command,
+            Command::Inspect { thing: Inspectable::List, .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_inspect_config_field() {
+        let json = r#"{"command": {"inspect": {"thing": "model"}}}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.command,
+            Command::Inspect { thing: Inspectable::ConfigField(ref f), .. } if f == "model"
+        ));
+    }
+
+    #[test]
+    fn test_parse_inspect_config_field_nested() {
+        let json = r#"{"command": {"inspect": {"thing": "api.temperature"}}}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.command,
+            Command::Inspect { thing: Inspectable::ConfigField(ref f), .. } if f == "api.temperature"
+        ));
+    }
+
+    // === DebugKey tests ===
+
+    #[test]
+    fn test_parse_debug_request_log() {
+        let json = r#"{
+            "command": "no_op",
+            "flags": {"debug": ["request_log"]}
+        }"#;
+        let input = from_str(json).unwrap();
+        assert_eq!(input.flags.debug.len(), 1);
+        assert!(matches!(
+            input.flags.debug[0],
+            crate::input::DebugKey::RequestLog
+        ));
+    }
+
+    #[test]
+    fn test_parse_debug_response_meta() {
+        let json = r#"{
+            "command": "no_op",
+            "flags": {"debug": ["response_meta"]}
+        }"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.flags.debug[0],
+            crate::input::DebugKey::ResponseMeta
+        ));
+    }
+
+    #[test]
+    fn test_parse_debug_all() {
+        let json = r#"{
+            "command": "no_op",
+            "flags": {"debug": ["all"]}
+        }"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.flags.debug[0],
+            crate::input::DebugKey::All
+        ));
+    }
+
+    #[test]
+    fn test_parse_debug_destroy_at() {
+        let json = r#"{
+            "command": "no_op",
+            "flags": {"debug": [{"destroy_at": 1234567890}]}
+        }"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.flags.debug[0],
+            crate::input::DebugKey::DestroyAt(1234567890)
+        ));
+    }
+
+    #[test]
+    fn test_parse_debug_destroy_after_seconds_inactive() {
+        let json = r#"{
+            "command": "no_op",
+            "flags": {"debug": [{"destroy_after_seconds_inactive": 60}]}
+        }"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.flags.debug[0],
+            crate::input::DebugKey::DestroyAfterSecondsInactive(60)
+        ));
+    }
+
+    #[test]
+    fn test_parse_debug_multiple() {
+        let json = r#"{
+            "command": "no_op",
+            "flags": {"debug": ["request_log", "response_meta"]}
+        }"#;
+        let input = from_str(json).unwrap();
+        assert_eq!(input.flags.debug.len(), 2);
+    }
+
+    // === Error handling tests ===
+
+    #[test]
+    fn test_invalid_command_name() {
+        let json = r#"{"command": "not_a_real_command"}"#;
+        let result = from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_required_prompt() {
+        let json = r#"{"command": {"send_prompt": {}}}"#;
+        let result = from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_required_new_in_rename() {
+        let json = r#"{"command": {"rename_context": {"old": "foo"}}}"#;
+        let result = from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unknown_fields_are_ignored() {
+        // serde default behavior with deny_unknown_fields not set
+        let json = r#"{"command": "no_op", "extra_field": "ignored"}"#;
+        let result = from_str(json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_raw_flag() {
+        let json = r#"{
+            "command": "no_op",
+            "flags": {"raw": true}
+        }"#;
+        let input = from_str(json).unwrap();
+        assert!(input.flags.raw);
+    }
+
+    #[test]
+    fn test_context_switch_non_persistent() {
+        let json = r#"{"command": "no_op", "context": {"switch": {"name": "test", "persistent": false}}}"#;
+        let input = from_str(json).unwrap();
+        assert!(matches!(
+            input.context,
+            ContextSelection::Switch { ref name, persistent: false } if name == "test"
+        ));
+    }
 }
