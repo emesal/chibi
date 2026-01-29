@@ -7,18 +7,12 @@ use serde::{Deserialize, Serialize};
 
 // Re-export core config types for convenience
 pub use chibi_core::config::{
-    ApiParams, Config, LocalConfig, ModelsConfig, ReasoningConfig, ReasoningEffort,
-    ResolvedConfig as CoreResolvedConfig, ResponseFormat, ToolChoice, ToolChoiceMode, ToolsConfig,
-    DEFAULT_API_URL,
+    ApiParams, ResolvedConfig as CoreResolvedConfig, ToolsConfig,
 };
 
 // ============================================================================
 // Presentation Default Functions
 // ============================================================================
-
-fn default_render_markdown() -> bool {
-    true
-}
 
 fn default_render_images() -> bool {
     true

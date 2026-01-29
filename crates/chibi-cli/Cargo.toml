@@ -20,6 +20,10 @@ futures-util = { version = "0.3.31", features = ["std"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["full"] }
+base64.workspace = true
+sha2 = "0.10"
+uuid = { version = "1.17", features = ["v4"] }
+reqwest = { version = "0.12", features = ["stream"] }
 
 [lints.rust]
 dead_code = "deny"
