@@ -973,6 +973,16 @@ impl AppState {
         context.updated_at = now_timestamp();
     }
 
+    /// Clear the current context (archive history).
+    ///
+    /// # Concurrency
+    ///
+    /// This function is safe to call without holding a `ContextLock` because:
+    /// - Transcript writes use `FileLock` via `append_to_transcript`
+    /// - Context saves use atomic writes via `save_context`
+    ///
+    /// If another process is running `send_prompt`, the transcript operations
+    /// will serialize correctly via their respective locks.
     pub fn clear_context(&self) -> io::Result<()> {
         let context = self.get_current_context()?;
 
