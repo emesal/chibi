@@ -83,15 +83,9 @@ pub fn cache_put(
     let meta_json =
         serde_json::to_string(&metadata).map_err(|e| io::Error::other(format!("{}", e)))?;
 
-    // Atomic write: write to .tmp, then rename
-    let img_tmp = cache_dir.join(format!("{}.img.tmp", key));
-    let meta_tmp = cache_dir.join(format!("{}.meta.json.tmp", key));
-
-    fs::write(&img_tmp, bytes)?;
-    fs::rename(&img_tmp, &img)?;
-
-    fs::write(&meta_tmp, meta_json)?;
-    fs::rename(&meta_tmp, &meta)?;
+    // Atomic write with fsync (prevents corruption on crash)
+    crate::safe_io::atomic_write(&img, bytes)?;
+    crate::safe_io::atomic_write_text(&meta, &meta_json)?;
 
     // Trigger cleanup (best-effort)
     let _ = cleanup_image_cache(cache_dir, max_bytes, max_age_days);
