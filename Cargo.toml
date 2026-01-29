@@ -38,6 +38,7 @@ streamdown-parser = { version = "0.1.4", path = "vendor/streamdown-rs/crates/str
 streamdown-syntax = { version = "0.1.4", path = "vendor/streamdown-rs/crates/streamdown-syntax" }
 streamdown-render = { version = "0.1.4", path = "vendor/streamdown-rs/crates/streamdown-render" }
 streamdown-plugin = { version = "0.1.4", path = "vendor/streamdown-rs/crates/streamdown-plugin" }
+reqwest = { version = "0.13.1", features = ["json", "stream"] }
 
 [workspace.lints.rust]
 dead_code = "deny"
