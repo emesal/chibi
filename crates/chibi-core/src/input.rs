@@ -96,7 +96,7 @@ pub enum DebugKey {
 }
 
 impl DebugKey {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         // Check for parameterized debug keys first
         if let Some(value) = s
             .strip_prefix("destroy_at=")
@@ -132,7 +132,7 @@ impl DebugKey {
     /// Invalid segments are silently ignored.
     pub fn parse_list(s: &str) -> Vec<Self> {
         s.split(',')
-            .filter_map(|segment| Self::from_str(segment.trim()))
+            .filter_map(|segment| Self::parse(segment.trim()))
             .collect()
     }
 }
@@ -329,11 +329,11 @@ mod tests {
     #[test]
     fn test_debug_key_from_str_request_log() {
         assert_eq!(
-            DebugKey::from_str("request-log"),
+            DebugKey::parse("request-log"),
             Some(DebugKey::RequestLog)
         );
         assert_eq!(
-            DebugKey::from_str("request_log"),
+            DebugKey::parse("request_log"),
             Some(DebugKey::RequestLog)
         );
     }
@@ -341,47 +341,47 @@ mod tests {
     #[test]
     fn test_debug_key_from_str_response_meta() {
         assert_eq!(
-            DebugKey::from_str("response-meta"),
+            DebugKey::parse("response-meta"),
             Some(DebugKey::ResponseMeta)
         );
         assert_eq!(
-            DebugKey::from_str("response_meta"),
+            DebugKey::parse("response_meta"),
             Some(DebugKey::ResponseMeta)
         );
     }
 
     #[test]
     fn test_debug_key_from_str_all() {
-        assert_eq!(DebugKey::from_str("all"), Some(DebugKey::All));
+        assert_eq!(DebugKey::parse("all"), Some(DebugKey::All));
     }
 
     #[test]
     fn test_debug_key_from_str_destroy_at() {
         assert_eq!(
-            DebugKey::from_str("destroy_at=1234567890"),
+            DebugKey::parse("destroy_at=1234567890"),
             Some(DebugKey::DestroyAt(1234567890))
         );
         assert_eq!(
-            DebugKey::from_str("destroy-at=1234567890"),
+            DebugKey::parse("destroy-at=1234567890"),
             Some(DebugKey::DestroyAt(1234567890))
         );
         // Invalid value
-        assert_eq!(DebugKey::from_str("destroy_at=invalid"), None);
+        assert_eq!(DebugKey::parse("destroy_at=invalid"), None);
     }
 
     #[test]
     fn test_debug_key_from_str_destroy_after_seconds_inactive() {
         assert_eq!(
-            DebugKey::from_str("destroy_after_seconds_inactive=60"),
+            DebugKey::parse("destroy_after_seconds_inactive=60"),
             Some(DebugKey::DestroyAfterSecondsInactive(60))
         );
         assert_eq!(
-            DebugKey::from_str("destroy-after-seconds-inactive=3600"),
+            DebugKey::parse("destroy-after-seconds-inactive=3600"),
             Some(DebugKey::DestroyAfterSecondsInactive(3600))
         );
         // Invalid value
         assert_eq!(
-            DebugKey::from_str("destroy_after_seconds_inactive=invalid"),
+            DebugKey::parse("destroy_after_seconds_inactive=invalid"),
             None
         );
     }
@@ -389,22 +389,22 @@ mod tests {
     #[test]
     fn test_debug_key_from_str_md() {
         assert_eq!(
-            DebugKey::from_str("md=README.md"),
+            DebugKey::parse("md=README.md"),
             Some(DebugKey::Md("README.md".to_string()))
         );
         assert_eq!(
-            DebugKey::from_str("md=docs/guide.md"),
+            DebugKey::parse("md=docs/guide.md"),
             Some(DebugKey::Md("docs/guide.md".to_string()))
         );
         // Empty path should return None
-        assert_eq!(DebugKey::from_str("md="), None);
+        assert_eq!(DebugKey::parse("md="), None);
     }
 
     #[test]
     fn test_debug_key_from_str_invalid() {
-        assert_eq!(DebugKey::from_str("invalid"), None);
-        assert_eq!(DebugKey::from_str(""), None);
-        assert_eq!(DebugKey::from_str("REQUEST_LOG"), None); // case sensitive
+        assert_eq!(DebugKey::parse("invalid"), None);
+        assert_eq!(DebugKey::parse(""), None);
+        assert_eq!(DebugKey::parse("REQUEST_LOG"), None); // case sensitive
     }
 
     #[test]
