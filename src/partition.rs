@@ -751,7 +751,16 @@ impl PartitionManager {
     /// Uses bloom filters to skip partitions that definitely don't contain
     /// the term. Returns matching entries and search statistics.
     ///
-    /// The search is case-insensitive and matches whole words.
+    /// The search is case-insensitive and matches substring in content.
+    ///
+    /// # Bloom Filter Behavior
+    ///
+    /// The bloom filter uses `any` semantics for multi-word queries: a partition
+    /// is scanned if ANY query token might be present. This is correct for
+    /// substring search because matching "foo bar" requires matching "foo bar"
+    /// as a substring, not matching "foo" AND "bar" separately. The bloom filter
+    /// acts as a quick pre-filter to skip partitions that definitely don't
+    /// contain any of the query words.
     #[allow(dead_code)] // Public API, will be used when search CLI is added
     pub fn search(&self, query: &str) -> io::Result<SearchResult> {
         let query_lower = query.to_lowercase();
