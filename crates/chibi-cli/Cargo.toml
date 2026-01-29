@@ -24,7 +24,7 @@ toml = "0.8"
 tokio = { version = "1.49.0", features = ["full"] }
 base64.workspace = true
 sha2 = "0.10"
-uuid = { version = "1.17", features = ["v4"] }
+uuid.workspace = true
 reqwest.workspace = true
 
 [lints.rust]
