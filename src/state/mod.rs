@@ -16,14 +16,15 @@ use crate::context::{
     EntryMetadata, Message, TranscriptEntry, is_valid_context_name, now_timestamp,
     validate_context_name,
 };
-use crate::partition::{PartitionManager, StorageConfig};
+use crate::partition::{ActiveState, PartitionManager, StorageConfig};
 use dirs_next::home_dir;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, ErrorKind, Write};
+use std::io::{self, BufReader, ErrorKind, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-#[derive(Debug)]
 pub struct AppState {
     pub config: Config,
     pub models_config: ModelsConfig,
@@ -33,6 +34,10 @@ pub struct AppState {
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
     pub plugins_dir: PathBuf,
+    /// Cache of active partition state per context, avoiding repeated file scans.
+    /// Uses interior mutability since caching is a side effect that doesn't change
+    /// logical state.
+    active_state_cache: RefCell<HashMap<String, ActiveState>>,
 }
 
 impl AppState {
@@ -64,6 +69,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            active_state_cache: RefCell::new(HashMap::new()),
         })
     }
 
@@ -155,6 +161,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            active_state_cache: RefCell::new(HashMap::new()),
         };
 
         // Sync state with filesystem (handles stale entries and orphan directories)
@@ -635,7 +642,7 @@ impl AppState {
 
         // If summary was in old context but not in file, save it
         if !old_context.summary.is_empty() && !summary_path.exists() {
-            fs::write(&summary_path, &old_context.summary)?;
+            crate::safe_io::atomic_write_text(&summary_path, &old_context.summary)?;
         }
 
         // Remove old context.json file
@@ -683,23 +690,19 @@ impl AppState {
         read_jsonl_file(&self.context_file(name))
     }
 
-    /// Write entries to context.jsonl (full rewrite)
+    /// Write entries to context.jsonl (full rewrite, atomic)
     pub fn write_context_entries(&self, name: &str, entries: &[TranscriptEntry]) -> io::Result<()> {
         self.ensure_context_dir(name)?;
         let path = self.context_file(name);
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
 
-        let mut writer = BufWriter::new(file);
+        let mut content = String::new();
         for entry in entries {
             let json = serde_json::to_string(entry)
                 .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
-            writeln!(writer, "{}", json)?;
+            content.push_str(&json);
+            content.push('\n');
         }
-        Ok(())
+        crate::safe_io::atomic_write_text(&path, &content)
     }
 
     /// Append a single entry to context.jsonl
@@ -740,17 +743,11 @@ impl AppState {
             .unwrap_or_else(now_timestamp)
     }
 
-    /// Save context metadata
+    /// Save context metadata (atomic write)
     fn save_context_meta(&self, name: &str, meta: &ContextMeta) -> io::Result<()> {
         self.ensure_context_dir(name)?;
         let path = self.context_meta_file(name);
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
-        serde_json::to_writer_pretty(BufWriter::new(file), meta)
-            .map_err(|e| io::Error::other(format!("Failed to save context meta: {}", e)))
+        crate::safe_io::atomic_write_json(&path, meta)
     }
 
     /// Convert transcript entries to messages (for backwards compat)
@@ -834,7 +831,7 @@ impl AppState {
         // Save summary to separate file
         let summary_path = self.summary_file(&context.name);
         if !context.summary.is_empty() {
-            fs::write(&summary_path, &context.summary)?;
+            crate::safe_io::atomic_write_text(&summary_path, &context.summary)?;
         } else if summary_path.exists() {
             // Remove empty summary file
             fs::remove_file(&summary_path)?;
@@ -863,6 +860,9 @@ impl AppState {
     }
 
     /// Append a single entry to transcript (the authoritative log, using partitioned storage)
+    ///
+    /// Uses cached active state when available to avoid repeated file scans.
+    /// The cache is updated after each operation and invalidated on context clear/compaction.
     pub fn append_to_transcript(
         &self,
         context_name: &str,
@@ -872,11 +872,31 @@ impl AppState {
         self.migrate_transcript_if_needed(context_name)?;
         let transcript_dir = self.transcript_dir(context_name);
         let storage_config = self.get_storage_config(context_name)?;
-        let mut pm = PartitionManager::load_with_config(&transcript_dir, storage_config)?;
+
+        // Get cached state if available
+        let cached_state = self.active_state_cache.borrow().get(context_name).cloned();
+
+        let mut pm = PartitionManager::load_with_cached_state(
+            &transcript_dir,
+            storage_config,
+            cached_state,
+        )?;
         pm.append_entry(entry)?;
 
         // Check if rotation is needed after append
-        pm.rotate_if_needed()?;
+        let rotated = pm.rotate_if_needed()?;
+
+        // Update cache with new state (if rotated, state was reset)
+        if rotated {
+            // After rotation, remove from cache so next load re-scans the empty active partition
+            self.active_state_cache.borrow_mut().remove(context_name);
+        } else {
+            // Update cache with the modified state
+            self.active_state_cache
+                .borrow_mut()
+                .insert(context_name.to_string(), pm.active_state());
+        }
+
         Ok(())
     }
 
@@ -964,8 +984,11 @@ impl AppState {
 
         // Create fresh context (preserving nothing - full clear)
         let new_context = Context::new(self.state.current_context.clone());
-
         self.save_current_context(&new_context)?;
+
+        // Invalidate active state cache after all writes are complete,
+        // so the next append re-scans fresh state from disk
+        self.active_state_cache.borrow_mut().remove(&context.name);
         Ok(())
     }
 
@@ -1009,6 +1032,9 @@ impl AppState {
 
         // Remove the directory
         fs::remove_dir_all(&dir)?;
+
+        // Invalidate active state cache for the destroyed context
+        self.active_state_cache.borrow_mut().remove(name);
 
         // Update state
         new_state.contexts.retain(|e| e.name != name);
@@ -1140,7 +1166,7 @@ impl AppState {
             None
         };
 
-        fs::write(&prompt_path, content)?;
+        crate::safe_io::atomic_write_text(&prompt_path, content)?;
 
         // Only log change and invalidate if content actually changed
         if old_content.as_deref() != Some(content) {
@@ -1296,7 +1322,6 @@ impl AppState {
 
         // Create fresh context
         let new_context = Context::new(context_name);
-
         self.save_context(&new_context)?;
 
         // Ensure the context is tracked in state (like clear_context does via save_current_context)
@@ -1313,6 +1338,10 @@ impl AppState {
             ));
             new_state.save(&self.state_path)?;
         }
+
+        // Invalidate active state cache after all writes are complete,
+        // so the next append re-scans fresh state from disk
+        self.active_state_cache.borrow_mut().remove(context_name);
 
         Ok(())
     }
@@ -1369,16 +1398,16 @@ impl AppState {
         }
     }
 
-    /// Save todos for a context
+    /// Save todos for a context (atomic write)
     pub fn save_todos(&self, context_name: &str, content: &str) -> io::Result<()> {
         self.ensure_context_dir(context_name)?;
-        fs::write(self.todos_file(context_name), content)
+        crate::safe_io::atomic_write_text(&self.todos_file(context_name), content)
     }
 
-    /// Save goals for a context
+    /// Save goals for a context (atomic write)
     pub fn save_goals(&self, context_name: &str, content: &str) -> io::Result<()> {
         self.ensure_context_dir(context_name)?;
-        fs::write(self.goals_file(context_name), content)
+        crate::safe_io::atomic_write_text(&self.goals_file(context_name), content)
     }
 
     /// Load todos for current context
@@ -1422,7 +1451,7 @@ impl AppState {
         }
     }
 
-    /// Save local config for a context
+    /// Save local config for a context (atomic write)
     pub fn save_local_config(
         &self,
         context_name: &str,
@@ -1432,7 +1461,7 @@ impl AppState {
         let path = self.local_config_file(context_name);
         let content = toml::to_string_pretty(local_config)
             .map_err(|e| io::Error::other(format!("Failed to serialize local.toml: {}", e)))?;
-        fs::write(&path, content)
+        crate::safe_io::atomic_write_text(&path, &content)
     }
 
     /// Resolve model name using models.toml aliases
@@ -1668,6 +1697,10 @@ impl AppState {
         let compaction_anchor = self.create_compaction_anchor(context_name, summary);
         self.append_to_transcript(context_name, &compaction_anchor)?;
         self.mark_context_dirty(context_name)?;
+
+        // Invalidate active state cache after compaction (context content changed)
+        self.active_state_cache.borrow_mut().remove(context_name);
+
         Ok(())
     }
 }
@@ -2988,5 +3021,168 @@ not valid json at all
         let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
         assert!(destroyed.is_empty());
         assert!(app.context_dir("keep-context").exists());
+    }
+
+    // === Active state caching tests (Issue #1) ===
+
+    #[test]
+    fn test_append_to_transcript_caches_state() {
+        let (app, _temp) = create_test_app();
+
+        // Create context (save_context writes a context_created anchor, populating the cache)
+        let ctx = Context::new("test-context");
+        app.save_context(&ctx).unwrap();
+        let count_after_save = app
+            .active_state_cache
+            .borrow()
+            .get("test-context")
+            .map(|s| s.entry_count())
+            .unwrap_or(0);
+
+        // Append an explicit entry
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry).unwrap();
+
+        // Cache should exist and have incremented
+        let cache = app.active_state_cache.borrow();
+        assert!(
+            cache.contains_key("test-context"),
+            "cache should contain entry after append"
+        );
+        assert_eq!(
+            cache.get("test-context").unwrap().entry_count(),
+            count_after_save + 1,
+            "cache entry_count should increment by 1 after append"
+        );
+    }
+
+    #[test]
+    fn test_append_to_transcript_updates_cache_incrementally() {
+        let (app, _temp) = create_test_app();
+
+        // Create context
+        let ctx = Context::new("test-context");
+        app.save_context(&ctx).unwrap();
+
+        let entry1 = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry1).unwrap();
+        let count_after_first = app
+            .active_state_cache
+            .borrow()
+            .get("test-context")
+            .unwrap()
+            .entry_count();
+
+        let entry2 = app.create_user_message_entry("World", "testuser");
+        app.append_to_transcript("test-context", &entry2).unwrap();
+
+        // Cache should have incremented by exactly 1 from the second append
+        let cache = app.active_state_cache.borrow();
+        assert_eq!(
+            cache.get("test-context").unwrap().entry_count(),
+            count_after_first + 1,
+            "cache should increment by 1 after each append"
+        );
+    }
+
+    #[test]
+    fn test_destroy_context_invalidates_cache() {
+        let (mut app, _temp) = create_test_app();
+
+        // Create context and populate cache
+        let ctx = Context::new("test-context");
+        app.save_context(&ctx).unwrap();
+
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry).unwrap();
+
+        // Verify cache has entry
+        assert!(app.active_state_cache.borrow().contains_key("test-context"));
+
+        // Destroy context
+        app.destroy_context("test-context").unwrap();
+
+        // Cache should be invalidated
+        assert!(
+            !app.active_state_cache.borrow().contains_key("test-context"),
+            "cache should be invalidated after destroy_context"
+        );
+    }
+
+    #[test]
+    fn test_finalize_compaction_invalidates_cache() {
+        let (app, _temp) = create_test_app();
+
+        // Create context and populate cache
+        let ctx = Context::new("test-context");
+        app.save_context(&ctx).unwrap();
+
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry).unwrap();
+
+        // Verify cache has entry
+        assert!(app.active_state_cache.borrow().contains_key("test-context"));
+
+        // Finalize compaction (writes another entry via append_to_transcript,
+        // then invalidates cache)
+        app.finalize_compaction("test-context", "Test summary")
+            .unwrap();
+
+        // Cache should be invalidated
+        assert!(
+            !app.active_state_cache.borrow().contains_key("test-context"),
+            "cache should be invalidated after finalize_compaction"
+        );
+    }
+
+    #[test]
+    fn test_clear_context_invalidates_cache() {
+        let (app, _temp) = create_test_app();
+
+        // Create the "default" context with messages so clear_context has something to clear
+        let mut ctx = Context::new("default");
+        ctx.messages
+            .push(Message::new("user".to_string(), "Hello".to_string()));
+        app.save_current_context(&ctx).unwrap();
+
+        // Populate cache explicitly
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("default", &entry).unwrap();
+        assert!(app.active_state_cache.borrow().contains_key("default"));
+
+        // clear_context writes archival anchor and saves fresh context (both populate
+        // cache), then invalidates the cache as the final step
+        app.clear_context().unwrap();
+
+        // Cache should be absent after clear
+        assert!(
+            !app.active_state_cache.borrow().contains_key("default"),
+            "cache should be invalidated after clear_context"
+        );
+    }
+
+    #[test]
+    fn test_clear_context_by_name_invalidates_cache() {
+        let (app, _temp) = create_test_app();
+
+        // Create context with messages
+        let mut ctx = Context::new("test-context");
+        ctx.messages
+            .push(Message::new("user".to_string(), "Hello".to_string()));
+        app.save_context(&ctx).unwrap();
+
+        // Append to transcript to populate cache
+        let entry = app.create_user_message_entry("Hello", "testuser");
+        app.append_to_transcript("test-context", &entry).unwrap();
+        assert!(app.active_state_cache.borrow().contains_key("test-context"));
+
+        // clear_context_by_name saves fresh context then invalidates cache last
+        app.clear_context_by_name("test-context").unwrap();
+
+        // Cache should be absent after clear
+        assert!(
+            !app.active_state_cache.borrow().contains_key("test-context"),
+            "cache should be invalidated after clear_context_by_name"
+        );
     }
 }

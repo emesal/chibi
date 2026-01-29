@@ -51,11 +51,12 @@
 //! See: <https://github.com/tomtomwombat/fastbloom>
 
 use crate::context::TranscriptEntry;
+use crate::safe_io::{FileLock, atomic_write_json};
 use crate::state::jsonl::read_jsonl_file;
 use fastbloom::BloomFilter;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 // ============================================================================
@@ -125,32 +126,45 @@ pub struct StorageConfig {
     pub enable_bloom_filters: Option<bool>,
 }
 
+/// Minimum partition age in seconds (1 minute).
+/// Prevents excessively frequent rotation from misconfiguration.
+const MIN_PARTITION_AGE_SECONDS: u64 = 60;
+
 impl StorageConfig {
     /// Returns the effective max entries threshold.
+    /// Enforces minimum of 1 to prevent infinite loops from zero values.
     #[inline]
     pub fn max_entries(&self) -> usize {
         self.partition_max_entries
             .unwrap_or(DEFAULT_PARTITION_MAX_ENTRIES)
+            .max(1)
     }
 
     /// Returns the effective max age threshold in seconds.
+    /// Enforces minimum of 60 seconds to prevent excessively frequent rotation.
     #[inline]
     pub fn max_age_seconds(&self) -> u64 {
         self.partition_max_age_seconds
             .unwrap_or(DEFAULT_PARTITION_MAX_AGE_SECONDS)
+            .max(MIN_PARTITION_AGE_SECONDS)
     }
 
     /// Returns the effective max tokens threshold.
+    /// Enforces minimum of 1 to prevent infinite loops from zero values.
     #[inline]
     pub fn max_tokens(&self) -> usize {
         self.partition_max_tokens
             .unwrap_or(DEFAULT_PARTITION_MAX_TOKENS)
+            .max(1)
     }
 
     /// Returns the bytes-per-token value for estimation.
+    /// Enforces minimum of 1 to prevent divide-by-zero errors.
     #[inline]
     pub fn bytes_per_token(&self) -> usize {
-        self.bytes_per_token.unwrap_or(DEFAULT_BYTES_PER_TOKEN)
+        self.bytes_per_token
+            .unwrap_or(DEFAULT_BYTES_PER_TOKEN)
+            .max(1)
     }
 
     /// Returns whether bloom filters should be built.
@@ -247,8 +261,20 @@ impl Default for RotationPolicy {
 // ============================================================================
 
 /// Cached state about the active partition, avoiding repeated file scans.
-#[derive(Debug, Default)]
-struct ActiveState {
+///
+/// This struct tracks entry counts, token estimates, and timestamps for the
+/// active partition without requiring a full file scan on every operation.
+///
+/// # Caching Strategy
+///
+/// The state is updated incrementally:
+/// - [`record_append()`] updates after writing an entry
+/// - [`reset()`] clears after rotation
+///
+/// For cross-session caching (e.g., in `AppState`), the state can be cloned
+/// and restored via [`PartitionManager::load_with_cached_state()`].
+#[derive(Debug, Default, Clone)]
+pub struct ActiveState {
     /// Number of entries in active partition.
     entry_count: usize,
 
@@ -310,6 +336,12 @@ impl ActiveState {
         self.token_count = 0;
         self.first_entry_ts = None;
     }
+
+    /// Returns the number of entries tracked in this state.
+    #[cfg(test)]
+    pub fn entry_count(&self) -> usize {
+        self.entry_count
+    }
 }
 
 // ============================================================================
@@ -347,6 +379,14 @@ pub struct PartitionManager {
 }
 
 impl PartitionManager {
+    /// Returns the path to the lock file for this partition manager.
+    ///
+    /// All write operations (append, rotate) acquire this lock to prevent
+    /// concurrent modifications from corrupting the partition state.
+    fn lock_path(&self) -> PathBuf {
+        self.context_dir.join(".transcript.lock")
+    }
+
     /// Loads with custom storage configuration.
     ///
     /// # Migration Behavior
@@ -396,6 +436,79 @@ impl PartitionManager {
         })
     }
 
+    /// Loads with custom storage configuration and optional cached active state.
+    ///
+    /// If `cached_state` is provided and valid (matches current active partition),
+    /// it is used instead of scanning the file. This avoids repeated file scans
+    /// when making multiple operations on the same context within a session.
+    ///
+    /// # Validation
+    ///
+    /// The cached state is validated by checking that the active partition file
+    /// exists. If the file doesn't exist but cached state claims entries exist,
+    /// the cache is invalidated and the file is re-scanned.
+    pub fn load_with_cached_state(
+        context_dir: &Path,
+        config: StorageConfig,
+        cached_state: Option<ActiveState>,
+    ) -> io::Result<Self> {
+        let manifest_path = context_dir.join("manifest.json");
+        let legacy_path = context_dir.join("context.jsonl");
+
+        let manifest = if manifest_path.exists() {
+            Self::load_manifest(&manifest_path)?
+        } else if legacy_path.exists() {
+            Manifest {
+                version: 1,
+                active_partition: "context.jsonl".to_string(),
+                partitions: Vec::new(),
+                rotation_policy: RotationPolicy {
+                    max_entries: config.max_entries(),
+                    max_age_seconds: config.max_age_seconds(),
+                    max_tokens: Some(config.max_tokens()),
+                },
+            }
+        } else {
+            Manifest {
+                rotation_policy: RotationPolicy {
+                    max_entries: config.max_entries(),
+                    max_age_seconds: config.max_age_seconds(),
+                    max_tokens: Some(config.max_tokens()),
+                },
+                ..Manifest::default()
+            }
+        };
+
+        let active_path = context_dir.join(&manifest.active_partition);
+
+        // Validate and use cached state if provided
+        let active = if let Some(cached) = cached_state {
+            // Validate: if file doesn't exist but cache has entries, re-scan
+            if !active_path.exists() && cached.entry_count > 0 {
+                ActiveState::default()
+            } else {
+                cached
+            }
+        } else {
+            ActiveState::from_file(&active_path, config.bytes_per_token())?
+        };
+
+        Ok(Self {
+            context_dir: context_dir.to_path_buf(),
+            manifest,
+            config,
+            active,
+        })
+    }
+
+    /// Returns a clone of the current active partition state for caching.
+    ///
+    /// Use this to capture state after operations and restore it later via
+    /// [`load_with_cached_state()`].
+    pub fn active_state(&self) -> ActiveState {
+        self.active.clone()
+    }
+
     /// Loads manifest from disk with error context.
     fn load_manifest(path: &Path) -> io::Result<Manifest> {
         let file = File::open(path)?;
@@ -404,22 +517,13 @@ impl PartitionManager {
         })
     }
 
-    /// Persists the manifest to disk.
+    /// Persists the manifest to disk atomically.
+    ///
+    /// Uses atomic write (temp file + rename) to prevent corruption from
+    /// crashes during the write operation.
     fn save_manifest(&self) -> io::Result<()> {
         let path = self.context_dir.join("manifest.json");
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
-        {
-            let mut writer = BufWriter::new(&mut file);
-            serde_json::to_writer_pretty(&mut writer, &self.manifest)
-                .map_err(|e| io::Error::other(format!("Failed to write manifest: {}", e)))?;
-        }
-        // Ensure durability: flush OS buffer cache to disk
-        file.sync_all()?;
-        Ok(())
+        atomic_write_json(&path, &self.manifest)
     }
 
     // ========================================================================
@@ -466,11 +570,19 @@ impl PartitionManager {
     /// partitions. Call `rotate_if_needed()` after appending to trigger
     /// rotation if thresholds are exceeded.
     ///
+    /// # Concurrency
+    ///
+    /// Acquires an exclusive file lock to prevent race conditions with
+    /// concurrent writers. The lock is released when the method returns.
+    ///
     /// # Durability
     ///
     /// Writes are flushed to disk via fsync to ensure durability. This prevents
     /// data loss on crash but may impact write performance on high-throughput workloads.
     pub fn append_entry(&mut self, entry: &TranscriptEntry) -> io::Result<()> {
+        // Acquire lock for write operation
+        let _lock = FileLock::acquire(&self.lock_path())?;
+
         fs::create_dir_all(&self.context_dir)?;
 
         let active_path = self.context_dir.join(&self.manifest.active_partition);
@@ -549,7 +661,15 @@ impl PartitionManager {
     /// 3. Build bloom filter if enabled
     /// 4. Add partition metadata to manifest
     /// 5. Reset active partition to `active.jsonl`
+    ///
+    /// # Concurrency
+    ///
+    /// Acquires an exclusive file lock to prevent race conditions with
+    /// concurrent writers. The lock is released when the method returns.
     pub fn rotate(&mut self) -> io::Result<()> {
+        // Acquire lock for rotation operation
+        let _lock = FileLock::acquire(&self.lock_path())?;
+
         let active_path = self.context_dir.join(&self.manifest.active_partition);
 
         // Nothing to rotate if empty
@@ -819,7 +939,7 @@ fn build_bloom_filter(entries: &[TranscriptEntry], partition_path: &Path) -> io:
     let bloom_path = partition_path.with_extension("bloom");
     let serialized =
         serde_json::to_vec(&bloom).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    fs::write(&bloom_path, serialized)?;
+    crate::safe_io::atomic_write(&bloom_path, &serialized)?;
     Ok(bloom_path)
 }
 
@@ -893,6 +1013,24 @@ mod tests {
         assert_eq!(config.max_entries(), DEFAULT_PARTITION_MAX_ENTRIES);
         assert_eq!(config.max_age_seconds(), DEFAULT_PARTITION_MAX_AGE_SECONDS);
         assert!(config.bloom_filters_enabled());
+    }
+
+    #[test]
+    fn test_storage_config_minimum_guards() {
+        // Test that zero values are clamped to minimums
+        let config = StorageConfig {
+            partition_max_entries: Some(0),
+            partition_max_age_seconds: Some(0),
+            partition_max_tokens: Some(0),
+            bytes_per_token: Some(0),
+            enable_bloom_filters: None,
+        };
+
+        // All should be clamped to at least 1 (or 60 for age)
+        assert_eq!(config.max_entries(), 1);
+        assert_eq!(config.max_age_seconds(), MIN_PARTITION_AGE_SECONDS);
+        assert_eq!(config.max_tokens(), 1);
+        assert_eq!(config.bytes_per_token(), 1);
     }
 
     #[test]
@@ -1236,5 +1374,185 @@ mod tests {
         assert!(tokens.contains(&"hello".to_string()));
         assert!(tokens.contains(&"world".to_string()));
         assert!(tokens.contains(&"test123".to_string()));
+    }
+
+    // === Caching tests (Issue #1) ===
+
+    #[test]
+    fn test_active_state_getter() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut pm = PartitionManager::load(temp_dir.path()).unwrap();
+
+        // Initially empty
+        let state = pm.active_state();
+        assert_eq!(state.entry_count, 0);
+
+        // After append
+        pm.append_entry(&make_entry("Hello")).unwrap();
+        let state = pm.active_state();
+        assert_eq!(state.entry_count, 1);
+        assert!(state.first_entry_ts.is_some());
+    }
+
+    #[test]
+    fn test_load_with_cached_state_uses_cache() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = StorageConfig::default();
+
+        // Create entries and get the state
+        let cached_state = {
+            let mut pm =
+                PartitionManager::load_with_config(temp_dir.path(), config.clone()).unwrap();
+            pm.append_entry(&make_entry("Entry 1")).unwrap();
+            pm.append_entry(&make_entry("Entry 2")).unwrap();
+            pm.active_state()
+        };
+
+        // Load with cached state - should skip file scan
+        let pm = PartitionManager::load_with_cached_state(
+            temp_dir.path(),
+            config,
+            Some(cached_state.clone()),
+        )
+        .unwrap();
+
+        // State should match what we cached
+        assert_eq!(pm.active_state().entry_count, cached_state.entry_count);
+        assert_eq!(
+            pm.active_state().first_entry_ts,
+            cached_state.first_entry_ts
+        );
+    }
+
+    #[test]
+    fn test_load_with_cached_state_none_scans_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = StorageConfig::default();
+
+        // Create some entries
+        {
+            let mut pm =
+                PartitionManager::load_with_config(temp_dir.path(), config.clone()).unwrap();
+            pm.append_entry(&make_entry("Entry 1")).unwrap();
+            pm.append_entry(&make_entry("Entry 2")).unwrap();
+        }
+
+        // Load without cached state - should scan file
+        let pm = PartitionManager::load_with_cached_state(temp_dir.path(), config, None).unwrap();
+
+        assert_eq!(pm.active_state().entry_count, 2);
+    }
+
+    #[test]
+    fn test_load_with_cached_state_invalidates_stale_cache() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = StorageConfig::default();
+
+        // Create a "stale" cache that claims entries exist
+        let stale_cache = ActiveState {
+            entry_count: 5,
+            token_count: 100,
+            first_entry_ts: Some(12345),
+        };
+
+        // But the file doesn't exist - cache should be invalidated
+        let pm =
+            PartitionManager::load_with_cached_state(temp_dir.path(), config, Some(stale_cache))
+                .unwrap();
+
+        // Should have detected stale cache and returned default state
+        assert_eq!(pm.active_state().entry_count, 0);
+    }
+
+    #[test]
+    fn test_active_state_reset_after_rotation() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = StorageConfig {
+            partition_max_entries: Some(2),
+            partition_max_age_seconds: Some(86400),
+            partition_max_tokens: None,
+            bytes_per_token: None,
+            enable_bloom_filters: Some(false),
+        };
+        let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
+
+        // Add entries up to threshold
+        pm.append_entry(&make_entry("Entry 1")).unwrap();
+        pm.append_entry(&make_entry("Entry 2")).unwrap();
+
+        // State should show 2 entries before rotation
+        assert_eq!(pm.active_state().entry_count, 2);
+
+        // Trigger rotation
+        pm.rotate_if_needed().unwrap();
+
+        // State should be reset after rotation
+        assert_eq!(pm.active_state().entry_count, 0);
+        assert!(pm.active_state().first_entry_ts.is_none());
+    }
+
+    // === Atomic manifest write tests (Issue #3) ===
+
+    #[test]
+    fn test_manifest_atomic_write_no_tmp_left() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = StorageConfig {
+            partition_max_entries: Some(2),
+            partition_max_age_seconds: Some(86400),
+            partition_max_tokens: None,
+            bytes_per_token: None,
+            enable_bloom_filters: Some(false),
+        };
+        let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
+
+        // Trigger rotation which writes manifest
+        pm.append_entry(&make_entry("Entry 1")).unwrap();
+        pm.append_entry(&make_entry("Entry 2")).unwrap();
+        pm.rotate_if_needed().unwrap();
+
+        // Check that no .tmp file remains
+        let manifest_path = temp_dir.path().join("manifest.json");
+        let tmp_path = temp_dir.path().join("manifest.tmp");
+
+        assert!(manifest_path.exists(), "manifest.json should exist");
+        assert!(
+            !tmp_path.exists(),
+            "manifest.tmp should not exist after atomic write"
+        );
+    }
+
+    // === File locking tests (Issue #2) ===
+
+    #[test]
+    fn test_lock_file_created_on_append() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut pm = PartitionManager::load(temp_dir.path()).unwrap();
+
+        pm.append_entry(&make_entry("Hello")).unwrap();
+
+        // Lock file should have been created
+        let lock_path = temp_dir.path().join(".transcript.lock");
+        assert!(lock_path.exists(), "lock file should be created on append");
+    }
+
+    #[test]
+    fn test_lock_file_created_on_rotate() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = StorageConfig {
+            partition_max_entries: Some(2),
+            partition_max_age_seconds: Some(86400),
+            partition_max_tokens: None,
+            bytes_per_token: None,
+            enable_bloom_filters: Some(false),
+        };
+        let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
+
+        pm.append_entry(&make_entry("Entry 1")).unwrap();
+        pm.append_entry(&make_entry("Entry 2")).unwrap();
+        pm.rotate_if_needed().unwrap();
+
+        // Lock file should exist
+        let lock_path = temp_dir.path().join(".transcript.lock");
+        assert!(lock_path.exists(), "lock file should be created on rotate");
     }
 }

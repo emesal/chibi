@@ -10,6 +10,7 @@ mod llm;
 mod lock;
 mod output;
 mod partition;
+mod safe_io;
 mod state;
 mod tools;
 

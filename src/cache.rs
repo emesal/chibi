@@ -103,15 +103,11 @@ pub fn cache_output(
         line_count,
     };
 
-    // Write content to cache file atomically (write to temp, then rename)
-    let temp_path = cache_dir.join(format!("{}.tmp", metadata.id));
-    fs::write(&temp_path, content)?;
-    fs::rename(&temp_path, &cache_path)?;
+    // Write content atomically (temp file + fsync + rename)
+    crate::safe_io::atomic_write_text(&cache_path, content)?;
 
-    // Write metadata
-    let meta_json = serde_json::to_string_pretty(&metadata)
-        .map_err(|e| io::Error::other(format!("Failed to serialize cache metadata: {}", e)))?;
-    fs::write(&meta_path, meta_json)?;
+    // Write metadata atomically
+    crate::safe_io::atomic_write_json(&meta_path, &metadata)?;
 
     Ok(CacheEntry {
         metadata,
