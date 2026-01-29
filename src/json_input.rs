@@ -389,7 +389,10 @@ mod tests {
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.command,
-            Command::Inspect { thing: Inspectable::SystemPrompt, .. }
+            Command::Inspect {
+                thing: Inspectable::SystemPrompt,
+                ..
+            }
         ));
     }
 
@@ -399,7 +402,10 @@ mod tests {
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.command,
-            Command::Inspect { thing: Inspectable::Reflection, .. }
+            Command::Inspect {
+                thing: Inspectable::Reflection,
+                ..
+            }
         ));
     }
 
@@ -409,7 +415,10 @@ mod tests {
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.command,
-            Command::Inspect { thing: Inspectable::Home, .. }
+            Command::Inspect {
+                thing: Inspectable::Home,
+                ..
+            }
         ));
     }
 
@@ -419,7 +428,10 @@ mod tests {
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.command,
-            Command::Inspect { thing: Inspectable::List, .. }
+            Command::Inspect {
+                thing: Inspectable::List,
+                ..
+            }
         ));
     }
 
@@ -479,10 +491,7 @@ mod tests {
             "flags": {"debug": ["all"]}
         }"#;
         let input = from_str(json).unwrap();
-        assert!(matches!(
-            input.flags.debug[0],
-            crate::input::DebugKey::All
-        ));
+        assert!(matches!(input.flags.debug[0], crate::input::DebugKey::All));
     }
 
     #[test]
@@ -564,7 +573,8 @@ mod tests {
 
     #[test]
     fn test_context_switch_non_persistent() {
-        let json = r#"{"command": "no_op", "context": {"switch": {"name": "test", "persistent": false}}}"#;
+        let json =
+            r#"{"command": "no_op", "context": {"switch": {"name": "test", "persistent": false}}}"#;
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.context,

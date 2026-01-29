@@ -610,7 +610,10 @@ fn integration_json_schema_all_definitions() {
     let definitions = &schema["definitions"];
 
     // All supporting types should be defined
-    assert!(definitions["Command"].is_object(), "Command should be defined");
+    assert!(
+        definitions["Command"].is_object(),
+        "Command should be defined"
+    );
     assert!(
         definitions["ContextSelection"].is_object(),
         "ContextSelection should be defined"
