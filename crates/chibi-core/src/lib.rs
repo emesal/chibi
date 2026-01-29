@@ -41,7 +41,7 @@ pub mod state;
 pub mod tools;
 
 // Re-export the facade
-pub use chibi::Chibi;
+pub use chibi::{Chibi, LoadOptions};
 
 // Re-export commonly used types
 pub use api::{CollectingSink, PromptOptions, ResponseEvent, ResponseSink};

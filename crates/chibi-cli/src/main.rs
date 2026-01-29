@@ -24,7 +24,7 @@ use chibi_core::context::{
     Context, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
 };
 use chibi_core::input::{ChibiInput, Command, ContextSelection, DebugKey, UsernameOverride};
-use chibi_core::{Chibi, Inspectable, PromptOptions, api, tools};
+use chibi_core::{Chibi, Inspectable, LoadOptions, PromptOptions, api, tools};
 use std::io::{self, ErrorKind, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
@@ -824,10 +824,10 @@ async fn main() -> io::Result<()> {
         }
 
         let output = OutputHandler::new(input.flags.json_output);
-        let mut chibi = match home_override {
-            Some(path) => Chibi::from_home(&path)?,
-            None => Chibi::load()?,
-        };
+        let mut chibi = Chibi::load_with_options(LoadOptions {
+            verbose: input.flags.verbose,
+            home: home_override,
+        })?;
 
         output.diagnostic(
             &format!("[Loaded {} tool(s)]", chibi.tool_count()),
@@ -870,26 +870,23 @@ async fn main() -> io::Result<()> {
         .any(|k| matches!(k, DebugKey::ForceMarkdown));
 
     let verbose = input.flags.verbose;
-    let mut chibi = match home_override {
-        Some(path) => Chibi::from_home(&path)?,
-        None => Chibi::load()?,
-    };
+    let mut chibi = Chibi::load_with_options(LoadOptions {
+        verbose,
+        home: home_override,
+    })?;
 
-    // Reload tools if verbose (to get the list for display)
-    if verbose {
-        chibi.reload_tools_verbose()?;
-        if !chibi.tools.is_empty() {
-            eprintln!(
-                "[Loaded {} tool(s): {}]",
-                chibi.tool_count(),
-                chibi
-                    .tools
-                    .iter()
-                    .map(|t| t.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
+    // Print tool list if verbose
+    if verbose && !chibi.tools.is_empty() {
+        eprintln!(
+            "[Loaded {} tool(s): {}]",
+            chibi.tool_count(),
+            chibi
+                .tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 
     let output = OutputHandler::new(input.flags.json_output);

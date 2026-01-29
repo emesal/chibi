@@ -39,6 +39,20 @@ use crate::context::{Context, ContextEntry};
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 
+use std::path::PathBuf;
+
+/// Options for loading a Chibi instance.
+///
+/// Use `Default::default()` for standard behavior, or customize as needed.
+#[derive(Debug, Clone, Default)]
+pub struct LoadOptions {
+    /// Print diagnostic info about tool loading to stderr.
+    pub verbose: bool,
+    /// Override the chibi home directory.
+    /// If `None`, uses `CHIBI_HOME` env var or `~/.chibi`.
+    pub home: Option<PathBuf>,
+}
+
 /// High-level facade for chibi embedding.
 ///
 /// Provides a clean API for common chibi operations without exposing
@@ -53,30 +67,45 @@ pub struct Chibi {
 impl Chibi {
     /// Load chibi from default home directory.
     ///
+    /// Convenience method equivalent to `load_with_options(LoadOptions::default())`.
+    /// Kept as a shortcut for library users who don't need custom options.
+    ///
     /// Uses the following precedence for the chibi directory:
     /// 1. `CHIBI_HOME` environment variable
     /// 2. `~/.chibi` default
     pub fn load() -> io::Result<Self> {
-        let app = AppState::load(None)?;
-        let tools = tools::load_tools(&app.plugins_dir, false)?;
-        Ok(Self { app, tools })
+        Self::load_with_options(LoadOptions::default())
     }
 
     /// Load chibi from a specific home directory.
     ///
+    /// Convenience method for `load_with_options(LoadOptions { home: Some(...), ..Default::default() })`.
+    /// Kept as a shortcut for library users who only need to override the home directory.
+    ///
     /// This overrides both `CHIBI_HOME` and the default `~/.chibi`.
     pub fn from_home(home: &Path) -> io::Result<Self> {
-        let app = AppState::load(Some(home.to_path_buf()))?;
-        let tools = tools::load_tools(&app.plugins_dir, false)?;
-        Ok(Self { app, tools })
+        Self::load_with_options(LoadOptions {
+            home: Some(home.to_path_buf()),
+            ..Default::default()
+        })
     }
 
-    /// Load chibi with verbose tool loading output.
+    /// Load chibi with custom options.
     ///
-    /// Like `load()` but prints diagnostic info about loaded tools to stderr.
-    pub fn load_verbose() -> io::Result<Self> {
-        let app = AppState::load(None)?;
-        let tools = tools::load_tools(&app.plugins_dir, true)?;
+    /// This is the most flexible way to load chibi, allowing control over
+    /// both the home directory and verbose output.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let chibi = Chibi::load_with_options(LoadOptions {
+    ///     verbose: true,
+    ///     home: Some("/custom/path".into()),
+    /// })?;
+    /// ```
+    pub fn load_with_options(options: LoadOptions) -> io::Result<Self> {
+        let app = AppState::load(options.home)?;
+        let tools = tools::load_tools(&app.plugins_dir, options.verbose)?;
         Ok(Self { app, tools })
     }
 
@@ -231,20 +260,6 @@ impl Chibi {
         self.app.save()
     }
 
-    /// Reload tools from the plugins directory.
-    ///
-    /// Call this if plugins have been added or removed while running.
-    pub fn reload_tools(&mut self) -> io::Result<()> {
-        self.tools = tools::load_tools(&self.app.plugins_dir, false)?;
-        Ok(())
-    }
-
-    /// Reload tools with verbose output.
-    pub fn reload_tools_verbose(&mut self) -> io::Result<()> {
-        self.tools = tools::load_tools(&self.app.plugins_dir, true)?;
-        Ok(())
-    }
-
     /// Get the chibi home directory path.
     pub fn home_dir(&self) -> &Path {
         &self.app.chibi_dir
@@ -275,5 +290,30 @@ mod tests {
         // This is expected - it's a single-threaded facade
         fn _assert_send<T: Send>() {}
         // Intentionally not calling _assert_send::<Chibi>() - it won't compile
+    }
+
+    #[test]
+    fn test_load_options_default() {
+        let opts = LoadOptions::default();
+        assert!(!opts.verbose);
+        assert!(opts.home.is_none());
+    }
+
+    #[test]
+    fn test_load_options_with_verbose() {
+        let opts = LoadOptions {
+            verbose: true,
+            ..Default::default()
+        };
+        assert!(opts.verbose);
+    }
+
+    #[test]
+    fn test_load_options_with_home() {
+        let opts = LoadOptions {
+            home: Some(PathBuf::from("/tmp/test-chibi")),
+            ..Default::default()
+        };
+        assert_eq!(opts.home, Some(PathBuf::from("/tmp/test-chibi")));
     }
 }
