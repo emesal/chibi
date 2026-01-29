@@ -4,8 +4,8 @@
 //! which enable asynchronous communication between contexts.
 
 use crate::context::{InboxEntry, now_timestamp};
+use crate::safe_io::FileLock;
 use crate::state::AppState;
-use fs2::FileExt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -43,16 +43,9 @@ impl AppState {
         let lock_path = self.inbox_lock_file(context_name);
         let inbox_path = self.inbox_file(context_name);
 
-        // Create/open lock file and acquire exclusive lock
-        let lock_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)?;
-        lock_file.lock_exclusive()?;
+        // Acquire RAII lock - released automatically on drop
+        let _lock = FileLock::acquire(&lock_path)?;
 
-        // Append to inbox
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -62,8 +55,6 @@ impl AppState {
             .map_err(|e| io::Error::other(format!("JSON serialize error: {}", e)))?;
         writeln!(file, "{}", json)?;
 
-        // Release lock
-        FileExt::unlock(&lock_file)?;
         Ok(())
     }
 
@@ -78,14 +69,8 @@ impl AppState {
             return Ok(Vec::new());
         }
 
-        // Create/open lock file and acquire exclusive lock
-        let lock_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)?;
-        lock_file.lock_exclusive()?;
+        // Acquire RAII lock - released automatically on drop
+        let _lock = FileLock::acquire(&lock_path)?;
 
         // Read all entries
         let file = File::open(&inbox_path)?;
@@ -105,11 +90,9 @@ impl AppState {
 
         // Clear the inbox by truncating the file
         if !entries.is_empty() {
-            File::create(&inbox_path)?; // This truncates the file
+            File::create(&inbox_path)?;
         }
 
-        // Release lock
-        FileExt::unlock(&lock_file)?;
         Ok(entries)
     }
 }

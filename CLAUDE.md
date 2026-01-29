@@ -14,11 +14,24 @@
 ## Build Commands
 
 ```bash
+# First time setup - initialize submodules
+git submodule update --init --recursive
+
 cargo build              # Debug build
 cargo build --release    # Release build
 cargo install --path .   # Install to ~/.cargo/bin
 cargo run -- <args>      # Run with arguments
 ```
+
+## Dependencies
+
+Chibi uses git submodules for vendored dependencies:
+
+- `vendor/streamdown-rs/` - Forked markdown renderer with custom patches
+  - Path dependencies in Cargo.toml point to `vendor/streamdown-rs/crates/*`
+  - Fork maintained at: https://github.com/emesal/streamdown-rs
+
+When cloning chibi, always use `--recurse-submodules` or run `git submodule update --init --recursive`.
 
 ## Architecture
 
@@ -33,6 +46,7 @@ config.rs        Config structs (Config, LocalConfig, ModelsConfig, ResolvedConf
 context.rs       Context, Message, TranscriptEntry, InboxEntry
 input.rs         ChibiInput, Command enum, Flags
 output.rs        OutputHandler (stdout/JSON modes)
+markdown.rs      Streaming markdown renderer (TTY detection, line buffering, inline image rendering)
 lock.rs          Context locking with heartbeat
 inbox.rs         Inter-context messaging
 llm.rs           Low-level API request helpers
@@ -85,12 +99,13 @@ Defined in `tools/file_tools.rs`:
 
 ### Hooks
 
-21 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
+23 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
 
 ```
 on_start, on_end
 pre_message, post_message
 pre_tool, post_tool
+pre_tool_output, post_tool_output
 pre_system_prompt, post_system_prompt
 pre_send_message, post_send_message
 on_context_switch
@@ -196,7 +211,8 @@ print("result")
 
 ### CLI Conventions
 
-- stdout: LLM output only (pipeable)
+- stdout: LLM output only (pipeable); markdown-rendered when TTY, raw when piped
+- `--raw` flag or `render_markdown = false` disables markdown rendering
 - stderr: Diagnostics (with `-v`)
 - Plugins: args via `CHIBI_TOOL_ARGS` env var, stdin free for user interaction
 - Hooks: `CHIBI_HOOK` + `CHIBI_HOOK_DATA` env vars

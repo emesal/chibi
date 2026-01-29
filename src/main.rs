@@ -3,13 +3,16 @@ mod cache;
 mod cli;
 mod config;
 mod context;
+mod image_cache;
 mod inbox;
 mod input;
 mod json_input;
 mod llm;
 mod lock;
+mod markdown;
 mod output;
 mod partition;
+mod safe_io;
 mod state;
 mod tools;
 
@@ -39,6 +42,36 @@ fn confirm_action(prompt: &str) -> bool {
     }
 
     matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+/// Render markdown content to stdout if appropriate.
+/// Uses markdown rendering when enabled and stdout is a TTY,
+/// otherwise outputs raw content.
+fn render_markdown_output(content: &str, config: markdown::MarkdownConfig) -> io::Result<()> {
+    let mut md = markdown::MarkdownStream::new(config);
+    md.write_chunk(content)?;
+    md.finish()?;
+    Ok(())
+}
+
+/// Build a MarkdownConfig from a ResolvedConfig.
+fn md_config_from_resolved(
+    config: &config::ResolvedConfig,
+    chibi_dir: &std::path::Path,
+    force_render: bool,
+) -> markdown::MarkdownConfig {
+    markdown::MarkdownConfig::from_resolved(config, chibi_dir, force_render)
+}
+
+/// Build a MarkdownConfig with safe defaults (used when no config is loaded).
+fn md_config_defaults(render: bool) -> markdown::MarkdownConfig {
+    markdown::MarkdownConfig {
+        render_markdown: render,
+        force_render: false,
+        image: config::ImageConfig::default(),
+        image_cache_dir: None,
+        markdown_style: config::default_markdown_style(),
+    }
 }
 
 /// Generate a unique context name for `-c new` or `-c new:prefix`
@@ -103,13 +136,22 @@ fn resolve_context_name(app: &AppState, name: &str) -> io::Result<String> {
     }
 }
 
-/// Display inspectable content for a context
 fn inspect_context(
     app: &AppState,
     context_name: &str,
     thing: &Inspectable,
     resolved_config: Option<&config::ResolvedConfig>,
+    force_markdown: bool,
 ) -> io::Result<()> {
+    // Resolve config if not provided (needed for render_markdown setting)
+    let config_holder;
+    let config = if let Some(cfg) = resolved_config {
+        cfg
+    } else {
+        config_holder = app.resolve_config(None, None)?;
+        &config_holder
+    };
+
     match thing {
         Inspectable::List => {
             println!("Inspectable items:");
@@ -144,7 +186,8 @@ fn inspect_context(
             if todos.is_empty() {
                 println!("(no todos)");
             } else {
-                print!("{}", todos);
+                let md_cfg = md_config_from_resolved(config, &app.chibi_dir, force_markdown);
+                render_markdown_output(&todos, md_cfg)?;
                 if !todos.ends_with('\n') {
                     println!();
                 }
@@ -155,7 +198,8 @@ fn inspect_context(
             if goals.is_empty() {
                 println!("(no goals)");
             } else {
-                print!("{}", goals);
+                let md_cfg = md_config_from_resolved(config, &app.chibi_dir, force_markdown);
+                render_markdown_output(&goals, md_cfg)?;
                 if !goals.ends_with('\n') {
                     println!();
                 }
@@ -164,21 +208,10 @@ fn inspect_context(
         Inspectable::Home => {
             println!("{}", app.chibi_dir.display());
         }
-        Inspectable::ConfigField(field_path) => {
-            if let Some(config) = resolved_config {
-                match config.get_field(field_path) {
-                    Some(value) => println!("{}", value),
-                    None => println!("(not set)"),
-                }
-            } else {
-                // Need to resolve config to inspect config fields
-                let config = app.resolve_config(None, None)?;
-                match config.get_field(field_path) {
-                    Some(value) => println!("{}", value),
-                    None => println!("(not set)"),
-                }
-            }
-        }
+        Inspectable::ConfigField(field_path) => match config.get_field(field_path) {
+            Some(value) => println!("{}", value),
+            None => println!("(not set)"),
+        },
     }
     Ok(())
 }
@@ -186,7 +219,14 @@ fn inspect_context(
 /// Show log entries for a context
 /// - Without verbose: shows messages, with condensed tool call summaries
 /// - With verbose: shows all entries with full content
-fn show_log(app: &AppState, context_name: &str, num: isize, verbose: bool) -> io::Result<()> {
+fn show_log(
+    app: &AppState,
+    context_name: &str,
+    num: isize,
+    verbose: bool,
+    resolved_config: &config::ResolvedConfig,
+    force_markdown: bool,
+) -> io::Result<()> {
     let entries = app.read_jsonl_transcript(context_name)?;
 
     // Select entries based on num parameter
@@ -210,7 +250,11 @@ fn show_log(app: &AppState, context_name: &str, num: isize, verbose: bool) -> io
     for entry in selected {
         match entry.entry_type.as_str() {
             ENTRY_TYPE_MESSAGE => {
-                println!("[{}]: {}\n", entry.from.to_uppercase(), entry.content);
+                println!("[{}]", entry.from.to_uppercase());
+                let md_cfg =
+                    md_config_from_resolved(resolved_config, &app.chibi_dir, force_markdown);
+                render_markdown_output(&entry.content, md_cfg)?;
+                println!();
             }
             ENTRY_TYPE_TOOL_CALL => {
                 if verbose {
@@ -282,6 +326,7 @@ async fn execute_from_input(
     app: &mut AppState,
     tools: &[tools::Tool],
     output: &OutputHandler,
+    force_markdown: bool,
 ) -> io::Result<()> {
     let verbose = input.flags.verbose;
     let json_output = input.flags.json_output;
@@ -405,14 +450,14 @@ async fn execute_from_input(
 
     // Touch the current context to update last_activity_at and apply debug destroy settings
     let current_ctx = app.state.current_context.clone();
-    let debug_destroy_at = match &input.flags.debug {
-        Some(input::DebugKey::DestroyAt(ts)) => Some(*ts),
+    let debug_destroy_at = input.flags.debug.iter().find_map(|k| match k {
+        input::DebugKey::DestroyAt(ts) => Some(*ts),
         _ => None,
-    };
-    let debug_destroy_after = match &input.flags.debug {
-        Some(input::DebugKey::DestroyAfterSecondsInactive(secs)) => Some(*secs),
+    });
+    let debug_destroy_after = input.flags.debug.iter().find_map(|k| match k {
+        input::DebugKey::DestroyAfterSecondsInactive(secs) => Some(*secs),
         _ => None,
-    };
+    });
     if app.touch_context_with_destroy_settings(
         &current_ctx,
         debug_destroy_at,
@@ -566,7 +611,8 @@ async fn execute_from_input(
                 Some(n) => resolve_context_name(app, n)?,
                 None => app.state.current_context.clone(),
             };
-            show_log(app, &ctx_name, *count, verbose)?;
+            let config = app.resolve_config(None, None)?;
+            show_log(app, &ctx_name, *count, verbose, &config, force_markdown)?;
             did_action = true;
         }
         Command::Inspect { context, thing } => {
@@ -575,7 +621,7 @@ async fn execute_from_input(
                 None => app.state.current_context.clone(),
             };
             // Pass None for resolved_config - it will be resolved on demand if needed
-            inspect_context(app, &ctx_name, thing, None)?;
+            inspect_context(app, &ctx_name, thing, None, force_markdown)?;
             did_action = true;
         }
         Command::SetSystemPrompt { context, prompt } => {
@@ -656,7 +702,10 @@ async fn execute_from_input(
                 Some(UsernameOverride::Transient(u)) => (None, Some(u.as_str())),
                 None => (None, None),
             };
-            let resolved = app.resolve_config(persistent_username, transient_username)?;
+            let mut resolved = app.resolve_config(persistent_username, transient_username)?;
+            if input.flags.raw {
+                resolved.render_markdown = false;
+            }
             let use_reflection = app.config.reflection_enabled;
 
             // Acquire context lock
@@ -668,7 +717,8 @@ async fn execute_from_input(
                 verbose,
                 use_reflection,
                 json_output,
-                input.flags.debug.as_ref(),
+                &input.flags.debug,
+                force_markdown,
             );
             api::send_prompt(app, prompt.clone(), tools, &resolved, &options).await?;
             did_action = true;
@@ -697,6 +747,29 @@ async fn execute_from_input(
                 ),
                 verbose,
             );
+        }
+    }
+
+    // Image cache cleanup (global, size-bounded)
+    if resolved.image.cache_enabled {
+        let image_cache_dir = app.chibi_dir.join("image_cache");
+        match image_cache::cleanup_image_cache(
+            &image_cache_dir,
+            resolved.image.cache_max_bytes,
+            resolved.image.cache_max_age_days,
+        ) {
+            Ok(removed) if removed > 0 => {
+                output.diagnostic(
+                    &format!(
+                        "[Image cache cleanup: removed {} entries (max {} days, max {} MB)]",
+                        removed,
+                        resolved.image.cache_max_age_days,
+                        resolved.image.cache_max_bytes / (1024 * 1024),
+                    ),
+                    verbose,
+                );
+            }
+            _ => {}
         }
     }
 
@@ -771,11 +844,42 @@ async fn main() -> io::Result<()> {
             input.flags.verbose,
         );
 
-        return execute_from_input(input, &mut app, &tools, &output).await;
+        return execute_from_input(input, &mut app, &tools, &output, false).await;
     }
 
     // CLI mode: parse to ChibiInput and use unified execution
     let input = cli::parse()?;
+
+    // Handle --debug md=<FILENAME> early (renders markdown and quits, implies -x)
+    if let Some(path) = input.flags.debug.iter().find_map(|k| match k {
+        input::DebugKey::Md(p) => Some(p),
+        _ => None,
+    }) {
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            io::Error::new(
+                ErrorKind::NotFound,
+                format!("Failed to read file '{}': {}", path, e),
+            )
+        })?;
+        // Check if force-markdown is also specified
+        let force_render = input
+            .flags
+            .debug
+            .iter()
+            .any(|k| matches!(k, input::DebugKey::ForceMarkdown));
+        let mut md_cfg = md_config_defaults(true);
+        md_cfg.force_render = force_render;
+        render_markdown_output(&content, md_cfg)?;
+        return Ok(());
+    }
+
+    // Handle --debug force-markdown (sets force_render for the session)
+    let force_markdown = input
+        .flags
+        .debug
+        .iter()
+        .any(|k| matches!(k, input::DebugKey::ForceMarkdown));
+
     let verbose = input.flags.verbose;
     let mut app = AppState::load(home_override)?;
 
@@ -796,5 +900,5 @@ async fn main() -> io::Result<()> {
     // Use OutputHandler for CLI mode (non-JSON output)
     let output = OutputHandler::new(input.flags.json_output);
 
-    execute_from_input(input, &mut app, &tools, &output).await
+    execute_from_input(input, &mut app, &tools, &output, force_markdown).await
 }

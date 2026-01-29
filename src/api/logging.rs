@@ -14,17 +14,15 @@ use std::io::Write;
 /// The `required_key` specifies which DebugKey enables this log. `DebugKey::All` always matches.
 pub fn log_to_jsonl(
     app: &AppState,
-    debug: Option<&DebugKey>,
+    debug: &[DebugKey],
     required_key: DebugKey,
     filename: &str,
     data_key: &str,
     data: &serde_json::Value,
 ) {
-    let should_log = match debug {
-        Some(DebugKey::All) => true,
-        Some(key) if *key == required_key => true,
-        _ => false,
-    };
+    let should_log = debug
+        .iter()
+        .any(|k| matches!(k, DebugKey::All) || *k == required_key);
     if !should_log {
         return;
     }
@@ -45,7 +43,7 @@ pub fn log_to_jsonl(
 /// Log an API request to requests.jsonl if debug logging is enabled
 pub fn log_request_if_enabled(
     app: &AppState,
-    debug: Option<&DebugKey>,
+    debug: &[DebugKey],
     request_body: &serde_json::Value,
 ) {
     log_to_jsonl(
@@ -61,7 +59,7 @@ pub fn log_request_if_enabled(
 /// Log response metadata to response_meta.jsonl if debug logging is enabled
 pub fn log_response_meta_if_enabled(
     app: &AppState,
-    debug: Option<&DebugKey>,
+    debug: &[DebugKey],
     response_meta: &serde_json::Value,
 ) {
     log_to_jsonl(

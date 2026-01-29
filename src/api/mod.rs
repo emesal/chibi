@@ -14,13 +14,13 @@ use crate::cache;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
 use crate::llm;
+use crate::markdown::MarkdownStream;
 use crate::output::OutputHandler;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
 use serde_json::json;
 use std::io::{self, ErrorKind};
-use tokio::io::{AsyncWriteExt, stdout};
 use uuid::Uuid;
 
 // Re-export submodule items
@@ -543,7 +543,12 @@ async fn send_prompt_with_depth(
         let response = llm::send_streaming_request(resolved_config, request_body.clone()).await?;
 
         let mut stream = response.bytes_stream();
-        let mut stdout = stdout();
+        let md_config = crate::markdown::MarkdownConfig::from_resolved(
+            resolved_config,
+            &app.chibi_dir,
+            options.force_render,
+        );
+        let mut md = MarkdownStream::new(md_config);
         let mut full_response = String::new();
         let mut is_first_content = true;
         let json_mode = output.is_json_mode();
@@ -603,8 +608,7 @@ async fn send_prompt_with_depth(
                                         full_response.push_str(remaining);
                                         // Only stream in normal mode
                                         if !json_mode {
-                                            stdout.write_all(remaining.as_bytes()).await?;
-                                            stdout.flush().await?;
+                                            md.write_chunk(remaining)?;
                                         }
                                     }
                                     continue;
@@ -614,8 +618,7 @@ async fn send_prompt_with_depth(
                             full_response.push_str(content);
                             // Only stream in normal mode
                             if !json_mode {
-                                stdout.write_all(content.as_bytes()).await?;
-                                stdout.flush().await?;
+                                md.write_chunk(content)?;
                             }
                         }
 
@@ -661,6 +664,11 @@ async fn send_prompt_with_depth(
         // Log response metadata if debug logging is enabled
         if let Some(ref meta) = response_meta {
             log_response_meta_if_enabled(app, debug, meta);
+        }
+
+        // Flush any remaining markdown buffer
+        if !json_mode {
+            md.finish()?;
         }
 
         // If we have tool calls, execute them and continue the loop
@@ -866,6 +874,56 @@ async fn send_prompt_with_depth(
                     format!("Error: Unknown tool '{}'", tc.name)
                 };
 
+                // Execute pre_tool_output hooks (can modify or replace output)
+                let mut tool_result = tool_result;
+                let pre_output_hook_data = serde_json::json!({
+                    "tool_name": tc.name,
+                    "arguments": args,
+                    "output": tool_result,
+                });
+                let pre_output_hook_results = tools::execute_hook(
+                    tools,
+                    tools::HookPoint::PreToolOutput,
+                    &pre_output_hook_data,
+                    verbose,
+                )?;
+
+                for (hook_tool_name, result) in pre_output_hook_results {
+                    // Check for block signal (replaces output entirely)
+                    if result
+                        .get("block")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        let replacement = result
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Output blocked by hook")
+                            .to_string();
+                        output.diagnostic(
+                            &format!(
+                                "[Hook pre_tool_output: {} blocked output from {}]",
+                                hook_tool_name, tc.name
+                            ),
+                            verbose,
+                        );
+                        tool_result = replacement;
+                        break;
+                    }
+
+                    // Check for output modification
+                    if let Some(modified_output) = result.get("output").and_then(|v| v.as_str()) {
+                        output.diagnostic(
+                            &format!(
+                                "[Hook pre_tool_output: {} modified output from {}]",
+                                hook_tool_name, tc.name
+                            ),
+                            verbose,
+                        );
+                        tool_result = modified_output.to_string();
+                    }
+                }
+
                 // Check if output should be cached (for non-error results exceeding threshold)
                 // All tools are subject to caching - no exceptions
                 let (final_result, was_cached) = if !tool_result.starts_with("Error:")
@@ -904,6 +962,21 @@ async fn send_prompt_with_depth(
                 } else {
                     (tool_result.clone(), false)
                 };
+
+                // Execute post_tool_output hooks (observe only)
+                let post_output_hook_data = serde_json::json!({
+                    "tool_name": tc.name,
+                    "arguments": args,
+                    "output": tool_result,
+                    "final_output": final_result,
+                    "cached": was_cached,
+                });
+                let _ = tools::execute_hook(
+                    tools,
+                    tools::HookPoint::PostToolOutput,
+                    &post_output_hook_data,
+                    verbose,
+                );
 
                 // Log tool call and result to both transcript.jsonl and context.jsonl
                 // Note: We log the original tool_result to transcript, but use final_result for API
