@@ -89,8 +89,15 @@ impl AppState {
         }
 
         // Clear the inbox by truncating the file
+        // If truncation fails, warn but still return entries (avoid silent data loss)
         if !entries.is_empty() {
-            File::create(&inbox_path)?;
+            if let Err(e) = File::create(&inbox_path) {
+                eprintln!(
+                    "[Warning: Failed to clear inbox after reading {} message(s): {}. Messages may be re-delivered.]",
+                    entries.len(),
+                    e
+                );
+            }
         }
 
         Ok(entries)

@@ -47,11 +47,13 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
             path.clone()
         };
 
-        // Security: Verify the executable path is within the plugins directory
-        // This prevents symlink attacks that could escape the plugins directory
-        match exec_path.canonicalize() {
-            Ok(canonical_exec) => {
-                if !canonical_exec.starts_with(&plugins_dir_canonical) {
+        // Security: Verify the executable path is within the plugins directory.
+        // This prevents symlink attacks that could escape the plugins directory.
+        // We store and use the canonical path to prevent TOCTOU attacks where
+        // a symlink could be modified between verification and execution.
+        let canonical_exec = match exec_path.canonicalize() {
+            Ok(canonical) => {
+                if !canonical.starts_with(&plugins_dir_canonical) {
                     if verbose {
                         eprintln!(
                             "[WARN] Skipping plugin outside plugins directory: {:?}",
@@ -60,6 +62,7 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
                     }
                     continue;
                 }
+                canonical
             }
             Err(e) => {
                 if verbose {
@@ -67,21 +70,21 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
                 }
                 continue;
             }
-        }
+        };
 
-        // Check if executable (on Unix)
+        // Check if executable (on Unix) - use canonical path
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = exec_path.metadata()
+            if let Ok(metadata) = canonical_exec.metadata()
                 && metadata.permissions().mode() & 0o111 == 0
             {
                 continue; // Not executable
             }
         }
 
-        // Try to get schema(s) from the tool
-        match get_tool_schemas(&exec_path, verbose) {
+        // Try to get schema(s) from the tool (using canonical path)
+        match get_tool_schemas(&canonical_exec, verbose) {
             Ok(new_tools) => tools.extend(new_tools),
             Err(e) => {
                 if verbose {
