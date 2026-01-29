@@ -1,12 +1,23 @@
 # Configuration Reference
 
-Chibi uses a layered configuration system. Settings are resolved in this order (later overrides earlier):
+Chibi uses a layered configuration system with separate files for core and CLI settings.
+
+## Core Configuration
+
+Settings are resolved in this order (later overrides earlier):
 
 1. **Defaults** - Built-in default values
 2. **Global config** (`~/.chibi/config.toml`) - User's base configuration
 3. **Model metadata** (`~/.chibi/models.toml`) - Per-model settings
 4. **Context config** (`~/.chibi/contexts/<name>/local.toml`) - Per-context overrides
 5. **CLI flags** - Command-line arguments (highest priority)
+
+## CLI Presentation Configuration
+
+Presentation settings (markdown rendering, images, color themes) live in separate files:
+
+1. **Global CLI config** (`~/.chibi/cli.toml`) - CLI presentation settings
+2. **Context CLI config** (`~/.chibi/contexts/<name>/cli.toml`) - Per-context overrides
 
 ## Home Directory
 
@@ -102,53 +113,6 @@ auto_cleanup_cache = true
 
 # Number of preview characters to show in truncated message (default: 500)
 tool_cache_preview_chars = 500
-
-# =============================================================================
-# Output Rendering
-# =============================================================================
-
-# Render LLM output as formatted markdown in the terminal (default: true)
-# When true and stdout is a TTY, output is rendered with formatting (headers,
-# bold, code blocks, etc.). When false or piped, raw text is emitted.
-# Can also be disabled per-invocation with --raw.
-render_markdown = true
-
-# =============================================================================
-# Image Rendering
-# =============================================================================
-
-[image]
-# Render images inline in the terminal (default: true)
-# When false, images show as [🖼 alt text] placeholders
-render_images = true
-
-# Image rendering mode (default: "auto")
-# Options: "auto", "truecolor", "ansi", "ascii", "placeholder"
-render_mode = "auto"
-
-# Enable individual rendering modes (default: all true)
-# Controls which modes are available for auto-detection and explicit selection
-enable_truecolor = true    # 24-bit color (best quality)
-enable_ansi = true          # 16-color ANSI (compatible)
-enable_ascii = true         # ASCII art (universal)
-
-# Maximum bytes to download for remote images (default: 10485760 = 10 MB)
-max_download_bytes = 10485760
-
-# Timeout in seconds for fetching remote images (default: 5)
-fetch_timeout_seconds = 5
-
-# Allow fetching images over plain HTTP (default: false)
-allow_http = false
-
-# Maximum image height in terminal lines (default: 25)
-max_height_lines = 25
-
-# Percentage of terminal width to use for images (default: 80)
-max_width_percent = 80
-
-# Image alignment: "left", "center", or "right" (default: "center")
-alignment = "center"
 
 # =============================================================================
 # Built-in file operations
@@ -297,9 +261,6 @@ auto_cleanup_cache = false
 tool_cache_preview_chars = 1000
 file_tools_allowed_paths = ["~/projects"]
 
-# Disable markdown rendering for this context
-# render_markdown = false
-
 # Context-specific API parameters
 [api]
 temperature = 0.3
@@ -315,12 +276,6 @@ effort = "high"
 
 # Or blocklist mode - these tools are excluded
 exclude = ["file_grep"]
-
-# Context-specific image rendering settings
-[image]
-render_images = true
-render_mode = "auto"
-max_height_lines = 30
 ```
 
 Set username via CLI (automatically saves to local.toml):
@@ -328,6 +283,90 @@ Set username via CLI (automatically saves to local.toml):
 ```bash
 chibi -u alice "Hello"  # Persists to local.toml
 chibi -U bob "Hello"    # Transient, doesn't persist
+```
+
+## CLI Configuration (cli.toml)
+
+CLI-specific presentation settings live in `~/.chibi/cli.toml`. These control how output is rendered in the terminal and are separate from core configuration to support future frontends.
+
+```toml
+# =============================================================================
+# Markdown Rendering
+# =============================================================================
+
+# Render LLM output as formatted markdown in the terminal (default: true)
+# Set to false for raw output (useful for piping)
+render_markdown = true
+
+# =============================================================================
+# Image Configuration
+# =============================================================================
+
+[image]
+# Render images inline in the terminal (default: true)
+render_images = true
+
+# Maximum bytes to download for remote images (default: 10 MB)
+max_download_bytes = 10485760
+
+# Timeout in seconds for fetching remote images (default: 5)
+fetch_timeout_seconds = 5
+
+# Allow fetching images over plain HTTP (default: false, HTTPS only)
+allow_http = false
+
+# Maximum image height in terminal lines (default: 25)
+max_height_lines = 25
+
+# Percentage of terminal width to use for images (default: 80)
+max_width_percent = 80
+
+# Image alignment: "left", "center", "right" (default: "center")
+alignment = "center"
+
+# Image rendering mode (default: "auto")
+# Options: "auto", "truecolor", "ansi", "ascii", "placeholder"
+render_mode = "auto"
+
+# Enable individual rendering modes (default: all true)
+enable_truecolor = true
+enable_ansi = true
+enable_ascii = true
+
+# Image caching for remote images
+cache_enabled = true
+cache_max_bytes = 104857600  # 100 MB
+cache_max_age_days = 30
+
+# =============================================================================
+# Markdown Color Scheme
+# =============================================================================
+
+[markdown_style]
+bright = "#FFFF54"    # emphasis, h2 headers
+head = "#54FF54"      # h3 headers
+symbol = "#7ABFC7"    # bullets, language labels
+grey = "#808080"      # borders, muted text
+dark = "#000000"      # code block background
+mid = "#3E31A2"       # table headers
+light = "#352879"     # alternate backgrounds
+```
+
+### Per-Context CLI Overrides
+
+Create `~/.chibi/contexts/<name>/cli.toml` to override CLI settings for specific contexts. Only specify fields you want to change:
+
+```toml
+# Disable markdown rendering for this context
+render_markdown = false
+
+[image]
+# Taller images in this context
+max_height_lines = 50
+
+[markdown_style]
+# Different color scheme
+bright = "#00FF00"
 ```
 
 ## API Parameters Reference

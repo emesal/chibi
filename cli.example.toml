@@ -1,0 +1,94 @@
+# =============================================================================
+# CLI Presentation Configuration
+# =============================================================================
+# This file configures CLI-specific presentation settings (rendering, styling).
+# Copy to: ~/.chibi/cli.toml
+#
+# Per-context overrides can be placed in:
+#   ~/.chibi/contexts/<context-name>/cli.toml
+#
+# Per-context files only need to specify fields you want to override.
+
+# =============================================================================
+# Markdown Rendering
+# =============================================================================
+
+# Render LLM output as formatted markdown in the terminal (default: true)
+# Set to false for raw output (useful for piping)
+render_markdown = true
+
+# =============================================================================
+# Image Configuration
+# =============================================================================
+
+[image]
+# Render images inline in the terminal (default: true)
+render_images = true
+
+# Maximum bytes to download for remote images (default: 10 MB)
+max_download_bytes = 10485760
+
+# Timeout in seconds for fetching remote images (default: 5)
+fetch_timeout_seconds = 5
+
+# Allow fetching images over plain HTTP (default: false, HTTPS only)
+allow_http = false
+
+# Maximum image height in terminal lines (default: 25)
+max_height_lines = 25
+
+# Percentage of terminal width to use for images (default: 80)
+max_width_percent = 80
+
+# Image alignment: "left", "center", "right" (default: "center")
+alignment = "center"
+
+# Image rendering mode (default: "auto")
+# Options: "auto", "truecolor", "ansi", "ascii", "placeholder"
+render_mode = "auto"
+
+# Enable truecolor (24-bit) rendering (default: true)
+enable_truecolor = true
+
+# Enable ANSI (16-color) rendering (default: true)
+enable_ansi = true
+
+# Enable ASCII art rendering (default: true)
+enable_ascii = true
+
+# Enable image cache for remote images (default: true)
+cache_enabled = true
+
+# Maximum total size of image cache in bytes (default: 100 MB)
+cache_max_bytes = 104857600
+
+# Maximum age of cached images in days (default: 30)
+cache_max_age_days = 30
+
+# =============================================================================
+# Markdown Color Scheme
+# =============================================================================
+# Commodore 128 inspired color scheme (VICE palette)
+# All values are CSS-style hex colors
+
+[markdown_style]
+# Light Yellow - for emphasis, h2 headers
+bright = "#FFFF54"
+
+# Light Green - for h3 headers
+head = "#54FF54"
+
+# Cyan - for bullets, language labels
+symbol = "#7ABFC7"
+
+# Grey - for borders, muted text, h6
+grey = "#808080"
+
+# Black - code block background
+dark = "#000000"
+
+# Blue - table headers
+mid = "#3E31A2"
+
+# Dark Blue - alternate backgrounds
+light = "#352879"

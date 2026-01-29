@@ -12,8 +12,8 @@ mod sink;
 // Re-export key types for use by other modules
 pub use cli::{parse, Cli, InspectableExt, PluginInvocation};
 pub use config::{
-    default_markdown_style, ConfigImageRenderMode, ImageAlignment, ImageConfig, ImageConfigOverride,
-    MarkdownStyle, ResolvedConfig,
+    default_markdown_style, load_cli_config, ConfigImageRenderMode, ImageAlignment, ImageConfig,
+    ImageConfigOverride, MarkdownStyle, ResolvedConfig,
 };
 pub use json_input::from_str as parse_json_input;
 pub use markdown::{MarkdownConfig, MarkdownStream};
@@ -140,21 +140,20 @@ fn resolve_context_name(chibi: &Chibi, name: &str) -> io::Result<String> {
 }
 
 /// Build CLI ResolvedConfig from Chibi facade.
-/// Combines core config with presentation defaults.
+/// Combines core config with presentation settings from cli.toml.
 fn resolve_cli_config(
     chibi: &Chibi,
     persistent_username: Option<&str>,
     transient_username: Option<&str>,
 ) -> io::Result<ResolvedConfig> {
     let core = chibi.resolve_config(persistent_username, transient_username)?;
+    let cli = load_cli_config(chibi.home_dir(), Some(chibi.current_context_name()))?;
 
-    // For now, use defaults for presentation config.
-    // Future: Read from config.toml for render_markdown, image, markdown_style
     Ok(ResolvedConfig {
         core,
-        render_markdown: true,
-        image: ImageConfig::default(),
-        markdown_style: default_markdown_style(),
+        render_markdown: cli.render_markdown,
+        image: cli.image,
+        markdown_style: cli.markdown_style,
     })
 }
 
