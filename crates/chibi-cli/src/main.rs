@@ -10,10 +10,10 @@ mod output;
 mod sink;
 
 // Re-export key types for use by other modules
-pub use cli::{parse, Cli, InspectableExt, PluginInvocation};
+pub use cli::{Cli, InspectableExt, PluginInvocation, parse};
 pub use config::{
-    default_markdown_style, load_cli_config, ConfigImageRenderMode, ImageAlignment, ImageConfig,
-    ImageConfigOverride, MarkdownStyle, ResolvedConfig,
+    ConfigImageRenderMode, ImageAlignment, ImageConfig, ImageConfigOverride, MarkdownStyle,
+    ResolvedConfig, default_markdown_style, load_cli_config,
 };
 pub use json_input::from_str as parse_json_input;
 pub use markdown::{MarkdownConfig, MarkdownStream};
@@ -24,7 +24,7 @@ use chibi_core::context::{
     Context, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
 };
 use chibi_core::input::{ChibiInput, Command, ContextSelection, DebugKey, UsernameOverride};
-use chibi_core::{api, tools, Chibi, Inspectable, PromptOptions};
+use chibi_core::{Chibi, Inspectable, PromptOptions, api, tools};
 use std::io::{self, ErrorKind, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
@@ -445,7 +445,10 @@ async fn execute_from_input(
                 local_config.username = Some(username.clone());
                 chibi.app.save_local_config(&current_ctx, &local_config)?;
                 output.diagnostic(
-                    &format!("[Username '{}' saved to context '{}']", username, current_ctx),
+                    &format!(
+                        "[Username '{}' saved to context '{}']",
+                        username, current_ctx
+                    ),
                     verbose,
                 );
                 did_action = true;

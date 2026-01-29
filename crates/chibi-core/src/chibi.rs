@@ -33,7 +33,7 @@ use std::io;
 use std::path::Path;
 
 use crate::api::sink::ResponseSink;
-use crate::api::{send_prompt, PromptOptions};
+use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
 use crate::context::{Context, ContextEntry};
 use crate::state::AppState;
@@ -107,7 +107,15 @@ impl Chibi {
         options: &PromptOptions<'_>,
         sink: &mut S,
     ) -> io::Result<()> {
-        send_prompt(&self.app, prompt.to_string(), &self.tools, config, options, sink).await
+        send_prompt(
+            &self.app,
+            prompt.to_string(),
+            &self.tools,
+            config,
+            options,
+            sink,
+        )
+        .await
     }
 
     /// Execute a tool by name with the given arguments.
@@ -133,7 +141,8 @@ impl Chibi {
         if tools::is_file_tool(name) {
             let config = self.app.resolve_config(None, None)?;
             let ctx_name = &self.app.state.current_context;
-            if let Some(result) = tools::execute_file_tool(&self.app, ctx_name, name, &args, &config)
+            if let Some(result) =
+                tools::execute_file_tool(&self.app, ctx_name, name, &args, &config)
             {
                 return result;
             }
@@ -162,14 +171,11 @@ impl Chibi {
         self.app.state.switch_context(name.to_string())?;
 
         // Ensure ContextEntry exists in state.contexts
-        if !self
-            .app
-            .state
-            .contexts
-            .iter()
-            .any(|e| e.name == name)
-        {
-            self.app.state.contexts.push(ContextEntry::new(name.to_string()));
+        if !self.app.state.contexts.iter().any(|e| e.name == name) {
+            self.app
+                .state
+                .contexts
+                .push(ContextEntry::new(name.to_string()));
         }
 
         // Create context directory if needed
@@ -216,7 +222,8 @@ impl Chibi {
         persistent_username: Option<&str>,
         transient_username: Option<&str>,
     ) -> io::Result<ResolvedConfig> {
-        self.app.resolve_config(persistent_username, transient_username)
+        self.app
+            .resolve_config(persistent_username, transient_username)
     }
 
     /// Save state (current context, context list) to disk.

@@ -6,7 +6,7 @@
 
 use super::compact::compact_context_with_llm;
 use super::logging::{log_request_if_enabled, log_response_meta_if_enabled};
-use super::request::{build_request_body, PromptOptions};
+use super::request::{PromptOptions, build_request_body};
 use super::sink::{ResponseEvent, ResponseSink};
 use crate::cache;
 use crate::config::{ResolvedConfig, ToolsConfig};
@@ -938,8 +938,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     && cache::should_cache(
                         &tool_result,
                         resolved_config.tool_output_cache_threshold,
-                    )
-                {
+                    ) {
                     let cache_dir = app.tool_cache_dir(&context.name);
                     match cache::cache_output(&cache_dir, &tc.name, &tool_result, &args) {
                         Ok(entry) => {

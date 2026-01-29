@@ -51,8 +51,8 @@
 //! See: <https://github.com/tomtomwombat/fastbloom>
 
 use crate::context::TranscriptEntry;
-use crate::safe_io::{FileLock, atomic_write_json};
 use crate::jsonl::read_jsonl_file;
+use crate::safe_io::{FileLock, atomic_write_json};
 use fastbloom::BloomFilter;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};

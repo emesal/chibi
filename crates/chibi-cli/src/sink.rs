@@ -29,11 +29,7 @@ impl<'a> CliResponseSink<'a> {
     /// * `output` - The output handler for diagnostic and JSON output
     /// * `markdown` - Optional markdown stream for terminal rendering
     /// * `verbose` - Whether verbose diagnostics should be shown
-    pub fn new(
-        output: &'a OutputHandler,
-        markdown: Option<MarkdownStream>,
-        verbose: bool,
-    ) -> Self {
+    pub fn new(output: &'a OutputHandler, markdown: Option<MarkdownStream>, verbose: bool) -> Self {
         Self {
             output,
             markdown,

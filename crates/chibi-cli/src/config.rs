@@ -8,9 +8,7 @@ use std::io;
 use std::path::Path;
 
 // Re-export core config types for convenience
-pub use chibi_core::config::{
-    ApiParams, ResolvedConfig as CoreResolvedConfig, ToolsConfig,
-};
+pub use chibi_core::config::{ApiParams, ResolvedConfig as CoreResolvedConfig, ToolsConfig};
 
 // ============================================================================
 // Presentation Default Functions
@@ -422,13 +420,22 @@ pub struct CliConfigOverride {
 /// Merge a MarkdownStyle with optional overrides.
 fn merge_markdown_style(base: &MarkdownStyle, overrides: &MarkdownStyleOverride) -> MarkdownStyle {
     MarkdownStyle {
-        bright: overrides.bright.clone().unwrap_or_else(|| base.bright.clone()),
+        bright: overrides
+            .bright
+            .clone()
+            .unwrap_or_else(|| base.bright.clone()),
         head: overrides.head.clone().unwrap_or_else(|| base.head.clone()),
-        symbol: overrides.symbol.clone().unwrap_or_else(|| base.symbol.clone()),
+        symbol: overrides
+            .symbol
+            .clone()
+            .unwrap_or_else(|| base.symbol.clone()),
         grey: overrides.grey.clone().unwrap_or_else(|| base.grey.clone()),
         dark: overrides.dark.clone().unwrap_or_else(|| base.dark.clone()),
         mid: overrides.mid.clone().unwrap_or_else(|| base.mid.clone()),
-        light: overrides.light.clone().unwrap_or_else(|| base.light.clone()),
+        light: overrides
+            .light
+            .clone()
+            .unwrap_or_else(|| base.light.clone()),
     }
 }
 

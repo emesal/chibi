@@ -328,14 +328,8 @@ mod tests {
 
     #[test]
     fn test_debug_key_from_str_request_log() {
-        assert_eq!(
-            DebugKey::parse("request-log"),
-            Some(DebugKey::RequestLog)
-        );
-        assert_eq!(
-            DebugKey::parse("request_log"),
-            Some(DebugKey::RequestLog)
-        );
+        assert_eq!(DebugKey::parse("request-log"), Some(DebugKey::RequestLog));
+        assert_eq!(DebugKey::parse("request_log"), Some(DebugKey::RequestLog));
     }
 
     #[test]

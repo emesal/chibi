@@ -3,7 +3,7 @@
 //! This module provides `OutputHandler` which handles outputting
 //! transcript entries and diagnostics in either plain text or JSONL format.
 
-use chibi_core::context::{now_timestamp, TranscriptEntry};
+use chibi_core::context::{TranscriptEntry, now_timestamp};
 use std::io::{self, Write};
 use uuid::Uuid;
 

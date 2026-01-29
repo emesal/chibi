@@ -1055,12 +1055,7 @@ mod tests {
 
     #[test]
     fn resolve_mode_placeholder_ignores_capability_flags() {
-        let mode = resolve_render_mode(
-            ConfigImageRenderMode::Placeholder,
-            false,
-            false,
-            false,
-        );
+        let mode = resolve_render_mode(ConfigImageRenderMode::Placeholder, false, false, false);
         assert!(matches!(mode, ImageRenderMode::Placeholder));
     }
 
