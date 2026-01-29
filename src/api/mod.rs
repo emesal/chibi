@@ -14,13 +14,13 @@ use crate::cache;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
 use crate::llm;
+use crate::markdown::MarkdownStream;
 use crate::output::OutputHandler;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
 use serde_json::json;
 use std::io::{self, ErrorKind};
-use tokio::io::{AsyncWriteExt, stdout};
 use uuid::Uuid;
 
 // Re-export submodule items
@@ -543,7 +543,12 @@ async fn send_prompt_with_depth(
         let response = llm::send_streaming_request(resolved_config, request_body.clone()).await?;
 
         let mut stream = response.bytes_stream();
-        let mut stdout = stdout();
+        let md_config = crate::markdown::MarkdownConfig::from_resolved(
+            resolved_config,
+            &app.chibi_dir,
+            options.force_render,
+        );
+        let mut md = MarkdownStream::new(md_config);
         let mut full_response = String::new();
         let mut is_first_content = true;
         let json_mode = output.is_json_mode();
@@ -603,8 +608,7 @@ async fn send_prompt_with_depth(
                                         full_response.push_str(remaining);
                                         // Only stream in normal mode
                                         if !json_mode {
-                                            stdout.write_all(remaining.as_bytes()).await?;
-                                            stdout.flush().await?;
+                                            md.write_chunk(remaining)?;
                                         }
                                     }
                                     continue;
@@ -614,8 +618,7 @@ async fn send_prompt_with_depth(
                             full_response.push_str(content);
                             // Only stream in normal mode
                             if !json_mode {
-                                stdout.write_all(content.as_bytes()).await?;
-                                stdout.flush().await?;
+                                md.write_chunk(content)?;
                             }
                         }
 
@@ -661,6 +664,11 @@ async fn send_prompt_with_depth(
         // Log response metadata if debug logging is enabled
         if let Some(ref meta) = response_meta {
             log_response_meta_if_enabled(app, debug, meta);
+        }
+
+        // Flush any remaining markdown buffer
+        if !json_mode {
+            md.finish()?;
         }
 
         // If we have tool calls, execute them and continue the loop

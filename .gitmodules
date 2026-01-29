@@ -1,3 +1,6 @@
 [submodule "plugins"]
 	path = plugins
 	url = https://github.com/emesal/chibi-plugins.git
+[submodule "vendor/streamdown-rs"]
+	path = vendor/streamdown-rs
+	url = https://github.com/emesal/streamdown-rs.git

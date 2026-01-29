@@ -104,6 +104,53 @@ auto_cleanup_cache = true
 tool_cache_preview_chars = 500
 
 # =============================================================================
+# Output Rendering
+# =============================================================================
+
+# Render LLM output as formatted markdown in the terminal (default: true)
+# When true and stdout is a TTY, output is rendered with formatting (headers,
+# bold, code blocks, etc.). When false or piped, raw text is emitted.
+# Can also be disabled per-invocation with --raw.
+render_markdown = true
+
+# =============================================================================
+# Image Rendering
+# =============================================================================
+
+[image]
+# Render images inline in the terminal (default: true)
+# When false, images show as [🖼 alt text] placeholders
+render_images = true
+
+# Image rendering mode (default: "auto")
+# Options: "auto", "truecolor", "ansi", "ascii", "placeholder"
+render_mode = "auto"
+
+# Enable individual rendering modes (default: all true)
+# Controls which modes are available for auto-detection and explicit selection
+enable_truecolor = true    # 24-bit color (best quality)
+enable_ansi = true          # 16-color ANSI (compatible)
+enable_ascii = true         # ASCII art (universal)
+
+# Maximum bytes to download for remote images (default: 10485760 = 10 MB)
+max_download_bytes = 10485760
+
+# Timeout in seconds for fetching remote images (default: 5)
+fetch_timeout_seconds = 5
+
+# Allow fetching images over plain HTTP (default: false)
+allow_http = false
+
+# Maximum image height in terminal lines (default: 25)
+max_height_lines = 25
+
+# Percentage of terminal width to use for images (default: 80)
+max_width_percent = 80
+
+# Image alignment: "left", "center", or "right" (default: "center")
+alignment = "center"
+
+# =============================================================================
 # Built-in file operations
 # =============================================================================
 
@@ -250,6 +297,9 @@ auto_cleanup_cache = false
 tool_cache_preview_chars = 1000
 file_tools_allowed_paths = ["~/projects"]
 
+# Disable markdown rendering for this context
+# render_markdown = false
+
 # Context-specific API parameters
 [api]
 temperature = 0.3
@@ -265,6 +315,12 @@ effort = "high"
 
 # Or blocklist mode - these tools are excluded
 exclude = ["file_grep"]
+
+# Context-specific image rendering settings
+[image]
+render_images = true
+render_mode = "auto"
+max_height_lines = 30
 ```
 
 Set username via CLI (automatically saves to local.toml):
@@ -346,6 +402,10 @@ Each layer can override specific values while inheriting others.
 ## Environment Variables
 
 Chibi does not use environment variables for configuration. All settings come from the config files described above.
+
+Chibi reads these environment variables for feature detection:
+- `COLORTERM` - Checked for truecolor support (`truecolor` or `24bit`)
+- `TERM` - Checked for color capability level (`truecolor`, `256color`, `color`)
 
 Plugins receive these environment variables:
 - `CHIBI_TOOL_ARGS` - JSON arguments for tool calls

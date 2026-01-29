@@ -92,6 +92,7 @@ chibi -c -            # current='work', previous='personal'
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
 | `-x, --no-chibi` | Don't invoke the LLM |
 | `-X, --force-chibi` | Force LLM invocation (overrides implied -x) |
+| `--raw` | Disable markdown rendering (plain text output) |
 | `-h, --help` | Show help message |
 | `--version` | Show version |
 
@@ -114,6 +115,8 @@ When using `--json-config`, pass a JSON object to stdin:
   "flags": { "verbose": true }
 }
 ```
+
+**Flags:** `"verbose"`, `"json_output"`, `"no_chibi"`, `"raw"`
 
 **Simple commands:** `"list_contexts"`, `"list_current_context"`, `"no_op"`
 
@@ -165,7 +168,7 @@ Use `-n home` to inspect the resolved path.
 
 | Flag | Description |
 |------|-------------|
-| `--debug <KEY>` | Enable debug features (see below) |
+| `--debug <KEY[,KEY,...]>` | Enable debug features (comma-separated, see below) |
 
 ### Debug Keys
 
@@ -174,6 +177,8 @@ Use `-n home` to inspect the resolved path.
 | `request-log` | Log full API request bodies to `requests.jsonl` |
 | `response-meta` | Log response metadata/usage stats to `response_meta.jsonl` |
 | `all` | Enable all logging features above |
+| `md=<FILENAME>` | Render a markdown file and quit (implies `-x`, forces rendering even without TTY) |
+| `force-markdown` | Force markdown rendering even when stdout is not a TTY |
 | `destroy_at=<TIMESTAMP>` | Set auto-destroy timestamp on current context |
 | `destroy_after_seconds_inactive=<SECS>` | Set inactivity timeout on current context |
 
@@ -182,6 +187,53 @@ Use `-n home` to inspect the resolved path.
 Debug output is written to files in the context directory:
 - `requests.jsonl` - Full API request bodies (with `request-log` or `all`)
 - `response_meta.jsonl` - Response metadata, usage stats, model info (with `response-meta` or `all`)
+
+### Markdown Rendering
+
+You can render a markdown file without invoking the LLM:
+
+```bash
+# Render a markdown file
+chibi --debug md=README.md
+
+# Works with any markdown file
+chibi --debug md=docs/guide.md
+```
+
+This is useful for:
+- Previewing markdown files with terminal rendering
+- Testing markdown rendering without starting a conversation
+- Quick markdown file viewing
+
+The `md=<FILENAME>` feature automatically:
+- Implies `-x` (no LLM invocation) and exits after rendering
+- Forces markdown rendering even when stdout is not a TTY (e.g., when piped or in CI)
+
+#### Force Markdown Rendering
+
+By default, markdown rendering only activates when stdout is a TTY (terminal). To force rendering even when piped or redirected:
+
+```bash
+# Force markdown rendering in a normal conversation
+chibi --debug force-markdown "Tell me about Rust"
+
+# Useful for piping formatted output
+chibi --debug force-markdown "List the files" | less -R
+```
+
+Note: `--debug md=<file>` automatically forces rendering, so you don't need to combine them.
+
+### Combining Debug Keys
+
+Multiple debug keys can be combined with commas:
+
+```bash
+# Enable request logging and force markdown rendering
+chibi --debug request-log,force-markdown "Tell me about Rust"
+
+# Log requests and response metadata
+chibi --debug request-log,response-meta "Hello"
+```
 
 ### Auto-Destroy (Test Cleanup)
 

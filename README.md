@@ -21,6 +21,14 @@ CLI tool for conversing with AI models via OpenRouter. Maintains conversation st
 ### Install
 
 ```bash
+# Clone with submodules
+git clone --recurse-submodules https://github.com/emesal/chibi.git
+cd chibi
+
+# Or if already cloned, initialize submodules
+git submodule update --init --recursive
+
+# Build and install
 cargo install --path .
 ```
 
@@ -63,12 +71,15 @@ chibi -v "Read my Cargo.toml"
 
 - **[Getting Started](docs/getting-started.md)** - Installation and first steps
 - **[Configuration](docs/configuration.md)** - Full config reference including API parameters
+- **[Images](docs/images.md)** - Image rendering in the terminal
+- **[Markdown Themes](docs/markdown-themes.md)** - Customizable color schemes for markdown rendering
 - **[Contexts](docs/contexts.md)** - Managing multiple conversations
 - **[Plugins](docs/plugins.md)** - Creating tools for the LLM
 - **[Hooks](docs/hooks.md)** - Lifecycle event system
 - **[Agentic Workflows](docs/agentic.md)** - Autonomous multi-step processing
 - **[CLI Reference](docs/cli-reference.md)** - All command flags
 - **[Transcript Format](docs/transcript-format.md)** - JSONL format specification
+- **[Upgrade Notes](docs/upgrade-notes.md)** - Version migration guides
 
 ## Command Overview
 
@@ -96,11 +107,7 @@ chibi -X                  # Force-enable the LLM
 
 See [CLI Reference](docs/cli-reference.md) for the complete list.
 
-<div align="center">
-    <br>
-    <img src="docs/images/explain_this.png" width="62%">
-    <br>
-</div>
+![chibi explain this girl](docs/images/explain_this.png)
 
 ## Example Plugins
 

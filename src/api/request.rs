@@ -13,7 +13,8 @@ pub struct PromptOptions<'a> {
     pub verbose: bool,
     pub use_reflection: bool,
     pub json_output: bool,
-    pub debug: Option<&'a DebugKey>,
+    pub debug: &'a [DebugKey],
+    pub force_render: bool,
 }
 
 impl<'a> PromptOptions<'a> {
@@ -21,13 +22,15 @@ impl<'a> PromptOptions<'a> {
         verbose: bool,
         use_reflection: bool,
         json_output: bool,
-        debug: Option<&'a DebugKey>,
+        debug: &'a [DebugKey],
+        force_render: bool,
     ) -> Self {
         Self {
             verbose,
             use_reflection,
             json_output,
             debug,
+            force_render,
         }
     }
 }

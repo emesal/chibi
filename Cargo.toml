@@ -16,11 +16,16 @@ schemars = "0.8"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10"
+streamdown-parser = { path = "vendor/streamdown-rs/crates/streamdown-parser" }
+streamdown-render = { path = "vendor/streamdown-rs/crates/streamdown-render" }
 strum = { version = "0.27", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["full"] }
 toml = "0.9.11"
 uuid = { version = "1", features = ["v4"] }
 fs2 = "0.4"
+base64 = "0.22"
+image = "0.24"
+imgcatr = "0.1.4"
 
 [lints.rust]
 dead_code = "deny"

@@ -355,6 +355,228 @@ fn default_tool_cache_preview_chars() -> usize {
     500
 }
 
+fn default_render_markdown() -> bool {
+    true
+}
+
+fn default_render_images() -> bool {
+    true
+}
+
+fn default_image_max_download_bytes() -> usize {
+    10 * 1024 * 1024
+}
+
+fn default_image_fetch_timeout_seconds() -> u64 {
+    5
+}
+
+fn default_image_max_height_lines() -> u32 {
+    25
+}
+
+fn default_image_max_width_percent() -> u32 {
+    80
+}
+
+fn default_image_cache_max_bytes() -> u64 {
+    104_857_600 // 100 MB
+}
+
+fn default_image_cache_max_age_days() -> u64 {
+    30
+}
+
+fn default_true_val() -> bool {
+    true
+}
+
+/// Image alignment in terminal
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageAlignment {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+impl ImageAlignment {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ImageAlignment::Left => "left",
+            ImageAlignment::Center => "center",
+            ImageAlignment::Right => "right",
+        }
+    }
+}
+
+impl std::fmt::Display for ImageAlignment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Image rendering mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigImageRenderMode {
+    #[default]
+    Auto,
+    Truecolor,
+    Ansi,
+    Ascii,
+    Placeholder,
+}
+
+impl ConfigImageRenderMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConfigImageRenderMode::Auto => "auto",
+            ConfigImageRenderMode::Truecolor => "truecolor",
+            ConfigImageRenderMode::Ansi => "ansi",
+            ConfigImageRenderMode::Ascii => "ascii",
+            ConfigImageRenderMode::Placeholder => "placeholder",
+        }
+    }
+}
+
+impl std::fmt::Display for ConfigImageRenderMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Grouped image rendering/fetching/caching configuration.
+/// Used in Config (with defaults), LocalConfig (all optional), and ResolvedConfig.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageConfig {
+    /// Render images inline in the terminal
+    #[serde(default = "default_render_images")]
+    pub render_images: bool,
+    /// Maximum bytes to download for remote images
+    #[serde(default = "default_image_max_download_bytes")]
+    pub max_download_bytes: usize,
+    /// Timeout in seconds for fetching remote images
+    #[serde(default = "default_image_fetch_timeout_seconds")]
+    pub fetch_timeout_seconds: u64,
+    /// Allow fetching images over plain HTTP (default: false, HTTPS only)
+    #[serde(default)]
+    pub allow_http: bool,
+    /// Maximum image height in terminal lines
+    #[serde(default = "default_image_max_height_lines")]
+    pub max_height_lines: u32,
+    /// Percentage of terminal width to use for images
+    #[serde(default = "default_image_max_width_percent")]
+    pub max_width_percent: u32,
+    /// Image alignment
+    #[serde(default)]
+    pub alignment: ImageAlignment,
+    /// Image rendering mode
+    #[serde(default)]
+    pub render_mode: ConfigImageRenderMode,
+    /// Enable truecolor (24-bit) rendering
+    #[serde(default = "default_true_val")]
+    pub enable_truecolor: bool,
+    /// Enable ANSI (16-color) rendering
+    #[serde(default = "default_true_val")]
+    pub enable_ansi: bool,
+    /// Enable ASCII art rendering
+    #[serde(default = "default_true_val")]
+    pub enable_ascii: bool,
+    /// Enable image cache for remote images
+    #[serde(default = "default_true_val")]
+    pub cache_enabled: bool,
+    /// Maximum total size of image cache in bytes
+    #[serde(default = "default_image_cache_max_bytes")]
+    pub cache_max_bytes: u64,
+    /// Maximum age of cached images in days
+    #[serde(default = "default_image_cache_max_age_days")]
+    pub cache_max_age_days: u64,
+}
+
+impl Default for ImageConfig {
+    fn default() -> Self {
+        Self {
+            render_images: true,
+            max_download_bytes: 10 * 1024 * 1024,
+            fetch_timeout_seconds: 5,
+            allow_http: false,
+            max_height_lines: 25,
+            max_width_percent: 80,
+            alignment: ImageAlignment::default(),
+            render_mode: ConfigImageRenderMode::default(),
+            enable_truecolor: true,
+            enable_ansi: true,
+            enable_ascii: true,
+            cache_enabled: true,
+            cache_max_bytes: 104_857_600,
+            cache_max_age_days: 30,
+        }
+    }
+}
+
+impl ImageConfig {
+    /// Merge with an optional override config (from LocalConfig).
+    /// Fields in `other` that are `Some` override `self`.
+    pub fn merge_with(&self, other: &ImageConfigOverride) -> Self {
+        Self {
+            render_images: other.render_images.unwrap_or(self.render_images),
+            max_download_bytes: other.max_download_bytes.unwrap_or(self.max_download_bytes),
+            fetch_timeout_seconds: other
+                .fetch_timeout_seconds
+                .unwrap_or(self.fetch_timeout_seconds),
+            allow_http: other.allow_http.unwrap_or(self.allow_http),
+            max_height_lines: other.max_height_lines.unwrap_or(self.max_height_lines),
+            max_width_percent: other.max_width_percent.unwrap_or(self.max_width_percent),
+            alignment: other.alignment.unwrap_or(self.alignment),
+            render_mode: other.render_mode.unwrap_or(self.render_mode),
+            enable_truecolor: other.enable_truecolor.unwrap_or(self.enable_truecolor),
+            enable_ansi: other.enable_ansi.unwrap_or(self.enable_ansi),
+            enable_ascii: other.enable_ascii.unwrap_or(self.enable_ascii),
+            cache_enabled: other.cache_enabled.unwrap_or(self.cache_enabled),
+            cache_max_bytes: other.cache_max_bytes.unwrap_or(self.cache_max_bytes),
+            cache_max_age_days: other.cache_max_age_days.unwrap_or(self.cache_max_age_days),
+        }
+    }
+}
+
+/// Per-context image config overrides (all fields optional).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImageConfigOverride {
+    pub render_images: Option<bool>,
+    pub max_download_bytes: Option<usize>,
+    pub fetch_timeout_seconds: Option<u64>,
+    pub allow_http: Option<bool>,
+    pub max_height_lines: Option<u32>,
+    pub max_width_percent: Option<u32>,
+    pub alignment: Option<ImageAlignment>,
+    pub render_mode: Option<ConfigImageRenderMode>,
+    pub enable_truecolor: Option<bool>,
+    pub enable_ansi: Option<bool>,
+    pub enable_ascii: Option<bool>,
+    pub cache_enabled: Option<bool>,
+    pub cache_max_bytes: Option<u64>,
+    pub cache_max_age_days: Option<u64>,
+}
+
+/// Markdown rendering color scheme (re-exported from streamdown-render).
+/// Chibi uses the Commodore 128 (VICE palette) defaults via `default_markdown_style()`.
+pub type MarkdownStyle = streamdown_render::RenderStyle;
+
+/// Commodore 128 inspired color scheme (VICE palette)
+pub fn default_markdown_style() -> MarkdownStyle {
+    MarkdownStyle {
+        bright: "#FFFF54".to_string(), // Light Yellow - for emphasis
+        head: "#54FF54".to_string(),   // Light Green - for h3 headers
+        symbol: "#7ABFC7".to_string(), // Cyan - for bullets, language labels
+        grey: "#808080".to_string(),   // Grey - for borders, muted text
+        dark: "#000000".to_string(),   // Black - code block background
+        mid: "#3E31A2".to_string(),    // Blue - table headers
+        light: "#352879".to_string(),  // Dark Blue - alternate backgrounds
+    }
+}
+
 /// Global config from ~/.chibi/config.toml
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -395,12 +617,21 @@ pub struct Config {
     /// Paths allowed for file tools (empty = cache only)
     #[serde(default)]
     pub file_tools_allowed_paths: Vec<String>,
+    /// Render LLM output as formatted markdown in the terminal
+    #[serde(default = "default_render_markdown")]
+    pub render_markdown: bool,
+    /// Image rendering, fetching, and caching configuration
+    #[serde(default)]
+    pub image: ImageConfig,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: ApiParams,
     /// Storage configuration for partitioned context storage
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Markdown rendering color scheme (Commodore 128 theme by default)
+    #[serde(default = "default_markdown_style")]
+    pub markdown_style: MarkdownStyle,
 }
 
 /// Per-context config from ~/.chibi/contexts/<name>/local.toml
@@ -426,6 +657,11 @@ pub struct LocalConfig {
     pub tool_cache_preview_chars: Option<usize>,
     /// Paths allowed for file tools (empty = cache only)
     pub file_tools_allowed_paths: Option<Vec<String>>,
+    /// Render LLM output as formatted markdown in the terminal
+    pub render_markdown: Option<bool>,
+    /// Image rendering config overrides
+    #[serde(default)]
+    pub image: ImageConfigOverride,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
     pub api: Option<ApiParams>,
@@ -435,6 +671,8 @@ pub struct LocalConfig {
     /// Per-context storage configuration overrides
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Markdown rendering color scheme override
+    pub markdown_style: Option<MarkdownStyle>,
 }
 
 /// Model metadata from ~/.chibi/models.toml
@@ -477,10 +715,16 @@ pub struct ResolvedConfig {
     pub tool_cache_preview_chars: usize,
     /// Paths allowed for file tools (empty = cache only)
     pub file_tools_allowed_paths: Vec<String>,
+    /// Render LLM output as formatted markdown in the terminal
+    pub render_markdown: bool,
+    /// Image rendering, fetching, and caching configuration
+    pub image: ImageConfig,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
     pub tools: ToolsConfig,
+    /// Markdown rendering color scheme
+    pub markdown_style: MarkdownStyle,
 }
 
 impl ResolvedConfig {
@@ -510,6 +754,21 @@ impl ResolvedConfig {
                     Some(self.file_tools_allowed_paths.join(", "))
                 }
             }
+            "render_markdown" => Some(self.render_markdown.to_string()),
+            "image.render_images" => Some(self.image.render_images.to_string()),
+            "image.max_download_bytes" => Some(self.image.max_download_bytes.to_string()),
+            "image.fetch_timeout_seconds" => Some(self.image.fetch_timeout_seconds.to_string()),
+            "image.allow_http" => Some(self.image.allow_http.to_string()),
+            "image.max_height_lines" => Some(self.image.max_height_lines.to_string()),
+            "image.max_width_percent" => Some(self.image.max_width_percent.to_string()),
+            "image.alignment" => Some(self.image.alignment.to_string()),
+            "image.render_mode" => Some(self.image.render_mode.to_string()),
+            "image.enable_truecolor" => Some(self.image.enable_truecolor.to_string()),
+            "image.enable_ansi" => Some(self.image.enable_ansi.to_string()),
+            "image.enable_ascii" => Some(self.image.enable_ascii.to_string()),
+            "image.cache_enabled" => Some(self.image.cache_enabled.to_string()),
+            "image.cache_max_bytes" => Some(self.image.cache_max_bytes.to_string()),
+            "image.cache_max_age_days" => Some(self.image.cache_max_age_days.to_string()),
 
             // API params (api.*)
             "api.temperature" => self.api.temperature.map(|v| format!("{}", v)),
@@ -549,6 +808,21 @@ impl ResolvedConfig {
             "auto_cleanup_cache",
             "tool_cache_preview_chars",
             "file_tools_allowed_paths",
+            "render_markdown",
+            "image.render_images",
+            "image.max_download_bytes",
+            "image.fetch_timeout_seconds",
+            "image.allow_http",
+            "image.max_height_lines",
+            "image.max_width_percent",
+            "image.alignment",
+            "image.render_mode",
+            "image.enable_truecolor",
+            "image.enable_ansi",
+            "image.enable_ascii",
+            "image.cache_enabled",
+            "image.cache_max_bytes",
+            "image.cache_max_age_days",
             "max_recursion_depth",
             "reflection_enabled",
             // API params
@@ -638,6 +912,14 @@ mod tests {
         assert!(config.reflection_enabled);
         assert_eq!(config.max_recursion_depth, 30);
         assert_eq!(config.username, "user");
+        // Image display defaults
+        assert_eq!(config.image.max_height_lines, 25);
+        assert_eq!(config.image.max_width_percent, 80);
+        assert_eq!(config.image.alignment, ImageAlignment::Center);
+        // Image cache defaults
+        assert!(config.image.cache_enabled);
+        assert_eq!(config.image.cache_max_bytes, 104_857_600);
+        assert_eq!(config.image.cache_max_age_days, 30);
     }
 
     #[test]
@@ -655,6 +937,11 @@ mod tests {
             max_recursion_depth = 20
             username = "alice"
             lock_heartbeat_seconds = 60
+
+            [image]
+            cache_enabled = false
+            cache_max_bytes = 50000000
+            cache_max_age_days = 7
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.auto_compact);
@@ -665,6 +952,9 @@ mod tests {
         assert_eq!(config.max_recursion_depth, 20);
         assert_eq!(config.username, "alice");
         assert_eq!(config.lock_heartbeat_seconds, 60);
+        assert!(!config.image.cache_enabled);
+        assert_eq!(config.image.cache_max_bytes, 50_000_000);
+        assert_eq!(config.image.cache_max_age_days, 7);
     }
 
     #[test]
@@ -1002,6 +1292,8 @@ mod tests {
             auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
+            render_markdown: true,
+            image: ImageConfig::default(),
             api: ApiParams {
                 temperature: Some(0.7),
                 max_tokens: Some(4096),
@@ -1017,6 +1309,7 @@ mod tests {
                 ..Default::default()
             },
             tools: ToolsConfig::default(),
+            markdown_style: default_markdown_style(),
         }
     }
 
@@ -1183,6 +1476,60 @@ mod tests {
         assert_eq!(config.get_field("api.reasoning.nonexistent"), None);
     }
 
+    #[test]
+    fn test_resolved_config_get_field_image_max_height_lines() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image.max_height_lines"),
+            Some("25".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_image_max_width_percent() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image.max_width_percent"),
+            Some("80".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_image_alignment() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image.alignment"),
+            Some("center".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_image_cache_enabled() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image.cache_enabled"),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_image_cache_max_bytes() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image.cache_max_bytes"),
+            Some("104857600".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_config_get_field_image_cache_max_age_days() {
+        let config = create_test_resolved_config();
+        assert_eq!(
+            config.get_field("image.cache_max_age_days"),
+            Some("30".to_string())
+        );
+    }
+
     // List all inspectable fields
 
     #[test]
@@ -1194,6 +1541,14 @@ mod tests {
         assert!(fields.contains(&"context_window_limit"));
         assert!(fields.contains(&"auto_compact"));
         assert!(fields.contains(&"reflection_enabled"));
+        // Should include image display fields
+        assert!(fields.contains(&"image.max_height_lines"));
+        assert!(fields.contains(&"image.max_width_percent"));
+        assert!(fields.contains(&"image.alignment"));
+        // Should include image cache fields
+        assert!(fields.contains(&"image.cache_enabled"));
+        assert!(fields.contains(&"image.cache_max_bytes"));
+        assert!(fields.contains(&"image.cache_max_age_days"));
         // Should include nested API params
         assert!(fields.contains(&"api.temperature"));
         assert!(fields.contains(&"api.max_tokens"));
@@ -1201,6 +1556,127 @@ mod tests {
         // Should include deeply nested reasoning config
         assert!(fields.contains(&"api.reasoning.effort"));
         assert!(fields.contains(&"api.reasoning.enabled"));
+    }
+
+    // ========== MarkdownStyle tests ==========
+
+    #[test]
+    fn test_markdown_style_default() {
+        let style = default_markdown_style();
+        assert_eq!(style.bright, "#FFFF54");
+        assert_eq!(style.head, "#54FF54");
+        assert_eq!(style.symbol, "#7ABFC7");
+        assert_eq!(style.grey, "#808080");
+        assert_eq!(style.dark, "#000000");
+        assert_eq!(style.mid, "#3E31A2");
+        assert_eq!(style.light, "#352879");
+    }
+
+    #[test]
+    fn test_markdown_style_is_render_style() {
+        // MarkdownStyle is a type alias for RenderStyle, so values work directly
+        let style = MarkdownStyle {
+            bright: "#FF0000".to_string(),
+            head: "#00FF00".to_string(),
+            symbol: "#0000FF".to_string(),
+            grey: "#888888".to_string(),
+            dark: "#000000".to_string(),
+            mid: "#444444".to_string(),
+            light: "#CCCCCC".to_string(),
+        };
+        assert_eq!(style.bright, "#FF0000");
+        assert_eq!(style.head, "#00FF00");
+        assert_eq!(style.symbol, "#0000FF");
+        assert_eq!(style.grey, "#888888");
+        assert_eq!(style.dark, "#000000");
+        assert_eq!(style.mid, "#444444");
+        assert_eq!(style.light, "#CCCCCC");
+    }
+
+    #[test]
+    fn test_markdown_style_serialization() {
+        let toml_str = r##"
+            bright = "#FFFF00"
+            head = "#00FFFF"
+            symbol = "#FF00FF"
+            grey = "#999999"
+            dark = "#111111"
+            mid = "#222222"
+            light = "#333333"
+        "##;
+        let style: MarkdownStyle = toml::from_str(toml_str).unwrap();
+        assert_eq!(style.bright, "#FFFF00");
+        assert_eq!(style.head, "#00FFFF");
+        assert_eq!(style.symbol, "#FF00FF");
+    }
+
+    #[test]
+    fn test_config_with_markdown_style() {
+        let toml_str = r##"
+            api_key = "test-key"
+            model = "gpt-4"
+            context_window_limit = 8000
+            warn_threshold_percent = 75.0
+
+            [markdown_style]
+            bright = "#FF0000"
+            head = "#00FF00"
+            symbol = "#0000FF"
+            grey = "#808080"
+            dark = "#000000"
+            mid = "#444444"
+            light = "#888888"
+        "##;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.markdown_style.bright, "#FF0000");
+        assert_eq!(config.markdown_style.head, "#00FF00");
+        assert_eq!(config.markdown_style.symbol, "#0000FF");
+    }
+
+    #[test]
+    fn test_config_markdown_style_defaults() {
+        let toml_str = r#"
+            api_key = "test-key"
+            model = "gpt-4"
+            context_window_limit = 8000
+            warn_threshold_percent = 75.0
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        // Should use Commodore 128 defaults
+        assert_eq!(config.markdown_style.bright, "#FFFF54");
+        assert_eq!(config.markdown_style.head, "#54FF54");
+        assert_eq!(config.markdown_style.symbol, "#7ABFC7");
+    }
+
+    #[test]
+    fn test_local_config_with_markdown_style() {
+        let toml_str = r##"
+            model = "claude-3"
+
+            [markdown_style]
+            bright = "#ABCDEF"
+            head = "#FEDCBA"
+            symbol = "#123456"
+            grey = "#654321"
+            dark = "#000000"
+            mid = "#111111"
+            light = "#222222"
+        "##;
+        let local: LocalConfig = toml::from_str(toml_str).unwrap();
+        assert!(local.markdown_style.is_some());
+        let style = local.markdown_style.unwrap();
+        assert_eq!(style.bright, "#ABCDEF");
+        assert_eq!(style.head, "#FEDCBA");
+        assert_eq!(style.symbol, "#123456");
+    }
+
+    #[test]
+    fn test_local_config_markdown_style_none() {
+        let toml_str = r#"
+            model = "claude-3"
+        "#;
+        let local: LocalConfig = toml::from_str(toml_str).unwrap();
+        assert!(local.markdown_style.is_none());
     }
 
     #[test]
