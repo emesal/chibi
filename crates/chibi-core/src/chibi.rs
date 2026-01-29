@@ -269,6 +269,44 @@ impl Chibi {
     pub fn tool_count(&self) -> usize {
         self.tools.len()
     }
+
+    /// Execute a hook on all tools that registered for it.
+    ///
+    /// This is the facade method for hook execution, allowing embedders to
+    /// trigger hooks without accessing `self.tools` directly.
+    ///
+    /// # Arguments
+    ///
+    /// * `hook` - The hook point to execute
+    /// * `data` - JSON data to pass to the hook
+    /// * `verbose` - Whether to print diagnostic info to stderr
+    ///
+    /// # Returns
+    ///
+    /// A vector of (tool_name, result) for tools that returned non-empty output.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use serde_json::json;
+    /// use chibi_core::tools::HookPoint;
+    ///
+    /// let hook_data = json!({
+    ///     "context": chibi.current_context_name(),
+    /// });
+    /// let results = chibi.execute_hook(HookPoint::OnStart, &hook_data, false)?;
+    /// for (tool_name, result) in results {
+    ///     println!("{}: {:?}", tool_name, result);
+    /// }
+    /// ```
+    pub fn execute_hook(
+        &self,
+        hook: tools::HookPoint,
+        data: &serde_json::Value,
+        verbose: bool,
+    ) -> io::Result<Vec<(String, serde_json::Value)>> {
+        tools::execute_hook(&self.tools, hook, data, verbose)
+    }
 }
 
 #[cfg(test)]

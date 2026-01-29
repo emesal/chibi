@@ -349,7 +349,7 @@ async fn execute_from_input(
         "current_context": chibi.app.state.current_context,
         "verbose": verbose,
     });
-    let _ = tools::execute_hook(&chibi.tools, tools::HookPoint::OnStart, &hook_data, verbose);
+    let _ = chibi.execute_hook(tools::HookPoint::OnStart, &hook_data, verbose);
 
     // Auto-destroy expired contexts
     let destroyed = chibi.app.auto_destroy_expired_contexts(verbose)?;
@@ -379,12 +379,7 @@ async fn execute_from_input(
                 "to_context": actual_name,
                 "is_transient": true,
             });
-            let _ = tools::execute_hook(
-                &chibi.tools,
-                tools::HookPoint::OnContextSwitch,
-                &hook_data,
-                verbose,
-            );
+            let _ = chibi.execute_hook(tools::HookPoint::OnContextSwitch, &hook_data, verbose);
         }
         ContextSelection::Switch { name, persistent } => {
             let prev_context = chibi.app.state.current_context.clone();
@@ -409,12 +404,7 @@ async fn execute_from_input(
                 "to_context": chibi.app.state.current_context,
                 "is_transient": !persistent,
             });
-            let _ = tools::execute_hook(
-                &chibi.tools,
-                tools::HookPoint::OnContextSwitch,
-                &hook_data,
-                verbose,
-            );
+            let _ = chibi.execute_hook(tools::HookPoint::OnContextSwitch, &hook_data, verbose);
             did_action = true;
         }
     }
@@ -542,22 +532,12 @@ async fn execute_from_input(
                     "message_count": context.messages.len(),
                     "summary": context.summary,
                 });
-                let _ = tools::execute_hook(
-                    &chibi.tools,
-                    tools::HookPoint::PreClear,
-                    &hook_data,
-                    verbose,
-                );
+                let _ = chibi.execute_hook(tools::HookPoint::PreClear, &hook_data, verbose);
                 chibi.app.clear_context()?;
                 let hook_data = serde_json::json!({
                     "context_name": chibi.current_context_name(),
                 });
-                let _ = tools::execute_hook(
-                    &chibi.tools,
-                    tools::HookPoint::PostClear,
-                    &hook_data,
-                    verbose,
-                );
+                let _ = chibi.execute_hook(tools::HookPoint::PostClear, &hook_data, verbose);
             } else {
                 chibi.app.clear_context_by_name(&ctx_name)?;
             }
@@ -716,7 +696,7 @@ async fn execute_from_input(
     let hook_data = serde_json::json!({
         "current_context": chibi.current_context_name(),
     });
-    let _ = tools::execute_hook(&chibi.tools, tools::HookPoint::OnEnd, &hook_data, verbose);
+    let _ = chibi.execute_hook(tools::HookPoint::OnEnd, &hook_data, verbose);
 
     // Automatic cache cleanup
     let resolved = chibi.resolve_config(None, None)?;
