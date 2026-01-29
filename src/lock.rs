@@ -74,7 +74,7 @@ impl ContextLock {
     fn touch(path: &Path) -> io::Result<()> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::ZERO)
             .as_secs();
         crate::safe_io::atomic_write_text(path, &timestamp.to_string())
     }
@@ -98,7 +98,7 @@ impl ContextLock {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(Duration::ZERO)
             .as_secs();
 
         // Stale if older than 1.5x heartbeat interval
