@@ -51,22 +51,26 @@ pub enum ResponseEvent<'a> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// struct CollectingSink {
+/// ```
+/// use chibi_core::api::sink::{ResponseSink, ResponseEvent};
+/// use std::io;
+///
+/// struct MySink {
 ///     text: String,
-///     entries: Vec<TranscriptEntry>,
 /// }
 ///
-/// impl ResponseSink for CollectingSink {
+/// impl ResponseSink for MySink {
 ///     fn handle(&mut self, event: ResponseEvent<'_>) -> io::Result<()> {
-///         match event {
-///             ResponseEvent::TextChunk(chunk) => self.text.push_str(chunk),
-///             ResponseEvent::TranscriptEntry(entry) => self.entries.push(entry),
-///             _ => {}
+///         if let ResponseEvent::TextChunk(chunk) = event {
+///             self.text.push_str(chunk);
 ///         }
 ///         Ok(())
 ///     }
 /// }
+///
+/// let mut sink = MySink { text: String::new() };
+/// sink.handle(ResponseEvent::TextChunk("Hello")).unwrap();
+/// assert_eq!(sink.text, "Hello");
 /// ```
 pub trait ResponseSink {
     /// Handle a response event.

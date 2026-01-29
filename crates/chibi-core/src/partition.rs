@@ -358,11 +358,19 @@ impl ActiveState {
 ///
 /// # Example
 ///
-/// ```ignore
-/// let mut pm = PartitionManager::load(&context_dir)?;
-/// pm.append_entry(&entry)?;
-/// pm.rotate_if_needed()?;
+/// ```no_run
+/// // Requires a context directory with transcript/ subdirectory.
+/// use chibi_core::partition::{PartitionManager, StorageConfig};
+/// use std::path::Path;
+///
+/// # fn example() -> std::io::Result<()> {
+/// let config = StorageConfig::default();
+/// let mut pm = PartitionManager::load_with_config(Path::new("/path/to/context"), config)?;
+/// // pm.append_entry(&entry)?;
+/// // pm.rotate_if_needed()?;
 /// let entries = pm.read_all_entries()?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct PartitionManager {
     /// Path to the context directory.

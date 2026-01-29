@@ -6,7 +6,9 @@
 //!
 //! For most embedding use cases, use the [`Chibi`] facade:
 //!
-//! ```ignore
+//! ```no_run
+//! // Requires ~/.chibi directory with config.toml and models.toml.
+//! // See chibi documentation for setup instructions.
 //! use chibi_core::{Chibi, CollectingSink};
 //! use chibi_core::api::PromptOptions;
 //!

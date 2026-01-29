@@ -6,7 +6,8 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
+//! // Requires ~/.chibi directory with config.toml and models.toml.
 //! use chibi_core::{Chibi, CollectingSink, ResolvedConfig};
 //! use chibi_core::api::PromptOptions;
 //!
@@ -44,6 +45,24 @@ use std::path::PathBuf;
 /// Options for loading a Chibi instance.
 ///
 /// Use `Default::default()` for standard behavior, or customize as needed.
+///
+/// # Example
+///
+/// ```
+/// use chibi_core::LoadOptions;
+/// use std::path::PathBuf;
+///
+/// // Default options use ~/.chibi or CHIBI_HOME
+/// let default_opts = LoadOptions::default();
+/// assert!(!default_opts.verbose);
+/// assert!(default_opts.home.is_none());
+///
+/// // Custom options with verbose output and custom home
+/// let custom_opts = LoadOptions {
+///     verbose: true,
+///     home: Some(PathBuf::from("/custom/chibi")),
+/// };
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
     /// Print diagnostic info about tool loading to stderr.
@@ -97,11 +116,15 @@ impl Chibi {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// // Requires a chibi home directory with config.toml and models.toml.
+    /// use chibi_core::{Chibi, LoadOptions};
+    ///
     /// let chibi = Chibi::load_with_options(LoadOptions {
     ///     verbose: true,
     ///     home: Some("/custom/path".into()),
     /// })?;
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn load_with_options(options: LoadOptions) -> io::Result<Self> {
         let app = AppState::load(options.home)?;
@@ -124,10 +147,19 @@ impl Chibi {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// // Requires ~/.chibi directory and valid API key in config.
+    /// # use chibi_core::{Chibi, CollectingSink};
+    /// # use chibi_core::api::PromptOptions;
+    /// # async fn example() -> std::io::Result<()> {
+    /// # let chibi = Chibi::load()?;
+    /// # let config = chibi.resolve_config(None, None)?;
+    /// # let options = PromptOptions::new(false, false, false, &[], false);
     /// let mut sink = CollectingSink::new();
     /// chibi.send_prompt_streaming("Hello", &config, &options, &mut sink).await?;
     /// println!("Got response: {}", sink.text);
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn send_prompt_streaming<S: ResponseSink>(
         &self,
@@ -287,10 +319,13 @@ impl Chibi {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// // Requires ~/.chibi directory with plugins that register hooks.
     /// use serde_json::json;
-    /// use chibi_core::tools::HookPoint;
+    /// use chibi_core::{Chibi, HookPoint};
     ///
+    /// # fn example() -> std::io::Result<()> {
+    /// let chibi = Chibi::load()?;
     /// let hook_data = json!({
     ///     "context": chibi.current_context_name(),
     /// });
@@ -298,6 +333,8 @@ impl Chibi {
     /// for (tool_name, result) in results {
     ///     println!("{}: {:?}", tool_name, result);
     /// }
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn execute_hook(
         &self,
