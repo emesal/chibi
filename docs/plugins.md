@@ -257,9 +257,17 @@ CHIBI_HOOK="on_start" CHIBI_HOOK_DATA='{"current_context": "default", "verbose":
 
 Chibi provides several built-in tools that don't require plugins:
 
+**Agentic tools:**
 - `update_todos` - Manage per-context todo list
 - `update_goals` - Manage per-context goals
 - `update_reflection` - Update LLM's persistent memory
 - `send_message` - Send messages between contexts
 
-These are always available to the LLM.
+**File tools** (for examining cached tool outputs and allowed paths):
+- `file_head` - Read first N lines
+- `file_tail` - Read last N lines
+- `file_lines` - Read specific line range
+- `file_grep` - Search for patterns
+- `cache_list` - List cached outputs
+
+These are always available to the LLM. See [agentic.md](agentic.md) for details on tool output caching.

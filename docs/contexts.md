@@ -276,8 +276,11 @@ chibi -g -5  # First 5 entries
 
 ```
 ~/.chibi/contexts/<name>/
-├── transcript.jsonl     # Authoritative conversation log (append-only)
-├── context.jsonl        # LLM context window (derived from transcript.jsonl)
+├── transcript/          # Authoritative conversation log (partitioned)
+│   ├── manifest.json    # Partition metadata
+│   ├── active.jsonl     # Current write partition
+│   └── partitions/      # Archived read-only partitions
+├── context.jsonl        # LLM context window (derived from transcript)
 ├── context_meta.json    # Metadata (created_at timestamp)
 ├── local.toml           # Per-context config overrides (optional)
 ├── summary.md           # Conversation summary (from compaction)
@@ -286,6 +289,7 @@ chibi -g -5  # First 5 entries
 ├── goals.md             # Current goals
 ├── inbox.jsonl          # Messages from other contexts
 ├── system_prompt.md     # Custom system prompt (optional)
+├── tool_cache/          # Cached large tool outputs
 ├── .lock                # Lock file (when active)
 └── .dirty               # Marker for context rebuild (temporary)
 ```
