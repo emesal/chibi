@@ -24,7 +24,7 @@ context_window_limit = 200000
 warn_threshold_percent = 80.0
 ```
 
-(Model metadata lookup will be automatic in a future release.)
+(This step will be automated in a future release.)
 
 Copy the example prompts:
 
