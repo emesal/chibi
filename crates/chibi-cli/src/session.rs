@@ -1,4 +1,4 @@
-// session.rs: CLI session state (current/previous context)
+// session.rs: CLI session state (implied/previous context)
 //
 // This tracks which context the user is working with across CLI invocations.
 // Separate from chibi-core's ContextState, which manages context metadata.
@@ -9,11 +9,14 @@ use std::path::Path;
 
 /// Session state persisted between CLI invocations.
 ///
-/// Tracks the current and previous context names for context switching.
+/// Tracks the implied and previous context names for context switching.
+/// - `implied_context`: The context used when no `-c`/`-C` is specified
+/// - `previous_context`: The last context switched away from (for `-c -`)
+///
 /// Stored in `~/.chibi/session.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
-    pub current_context: String,
+    pub implied_context: String,
     #[serde(default)]
     pub previous_context: Option<String>,
 }
@@ -21,7 +24,7 @@ pub struct Session {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            current_context: "default".to_string(),
+            implied_context: "default".to_string(),
             previous_context: None,
         }
     }
@@ -49,17 +52,17 @@ impl Session {
         std::fs::write(path, content)
     }
 
-    /// Switch to a new context, updating previous_context.
+    /// Switch to a new context, updating previous_context and implied_context.
     ///
     /// If switching to the same context, previous_context is unchanged.
     pub fn switch_context(&mut self, name: String) {
-        if self.current_context != name {
-            self.previous_context = Some(self.current_context.clone());
+        if self.implied_context != name {
+            self.previous_context = Some(self.implied_context.clone());
         }
-        self.current_context = name;
+        self.implied_context = name;
     }
 
-    /// Swap current and previous contexts.
+    /// Swap implied and previous contexts.
     ///
     /// Returns the name of the context switched to (the previous context).
     /// Returns an error if there is no previous context.
@@ -74,14 +77,14 @@ impl Session {
                     "No previous context available (use -c to switch contexts first)",
                 )
             })?;
-        let current = std::mem::replace(&mut self.current_context, previous.clone());
+        let current = std::mem::replace(&mut self.implied_context, previous.clone());
         self.previous_context = Some(current);
         Ok(previous)
     }
 
-    /// Check if a context name matches the current context.
-    pub fn is_current(&self, name: &str) -> bool {
-        self.current_context == name
+    /// Check if a context name matches the implied context.
+    pub fn is_implied(&self, name: &str) -> bool {
+        self.implied_context == name
     }
 
     /// Get the previous context name, or error if none available
@@ -105,12 +108,12 @@ impl Session {
 
     /// Handle session state after a context is destroyed.
     ///
-    /// If the destroyed context was the current context, switches to a fallback:
+    /// If the destroyed context was the implied context, switches to a fallback:
     /// - Previous context if it exists and is valid
     /// - Otherwise "default"
     ///
     /// The `context_exists` closure is used to check if a context directory exists.
-    /// Returns the new current context name if a switch occurred, None otherwise.
+    /// Returns the new implied context name if a switch occurred, None otherwise.
     pub fn handle_context_destroyed<F>(
         &mut self,
         destroyed: &str,
@@ -119,8 +122,8 @@ impl Session {
     where
         F: Fn(&str) -> bool,
     {
-        if self.current_context != destroyed {
-            // Not destroying current context, no session changes needed
+        if self.implied_context != destroyed {
+            // Not destroying implied context, no session changes needed
             // (but clear previous if it was the destroyed one)
             if self.previous_context.as_deref() == Some(destroyed) {
                 self.previous_context = None;
@@ -128,7 +131,7 @@ impl Session {
             return None;
         }
 
-        // Destroying current context - find a fallback
+        // Destroying implied context - find a fallback
         let fallback = self
             .previous_context
             .as_ref()
@@ -136,7 +139,7 @@ impl Session {
             .cloned()
             .unwrap_or_else(|| "default".to_string());
 
-        self.current_context = fallback.clone();
+        self.implied_context = fallback.clone();
         self.previous_context = None;
         Some(fallback)
     }
@@ -151,7 +154,7 @@ mod tests {
     #[test]
     fn test_default_session() {
         let session = Session::default();
-        assert_eq!(session.current_context, "default");
+        assert_eq!(session.implied_context, "default");
         assert!(session.previous_context.is_none());
     }
 
@@ -160,11 +163,11 @@ mod tests {
         let mut session = Session::default();
 
         session.switch_context("test".to_string());
-        assert_eq!(session.current_context, "test");
+        assert_eq!(session.implied_context, "test");
         assert_eq!(session.previous_context, Some("default".to_string()));
 
         session.switch_context("another".to_string());
-        assert_eq!(session.current_context, "another");
+        assert_eq!(session.implied_context, "another");
         assert_eq!(session.previous_context, Some("test".to_string()));
     }
 
@@ -174,7 +177,7 @@ mod tests {
         session.switch_context("test".to_string());
         session.switch_context("test".to_string()); // same context
 
-        assert_eq!(session.current_context, "test");
+        assert_eq!(session.implied_context, "test");
         // previous should still be "default", not "test"
         assert_eq!(session.previous_context, Some("default".to_string()));
     }
@@ -186,13 +189,13 @@ mod tests {
 
         let result = session.swap_with_previous().unwrap();
         assert_eq!(result, "default");
-        assert_eq!(session.current_context, "default");
+        assert_eq!(session.implied_context, "default");
         assert_eq!(session.previous_context, Some("test".to_string()));
 
         // swap back
         let result = session.swap_with_previous().unwrap();
         assert_eq!(result, "test");
-        assert_eq!(session.current_context, "test");
+        assert_eq!(session.implied_context, "test");
         assert_eq!(session.previous_context, Some("default".to_string()));
     }
 
@@ -206,7 +209,7 @@ mod tests {
     #[test]
     fn test_swap_empty_previous() {
         let mut session = Session {
-            current_context: "test".to_string(),
+            implied_context: "test".to_string(),
             previous_context: Some("".to_string()),
         };
         let result = session.swap_with_previous();
@@ -232,7 +235,7 @@ mod tests {
     #[test]
     fn test_get_previous_empty() {
         let session = Session {
-            current_context: "test".to_string(),
+            implied_context: "test".to_string(),
             previous_context: Some("".to_string()),
         };
         let result = session.get_previous();
@@ -248,7 +251,7 @@ mod tests {
         session.save(temp_dir.path()).unwrap();
 
         let loaded = Session::load(temp_dir.path()).unwrap();
-        assert_eq!(loaded.current_context, "test");
+        assert_eq!(loaded.implied_context, "test");
         assert_eq!(loaded.previous_context, Some("default".to_string()));
     }
 
@@ -256,7 +259,7 @@ mod tests {
     fn test_load_missing_file() {
         let temp_dir = TempDir::new().unwrap();
         let session = Session::load(temp_dir.path()).unwrap();
-        assert_eq!(session.current_context, "default");
+        assert_eq!(session.implied_context, "default");
         assert!(session.previous_context.is_none());
     }
 
@@ -271,12 +274,12 @@ mod tests {
     }
 
     #[test]
-    fn test_is_current_and_previous() {
+    fn test_is_implied_and_previous() {
         let mut session = Session::default();
         session.switch_context("test".to_string());
 
-        assert!(session.is_current("test"));
-        assert!(!session.is_current("default"));
+        assert!(session.is_implied("test"));
+        assert!(!session.is_implied("default"));
         assert!(session.is_previous("default"));
         assert!(!session.is_previous("test"));
     }
@@ -288,14 +291,14 @@ mod tests {
         session.switch_context("ctx_b".to_string());
 
         // ctx_b is current, ctx_a is previous
-        assert_eq!(session.current_context, "ctx_b");
+        assert_eq!(session.implied_context, "ctx_b");
         assert_eq!(session.previous_context, Some("ctx_a".to_string()));
 
         // Destroy current (ctx_b), previous (ctx_a) exists
         let result = session.handle_context_destroyed("ctx_b", |name| name == "ctx_a");
 
         assert_eq!(result, Some("ctx_a".to_string()));
-        assert_eq!(session.current_context, "ctx_a");
+        assert_eq!(session.implied_context, "ctx_a");
         assert!(session.previous_context.is_none());
     }
 
@@ -305,14 +308,14 @@ mod tests {
         session.switch_context("lone_ctx".to_string());
 
         // lone_ctx is current, previous is "default" but doesn't exist
-        assert_eq!(session.current_context, "lone_ctx");
+        assert_eq!(session.implied_context, "lone_ctx");
         assert_eq!(session.previous_context, Some("default".to_string()));
 
         // Destroy current, previous doesn't exist as a directory
         let result = session.handle_context_destroyed("lone_ctx", |_| false);
 
         assert_eq!(result, Some("default".to_string()));
-        assert_eq!(session.current_context, "default");
+        assert_eq!(session.implied_context, "default");
         assert!(session.previous_context.is_none());
     }
 
@@ -326,7 +329,7 @@ mod tests {
         let result = session.handle_context_destroyed("ctx_a", |_| true);
 
         assert!(result.is_none());
-        assert_eq!(session.current_context, "ctx_b");
+        assert_eq!(session.implied_context, "ctx_b");
         // previous_context should be cleared since it was destroyed
         assert!(session.previous_context.is_none());
     }
@@ -334,7 +337,7 @@ mod tests {
     #[test]
     fn test_handle_context_destroyed_previous_same_as_destroyed() {
         let mut session = Session {
-            current_context: "current".to_string(),
+            implied_context: "current".to_string(),
             previous_context: Some("current".to_string()), // edge case: same as current
         };
 
@@ -343,20 +346,20 @@ mod tests {
 
         // Should fall back to default since previous == destroyed
         assert_eq!(result, Some("default".to_string()));
-        assert_eq!(session.current_context, "default");
+        assert_eq!(session.implied_context, "default");
     }
 
     #[test]
     fn test_handle_context_destroyed_no_previous() {
         let mut session = Session {
-            current_context: "only_ctx".to_string(),
+            implied_context: "only_ctx".to_string(),
             previous_context: None,
         };
 
         let result = session.handle_context_destroyed("only_ctx", |_| true);
 
         assert_eq!(result, Some("default".to_string()));
-        assert_eq!(session.current_context, "default");
+        assert_eq!(session.implied_context, "default");
         assert!(session.previous_context.is_none());
     }
 }

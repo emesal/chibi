@@ -3,9 +3,9 @@
 //! This module handles parsing command-line arguments and converting them
 //! to the unified `ChibiInput` format.
 
-use chibi_core::input::{
-    ChibiInput, Command, ContextSelection, DebugKey, Flags, Inspectable, UsernameOverride,
-};
+use chibi_core::input::{Command, DebugKey, Flags, Inspectable};
+
+use crate::input::{ChibiInput, ContextSelection, UsernameOverride};
 use clap::Parser;
 use std::io::{self, BufRead, ErrorKind, IsTerminal};
 
@@ -81,14 +81,14 @@ pub struct Cli {
     )]
     pub switch_context: Option<String>,
 
-    /// Use context for this invocation only
+    /// Use context for this invocation only (ephemeral, does not update session)
     #[arg(
         short = 'C',
-        long = "transient-context",
+        long = "ephemeral-context",
         value_name = "NAME",
         allow_hyphen_values = true
     )]
-    pub transient_context: Option<String>,
+    pub ephemeral_context: Option<String>,
 
     /// Show current context info
     #[arg(short = 'l', long = "list-current-context")]
@@ -210,14 +210,14 @@ pub struct Cli {
     )]
     pub set_username: Option<String>,
 
-    /// Set username for this invocation only
+    /// Set username for this invocation only (ephemeral)
     #[arg(
         short = 'U',
-        long = "transient-username",
+        long = "ephemeral-username",
         value_name = "NAME",
         allow_hyphen_values = true
     )]
-    pub transient_username: Option<String>,
+    pub ephemeral_username: Option<String>,
 
     // === Plugin/tool options ===
     // Note: These are handled specially because they consume all remaining args
@@ -450,8 +450,8 @@ impl Cli {
         }
 
         // Determine context selection
-        let context = if let Some(ref name) = self.transient_context {
-            ContextSelection::Transient { name: name.clone() }
+        let context = if let Some(ref name) = self.ephemeral_context {
+            ContextSelection::Ephemeral { name: name.clone() }
         } else if let Some(ref name) = self.switch_context {
             ContextSelection::Switch {
                 name: name.clone(),
@@ -462,8 +462,8 @@ impl Cli {
         };
 
         // Determine username override
-        let username_override = if let Some(ref name) = self.transient_username {
-            Some(UsernameOverride::Transient(name.clone()))
+        let username_override = if let Some(ref name) = self.ephemeral_username {
+            Some(UsernameOverride::Ephemeral(name.clone()))
         } else {
             self.set_username
                 .as_ref()
@@ -829,21 +829,21 @@ mod tests {
         );
     }
 
-    // === Transient context tests ===
+    // === Ephemeral context tests ===
 
     #[test]
-    fn test_transient_context_short() {
+    fn test_ephemeral_context_short() {
         let input = parse_input("-C temp").unwrap();
         assert!(
-            matches!(input.context, ContextSelection::Transient { ref name } if name == "temp")
+            matches!(input.context, ContextSelection::Ephemeral { ref name } if name == "temp")
         );
     }
 
     #[test]
-    fn test_transient_context_with_prompt() {
+    fn test_ephemeral_context_with_prompt() {
         let input = parse_input("-C agent run task").unwrap();
         assert!(
-            matches!(input.context, ContextSelection::Transient { ref name } if name == "agent")
+            matches!(input.context, ContextSelection::Ephemeral { ref name } if name == "agent")
         );
         assert!(
             matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "run task")
@@ -1058,10 +1058,10 @@ mod tests {
     }
 
     #[test]
-    fn test_transient_username_short() {
+    fn test_ephemeral_username_short() {
         let input = parse_input("-U bob").unwrap();
         assert!(
-            matches!(input.username_override, Some(UsernameOverride::Transient(ref u)) if u == "bob")
+            matches!(input.username_override, Some(UsernameOverride::Ephemeral(ref u)) if u == "bob")
         );
     }
 

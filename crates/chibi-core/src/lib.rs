@@ -49,7 +49,7 @@ pub use chibi::{Chibi, LoadOptions};
 pub use api::{CollectingSink, PromptOptions, ResponseEvent, ResponseSink};
 pub use config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
 pub use context::{Context, ContextEntry, Message, TranscriptEntry};
-pub use input::{ChibiInput, Command, Flags, Inspectable};
+pub use input::{Command, Flags, Inspectable};
 pub use partition::StorageConfig;
 pub use state::AppState;
 pub use tools::{HookPoint, Tool};

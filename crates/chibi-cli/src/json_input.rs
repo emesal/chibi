@@ -46,14 +46,14 @@
 //!
 //! - `"current"` (default)
 //! - `{ "switch": { "name": "..." } }` (persistent is true by default)
-//! - `{ "transient": { "name": "..." } }`
+//! - `{ "ephemeral": { "name": "..." } }`
 //!
 //! ### Username Override
 //!
 //! - `{ "persistent": "username" }`
-//! - `{ "transient": "username" }`
+//! - `{ "ephemeral": "username" }`
 
-use chibi_core::input::ChibiInput;
+use crate::input::ChibiInput;
 use std::io::{self, ErrorKind};
 
 /// Parse JSON input string to ChibiInput
@@ -65,7 +65,8 @@ pub fn from_str(s: &str) -> io::Result<ChibiInput> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chibi_core::input::{Command, ContextSelection, DebugKey, Inspectable, UsernameOverride};
+    use crate::input::{ContextSelection, UsernameOverride};
+    use chibi_core::input::{Command, DebugKey, Inspectable};
 
     #[test]
     fn test_parse_simple_prompt() {
