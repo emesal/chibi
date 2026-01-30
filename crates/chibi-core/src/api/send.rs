@@ -286,6 +286,7 @@ pub async fn send_prompt<S: ResponseSink>(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_prompt_with_depth<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
