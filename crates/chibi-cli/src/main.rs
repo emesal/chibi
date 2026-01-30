@@ -669,7 +669,7 @@ async fn execute_from_input(
             let ctx_name = session.current_context.clone();
             if !chibi.app.context_dir(&ctx_name).exists() {
                 let new_context = Context::new(ctx_name.clone());
-                chibi.app.save_context(&new_context)?;
+                chibi.app.save_and_register_context(&new_context)?;
             }
 
             // Resolve config with runtime overrides

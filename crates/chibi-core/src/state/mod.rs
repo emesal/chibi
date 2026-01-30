@@ -906,7 +906,7 @@ impl AppState {
         })
     }
 
-    pub fn save_current_context(&self, context: &Context) -> io::Result<()> {
+    pub fn save_and_register_context(&self, context: &Context) -> io::Result<()> {
         self.save_context(context)?;
 
         // Ensure the context is tracked in state.
@@ -1266,24 +1266,9 @@ impl AppState {
         // Mark context dirty so it rebuilds with new anchor on next load
         self.mark_context_dirty(context_name)?;
 
-        // Create fresh context
+        // Create fresh context and register it in state
         let new_context = Context::new(context_name);
-        self.save_context(&new_context)?;
-
-        // Ensure the context is tracked in state (like clear_context does via save_current_context)
-        if !self
-            .state
-            .contexts
-            .iter()
-            .any(|e| e.name == new_context.name)
-        {
-            let mut new_state = self.state.clone();
-            new_state.contexts.push(ContextEntry::with_created_at(
-                new_context.name.clone(),
-                new_context.created_at,
-            ));
-            new_state.save(&self.state_path)?;
-        }
+        self.save_and_register_context(&new_context)?;
 
         // Invalidate active state cache after all writes are complete,
         // so the next append re-scans fresh state from disk
@@ -2599,8 +2584,8 @@ not valid json at all
     }
 
     #[test]
-    fn test_save_current_context_adds_to_state_contexts() {
-        // Verify that save_current_context adds new contexts to state.json
+    fn test_save_and_register_context_adds_to_state_contexts() {
+        // Verify that save_and_register_context adds new contexts to state.json
         let (app, _temp) = create_test_app();
 
         // First save initial state so state.json exists
@@ -2609,7 +2594,7 @@ not valid json at all
         assert!(!app.state.contexts.iter().any(|e| e.name == "new-context"));
 
         let ctx = Context::new("new-context");
-        app.save_current_context(&ctx).unwrap();
+        app.save_and_register_context(&ctx).unwrap();
 
         // Check the state file directly
         let state_content = fs::read_to_string(&app.state_path).unwrap();
@@ -2619,7 +2604,7 @@ not valid json at all
         );
     }
 
-    // NOTE: test_save_current_context_preserves_disk_current_context was removed
+    // NOTE: test_save_and_register_context_preserves_disk_current_context was removed
     // in the stateless-core refactor. current_context is no longer stored in state.json;
     // it's now managed by the CLI Session layer.
 
