@@ -55,8 +55,6 @@ impl AppState {
 
         let state = ContextState {
             contexts: Vec::new(),
-            current_context: "default".to_string(),
-            previous_context: None,
         };
 
         Ok(AppState {
@@ -139,15 +137,11 @@ impl AppState {
                 eprintln!("[WARN] State file corrupted, resetting to defaults: {}", e);
                 ContextState {
                     contexts: Vec::new(),
-                    current_context: "default".to_string(),
-                    previous_context: None,
                 }
             })
         } else {
             ContextState {
                 contexts: Vec::new(),
-                current_context: "default".to_string(),
-                previous_context: None,
             }
         };
 
@@ -181,7 +175,8 @@ impl AppState {
     /// Operations:
     /// 1. Remove entries whose directories no longer exist
     /// 2. Register orphan directories (exist on disk but not in state)
-    /// 3. Validate current_context and previous_context references
+    ///
+    /// Note: Session state (current/previous context) is now managed by CLI.
     ///
     /// Returns true if state was modified (needs saving)
     pub fn sync_state_with_filesystem(&mut self) -> io::Result<bool> {
@@ -215,32 +210,6 @@ impl AppState {
                         modified = true;
                     }
                 }
-            }
-        }
-
-        // Phase 3: Validate current_context reference
-        let current_exists = self
-            .state
-            .contexts
-            .iter()
-            .any(|e| e.name == self.state.current_context);
-        if !current_exists {
-            // Fall back to first available context or "default"
-            self.state.current_context = self
-                .state
-                .contexts
-                .first()
-                .map(|e| e.name.clone())
-                .unwrap_or_else(|| "default".to_string());
-            modified = true;
-        }
-
-        // Phase 4: Validate previous_context reference
-        if let Some(ref prev) = self.state.previous_context {
-            let prev_exists = self.state.contexts.iter().any(|e| &e.name == prev);
-            if !prev_exists {
-                self.state.previous_context = None;
-                modified = true;
             }
         }
 
@@ -279,18 +248,19 @@ impl AppState {
     }
 
     /// Auto-destroy contexts that have expired based on their settings.
-    /// Only destroys non-current contexts.
     /// Returns the list of destroyed context names.
+    ///
+    /// Note: This now destroys ALL expired contexts. The CLI is responsible for
+    /// checking if the session's current context was destroyed and handling it.
     pub fn auto_destroy_expired_contexts(&mut self, verbose: bool) -> io::Result<Vec<String>> {
-        let current = self.state.current_context.clone();
         let mut destroyed = Vec::new();
 
-        // Collect contexts to destroy (excluding current)
+        // Collect contexts to destroy
         let to_destroy: Vec<String> = self
             .state
             .contexts
             .iter()
-            .filter(|e| e.name != current && e.should_auto_destroy())
+            .filter(|e| e.should_auto_destroy())
             .map(|e| e.name.clone())
             .collect();
 
@@ -306,10 +276,6 @@ impl AppState {
             }
             // Remove from state
             self.state.contexts.retain(|e| e.name != name);
-            // Clear previous_context if it was destroyed
-            if self.state.previous_context.as_ref() == Some(&name) {
-                self.state.previous_context = None;
-            }
             destroyed.push(name);
         }
 
@@ -920,24 +886,10 @@ impl AppState {
         Ok(())
     }
 
-    /// Append an entry to both transcript and context for the current context
-    pub fn append_to_current_transcript_and_context(
-        &self,
-        entry: &TranscriptEntry,
-    ) -> io::Result<()> {
-        self.append_to_transcript_and_context(&self.state.current_context, entry)
-    }
-
-    pub fn get_current_context(&self) -> io::Result<Context> {
-        self.load_context(&self.state.current_context).or_else(|e| {
-            if e.kind() == ErrorKind::NotFound {
-                // Return empty context if it doesn't exist yet
-                Ok(Context::new(self.state.current_context.clone()))
-            } else {
-                Err(e)
-            }
-        })
-    }
+    // NOTE: append_to_current_transcript_and_context and get_current_context were removed
+    // in the stateless-core refactor. Use the parameterized versions instead:
+    // - append_to_transcript_and_context(context_name, entry)
+    // - get_or_create_context(name)
 
     /// Get or create a context by name.
     ///
@@ -995,8 +947,8 @@ impl AppState {
     ///
     /// If another process is running `send_prompt`, the transcript operations
     /// will serialize correctly via their respective locks.
-    pub fn clear_context(&self) -> io::Result<()> {
-        let context = self.get_current_context()?;
+    pub fn clear_context(&self, context_name: &str) -> io::Result<()> {
+        let context = self.get_or_create_context(context_name)?;
 
         // Don't clear if already empty
         if context.messages.is_empty() {
@@ -1014,8 +966,8 @@ impl AppState {
         self.mark_context_dirty(&context.name)?;
 
         // Create fresh context (preserving nothing - full clear)
-        let new_context = Context::new(self.state.current_context.clone());
-        self.save_current_context(&new_context)?;
+        let new_context = Context::new(context_name.to_string());
+        self.save_context(&new_context)?;
 
         // Invalidate active state cache after all writes are complete,
         // so the next append re-scans fresh state from disk
@@ -1024,41 +976,15 @@ impl AppState {
     }
 
     /// Destroy a context and its directory.
-    /// If destroying the current context, switches to the previous context first
-    /// (or "default" if no previous context exists).
-    /// Returns the name of the context that was switched to if a switch occurred.
-    pub fn destroy_context(&mut self, name: &str) -> io::Result<Option<String>> {
+    ///
+    /// Returns `true` if the context existed and was destroyed, `false` if it didn't exist.
+    ///
+    /// Note: Session state (what was current/previous) is managed by CLI. This method
+    /// just deletes the context. Caller is responsible for updating session if needed.
+    pub fn destroy_context(&mut self, name: &str) -> io::Result<bool> {
         let dir = self.context_dir(name);
         if !dir.exists() {
-            return Ok(None);
-        }
-
-        let mut new_state = self.state.clone();
-        let switched_to: Option<String>;
-
-        // If destroying the current context, switch to another first
-        if self.state.current_context == name {
-            // Determine the fallback context
-            let fallback = self
-                .state
-                .previous_context
-                .as_ref()
-                .filter(|prev| *prev != name && self.context_dir(prev).exists())
-                .cloned()
-                .unwrap_or_else(|| "default".to_string());
-
-            new_state.current_context = fallback.clone();
-            new_state.previous_context = None; // Clear previous after using it
-            self.state.current_context = fallback.clone();
-            self.state.previous_context = None;
-            switched_to = Some(fallback);
-        } else {
-            // If destroying a context that was the previous context, clear it
-            if self.state.previous_context.as_ref() == Some(&name.to_string()) {
-                new_state.previous_context = None;
-                self.state.previous_context = None;
-            }
-            switched_to = None;
+            return Ok(false);
         }
 
         // Remove the directory
@@ -1067,14 +993,14 @@ impl AppState {
         // Invalidate active state cache for the destroyed context
         self.active_state_cache.borrow_mut().remove(name);
 
-        // Update state
-        new_state.contexts.retain(|e| e.name != name);
-        new_state.save(&self.state_path)?;
+        // Update state - remove from contexts list and save
+        self.state.contexts.retain(|e| e.name != name);
+        self.state.save(&self.state_path)?;
 
-        Ok(switched_to)
+        Ok(true)
     }
 
-    pub fn rename_context(&self, old_name: &str, new_name: &str) -> io::Result<()> {
+    pub fn rename_context(&mut self, old_name: &str, new_name: &str) -> io::Result<()> {
         validate_context_name(new_name)?;
 
         let old_dir = self.context_dir(old_name);
@@ -1097,26 +1023,24 @@ impl AppState {
         // Rename the directory (context name is derived from directory, no file updates needed)
         fs::rename(&old_dir, &new_dir)?;
 
-        // Update state
-        let mut new_state = self.state.clone();
-        if new_state.current_context == old_name {
-            new_state.current_context = new_name.to_string();
-        }
-        // Preserve created_at from old entry
-        let created_at = new_state
+        // Update state: preserve created_at from old entry
+        let created_at = self
+            .state
             .contexts
             .iter()
             .find(|e| e.name == old_name)
             .map(|e| e.created_at)
             .unwrap_or_else(now_timestamp);
-        new_state.contexts.retain(|e| e.name != old_name);
-        if !new_state.contexts.iter().any(|e| e.name == new_name) {
-            new_state
+
+        self.state.contexts.retain(|e| e.name != old_name);
+        if !self.state.contexts.iter().any(|e| e.name == new_name) {
+            self.state
                 .contexts
                 .push(ContextEntry::with_created_at(new_name, created_at));
         }
-        new_state.save(&self.state_path)?;
+        self.state.save(&self.state_path)?;
 
+        // Note: If CLI's session.current_context was renamed, CLI must update it.
         Ok(())
     }
 
@@ -1158,17 +1082,8 @@ impl AppState {
         self.context_dir(context_name).join("system_prompt.md")
     }
 
-    /// Load the system prompt for the current context.
-    /// Returns context-specific prompt if it exists, otherwise falls back to default.
-    pub fn load_system_prompt(&self) -> io::Result<String> {
-        let context_prompt_path = self.context_prompt_file(&self.state.current_context);
-        if context_prompt_path.exists() {
-            fs::read_to_string(&context_prompt_path)
-        } else {
-            // Fall back to default prompt
-            self.load_prompt("chibi")
-        }
-    }
+    // NOTE: load_system_prompt() (no args) was removed in stateless-core refactor.
+    // Use load_system_prompt_for(context_name) instead.
 
     /// Load the system prompt for a specific context.
     pub fn load_system_prompt_for(&self, context_name: &str) -> io::Result<String> {
@@ -1441,25 +1356,10 @@ impl AppState {
         crate::safe_io::atomic_write_text(&self.goals_file(context_name), content)
     }
 
-    /// Load todos for current context
-    pub fn load_current_todos(&self) -> io::Result<String> {
-        self.load_todos(&self.state.current_context)
-    }
-
-    /// Load goals for current context
-    pub fn load_current_goals(&self) -> io::Result<String> {
-        self.load_goals(&self.state.current_context)
-    }
-
-    /// Save todos for current context
-    pub fn save_current_todos(&self, content: &str) -> io::Result<()> {
-        self.save_todos(&self.state.current_context, content)
-    }
-
-    /// Save goals for current context
-    pub fn save_current_goals(&self, content: &str) -> io::Result<()> {
-        self.save_goals(&self.state.current_context, content)
-    }
+    // NOTE: load_current_todos, load_current_goals, save_current_todos, save_current_goals
+    // were removed in the stateless-core refactor. Use the parameterized versions:
+    // - load_todos(context_name) / save_todos(context_name, content)
+    // - load_goals(context_name) / save_goals(context_name, content)
 
     /// Get the path to a context's local config file
     pub fn local_config_file(&self, context_name: &str) -> PathBuf {
@@ -1516,10 +1416,11 @@ impl AppState {
     /// 5. Defaults
     pub fn resolve_config(
         &self,
+        context_name: &str,
         cli_username: Option<&str>,
         cli_temp_username: Option<&str>,
     ) -> io::Result<ResolvedConfig> {
-        let local = self.load_local_config(&self.state.current_context)?;
+        let local = self.load_local_config(context_name)?;
 
         // Start with defaults, then merge global config
         let mut api_params = ApiParams::defaults();
@@ -1645,19 +1546,28 @@ impl AppState {
     // Each method encapsulates context-specific logic (from/to derivation).
 
     /// Create a transcript entry for a user message
-    pub fn create_user_message_entry(&self, content: &str, username: &str) -> TranscriptEntry {
+    pub fn create_user_message_entry(
+        &self,
+        context_name: &str,
+        content: &str,
+        username: &str,
+    ) -> TranscriptEntry {
         TranscriptEntry::builder()
             .from(username)
-            .to(&self.state.current_context)
+            .to(context_name)
             .content(content)
             .entry_type(ENTRY_TYPE_MESSAGE)
             .build()
     }
 
     /// Create a transcript entry for an assistant message
-    pub fn create_assistant_message_entry(&self, content: &str) -> TranscriptEntry {
+    pub fn create_assistant_message_entry(
+        &self,
+        context_name: &str,
+        content: &str,
+    ) -> TranscriptEntry {
         TranscriptEntry::builder()
-            .from(&self.state.current_context)
+            .from(context_name)
             .to("user")
             .content(content)
             .entry_type(ENTRY_TYPE_MESSAGE)
@@ -1665,9 +1575,14 @@ impl AppState {
     }
 
     /// Create a transcript entry for a tool call
-    pub fn create_tool_call_entry(&self, tool_name: &str, arguments: &str) -> TranscriptEntry {
+    pub fn create_tool_call_entry(
+        &self,
+        context_name: &str,
+        tool_name: &str,
+        arguments: &str,
+    ) -> TranscriptEntry {
         TranscriptEntry::builder()
-            .from(&self.state.current_context)
+            .from(context_name)
             .to(tool_name)
             .content(arguments)
             .entry_type(ENTRY_TYPE_TOOL_CALL)
@@ -1675,10 +1590,15 @@ impl AppState {
     }
 
     /// Create a transcript entry for a tool result
-    pub fn create_tool_result_entry(&self, tool_name: &str, result: &str) -> TranscriptEntry {
+    pub fn create_tool_result_entry(
+        &self,
+        context_name: &str,
+        tool_name: &str,
+        result: &str,
+    ) -> TranscriptEntry {
         TranscriptEntry::builder()
             .from(tool_name)
-            .to(&self.state.current_context)
+            .to(context_name)
             .content(result)
             .entry_type(ENTRY_TYPE_TOOL_RESULT)
             .build()

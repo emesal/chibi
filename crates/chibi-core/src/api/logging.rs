@@ -1,6 +1,6 @@
 //! Debug logging utilities for API requests and responses.
 //!
-//! These utilities log API interactions to JSONL files in the current context's
+//! These utilities log API interactions to JSONL files in the specified context's
 //! directory when debug logging is enabled.
 
 use crate::context::now_timestamp;
@@ -10,10 +10,11 @@ use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;
 
-/// Log data to a JSONL file in the current context's directory if debug logging is enabled.
+/// Log data to a JSONL file in the specified context's directory if debug logging is enabled.
 /// The `required_key` specifies which DebugKey enables this log. `DebugKey::All` always matches.
 pub fn log_to_jsonl(
     app: &AppState,
+    context_name: &str,
     debug: &[DebugKey],
     required_key: DebugKey,
     filename: &str,
@@ -32,7 +33,7 @@ pub fn log_to_jsonl(
         data_key: data,
     });
 
-    let log_path = app.context_dir(&app.state.current_context).join(filename);
+    let log_path = app.context_dir(context_name).join(filename);
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path)
         && let Ok(json) = serde_json::to_string(&log_entry)
     {
@@ -43,11 +44,13 @@ pub fn log_to_jsonl(
 /// Log an API request to requests.jsonl if debug logging is enabled
 pub fn log_request_if_enabled(
     app: &AppState,
+    context_name: &str,
     debug: &[DebugKey],
     request_body: &serde_json::Value,
 ) {
     log_to_jsonl(
         app,
+        context_name,
         debug,
         DebugKey::RequestLog,
         "requests.jsonl",
@@ -59,11 +62,13 @@ pub fn log_request_if_enabled(
 /// Log response metadata to response_meta.jsonl if debug logging is enabled
 pub fn log_response_meta_if_enabled(
     app: &AppState,
+    context_name: &str,
     debug: &[DebugKey],
     response_meta: &serde_json::Value,
 ) {
     log_to_jsonl(
         app,
+        context_name,
         debug,
         DebugKey::ResponseMeta,
         "response_meta.jsonl",

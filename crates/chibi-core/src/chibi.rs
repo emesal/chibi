@@ -203,13 +203,13 @@ impl Chibi {
         args: serde_json::Value,
     ) -> io::Result<String> {
         // Try built-in tools first
-        if let Some(result) = tools::execute_builtin_tool(&self.app, name, &args) {
+        if let Some(result) = tools::execute_builtin_tool(&self.app, context_name, name, &args) {
             return result;
         }
 
         // Try file tools
         if tools::is_file_tool(name) {
-            let config = self.app.resolve_config(None, None)?;
+            let config = self.app.resolve_config(context_name, None, None)?;
             if let Some(result) =
                 tools::execute_file_tool(&self.app, context_name, name, &args, &config)
             {
@@ -228,71 +228,13 @@ impl Chibi {
         ))
     }
 
-    /// Switch to a different context.
-    ///
-    /// Creates the context if it doesn't exist. Use `save()` after switching
-    /// to persist the change.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The context name to switch to
-    pub fn switch_context(&mut self, name: &str) -> io::Result<()> {
-        self.app.state.switch_context(name.to_string())?;
-
-        // Ensure ContextEntry exists in state.contexts
-        if !self.app.state.contexts.iter().any(|e| e.name == name) {
-            self.app
-                .state
-                .contexts
-                .push(ContextEntry::new(name.to_string()));
-        }
-
-        // Create context directory if needed
-        if !self.app.context_dir(name).exists() {
-            let new_context = Context::new(name.to_string());
-            self.app.save_context(&new_context)?;
-        }
-
-        Ok(())
-    }
-
-    /// Swap current and previous contexts.
-    ///
-    /// Returns the name of the context switched to.
-    /// Returns an error if there is no previous context.
-    pub fn swap_with_previous(&mut self) -> io::Result<String> {
-        let previous = self
-            .app
-            .state
-            .previous_context
-            .as_ref()
-            .filter(|s| !s.is_empty())
-            .cloned()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "No previous context available (use -c to switch contexts first)",
-                )
-            })?;
-
-        let current = self.app.state.current_context.clone();
-        self.app.state.current_context = previous.clone();
-        self.app.state.previous_context = Some(current);
-
-        Ok(previous)
-    }
-
-    /// Get the current context.
-    ///
-    /// Loads the context from disk if not already in memory.
-    pub fn current_context(&self) -> io::Result<Context> {
-        self.app.get_current_context()
-    }
-
-    /// Get the name of the current context.
-    pub fn current_context_name(&self) -> &str {
-        &self.app.state.current_context
-    }
+    // NOTE: The following methods were removed in the stateless-core refactor:
+    // - switch_context() - now handled by CLI Session
+    // - swap_with_previous() - now handled by CLI Session
+    // - current_context() - use get_or_create_context(name) on app
+    // - current_context_name() - CLI owns session state now
+    //
+    // See CLI Session for context navigation, and use parameterized methods on app.
 
     /// List all available context names.
     pub fn list_contexts(&self) -> Vec<String> {
@@ -310,15 +252,17 @@ impl Chibi {
     ///
     /// # Arguments
     ///
+    /// * `context_name` - The context to resolve config for
     /// * `persistent_username` - Username override to persist in local config
     /// * `transient_username` - Username override for this session only
     pub fn resolve_config(
         &self,
+        context_name: &str,
         persistent_username: Option<&str>,
         transient_username: Option<&str>,
     ) -> io::Result<ResolvedConfig> {
         self.app
-            .resolve_config(persistent_username, transient_username)
+            .resolve_config(context_name, persistent_username, transient_username)
     }
 
     /// Save state (current context, context list) to disk.

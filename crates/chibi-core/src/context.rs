@@ -116,24 +116,17 @@ impl ContextEntry {
     }
 }
 
+/// Holds the list of known contexts. Session state (current/previous context)
+/// is now managed by the CLI layer in session.json.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContextState {
     pub contexts: Vec<ContextEntry>,
-    pub current_context: String,
-    #[serde(default)]
-    pub previous_context: Option<String>,
+    // NOTE: current_context and previous_context fields were removed in the
+    // stateless-core refactor. Old state.json files may have these fields;
+    // serde will ignore them on deserialization (deny_unknown_fields is not set).
 }
 
 impl ContextState {
-    pub fn switch_context(&mut self, name: String) -> io::Result<()> {
-        validate_context_name(&name)?;
-        if self.current_context != name {
-            self.previous_context = Some(self.current_context.clone());
-        }
-        self.current_context = name;
-        Ok(())
-    }
-
     pub fn save(&self, state_path: &Path) -> io::Result<()> {
         crate::safe_io::atomic_write_json(state_path, self)
     }
@@ -364,43 +357,8 @@ mod tests {
         assert!(ts < 4102444800);
     }
 
-    #[test]
-    fn test_context_state_switch_valid() {
-        let mut state = ContextState {
-            contexts: vec![ContextEntry::new("default")],
-            current_context: "default".to_string(),
-            previous_context: None,
-        };
-        assert!(state.switch_context("new-context".to_string()).is_ok());
-        assert_eq!(state.current_context, "new-context");
-        assert_eq!(state.previous_context, Some("default".to_string()));
-    }
-
-    #[test]
-    fn test_context_state_switch_invalid() {
-        let mut state = ContextState {
-            contexts: vec![ContextEntry::new("default")],
-            current_context: "default".to_string(),
-            previous_context: None,
-        };
-        assert!(state.switch_context("invalid name".to_string()).is_err());
-        // Should not have changed
-        assert_eq!(state.current_context, "default");
-        assert_eq!(state.previous_context, None);
-    }
-
-    #[test]
-    fn test_context_state_switch_same_context() {
-        let mut state = ContextState {
-            contexts: vec![ContextEntry::new("default")],
-            current_context: "default".to_string(),
-            previous_context: Some("old".to_string()),
-        };
-        // Switching to the same context should not update previous_context
-        assert!(state.switch_context("default".to_string()).is_ok());
-        assert_eq!(state.current_context, "default");
-        assert_eq!(state.previous_context, Some("old".to_string()));
-    }
+    // NOTE: test_context_state_switch_* tests were removed as switch_context()
+    // is now handled by the CLI Session struct, not ContextState.
 
     #[test]
     fn test_message_serialization() {
@@ -737,8 +695,6 @@ mod tests {
 
         let state = ContextState {
             contexts: vec![ContextEntry::new("default")],
-            current_context: "default".to_string(),
-            previous_context: None,
         };
 
         state.save(&state_path).unwrap();
@@ -746,7 +702,8 @@ mod tests {
         // Verify the file exists and is valid JSON
         let content = std::fs::read_to_string(&state_path).unwrap();
         let parsed: ContextState = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed.current_context, "default");
+        assert_eq!(parsed.contexts.len(), 1);
+        assert_eq!(parsed.contexts[0].name, "default");
 
         // Verify no temp files left behind (temp files use .tmp.{id} extension)
         let parent = state_path.parent().unwrap();
@@ -773,8 +730,6 @@ mod tests {
                 thread::spawn(move || {
                     let state = ContextState {
                         contexts: vec![ContextEntry::new(format!("ctx-{}", i))],
-                        current_context: format!("ctx-{}", i),
-                        previous_context: None,
                     };
                     state.save(&path).unwrap();
                 })
@@ -788,6 +743,6 @@ mod tests {
         // The file should be valid JSON (one of the writes won)
         let content = std::fs::read_to_string(&*state_path).unwrap();
         let parsed: ContextState = serde_json::from_str(&content).unwrap();
-        assert!(parsed.current_context.starts_with("ctx-"));
+        assert!(parsed.contexts[0].name.starts_with("ctx-"));
     }
 }
