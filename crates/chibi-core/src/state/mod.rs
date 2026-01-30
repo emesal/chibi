@@ -1229,54 +1229,6 @@ impl AppState {
         self.load_goals(context_name)
     }
 
-    /// Clear a context by name (archive its history)
-    ///
-    /// This mirrors `clear_context()` behavior but operates on any named context,
-    /// not just the current one. Both functions:
-    /// - Archive messages to transcript.md
-    /// - Write an archival anchor to transcript.jsonl
-    /// - Mark the context as dirty for rebuild
-    /// - Create a fresh context
-    pub fn clear_context_by_name(&self, context_name: &str) -> io::Result<()> {
-        let context = self.load_context(context_name)?;
-
-        // Don't clear if already empty
-        if context.messages.is_empty() {
-            return Ok(());
-        }
-
-        // Append to transcript.md before clearing (for human-readable archival)
-        self.ensure_context_dir(context_name)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.transcript_file(context_name))?;
-
-        for msg in &context.messages {
-            if msg.role == "system" {
-                continue;
-            }
-            writeln!(file, "[{}]: {}\n", msg.role.to_uppercase(), msg.content)?;
-        }
-
-        // Write archival anchor to transcript.jsonl (like clear_context does)
-        let archival_anchor = self.create_archival_anchor(context_name);
-        self.append_to_transcript(context_name, &archival_anchor)?;
-
-        // Mark context dirty so it rebuilds with new anchor on next load
-        self.mark_context_dirty(context_name)?;
-
-        // Create fresh context and register it in state
-        let new_context = Context::new(context_name);
-        self.save_and_register_context(&new_context)?;
-
-        // Invalidate active state cache after all writes are complete,
-        // so the next append re-scans fresh state from disk
-        self.active_state_cache.borrow_mut().remove(context_name);
-
-        Ok(())
-    }
-
     pub fn should_auto_compact(&self, context: &Context, resolved_config: &ResolvedConfig) -> bool {
         if !resolved_config.auto_compact {
             return false;
@@ -2608,62 +2560,6 @@ not valid json at all
     // in the stateless-core refactor. current_context is no longer stored in state.json;
     // it's now managed by the CLI Session layer.
 
-    // === clear_context_by_name archival anchor tests (Bug #2) ===
-
-    #[test]
-    fn test_clear_context_by_name_writes_archival_anchor() {
-        // BUG: clear_context_by_name should write an archival anchor to transcript.jsonl
-        // like clear_context does, but currently it doesn't
-        let (app, _temp) = create_test_app();
-
-        // Create a context with some messages
-        let mut ctx = Context::new("test-context");
-        ctx.messages.push(Message::new("user", "Hello"));
-        ctx.messages.push(Message::new("assistant", "Hi there"));
-        app.save_context(&ctx).unwrap();
-
-        // Create transcript.jsonl with the messages
-        let user_entry = app.create_user_message_entry("test-context", "Hello", "testuser");
-        let asst_entry = app.create_assistant_message_entry("test-context", "Hi there");
-        app.append_to_transcript("test-context", &user_entry)
-            .unwrap();
-        app.append_to_transcript("test-context", &asst_entry)
-            .unwrap();
-
-        // Clear the context by name
-        app.clear_context_by_name("test-context").unwrap();
-
-        // Read transcript and check for archival anchor
-        let entries = app.read_transcript_entries("test-context").unwrap();
-        let has_archival = entries
-            .iter()
-            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_ARCHIVAL);
-
-        assert!(
-            has_archival,
-            "clear_context_by_name should write an archival anchor to transcript"
-        );
-    }
-
-    #[test]
-    fn test_clear_context_by_name_marks_dirty() {
-        // clear_context_by_name should mark the context as dirty for rebuild
-        let (app, _temp) = create_test_app();
-
-        // Create a context with messages
-        let mut ctx = Context::new("test-context");
-        ctx.messages.push(Message::new("user", "Hello"));
-        app.save_context(&ctx).unwrap();
-
-        // Clear should mark dirty
-        app.clear_context_by_name("test-context").unwrap();
-
-        assert!(
-            app.is_context_dirty("test-context"),
-            "clear_context_by_name should mark context as dirty"
-        );
-    }
-
     // === Touch context tests ===
 
     #[test]
@@ -2938,31 +2834,6 @@ not valid json at all
         assert!(
             !app.active_state_cache.borrow().contains_key("default"),
             "cache should be invalidated after clear_context"
-        );
-    }
-
-    #[test]
-    fn test_clear_context_by_name_invalidates_cache() {
-        let (app, _temp) = create_test_app();
-
-        // Create context with messages
-        let mut ctx = Context::new("test-context");
-        ctx.messages
-            .push(Message::new("user".to_string(), "Hello".to_string()));
-        app.save_context(&ctx).unwrap();
-
-        // Append to transcript to populate cache
-        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
-        app.append_to_transcript("test-context", &entry).unwrap();
-        assert!(app.active_state_cache.borrow().contains_key("test-context"));
-
-        // clear_context_by_name saves fresh context then invalidates cache last
-        app.clear_context_by_name("test-context").unwrap();
-
-        // Cache should be absent after clear
-        assert!(
-            !app.active_state_cache.borrow().contains_key("test-context"),
-            "cache should be invalidated after clear_context_by_name"
         );
     }
 }
