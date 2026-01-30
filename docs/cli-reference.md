@@ -21,7 +21,7 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 
 ### Previous Context Reference
 
-The special context name `-` can be used to reference the previous context in any command that accepts a context name (`-c`, `-C`, `-D`, `-A`, `-Z`, `-R`, `-G`, `-N`, `-Y`, `--clear-cache-for`). The previous context is tracked in `state.json` and updated whenever you use `-c` to switch contexts.
+The special context name `-` can be used to reference the previous context in any command that accepts a context name (`-c`, `-C`, `-D`, `-A`, `-Z`, `-R`, `-G`, `-N`, `-Y`, `--clear-cache-for`). The previous context is tracked in `session.json` and updated whenever you use `-c` to switch contexts.
 
 **Examples:**
 ```bash
@@ -42,7 +42,7 @@ chibi -c -            # current='work', previous='personal'
 **Notes:**
 - `-` is a reserved name and cannot be used as a literal context name
 - If no previous context exists (first invocation), you'll get an error: "No previous context available"
-- Only persistent switches (`-c`) update `previous_context` in state.json and use swap behavior
+- Only persistent switches (`-c`) update `previous_context` in session.json and use swap behavior
 - Transient switches (`-C -`) resolve to previous context but don't swap or persist changes
 - Works with all context name parameters: `-D -` deletes previous context, `-G - 10` shows previous context's log, etc.
 - Attached flag syntax works: both `-xc-` and `-xc -` are valid
