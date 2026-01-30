@@ -2,7 +2,7 @@
 //!
 //! Methods for loading/saving system prompts, todos, goals, and reflection content.
 
-use crate::context::{now_timestamp, TranscriptEntry, ENTRY_TYPE_SYSTEM_PROMPT_CHANGED};
+use crate::context::{ENTRY_TYPE_SYSTEM_PROMPT_CHANGED, TranscriptEntry, now_timestamp};
 use std::fs;
 use std::io;
 use uuid::Uuid;

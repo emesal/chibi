@@ -6,7 +6,7 @@ use crate::context::{Context, ContextEntry, Message, now_timestamp, validate_con
 use std::fs;
 use std::io::{self, ErrorKind};
 
-use super::{create_archival_anchor, AppState, StatePaths};
+use super::{AppState, StatePaths, create_archival_anchor};
 
 impl AppState {
     /// Get or create a context by name.

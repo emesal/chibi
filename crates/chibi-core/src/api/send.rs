@@ -13,8 +13,8 @@ use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
 use crate::llm;
 use crate::state::{
-    create_assistant_message_entry, create_tool_call_entry, create_tool_result_entry,
-    create_user_message_entry, AppState, StatePaths,
+    AppState, StatePaths, create_assistant_message_entry, create_tool_call_entry,
+    create_tool_result_entry, create_user_message_entry,
 };
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
@@ -1014,8 +1014,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 );
 
                 // Log tool call and result
-                let tool_call_entry =
-                    create_tool_call_entry(context_name, &tc.name, &tc.arguments);
+                let tool_call_entry = create_tool_call_entry(context_name, &tc.name, &tc.arguments);
                 app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
                 sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
