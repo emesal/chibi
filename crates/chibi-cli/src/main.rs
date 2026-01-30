@@ -24,7 +24,8 @@ pub use session::Session;
 pub use sink::CliResponseSink;
 
 use chibi_core::context::{
-    Context, ContextEntry, now_timestamp, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
+    Context, ContextEntry, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
+    now_timestamp,
 };
 use chibi_core::input::{Command, DebugKey};
 
@@ -419,7 +420,13 @@ async fn execute_from_input(
         _ => None,
     });
     // Ensure ContextEntry exists before applying destroy settings (fix for #47 regression)
-    if !chibi.app.state.contexts.iter().any(|e| e.name == current_ctx) {
+    if !chibi
+        .app
+        .state
+        .contexts
+        .iter()
+        .any(|e| e.name == current_ctx)
+    {
         chibi.app.state.contexts.push(ContextEntry::with_created_at(
             current_ctx.clone(),
             now_timestamp(),
