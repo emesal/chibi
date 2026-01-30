@@ -18,7 +18,8 @@ default:
   @echo "  just test                 → Just run tests"
   @echo ""
   @echo "🔀 Finishing work:"
-  @echo "  just merge-to-dev         → Merge current branch to dev + tag it"
+  @echo "  just merge-to-dev         → Merge current branch to dev + tag it (local)"
+  @echo "  just pr                   → Create PR to dev (auto-tags on merge)"
   @echo ""
   @echo "🚀 Release cycle:"
   @echo "  just release v0.x         → Squash dev→main, run tests, tag release"
@@ -102,7 +103,7 @@ hotfix name:
   echo "⚠️  This branch is from main, not dev!"
   echo "  After merging to main, sync back to dev with: git checkout dev && git merge main"
 
-# Merge current branch into dev and tag it
+# Merge current branch into dev and tag it (local merge, for quick changes)
 merge-to-dev:
   #!/usr/bin/env bash
   set -e
@@ -118,6 +119,25 @@ merge-to-dev:
   echo "✓ Merged $BRANCH into dev and tagged as $BRANCH"
   echo "  Branch $BRANCH is now preserved as a tag"
   echo "  You can delete the branch with: git branch -d $BRANCH"
+
+# Create a pull request to dev (auto-tags on merge via GitHub Actions)
+pr:
+  #!/usr/bin/env bash
+  set -e
+  BRANCH=$(git branch --show-current)
+  if [ "$BRANCH" = "dev" ] || [ "$BRANCH" = "main" ]; then
+    echo "Error: Cannot create PR from dev or main"
+    exit 1
+  fi
+
+  # Push branch if not already pushed
+  git push -u origin "$BRANCH" 2>/dev/null || git push origin "$BRANCH"
+
+  # Create PR
+  gh pr create --base dev --fill
+
+  echo "✓ PR created to dev"
+  echo "  When merged, GitHub Actions will automatically tag it as $BRANCH"
 
 # === Linting & Testing ===
 
