@@ -132,10 +132,9 @@ fn resolve_context_name(chibi: &Chibi, session: &Session, name: &str) -> io::Res
 fn resolve_cli_config(
     chibi: &Chibi,
     context_name: &str,
-    persistent_username: Option<&str>,
-    ephemeral_username: Option<&str>,
+    username_override: Option<&str>,
 ) -> io::Result<ResolvedConfig> {
-    let core = chibi.resolve_config(context_name, persistent_username, ephemeral_username)?;
+    let core = chibi.resolve_config(context_name, username_override)?;
     let cli = load_cli_config(chibi.home_dir(), Some(context_name))?;
 
     Ok(ResolvedConfig {
@@ -158,7 +157,7 @@ fn inspect_context(
     let config = if let Some(cfg) = resolved_config {
         cfg
     } else {
-        config_holder = resolve_cli_config(chibi, context_name, None, None)?;
+        config_holder = resolve_cli_config(chibi, context_name, None)?;
         &config_holder
     };
 
@@ -427,26 +426,25 @@ async fn execute_from_input(
     }
 
     // Handle username override
-    if let Some(ref override_) = input.username_override {
-        match override_ {
-            UsernameOverride::Persistent(username) => {
-                let mut local_config = chibi.app.load_local_config(&current_ctx)?;
-                local_config.username = Some(username.clone());
-                chibi.app.save_local_config(&current_ctx, &local_config)?;
-                output.diagnostic(
-                    &format!(
-                        "[Username '{}' saved to context '{}']",
-                        username, current_ctx
-                    ),
-                    verbose,
-                );
-                did_action = true;
-            }
-            UsernameOverride::Ephemeral(_) => {
-                // Applied via resolve_config later
-            }
+    // Persistent (-u) is saved to local.toml; ephemeral (-U) is used for this invocation only
+    let ephemeral_username: Option<&str> = match &input.username_override {
+        Some(UsernameOverride::Persistent(username)) => {
+            let mut local_config = chibi.app.load_local_config(&current_ctx)?;
+            local_config.username = Some(username.clone());
+            chibi.app.save_local_config(&current_ctx, &local_config)?;
+            output.diagnostic(
+                &format!(
+                    "[Username '{}' saved to context '{}']",
+                    username, current_ctx
+                ),
+                verbose,
+            );
+            did_action = true;
+            None // persistent was saved, no runtime override needed
         }
-    }
+        Some(UsernameOverride::Ephemeral(username)) => Some(username.as_str()),
+        None => None,
+    };
 
     // Execute command
     match &input.command {
@@ -552,7 +550,7 @@ async fn execute_from_input(
                 api::compact_context_by_name(&chibi.app, &resolved_name, verbose).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
-                let resolved = chibi.resolve_config(&working_context, None, None)?;
+                let resolved = chibi.resolve_config(&working_context, None)?;
                 api::compact_context_with_llm_manual(
                     &chibi.app,
                     &working_context,
@@ -587,7 +585,7 @@ async fn execute_from_input(
                 Some(n) => resolve_context_name(chibi, session, n)?,
                 None => working_context.clone(),
             };
-            let config = resolve_cli_config(chibi, &ctx_name, None, None)?;
+            let config = resolve_cli_config(chibi, &ctx_name, None)?;
             show_log(chibi, &ctx_name, *count, verbose, &config, force_markdown)?;
             did_action = true;
         }
@@ -596,7 +594,9 @@ async fn execute_from_input(
                 Some(n) => resolve_context_name(chibi, session, n)?,
                 None => working_context.clone(),
             };
-            inspect_context(chibi, &ctx_name, thing, None, force_markdown)?;
+            // Pass ephemeral username so -U works with -n
+            let config = resolve_cli_config(chibi, &ctx_name, ephemeral_username)?;
+            inspect_context(chibi, &ctx_name, thing, Some(&config), force_markdown)?;
             did_action = true;
         }
         Command::SetSystemPrompt { context, prompt } => {
@@ -643,7 +643,7 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::CleanupCache => {
-            let resolved = chibi.resolve_config(&working_context, None, None)?;
+            let resolved = chibi.resolve_config(&working_context, None)?;
             let removed = chibi
                 .app
                 .cleanup_all_tool_caches(resolved.tool_cache_max_age_days)?;
@@ -661,14 +661,8 @@ async fn execute_from_input(
                 chibi.app.save_and_register_context(&new_context)?;
             }
 
-            // Resolve config with runtime overrides
-            let (persistent_username, ephemeral_username) = match &input.username_override {
-                Some(UsernameOverride::Persistent(u)) => (Some(u.as_str()), None),
-                Some(UsernameOverride::Ephemeral(u)) => (None, Some(u.as_str())),
-                None => (None, None),
-            };
-            let mut resolved =
-                resolve_cli_config(chibi, &ctx_name, persistent_username, ephemeral_username)?;
+            // Resolve config with runtime override (ephemeral username extracted earlier)
+            let mut resolved = resolve_cli_config(chibi, &ctx_name, ephemeral_username)?;
             if input.flags.raw {
                 resolved.render_markdown = false;
             }
@@ -721,7 +715,7 @@ async fn execute_from_input(
     let _ = chibi.execute_hook(tools::HookPoint::OnEnd, &hook_data, verbose);
 
     // Automatic cache cleanup
-    let resolved = chibi.resolve_config(&working_context, None, None)?;
+    let resolved = chibi.resolve_config(&working_context, None)?;
     if resolved.auto_cleanup_cache {
         let removed = chibi
             .app
@@ -739,7 +733,7 @@ async fn execute_from_input(
     }
 
     // Image cache cleanup
-    let cli_config = resolve_cli_config(chibi, &working_context, None, None)?;
+    let cli_config = resolve_cli_config(chibi, &working_context, None)?;
     if cli_config.image.cache_enabled {
         let image_cache_dir = chibi.home_dir().join("image_cache");
         match image_cache::cleanup_image_cache(

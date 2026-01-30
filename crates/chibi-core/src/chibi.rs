@@ -16,7 +16,7 @@
 //!     let mut chibi = Chibi::load()?;
 //!
 //!     // Get the config for the default context
-//!     let config = chibi.resolve_config("default", None, None)?;
+//!     let config = chibi.resolve_config("default", None)?;
 //!
 //!     // Create options and a sink to collect the response
 //!     let options = PromptOptions::new(false, false, false, &[], false);
@@ -154,7 +154,7 @@ impl Chibi {
     /// # use chibi_core::api::PromptOptions;
     /// # async fn example() -> std::io::Result<()> {
     /// # let chibi = Chibi::load()?;
-    /// # let config = chibi.resolve_config("default", None, None)?;
+    /// # let config = chibi.resolve_config("default", None)?;
     /// # let options = PromptOptions::new(false, false, false, &[], false);
     /// let mut sink = CollectingSink::new();
     /// chibi.send_prompt_streaming("default", "Hello", &config, &options, &mut sink).await?;
@@ -209,7 +209,7 @@ impl Chibi {
 
         // Try file tools
         if tools::is_file_tool(name) {
-            let config = self.app.resolve_config(context_name, None, None)?;
+            let config = self.app.resolve_config(context_name, None)?;
             if let Some(result) =
                 tools::execute_file_tool(&self.app, context_name, name, &args, &config)
             {
@@ -248,21 +248,18 @@ impl Chibi {
 
     /// Resolve configuration for the current context.
     ///
-    /// Combines global config, context-local config, and optional runtime overrides.
+    /// Combines global config, context-local config, and optional runtime override.
     ///
     /// # Arguments
     ///
     /// * `context_name` - The context to resolve config for
-    /// * `persistent_username` - Username override to persist in local config
-    /// * `ephemeral_username` - Username override for this session only
+    /// * `username_override` - Optional username override for this invocation
     pub fn resolve_config(
         &self,
         context_name: &str,
-        persistent_username: Option<&str>,
-        ephemeral_username: Option<&str>,
+        username_override: Option<&str>,
     ) -> io::Result<ResolvedConfig> {
-        self.app
-            .resolve_config(context_name, persistent_username, ephemeral_username)
+        self.app.resolve_config(context_name, username_override)
     }
 
     /// Save state (current context, context list) to disk.

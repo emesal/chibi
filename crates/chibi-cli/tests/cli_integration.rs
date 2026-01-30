@@ -1642,3 +1642,179 @@ fn integration_session_created_on_first_switch() {
         "session.json should exist after first switch"
     );
 }
+
+// =============================================================================
+// Username override tests (persistent vs ephemeral)
+// =============================================================================
+
+/// Helper to create a test home with a specific username in config
+fn setup_test_home_with_username(username: &str) -> TempDir {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let config_content = format!(
+        r#"
+api_key = "test-key-not-real"
+model = "test-model"
+context_window_limit = 8000
+warn_threshold_percent = 75.0
+username = "{}"
+"#,
+        username
+    );
+    fs::write(temp_dir.path().join("config.toml"), config_content)
+        .expect("failed to write config.toml");
+    temp_dir
+}
+
+#[test]
+fn integration_username_from_global_config() {
+    // Username should come from config.toml when no override is specified
+    let temp_home = setup_test_home_with_username("globaluser");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-n", "username"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "globaluser");
+}
+
+#[test]
+fn integration_persistent_username_saves_to_local_config() {
+    // -u should save the username to local.toml
+    let temp_home = setup_test_home_with_username("globaluser");
+
+    // Set persistent username
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-u", "persistentuser"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+
+    // Verify the username was saved to local.toml
+    let local_config_path = temp_home.path().join("contexts/default/local.toml");
+    assert!(
+        local_config_path.exists(),
+        "local.toml should exist after -u"
+    );
+
+    let local_content = fs::read_to_string(&local_config_path).expect("failed to read local.toml");
+    assert!(
+        local_content.contains("persistentuser"),
+        "local.toml should contain the persistent username"
+    );
+
+    // Now verify -n username shows the persistent username (not the global one)
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-n", "username"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "persistentuser",
+        "username should be persistentuser after -u"
+    );
+}
+
+#[test]
+fn integration_ephemeral_username_overrides_but_does_not_persist() {
+    // -U should override the username for this invocation only, not save to local.toml
+    let temp_home = setup_test_home_with_username("globaluser");
+
+    // First, set a persistent username so we have local.toml
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-u", "persistentuser"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Verify it's set
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-n", "username"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "persistentuser"
+    );
+
+    // Now use ephemeral username and check it via -n in same invocation
+    // Note: -U and -n together should show the ephemeral username
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-U", "ephemeraluser", "-n", "username"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "ephemeraluser",
+        "username should be ephemeraluser when using -U"
+    );
+
+    // Verify local.toml still has persistentuser (ephemeral didn't persist)
+    let local_config_path = temp_home.path().join("contexts/default/local.toml");
+    let local_content = fs::read_to_string(&local_config_path).expect("failed to read local.toml");
+    assert!(
+        local_content.contains("persistentuser"),
+        "local.toml should still contain persistentuser, not ephemeraluser"
+    );
+    assert!(
+        !local_content.contains("ephemeraluser"),
+        "local.toml should NOT contain ephemeraluser"
+    );
+
+    // And verify that without -U, we get the persistent username again
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-n", "username"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "persistentuser",
+        "username should be back to persistentuser without -U"
+    );
+}
+
+#[test]
+fn integration_ephemeral_username_overrides_persistent() {
+    // -U should take priority over what's in local.toml
+    let temp_home = setup_test_home_with_username("globaluser");
+
+    // Set persistent username first
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-u", "persistentuser"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Now verify -U overrides the persistent username
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-U", "ephemeraluser", "-n", "username"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "ephemeraluser",
+        "ephemeral username (-U) should override persistent username from local.toml"
+    );
+}

@@ -904,8 +904,8 @@ impl AppState {
         self.save_context(context)?;
 
         // Ensure the context is tracked in state.
-        // Important: Read state from disk to avoid persisting ephemeral context switches.
-        // The in-memory state may have an ephemeral current_context that shouldn't be saved.
+        // Important: Read state from disk to get the authoritative list of contexts,
+        // rather than using in-memory state which may be stale.
         if !self.state.contexts.iter().any(|e| e.name == context.name) {
             let disk_state = if self.state_path.exists() {
                 let content = fs::read_to_string(&self.state_path)?;
@@ -1340,7 +1340,7 @@ impl AppState {
     }
 
     /// Resolve the full configuration, applying overrides in order:
-    /// 1. CLI flags (passed as parameters)
+    /// 1. Runtime override (passed as parameter)
     /// 2. Context-local config (local.toml)
     /// 3. Global config (config.toml)
     /// 4. Models.toml (for model expansion)
@@ -1348,8 +1348,7 @@ impl AppState {
     pub fn resolve_config(
         &self,
         context_name: &str,
-        cli_username: Option<&str>,
-        cli_ephemeral_username: Option<&str>,
+        username_override: Option<&str>,
     ) -> io::Result<ResolvedConfig> {
         let local = self.load_local_config(context_name)?;
 
@@ -1435,12 +1434,8 @@ impl AppState {
             resolved.tools = local_tools.clone();
         }
 
-        // Apply CLI overrides (highest priority)
-        // Note: -u (persistent) should have been saved to local.toml before calling this
-        // -U (ephemeral) overrides for this invocation only
-        if let Some(username) = cli_ephemeral_username {
-            resolved.username = username.to_string();
-        } else if let Some(username) = cli_username {
+        // Apply runtime username override (highest priority)
+        if let Some(username) = username_override {
             resolved.username = username.to_string();
         }
 
@@ -2000,7 +1995,7 @@ mod tests {
     #[test]
     fn test_resolve_config_defaults() {
         let (app, _temp) = create_test_app();
-        let resolved = app.resolve_config("default", None, None).unwrap();
+        let resolved = app.resolve_config("default", None).unwrap();
 
         assert_eq!(resolved.api_key, "test-key");
         assert_eq!(resolved.model, "test-model");
@@ -2020,14 +2015,14 @@ mod tests {
         };
         app.save_local_config("default", &local).unwrap();
 
-        let resolved = app.resolve_config("default", None, None).unwrap();
+        let resolved = app.resolve_config("default", None).unwrap();
         assert_eq!(resolved.model, "local-model");
         assert_eq!(resolved.username, "localuser");
         assert!(resolved.auto_compact);
     }
 
     #[test]
-    fn test_resolve_config_cli_override() {
+    fn test_resolve_config_username_override() {
         let (app, _temp) = create_test_app();
 
         // Set local config
@@ -2037,17 +2032,15 @@ mod tests {
         };
         app.save_local_config("default", &local).unwrap();
 
-        // CLI temp username should override local
-        let resolved = app
-            .resolve_config("default", None, Some("cliuser"))
-            .unwrap();
-        assert_eq!(resolved.username, "cliuser");
+        // Runtime username override should override local
+        let resolved = app.resolve_config("default", Some("overrideuser")).unwrap();
+        assert_eq!(resolved.username, "overrideuser");
     }
 
     #[test]
     fn test_resolve_config_api_params_global_defaults() {
         let (app, _temp) = create_test_app();
-        let resolved = app.resolve_config("default", None, None).unwrap();
+        let resolved = app.resolve_config("default", None).unwrap();
 
         // Should have defaults from ApiParams::defaults()
         assert_eq!(resolved.api.prompt_caching, Some(true));
@@ -2073,7 +2066,7 @@ mod tests {
         };
         app.save_local_config("default", &local).unwrap();
 
-        let resolved = app.resolve_config("default", None, None).unwrap();
+        let resolved = app.resolve_config("default", None).unwrap();
 
         // Context-level API params should override
         assert_eq!(resolved.api.temperature, Some(0.7));
@@ -2127,7 +2120,7 @@ mod tests {
             },
         );
 
-        let resolved = app.resolve_config("default", None, None).unwrap();
+        let resolved = app.resolve_config("default", None).unwrap();
 
         // Model-level params should be applied
         assert_eq!(resolved.api.temperature, Some(0.5));
@@ -2191,7 +2184,7 @@ mod tests {
         };
         app.save_local_config("default", &local).unwrap();
 
-        let resolved = app.resolve_config("default", None, None).unwrap();
+        let resolved = app.resolve_config("default", None).unwrap();
 
         // Context should override model
         assert_eq!(resolved.api.temperature, Some(0.9));
@@ -2199,27 +2192,11 @@ mod tests {
         assert_eq!(resolved.api.max_tokens, Some(1000));
     }
 
-    #[test]
-    fn test_resolve_config_cli_persistent_username() {
-        let (app, _temp) = create_test_app();
-
-        // CLI persistent username (simulates -u flag)
-        let resolved = app
-            .resolve_config("default", Some("persistentuser"), None)
-            .unwrap();
-        assert_eq!(resolved.username, "persistentuser");
-    }
-
-    #[test]
-    fn test_resolve_config_cli_temp_username_over_persistent() {
-        let (app, _temp) = create_test_app();
-
-        // Temp username should override persistent
-        let resolved = app
-            .resolve_config("default", Some("persistentuser"), Some("tempuser"))
-            .unwrap();
-        assert_eq!(resolved.username, "tempuser");
-    }
+    // NOTE: test_resolve_config_cli_persistent_username and
+    // test_resolve_config_cli_temp_username_over_persistent were removed in the
+    // stateless-core refactor. The distinction between persistent (-u) and
+    // ephemeral (-U) usernames is now handled by the CLI layer, not chibi-core.
+    // Core only knows about a single optional username_override parameter.
 
     #[test]
     fn test_resolve_config_all_local_overrides() {
@@ -2248,7 +2225,7 @@ mod tests {
         };
         app.save_local_config("default", &local).unwrap();
 
-        let resolved = app.resolve_config("default", None, None).unwrap();
+        let resolved = app.resolve_config("default", None).unwrap();
 
         assert_eq!(resolved.model, "local-model");
         assert_eq!(resolved.api_key, "local-key");
