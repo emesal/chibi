@@ -92,13 +92,13 @@ Plugins can register for lifecycle hooks by including a `hooks` array in the sch
 
 | Hook | When | Hook Data |
 |------|------|-----------|
-| `on_start` | Chibi starts | `{current_context, verbose}` |
-| `on_end` | Chibi exits | `{current_context}` |
+| `on_start` | Chibi starts | `{implied_context, working_context, verbose}` |
+| `on_end` | Chibi exits | `{implied_context, working_context}` |
 | `pre_message` | Before sending user message to LLM | `{prompt, context_name, summary}` |
 | `post_message` | After receiving LLM response | `{prompt, response, context_name}` |
 | `pre_tool` | Before executing a tool | `{tool_name, arguments}` |
 | `post_tool` | After tool execution | `{tool_name, arguments, result}` |
-| `on_context_switch` | Context changes | `{from_context, to_context, is_transient}` |
+| `on_context_switch` | Context changes | `{from_context, to_context, is_ephemeral}` |
 | `pre_clear` | Before clearing context | `{context_name, message_count, summary}` |
 | `post_clear` | After clearing context | `{context_name}` |
 | `pre_compact` | Before manual compaction | `{context_name, message_count, summary}` |
@@ -250,7 +250,7 @@ CHIBI_TOOL_ARGS='{"name": "world"}' ./my_plugin
 
 Test hooks:
 ```bash
-CHIBI_HOOK="on_start" CHIBI_HOOK_DATA='{"current_context": "default", "verbose": true}' ./my_plugin
+CHIBI_HOOK="on_start" CHIBI_HOOK_DATA='{"implied_context": "default", "working_context": "default", "verbose": true}' ./my_plugin
 ```
 
 ## Built-in Tools

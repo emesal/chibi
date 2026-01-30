@@ -228,12 +228,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_transient_context() {
-        let json = r#"{"command": "no_op", "context": {"transient": {"name": "temp"}}}"#;
+    fn test_parse_ephemeral_context() {
+        let json = r#"{"command": "no_op", "context": {"ephemeral": {"name": "temp"}}}"#;
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.context,
-            ContextSelection::Transient { ref name } if name == "temp"
+            ContextSelection::Ephemeral { ref name } if name == "temp"
         ));
     }
 
@@ -248,12 +248,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_username_transient() {
-        let json = r#"{"command": "no_op", "username_override": {"transient": "bob"}}"#;
+    fn test_parse_username_ephemeral() {
+        let json = r#"{"command": "no_op", "username_override": {"ephemeral": "bob"}}"#;
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.username_override,
-            Some(UsernameOverride::Transient(ref u)) if u == "bob"
+            Some(UsernameOverride::Ephemeral(ref u)) if u == "bob"
         ));
     }
 
@@ -340,7 +340,7 @@ mod tests {
             "command": {"send_prompt": {"prompt": "hello world"}},
             "flags": {"verbose": true},
             "context": {"switch": {"name": "coding"}},
-            "username_override": {"transient": "alice"}
+            "username_override": {"ephemeral": "alice"}
         }"#;
         let input = from_str(json).unwrap();
         assert!(
@@ -351,7 +351,7 @@ mod tests {
             matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "coding")
         );
         assert!(
-            matches!(input.username_override, Some(UsernameOverride::Transient(ref u)) if u == "alice")
+            matches!(input.username_override, Some(UsernameOverride::Ephemeral(ref u)) if u == "alice")
         );
     }
 

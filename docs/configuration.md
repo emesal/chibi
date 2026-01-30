@@ -282,7 +282,7 @@ Set username via CLI (automatically saves to local.toml):
 
 ```bash
 chibi -u alice "Hello"  # Persists to local.toml
-chibi -U bob "Hello"    # Transient, doesn't persist
+chibi -U bob "Hello"    # Ephemeral, doesn't persist
 ```
 
 ## CLI Configuration (cli.toml)

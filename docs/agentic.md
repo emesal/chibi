@@ -155,7 +155,7 @@ See [hooks.md](hooks.md#pre_send_message) for details.
 
 ## Sub-Agents
 
-### Transient Context Flag
+### Ephemeral Context Flag
 
 Use `-C` to spawn agents without affecting global context state:
 

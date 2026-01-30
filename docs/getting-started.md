@@ -120,7 +120,7 @@ result=$(chibi "What is 2+2? Just the number.")
 ## Next Steps
 
 - [Configuration Reference](configuration.md) - All config options including API parameters
-- [Context Management](contexts.md) - Multiple conversations, locking, transient contexts
+- [Context Management](contexts.md) - Multiple conversations, locking, ephemeral contexts
 - [Plugins](plugins.md) - Extending chibi with custom tools
 - [Hooks](hooks.md) - Lifecycle event system
 - [Agentic Workflows](agentic.md) - Todos, goals, reflection, autonomous processing

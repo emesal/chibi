@@ -317,9 +317,9 @@ fn integration_new_context_empty_prefix_error() {
     );
 }
 
-/// Test transient context with -C new
+/// Test ephemeral context with -C new
 #[test]
-fn integration_transient_new_context() {
+fn integration_ephemeral_new_context() {
     let temp_home = setup_test_home();
 
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
@@ -442,10 +442,10 @@ fn integration_json_config_mode_context_switch() {
         .spawn()
         .expect("failed to spawn chibi");
 
-    // Switch to a context transiently and list current context info
+    // Switch to a context ephemerally and list current context info
     let json_input = r#"{
         "command": "list_current_context",
-        "context": {"transient": {"name": "json_test_context"}}
+        "context": {"ephemeral": {"name": "json_test_context"}}
     }"#;
     child
         .stdin
@@ -648,8 +648,8 @@ fn integration_json_schema_context_selection_variants() {
     assert!(ctx_def.contains("current"), "should have 'current' variant");
     assert!(ctx_def.contains("switch"), "should have 'switch' variant");
     assert!(
-        ctx_def.contains("transient"),
-        "should have 'transient' variant"
+        ctx_def.contains("ephemeral"),
+        "should have 'ephemeral' variant"
     );
 }
 
@@ -1085,7 +1085,7 @@ fn integration_context_name_dash_is_invalid() {
 }
 
 #[test]
-fn integration_transient_switch_to_previous() {
+fn integration_ephemeral_switch_to_previous() {
     let temp_home = setup_test_home();
 
     // Create and switch to contexts
@@ -1094,7 +1094,7 @@ fn integration_transient_switch_to_previous() {
             "--debug",
             "destroy_after_seconds_inactive=1",
             "-c",
-            "trans_1",
+            "eph_1",
             "-l",
         ])
         .env("CHIBI_HOME", temp_home.path())
@@ -1106,14 +1106,14 @@ fn integration_transient_switch_to_previous() {
             "--debug",
             "destroy_after_seconds_inactive=1",
             "-c",
-            "trans_2",
+            "eph_2",
             "-l",
         ])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
 
-    // Use "-C -" to transiently use previous
+    // Use "-C -" to ephemerally use previous
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args(["-C", "-", "-l"])
         .env("CHIBI_HOME", temp_home.path())
@@ -1122,7 +1122,7 @@ fn integration_transient_switch_to_previous() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("trans_1"), "Should transiently use trans_1");
+    assert!(stdout.contains("eph_1"), "Should ephemerally use eph_1");
 }
 
 #[test]
@@ -1357,14 +1357,14 @@ fn integration_session_switch_persists() {
     // Verify session.json was updated
     let session = read_session(&temp_home);
     assert_eq!(
-        session["current_context"], "session_test_1",
-        "session.json should have updated current_context"
+        session["implied_context"], "session_test_1",
+        "session.json should have updated implied_context"
     );
 }
 
-/// Test that `-C name` (transient) does NOT persist to session.json
+/// Test that `-C name` (ephemeral) does NOT persist to session.json
 #[test]
-fn integration_session_transient_does_not_persist() {
+fn integration_session_ephemeral_does_not_persist() {
     let temp_home = setup_test_home();
 
     // First, switch to a context persistently to establish session
@@ -1374,24 +1374,24 @@ fn integration_session_transient_does_not_persist() {
         .output()
         .expect("failed to run chibi");
 
-    // Now use transient switch
+    // Now use ephemeral switch
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args(["-C", "transient_ctx", "-l"])
+        .args(["-C", "ephemeral_ctx", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("transient_ctx"),
-        "Should be using transient_ctx"
+        stdout.contains("ephemeral_ctx"),
+        "Should be using ephemeral_ctx"
     );
 
-    // Verify session.json still has persistent_ctx as current
+    // Verify session.json still has persistent_ctx as implied
     let session = read_session(&temp_home);
     assert_eq!(
-        session["current_context"], "persistent_ctx",
-        "session.json should NOT be updated by transient switch"
+        session["implied_context"], "persistent_ctx",
+        "session.json should NOT be updated by ephemeral switch"
     );
 }
 
@@ -1413,7 +1413,7 @@ fn integration_session_rename_updates_current() {
         .expect("failed to run chibi");
 
     let session = read_session(&temp_home);
-    assert_eq!(session["current_context"], "rename_me");
+    assert_eq!(session["implied_context"], "rename_me");
 
     // Rename current context
     let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
@@ -1430,7 +1430,7 @@ fn integration_session_rename_updates_current() {
     // Verify session.json was updated
     let session = read_session(&temp_home);
     assert_eq!(
-        session["current_context"], "new_name",
+        session["implied_context"], "new_name",
         "session should reflect renamed context"
     );
 }
@@ -1454,7 +1454,7 @@ fn integration_session_rename_updates_previous() {
         .expect("failed to run chibi");
 
     let session = read_session(&temp_home);
-    assert_eq!(session["current_context"], "current");
+    assert_eq!(session["implied_context"], "current");
     assert_eq!(session["previous_context"], "old_prev");
 
     // Rename the previous context
@@ -1471,7 +1471,7 @@ fn integration_session_rename_updates_previous() {
 
     // Verify session.json was updated
     let session = read_session(&temp_home);
-    assert_eq!(session["current_context"], "current");
+    assert_eq!(session["implied_context"], "current");
     assert_eq!(
         session["previous_context"], "new_prev",
         "previous_context should be updated after rename"
@@ -1492,7 +1492,7 @@ fn integration_session_tracks_previous_correctly() {
 
     // Previous should be "default" (the initial context)
     let session = read_session(&temp_home);
-    assert_eq!(session["current_context"], "ctx_1");
+    assert_eq!(session["implied_context"], "ctx_1");
     assert_eq!(session["previous_context"], "default");
 
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
@@ -1502,7 +1502,7 @@ fn integration_session_tracks_previous_correctly() {
         .expect("failed to run chibi");
 
     let session = read_session(&temp_home);
-    assert_eq!(session["current_context"], "ctx_2");
+    assert_eq!(session["implied_context"], "ctx_2");
     assert_eq!(
         session["previous_context"], "ctx_1",
         "previous should be ctx_1, not default"
@@ -1515,7 +1515,7 @@ fn integration_session_tracks_previous_correctly() {
         .expect("failed to run chibi");
 
     let session = read_session(&temp_home);
-    assert_eq!(session["current_context"], "ctx_3");
+    assert_eq!(session["implied_context"], "ctx_3");
     assert_eq!(
         session["previous_context"], "ctx_2",
         "previous should be ctx_2"
@@ -1550,7 +1550,7 @@ fn integration_session_switch_to_same_preserves_previous() {
         .expect("failed to run chibi");
 
     let session = read_session(&temp_home);
-    assert_eq!(session["current_context"], "ctx_b");
+    assert_eq!(session["implied_context"], "ctx_b");
     assert_eq!(
         session["previous_context"], "ctx_a",
         "previous should still be ctx_a, not ctx_b"
@@ -1584,7 +1584,7 @@ fn integration_session_swap_persists() {
 
     let session = read_session(&temp_home);
     assert_eq!(
-        session["current_context"], "swap_a",
+        session["implied_context"], "swap_a",
         "after swap, current should be swap_a"
     );
     assert_eq!(
@@ -1600,7 +1600,7 @@ fn integration_session_swap_persists() {
         .expect("failed to run chibi");
 
     let session = read_session(&temp_home);
-    assert_eq!(session["current_context"], "swap_b");
+    assert_eq!(session["implied_context"], "swap_b");
     assert_eq!(session["previous_context"], "swap_a");
 }
 

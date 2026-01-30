@@ -254,15 +254,15 @@ impl Chibi {
     ///
     /// * `context_name` - The context to resolve config for
     /// * `persistent_username` - Username override to persist in local config
-    /// * `transient_username` - Username override for this session only
+    /// * `ephemeral_username` - Username override for this session only
     pub fn resolve_config(
         &self,
         context_name: &str,
         persistent_username: Option<&str>,
-        transient_username: Option<&str>,
+        ephemeral_username: Option<&str>,
     ) -> io::Result<ResolvedConfig> {
         self.app
-            .resolve_config(context_name, persistent_username, transient_username)
+            .resolve_config(context_name, persistent_username, ephemeral_username)
     }
 
     /// Save state (current context, context list) to disk.

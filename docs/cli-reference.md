@@ -7,7 +7,7 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 | Flag | Description |
 |------|-------------|
 | `-c, --switch-context <NAME>` | Switch to a context (persistent); `new` for auto-name, `new:prefix` for prefixed, `-` for previous |
-| `-C, --transient-context <NAME>` | Use context for this invocation only (doesn't change global state) |
+| `-C, --ephemeral-context <NAME>` | Use context for this invocation only (doesn't change global state) |
 | `-l, --list-current-context` | Show current context info (name, message count, todos, goals) |
 | `-L, --list-contexts` | List all contexts (shows `[active]` or `[stale]` lock status) |
 | `-d, --delete-current-context` | Delete the current context |
@@ -43,7 +43,7 @@ chibi -c -            # current='work', previous='personal'
 - `-` is a reserved name and cannot be used as a literal context name
 - If no previous context exists (first invocation), you'll get an error: "No previous context available"
 - Only persistent switches (`-c`) update `previous_context` in session.json and use swap behavior
-- Transient switches (`-C -`) resolve to previous context but don't swap or persist changes
+- Ephemeral switches (`-C -`) resolve to previous context but don't swap or persist changes
 - Works with all context name parameters: `-D -` deletes previous context, `-G - 10` shows previous context's log, etc.
 - Attached flag syntax works: both `-xc-` and `-xc -` are valid
 
@@ -68,7 +68,7 @@ chibi -c -            # current='work', previous='personal'
 | Flag | Description |
 |------|-------------|
 | `-u, --set-username <NAME>` | Set username (persists to context's local.toml) |
-| `-U, --transient-username <NAME>` | Set username for this invocation only |
+| `-U, --ephemeral-username <NAME>` | Set username for this invocation only |
 
 ## Plugins & Tools
 
@@ -132,9 +132,9 @@ When using `--json-config`, pass a JSON object to stdin:
 - `{ "run_plugin": { "name": "...", "args": [...] } }`
 - `{ "call_tool": { "name": "...", "args": [...] } }`
 
-**Context selection:** `"current"`, `{ "switch": { "name": "..." } }`, `{ "transient": { "name": "..." } }`
+**Context selection:** `"current"`, `{ "switch": { "name": "..." } }`, `{ "ephemeral": { "name": "..." } }`
 
-**Username:** `{ "persistent": "name" }`, `{ "transient": "name" }`
+**Username:** `{ "persistent": "name" }`, `{ "ephemeral": "name" }`
 
 **Home directory:** Use `--home` alongside `--json-config` (cannot be set in JSON):
 ```bash

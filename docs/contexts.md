@@ -62,18 +62,18 @@ The `-` reference works with any command that accepts a context name:
 chibi -c staging      # Switch to staging
 chibi -D -            # Delete the previous context (production)
 chibi -G - 20         # Show last 20 log entries from previous context
-chibi -C - "query"    # Transiently run a query in previous context (no swap)
+chibi -C - "query"    # Ephemerally run a query in previous context (no swap)
 ```
 
 **How it works:**
-- `session.json` tracks `current_context` and `previous_context` fields
-- When using `-c -`, current and previous contexts swap (like `cd -`)
-- Transient switches (`-C -`) use previous but don't swap or persist changes
+- `session.json` tracks `implied_context` and `previous_context` fields
+- When using `-c -`, implied and previous contexts swap (like `cd -`)
+- Ephemeral switches (`-C -`) use previous but don't swap or persist changes
 - Other commands (`-D -`, `-G -`, etc.) just resolve to the previous context name
 - `-` is a reserved name and cannot be used as an actual context name
 - Error if no previous context exists (e.g., on first invocation)
 
-## Transient Contexts
+## Ephemeral Contexts
 
 Use `-C` to run in a context without changing your current context:
 

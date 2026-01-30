@@ -442,7 +442,7 @@ async fn execute_from_input(
                 );
                 did_action = true;
             }
-            UsernameOverride::Transient(_) => {
+            UsernameOverride::Ephemeral(_) => {
                 // Applied via resolve_config later
             }
         }

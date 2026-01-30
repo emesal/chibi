@@ -910,8 +910,8 @@ impl AppState {
         self.save_context(context)?;
 
         // Ensure the context is tracked in state.
-        // Important: Read state from disk to avoid persisting transient context switches.
-        // The in-memory state may have a transient current_context that shouldn't be saved.
+        // Important: Read state from disk to avoid persisting ephemeral context switches.
+        // The in-memory state may have an ephemeral current_context that shouldn't be saved.
         if !self.state.contexts.iter().any(|e| e.name == context.name) {
             let disk_state = if self.state_path.exists() {
                 let content = fs::read_to_string(&self.state_path)?;
@@ -1355,7 +1355,7 @@ impl AppState {
         &self,
         context_name: &str,
         cli_username: Option<&str>,
-        cli_temp_username: Option<&str>,
+        cli_ephemeral_username: Option<&str>,
     ) -> io::Result<ResolvedConfig> {
         let local = self.load_local_config(context_name)?;
 
@@ -1443,8 +1443,8 @@ impl AppState {
 
         // Apply CLI overrides (highest priority)
         // Note: -u (persistent) should have been saved to local.toml before calling this
-        // -U (temp) overrides for this invocation only
-        if let Some(username) = cli_temp_username {
+        // -U (ephemeral) overrides for this invocation only
+        if let Some(username) = cli_ephemeral_username {
             resolved.username = username.to_string();
         } else if let Some(username) = cli_username {
             resolved.username = username.to_string();
