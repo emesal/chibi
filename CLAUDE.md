@@ -40,7 +40,9 @@ CLI for LLM conversations via OpenRouter. Persistent context with plugin/hook ex
 
 ```
 ~/.chibi/
-├── config.toml, models.toml, state.json
+├── config.toml, models.toml
+├── state.json               # Context metadata (core)
+├── session.json             # Navigation state (CLI)
 ├── prompts/{chibi,reflection,compaction,continuation}.md
 ├── plugins/
 └── contexts/<name>/

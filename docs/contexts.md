@@ -23,7 +23,7 @@ chibi -c web-project
 chibi -c -
 ```
 
-The current context is persisted in `~/.chibi/state.json`, along with the `previous_context` for quick switching.
+The current context is persisted in `~/.chibi/session.json`, along with the `previous_context` for quick switching.
 
 ### Auto-Named Contexts
 
@@ -66,7 +66,7 @@ chibi -C - "query"    # Transiently run a query in previous context (no swap)
 ```
 
 **How it works:**
-- `state.json` tracks `previous_context` field
+- `session.json` tracks `current_context` and `previous_context` fields
 - When using `-c -`, current and previous contexts swap (like `cd -`)
 - Transient switches (`-C -`) use previous but don't swap or persist changes
 - Other commands (`-D -`, `-G -`, etc.) just resolve to the previous context name
@@ -179,7 +179,7 @@ Chibi tracks when each context was last used. This enables automatic cleanup of 
 
 ### Activity Tracking
 
-Every time chibi runs with a context, it updates the `last_activity_at` timestamp in `state.json`. This happens automatically during normal usage.
+Every time chibi runs with a context, it updates the `last_activity_at` timestamp in `state.json` (context metadata). This happens automatically during normal usage.
 
 ### Auto-Destroy (Debug Feature)
 
