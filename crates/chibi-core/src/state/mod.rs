@@ -219,12 +219,6 @@ impl AppState {
         Ok(modified)
     }
 
-    /// Update the last_activity_at timestamp for a context
-    #[allow(dead_code)]
-    pub fn touch_context(&mut self, name: &str) -> io::Result<bool> {
-        self.touch_context_with_destroy_settings(name, None, None)
-    }
-
     /// Update the last_activity_at timestamp for a context and optionally set destroy settings.
     /// The destroy settings are only set via --debug flags for testing purposes.
     pub fn touch_context_with_destroy_settings(
@@ -2488,8 +2482,14 @@ not valid json at all
         app.save_context(&ctx2).unwrap();
 
         // Add them to state.json
-        app.state.contexts.push(ContextEntry::new("context-one"));
-        app.state.contexts.push(ContextEntry::new("context-two"));
+        app.state.contexts.push(ContextEntry::with_created_at(
+            "context-one",
+            now_timestamp(),
+        ));
+        app.state.contexts.push(ContextEntry::with_created_at(
+            "context-two",
+            now_timestamp(),
+        ));
         app.save().unwrap();
 
         // Manually delete one context's directory (simulating rm -r)
@@ -2563,48 +2563,15 @@ not valid json at all
     // === Touch context tests ===
 
     #[test]
-    fn test_touch_context_updates_last_activity() {
-        let (mut app, _temp) = create_test_app();
-
-        // Add an entry to state.contexts manually (save_context doesn't do this)
-        let entry = ContextEntry::new("test-context");
-        let initial_activity = entry.last_activity_at;
-        app.state.contexts.push(entry);
-
-        // Create the context directory
-        let ctx = Context::new("test-context");
-        app.save_context(&ctx).unwrap();
-
-        // Touch the context
-        let result = app.touch_context("test-context").unwrap();
-        assert!(result);
-
-        // Check that last_activity_at was updated
-        let entry = app
-            .state
-            .contexts
-            .iter()
-            .find(|e| e.name == "test-context")
-            .unwrap();
-        assert!(entry.last_activity_at >= initial_activity);
-    }
-
-    #[test]
-    fn test_touch_context_nonexistent_returns_false() {
-        let (mut app, _temp) = create_test_app();
-        let result = app.touch_context("nonexistent").unwrap();
-        assert!(!result);
-    }
-
-    #[test]
     fn test_touch_context_with_destroy_settings_on_new_context() {
         let (mut app, _temp) = create_test_app();
 
         // Simulate what happens when switching to a new context with debug settings:
         // 1. Context entry is added to state.contexts (our fix)
-        app.state
-            .contexts
-            .push(ContextEntry::new("new-test-context"));
+        app.state.contexts.push(ContextEntry::with_created_at(
+            "new-test-context",
+            now_timestamp(),
+        ));
 
         // 2. Debug settings are applied via touch_context_with_destroy_settings
         let result = app
@@ -2641,7 +2608,7 @@ not valid json at all
         app.save_context(&ctx).unwrap();
 
         // Add entry to state.contexts with destroy_at in the past
-        let mut entry = ContextEntry::new("to-destroy");
+        let mut entry = ContextEntry::with_created_at("to-destroy", now_timestamp());
         entry.destroy_at = 1; // Way in the past
         app.state.contexts.push(entry);
 
@@ -2660,7 +2627,7 @@ not valid json at all
         app.save_context(&ctx).unwrap();
 
         // Add entry to state.contexts with inactivity timeout triggered
-        let mut entry = ContextEntry::new("to-destroy");
+        let mut entry = ContextEntry::with_created_at("to-destroy", now_timestamp());
         entry.last_activity_at = 1; // Way in the past
         entry.destroy_after_seconds_inactive = 60; // 1 minute
         app.state.contexts.push(entry);
@@ -2687,7 +2654,7 @@ not valid json at all
         app.save_context(&ctx).unwrap();
 
         // Add entry to state.contexts with settings that should NOT trigger destroy
-        let mut entry = ContextEntry::new("keep-context");
+        let mut entry = ContextEntry::with_created_at("keep-context", now_timestamp());
         entry.last_activity_at = 1; // Way in the past
         entry.destroy_after_seconds_inactive = 0; // Disabled
         entry.destroy_at = 0; // Disabled
