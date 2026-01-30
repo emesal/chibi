@@ -498,16 +498,13 @@ async fn execute_from_input(
             } else if !confirm_action(&format!("Destroy context '{}'?", ctx_name)) {
                 output.emit_result("Aborted");
             } else {
-                // Handle fallback if destroying current context
-                if session.current_context == ctx_name {
-                    let fallback = session
-                        .previous_context
-                        .as_ref()
-                        .filter(|p| *p != &ctx_name && chibi.app.context_dir(p).exists())
-                        .cloned()
-                        .unwrap_or_else(|| "default".to_string());
-                    session.current_context = fallback.clone();
-                    session.previous_context = None;
+                // Handle session fallback if destroying current context
+                if session
+                    .handle_context_destroyed(&ctx_name, |name| {
+                        chibi.app.context_dir(name).exists()
+                    })
+                    .is_some()
+                {
                     session.save(chibi.home_dir())?;
                 }
                 chibi.app.destroy_context(&ctx_name)?;
