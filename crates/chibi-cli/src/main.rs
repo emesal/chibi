@@ -384,9 +384,7 @@ async fn execute_from_input(
         ContextSelection::Switch { name, persistent } => {
             let prev_context = chibi.app.state.current_context.clone();
             if name == "-" {
-                let previous = resolve_previous_context(chibi)?;
-                chibi.app.state.current_context = previous;
-                chibi.app.state.previous_context = Some(prev_context.clone());
+                chibi.swap_with_previous()?;
             } else {
                 let actual_name = resolve_context_name(chibi, name)?;
                 chibi.switch_context(&actual_name)?;

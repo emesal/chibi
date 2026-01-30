@@ -248,6 +248,32 @@ impl Chibi {
         Ok(())
     }
 
+    /// Swap current and previous contexts.
+    ///
+    /// Returns the name of the context switched to.
+    /// Returns an error if there is no previous context.
+    pub fn swap_with_previous(&mut self) -> io::Result<String> {
+        let previous = self
+            .app
+            .state
+            .previous_context
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "No previous context available (use -c to switch contexts first)",
+                )
+            })?;
+
+        let current = self.app.state.current_context.clone();
+        self.app.state.current_context = previous.clone();
+        self.app.state.previous_context = Some(current);
+
+        Ok(previous)
+    }
+
     /// Get the current context.
     ///
     /// Loads the context from disk if not already in memory.
