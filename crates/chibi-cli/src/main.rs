@@ -30,7 +30,7 @@ use chibi_core::context::{
 use chibi_core::input::{Command, DebugKey};
 
 use crate::input::{ChibiInput, ContextSelection, UsernameOverride};
-use chibi_core::{Chibi, Inspectable, LoadOptions, PromptOptions, api, tools};
+use chibi_core::{Chibi, Inspectable, LoadOptions, PromptOptions, StatePaths, api, tools};
 use std::io::{self, ErrorKind, IsTerminal, Read, Write};
 use std::path::PathBuf;
 

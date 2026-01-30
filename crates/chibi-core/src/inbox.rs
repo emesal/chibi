@@ -5,7 +5,7 @@
 
 use crate::context::{InboxEntry, now_timestamp};
 use crate::safe_io::FileLock;
-use crate::state::AppState;
+use crate::state::{AppState, StatePaths};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
