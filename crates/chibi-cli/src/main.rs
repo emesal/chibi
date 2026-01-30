@@ -549,7 +549,8 @@ async fn execute_from_input(
                 });
                 let _ = chibi.execute_hook(tools::HookPoint::PostClear, &hook_data, verbose);
             } else {
-                chibi.app.clear_context_by_name(&ctx_name)?;
+                // For named contexts, just clear without hooks (hooks are for interactive use)
+                chibi.app.clear_context(&ctx_name)?;
             }
             output.emit_result(&format!(
                 "Context '{}' archived (history saved to transcript)",
