@@ -273,7 +273,17 @@ pub async fn send_prompt<S: ResponseSink>(
     options: &PromptOptions<'_>,
     sink: &mut S,
 ) -> io::Result<()> {
-    send_prompt_with_depth(app, context_name, prompt, tools, 0, resolved_config, options, sink).await
+    send_prompt_with_depth(
+        app,
+        context_name,
+        prompt,
+        tools,
+        0,
+        resolved_config,
+        options,
+        sink,
+    )
+    .await
 }
 
 async fn send_prompt_with_depth<S: ResponseSink>(
