@@ -22,12 +22,17 @@ impl AppState {
         self.context_dir(context_name).join(".inbox.lock")
     }
 
-    /// Send a message to another context's inbox
-    pub fn send_inbox_message(&self, to_context: &str, message: &str) -> io::Result<()> {
+    /// Send a message from a specified context to another context's inbox
+    pub fn send_inbox_message_from(
+        &self,
+        from_context: &str,
+        to_context: &str,
+        message: &str,
+    ) -> io::Result<()> {
         let entry = InboxEntry {
             id: Uuid::new_v4().to_string(),
             timestamp: now_timestamp(),
-            from: self.state.current_context.clone(),
+            from: from_context.to_string(),
             to: to_context.to_string(),
             content: message.to_string(),
         };
@@ -104,10 +109,6 @@ impl AppState {
         Ok(entries)
     }
 
-    /// Load and clear the current context's inbox atomically.
-    ///
-    /// Convenience wrapper around `load_and_clear_inbox` using `state.current_context`.
-    pub fn load_and_clear_current_inbox(&self) -> io::Result<Vec<InboxEntry>> {
-        self.load_and_clear_inbox(&self.state.current_context)
-    }
+    // NOTE: load_and_clear_current_inbox was removed in the stateless-core refactor.
+    // Use load_and_clear_inbox(context_name) instead.
 }

@@ -546,7 +546,7 @@ async fn compact_context_with_llm_internal(
     };
 
     // Load system prompt
-    let system_prompt = app.load_system_prompt()?;
+    let system_prompt = app.load_system_prompt_for(context_name)?;
 
     // Create new context with system prompt, continuation instructions, and summary
     let mut new_context = Context {

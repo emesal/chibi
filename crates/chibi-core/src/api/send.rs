@@ -338,7 +338,8 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     app.add_message(&mut context, "user".to_string(), final_prompt.clone());
 
     // Append user message to both transcript.jsonl and context.jsonl (tandem write)
-    let user_entry = app.create_user_message_entry(&final_prompt, &resolved_config.username);
+    let user_entry =
+        app.create_user_message_entry(context_name, &final_prompt, &resolved_config.username);
     app.append_to_transcript_and_context(context_name, &user_entry)?;
     sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
 
@@ -359,7 +360,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     }
 
     // Prepare messages for API
-    let system_prompt = app.load_system_prompt()?;
+    let system_prompt = app.load_system_prompt_for(context_name)?;
     let reflection_prompt = if use_reflection {
         app.load_reflection_prompt()?
     } else {
@@ -550,7 +551,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     // Tool call loop - keep going until we get a final text response
     loop {
         // Log request if debug logging is enabled
-        log_request_if_enabled(app, debug, &request_body);
+        log_request_if_enabled(app, context_name, debug, &request_body);
 
         let response = llm::send_streaming_request(resolved_config, request_body.clone()).await?;
 
@@ -668,7 +669,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
         // Log response metadata if debug logging is enabled
         if let Some(ref meta) = response_meta {
-            log_response_meta_if_enabled(app, debug, meta);
+            log_response_meta_if_enabled(app, context_name, debug, meta);
         }
 
         // Signal that streaming is finished
@@ -776,7 +777,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 } else if tc.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
                     "Error: Reflection tool is not enabled".to_string()
                 } else if let Some(builtin_result) =
-                    tools::execute_builtin_tool(app, &tc.name, &args)
+                    tools::execute_builtin_tool(app, context_name, &tc.name, &args)
                 {
                     match builtin_result {
                         Ok(r) => r,
@@ -999,7 +1000,8 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 );
 
                 // Log tool call and result
-                let tool_call_entry = app.create_tool_call_entry(&tc.name, &tc.arguments);
+                let tool_call_entry =
+                    app.create_tool_call_entry(context_name, &tc.name, &tc.arguments);
                 app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
                 sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
@@ -1008,7 +1010,8 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 } else {
                     &tool_result
                 };
-                let tool_result_entry = app.create_tool_result_entry(&tc.name, logged_result);
+                let tool_result_entry =
+                    app.create_tool_result_entry(context_name, &tc.name, logged_result);
                 app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
                 sink.handle(ResponseEvent::TranscriptEntry(tool_result_entry))?;
 
@@ -1046,7 +1049,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         // No tool calls - we have a final response
         app.add_message(&mut context, "assistant".to_string(), full_response.clone());
 
-        let assistant_entry = app.create_assistant_message_entry(&full_response);
+        let assistant_entry = app.create_assistant_message_entry(context_name, &full_response);
         app.append_to_transcript_and_context(context_name, &assistant_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(assistant_entry))?;
 
