@@ -939,6 +939,21 @@ impl AppState {
         })
     }
 
+    /// Get or create a context by name.
+    ///
+    /// Returns an existing context if found, or creates a new empty one.
+    /// This is the parameterized version of `get_current_context`.
+    pub fn get_or_create_context(&self, name: &str) -> io::Result<Context> {
+        self.load_context(name).or_else(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                // Return empty context if it doesn't exist yet
+                Ok(Context::new(name.to_string()))
+            } else {
+                Err(e)
+            }
+        })
+    }
+
     pub fn save_current_context(&self, context: &Context) -> io::Result<()> {
         self.save_context(context)?;
 

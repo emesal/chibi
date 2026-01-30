@@ -58,9 +58,10 @@ impl AppState {
         Ok(())
     }
 
-    /// Load and clear the current context's inbox atomically
-    pub fn load_and_clear_current_inbox(&self) -> io::Result<Vec<InboxEntry>> {
-        let context_name = &self.state.current_context;
+    /// Load and clear a context's inbox atomically.
+    ///
+    /// This is the parameterized version - use this when you know the context name.
+    pub fn load_and_clear_inbox(&self, context_name: &str) -> io::Result<Vec<InboxEntry>> {
         let lock_path = self.inbox_lock_file(context_name);
         let inbox_path = self.inbox_file(context_name);
 
@@ -101,5 +102,12 @@ impl AppState {
         }
 
         Ok(entries)
+    }
+
+    /// Load and clear the current context's inbox atomically.
+    ///
+    /// Convenience wrapper around `load_and_clear_inbox` using `state.current_context`.
+    pub fn load_and_clear_current_inbox(&self) -> io::Result<Vec<InboxEntry>> {
+        self.load_and_clear_inbox(&self.state.current_context)
     }
 }

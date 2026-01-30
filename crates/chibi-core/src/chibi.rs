@@ -22,8 +22,8 @@
 //!     let options = PromptOptions::new(false, false, false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
-//!     // Send a prompt
-//!     chibi.send_prompt_streaming("Hello!", &config, &options, &mut sink).await?;
+//!     // Send a prompt to the default context
+//!     chibi.send_prompt_streaming("default", "Hello!", &config, &options, &mut sink).await?;
 //!
 //!     println!("Response: {}", sink.text);
 //!     Ok(())
@@ -140,6 +140,7 @@ impl Chibi {
     ///
     /// # Arguments
     ///
+    /// * `context_name` - The context to use for this prompt
     /// * `prompt` - The user's prompt text
     /// * `config` - Resolved configuration for this request
     /// * `options` - Options controlling prompt execution behavior
@@ -156,13 +157,14 @@ impl Chibi {
     /// # let config = chibi.resolve_config(None, None)?;
     /// # let options = PromptOptions::new(false, false, false, &[], false);
     /// let mut sink = CollectingSink::new();
-    /// chibi.send_prompt_streaming("Hello", &config, &options, &mut sink).await?;
+    /// chibi.send_prompt_streaming("default", "Hello", &config, &options, &mut sink).await?;
     /// println!("Got response: {}", sink.text);
     /// # Ok(())
     /// # }
     /// ```
     pub async fn send_prompt_streaming<S: ResponseSink>(
         &self,
+        context_name: &str,
         prompt: &str,
         config: &ResolvedConfig,
         options: &PromptOptions<'_>,
@@ -170,6 +172,7 @@ impl Chibi {
     ) -> io::Result<()> {
         send_prompt(
             &self.app,
+            context_name,
             prompt.to_string(),
             &self.tools,
             config,
@@ -185,6 +188,7 @@ impl Chibi {
     ///
     /// # Arguments
     ///
+    /// * `context_name` - The context to use for file tools
     /// * `name` - The tool name
     /// * `args` - JSON arguments for the tool
     ///
@@ -192,7 +196,12 @@ impl Chibi {
     ///
     /// The tool's output as a string, or an error if the tool wasn't found
     /// or execution failed.
-    pub fn execute_tool(&self, name: &str, args: serde_json::Value) -> io::Result<String> {
+    pub fn execute_tool(
+        &self,
+        context_name: &str,
+        name: &str,
+        args: serde_json::Value,
+    ) -> io::Result<String> {
         // Try built-in tools first
         if let Some(result) = tools::execute_builtin_tool(&self.app, name, &args) {
             return result;
@@ -201,9 +210,8 @@ impl Chibi {
         // Try file tools
         if tools::is_file_tool(name) {
             let config = self.app.resolve_config(None, None)?;
-            let ctx_name = &self.app.state.current_context;
             if let Some(result) =
-                tools::execute_file_tool(&self.app, ctx_name, name, &args, &config)
+                tools::execute_file_tool(&self.app, context_name, name, &args, &config)
             {
                 return result;
             }
