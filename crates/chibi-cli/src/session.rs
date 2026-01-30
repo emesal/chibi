@@ -102,6 +102,44 @@ impl Session {
     pub fn is_previous(&self, name: &str) -> bool {
         self.previous_context.as_deref() == Some(name)
     }
+
+    /// Handle session state after a context is destroyed.
+    ///
+    /// If the destroyed context was the current context, switches to a fallback:
+    /// - Previous context if it exists and is valid
+    /// - Otherwise "default"
+    ///
+    /// The `context_exists` closure is used to check if a context directory exists.
+    /// Returns the new current context name if a switch occurred, None otherwise.
+    pub fn handle_context_destroyed<F>(
+        &mut self,
+        destroyed: &str,
+        context_exists: F,
+    ) -> Option<String>
+    where
+        F: Fn(&str) -> bool,
+    {
+        if self.current_context != destroyed {
+            // Not destroying current context, no session changes needed
+            // (but clear previous if it was the destroyed one)
+            if self.previous_context.as_deref() == Some(destroyed) {
+                self.previous_context = None;
+            }
+            return None;
+        }
+
+        // Destroying current context - find a fallback
+        let fallback = self
+            .previous_context
+            .as_ref()
+            .filter(|p| *p != destroyed && context_exists(p))
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+
+        self.current_context = fallback.clone();
+        self.previous_context = None;
+        Some(fallback)
+    }
 }
 
 #[cfg(test)]
@@ -241,5 +279,84 @@ mod tests {
         assert!(!session.is_current("default"));
         assert!(session.is_previous("default"));
         assert!(!session.is_previous("test"));
+    }
+
+    #[test]
+    fn test_handle_context_destroyed_current_falls_back_to_previous() {
+        let mut session = Session::default();
+        session.switch_context("ctx_a".to_string());
+        session.switch_context("ctx_b".to_string());
+
+        // ctx_b is current, ctx_a is previous
+        assert_eq!(session.current_context, "ctx_b");
+        assert_eq!(session.previous_context, Some("ctx_a".to_string()));
+
+        // Destroy current (ctx_b), previous (ctx_a) exists
+        let result = session.handle_context_destroyed("ctx_b", |name| name == "ctx_a");
+
+        assert_eq!(result, Some("ctx_a".to_string()));
+        assert_eq!(session.current_context, "ctx_a");
+        assert!(session.previous_context.is_none());
+    }
+
+    #[test]
+    fn test_handle_context_destroyed_current_falls_back_to_default() {
+        let mut session = Session::default();
+        session.switch_context("lone_ctx".to_string());
+
+        // lone_ctx is current, previous is "default" but doesn't exist
+        assert_eq!(session.current_context, "lone_ctx");
+        assert_eq!(session.previous_context, Some("default".to_string()));
+
+        // Destroy current, previous doesn't exist as a directory
+        let result = session.handle_context_destroyed("lone_ctx", |_| false);
+
+        assert_eq!(result, Some("default".to_string()));
+        assert_eq!(session.current_context, "default");
+        assert!(session.previous_context.is_none());
+    }
+
+    #[test]
+    fn test_handle_context_destroyed_not_current() {
+        let mut session = Session::default();
+        session.switch_context("ctx_a".to_string());
+        session.switch_context("ctx_b".to_string());
+
+        // Destroy ctx_a (not current), should return None and not change current
+        let result = session.handle_context_destroyed("ctx_a", |_| true);
+
+        assert!(result.is_none());
+        assert_eq!(session.current_context, "ctx_b");
+        // previous_context should be cleared since it was destroyed
+        assert!(session.previous_context.is_none());
+    }
+
+    #[test]
+    fn test_handle_context_destroyed_previous_same_as_destroyed() {
+        let mut session = Session {
+            current_context: "current".to_string(),
+            previous_context: Some("current".to_string()), // edge case: same as current
+        };
+
+        // Destroy current, but previous points to same context
+        let result = session.handle_context_destroyed("current", |_| true);
+
+        // Should fall back to default since previous == destroyed
+        assert_eq!(result, Some("default".to_string()));
+        assert_eq!(session.current_context, "default");
+    }
+
+    #[test]
+    fn test_handle_context_destroyed_no_previous() {
+        let mut session = Session {
+            current_context: "only_ctx".to_string(),
+            previous_context: None,
+        };
+
+        let result = session.handle_context_destroyed("only_ctx", |_| true);
+
+        assert_eq!(result, Some("default".to_string()));
+        assert_eq!(session.current_context, "default");
+        assert!(session.previous_context.is_none());
     }
 }

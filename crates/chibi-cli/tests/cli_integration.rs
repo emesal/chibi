@@ -1325,3 +1325,320 @@ fn integration_previous_context_swaps_like_cd() {
         "Should be in swap_a after third -c - (swap behavior)"
     );
 }
+
+// =============================================================================
+// Session persistence integration tests (issue #81)
+// =============================================================================
+
+/// Helper to read and parse session.json from a temp home
+fn read_session(temp_home: &TempDir) -> serde_json::Value {
+    let session_path = temp_home.path().join("session.json");
+    if session_path.exists() {
+        let content = fs::read_to_string(&session_path).expect("failed to read session.json");
+        serde_json::from_str(&content).expect("failed to parse session.json")
+    } else {
+        serde_json::json!({})
+    }
+}
+
+/// Test that `-c name` creates context and updates session.json
+#[test]
+fn integration_session_switch_persists() {
+    let temp_home = setup_test_home();
+
+    // Switch to a new context
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "session_test_1", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output.status.success());
+
+    // Verify session.json was updated
+    let session = read_session(&temp_home);
+    assert_eq!(
+        session["current_context"], "session_test_1",
+        "session.json should have updated current_context"
+    );
+}
+
+/// Test that `-C name` (transient) does NOT persist to session.json
+#[test]
+fn integration_session_transient_does_not_persist() {
+    let temp_home = setup_test_home();
+
+    // First, switch to a context persistently to establish session
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "persistent_ctx", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Now use transient switch
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-C", "transient_ctx", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("transient_ctx"),
+        "Should be using transient_ctx"
+    );
+
+    // Verify session.json still has persistent_ctx as current
+    let session = read_session(&temp_home);
+    assert_eq!(
+        session["current_context"], "persistent_ctx",
+        "session.json should NOT be updated by transient switch"
+    );
+}
+
+// Note: Destroy fallback tests are in session.rs unit tests.
+// Integration testing of destroy requires TTY confirmation which can't be
+// simulated in subprocess tests (confirm_action returns false for non-TTY stdin).
+// See Session::handle_context_destroyed for the fallback logic.
+
+/// Test that renaming current context updates session.json
+#[test]
+fn integration_session_rename_updates_current() {
+    let temp_home = setup_test_home();
+
+    // Create a context
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "rename_me", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let session = read_session(&temp_home);
+    assert_eq!(session["current_context"], "rename_me");
+
+    // Rename current context
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-r", "new_name"]) // rename current to new_name
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(
+        output.status.success(),
+        "rename should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify session.json was updated
+    let session = read_session(&temp_home);
+    assert_eq!(
+        session["current_context"], "new_name",
+        "session should reflect renamed context"
+    );
+}
+
+/// Test that renaming previous context updates session.previous_context
+#[test]
+fn integration_session_rename_updates_previous() {
+    let temp_home = setup_test_home();
+
+    // Create two contexts
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "old_prev", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "current", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let session = read_session(&temp_home);
+    assert_eq!(session["current_context"], "current");
+    assert_eq!(session["previous_context"], "old_prev");
+
+    // Rename the previous context
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-R", "old_prev", "new_prev"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(
+        output.status.success(),
+        "rename should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify session.json was updated
+    let session = read_session(&temp_home);
+    assert_eq!(session["current_context"], "current");
+    assert_eq!(
+        session["previous_context"], "new_prev",
+        "previous_context should be updated after rename"
+    );
+}
+
+/// Test that session.json records correct previous_context after multiple switches
+#[test]
+fn integration_session_tracks_previous_correctly() {
+    let temp_home = setup_test_home();
+
+    // Switch through multiple contexts
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "ctx_1", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Previous should be "default" (the initial context)
+    let session = read_session(&temp_home);
+    assert_eq!(session["current_context"], "ctx_1");
+    assert_eq!(session["previous_context"], "default");
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "ctx_2", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let session = read_session(&temp_home);
+    assert_eq!(session["current_context"], "ctx_2");
+    assert_eq!(
+        session["previous_context"], "ctx_1",
+        "previous should be ctx_1, not default"
+    );
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "ctx_3", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let session = read_session(&temp_home);
+    assert_eq!(session["current_context"], "ctx_3");
+    assert_eq!(
+        session["previous_context"], "ctx_2",
+        "previous should be ctx_2"
+    );
+}
+
+/// Test that switching to current context doesn't change previous
+#[test]
+fn integration_session_switch_to_same_preserves_previous() {
+    let temp_home = setup_test_home();
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "ctx_a", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "ctx_b", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let session = read_session(&temp_home);
+    assert_eq!(session["previous_context"], "ctx_a");
+
+    // Switch to same context (ctx_b)
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "ctx_b", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let session = read_session(&temp_home);
+    assert_eq!(session["current_context"], "ctx_b");
+    assert_eq!(
+        session["previous_context"], "ctx_a",
+        "previous should still be ctx_a, not ctx_b"
+    );
+}
+
+/// Test that swap (`-c -`) updates session.json correctly
+#[test]
+fn integration_session_swap_persists() {
+    let temp_home = setup_test_home();
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "swap_a", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "swap_b", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Now swap
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "-", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+    assert!(output.status.success());
+
+    let session = read_session(&temp_home);
+    assert_eq!(
+        session["current_context"], "swap_a",
+        "after swap, current should be swap_a"
+    );
+    assert_eq!(
+        session["previous_context"], "swap_b",
+        "after swap, previous should be swap_b"
+    );
+
+    // Swap again
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "-", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    let session = read_session(&temp_home);
+    assert_eq!(session["current_context"], "swap_b");
+    assert_eq!(session["previous_context"], "swap_a");
+}
+
+/// Test session.json is not created until first persistent switch
+#[test]
+fn integration_session_created_on_first_switch() {
+    let temp_home = setup_test_home();
+    let session_path = temp_home.path().join("session.json");
+
+    // Initially no session.json
+    assert!(
+        !session_path.exists(),
+        "session.json should not exist initially"
+    );
+
+    // Run a command that doesn't switch contexts
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-L"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Still no session.json (no switch happened)
+    assert!(
+        !session_path.exists(),
+        "session.json should not exist after -L"
+    );
+
+    // Now switch contexts
+    let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
+        .args(["-c", "first_ctx", "-l"])
+        .env("CHIBI_HOME", temp_home.path())
+        .output()
+        .expect("failed to run chibi");
+
+    // Now session.json should exist
+    assert!(
+        session_path.exists(),
+        "session.json should exist after first switch"
+    );
+}
