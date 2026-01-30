@@ -24,7 +24,7 @@ pub use session::Session;
 pub use sink::CliResponseSink;
 
 use chibi_core::context::{
-    Context, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
+    Context, ContextEntry, now_timestamp, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
 };
 use chibi_core::input::{Command, DebugKey};
 
@@ -348,6 +348,7 @@ async fn execute_from_input(
         if destroyed.contains(&session.implied_context) {
             session.implied_context = "default".to_string();
             session.previous_context = None;
+            session.save(chibi.home_dir())?;
         }
         output.diagnostic(
             &format!("[Auto-destroyed {} expired context(s)]", destroyed.len()),
@@ -417,6 +418,13 @@ async fn execute_from_input(
         DebugKey::DestroyAfterSecondsInactive(secs) => Some(*secs),
         _ => None,
     });
+    // Ensure ContextEntry exists before applying destroy settings (fix for #47 regression)
+    if !chibi.app.state.contexts.iter().any(|e| e.name == current_ctx) {
+        chibi.app.state.contexts.push(ContextEntry::with_created_at(
+            current_ctx.clone(),
+            now_timestamp(),
+        ));
+    }
     if chibi.app.touch_context_with_destroy_settings(
         &current_ctx,
         debug_destroy_at,

@@ -48,8 +48,7 @@ impl Session {
     /// Save session to `session.json` in the given chibi directory.
     pub fn save(&self, chibi_dir: &Path) -> io::Result<()> {
         let path = chibi_dir.join("session.json");
-        let content = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, content)
+        chibi_core::safe_io::atomic_write_json(&path, self)
     }
 
     /// Switch to a new context, updating previous_context and implied_context.
