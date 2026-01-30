@@ -1,0 +1,18 @@
+#!/bin/bash
+
+chibi=target/release/chibi
+
+HISTFILE="${XDG_STATE_HOME:-$HOME/.local/state}/chibi_repl_history"
+mkdir -p "$(dirname "$HISTFILE")"
+history -r "$HISTFILE" 2>/dev/null
+
+while true; do
+    read -e -p "> " prompt || break
+    [[ -z "$prompt" ]] && continue
+
+    history -s "$prompt"
+    history -w "$HISTFILE"
+
+    $chibi -v "$prompt"
+    echo
+done

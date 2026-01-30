@@ -1,0 +1,134 @@
+# =============================================================================
+# Model Metadata
+# =============================================================================
+# This file lets you specify context window sizes and API parameters per model.
+# Copy to ~/.chibi/models.toml and customize as needed.
+#
+# Keys should match the model names you use in config.toml or local.toml.
+# When you use a model, chibi checks for a matching entry and applies:
+# - context_window: Overrides context_window_limit from config.toml
+# - api.*: Model-specific API parameters (merged with global settings)
+
+# =============================================================================
+# Anthropic Models
+# =============================================================================
+
+[models."anthropic/claude-sonnet-4"]
+context_window = 200000
+
+# Claude with extended thinking (token-based reasoning)
+[models."anthropic/claude-sonnet-4".api.reasoning]
+max_tokens = 32000
+
+[models."anthropic/claude-3.5-haiku"]
+context_window = 200000
+
+[models."anthropic/claude-3-opus"]
+context_window = 200000
+
+# =============================================================================
+# OpenAI Models
+# =============================================================================
+
+[models."openai/gpt-4o"]
+context_window = 128000
+
+[models."openai/gpt-4o-mini"]
+context_window = 128000
+
+# OpenAI reasoning models (effort-based reasoning)
+[models."openai/o3"]
+context_window = 200000
+
+[models."openai/o3".api]
+max_tokens = 100000
+
+[models."openai/o3".api.reasoning]
+effort = "high"
+
+[models."openai/o3-mini"]
+context_window = 200000
+
+[models."openai/o3-mini".api.reasoning]
+effort = "medium"
+
+[models."openai/o1"]
+context_window = 200000
+
+[models."openai/o1".api.reasoning]
+effort = "medium"
+
+# =============================================================================
+# Google Models
+# =============================================================================
+
+[models."google/gemini-2.0-flash-exp:free"]
+context_window = 1048576
+
+# Gemini thinking model (token-based reasoning)
+[models."google/gemini-2.0-flash-thinking-exp:free"]
+context_window = 1048576
+
+[models."google/gemini-2.0-flash-thinking-exp:free".api.reasoning]
+max_tokens = 16000
+
+[models."google/gemma-3-27b-it:free"]
+context_window = 131072
+
+# =============================================================================
+# Meta Llama Models
+# =============================================================================
+
+[models."meta-llama/llama-3.3-70b-instruct:free"]
+context_window = 131072
+
+[models."meta-llama/llama-3.1-405b-instruct"]
+context_window = 131072
+
+# =============================================================================
+# Other Free Models
+# =============================================================================
+
+[models."mistralai/devstral-2512:free"]
+context_window = 262144
+
+[models."nvidia/nemotron-3-nano-30b-a3b:free"]
+context_window = 256000
+
+[models."openai/gpt-oss-120b:free"]
+context_window = 131072
+
+[models."xiaomi/mimo-v2-flash:free"]
+context_window = 262144
+
+[models."qwen/qwen3-next-80b-a3b-instruct:free"]
+context_window = 262144
+
+# Qwen with extended thinking
+[models."qwen/qwq-32b:free"]
+context_window = 131072
+
+[models."qwen/qwq-32b:free".api.reasoning]
+max_tokens = 16000
+
+[models."arcee-ai/trinity-large-preview:free"]
+context_window = 131000
+
+[models."arcee-ai/trinity-large-preview:free".api.reasoning]
+max_tokens = 16000
+
+# =============================================================================
+# xAI Grok Models (effort-based reasoning)
+# =============================================================================
+
+[models."x-ai/grok-3-beta"]
+context_window = 131072
+
+[models."x-ai/grok-3-beta".api.reasoning]
+effort = "high"
+
+[models."x-ai/grok-3-mini-beta"]
+context_window = 131072
+
+[models."x-ai/grok-3-mini-beta".api.reasoning]
+effort = "medium"
