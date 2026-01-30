@@ -5,13 +5,10 @@
 //! - Configuration loading and resolution
 //! - Transcript and inbox operations
 
-pub mod jsonl;
-
-use jsonl::read_jsonl_file;
+use crate::jsonl::read_jsonl_file;
 
 use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
-#[cfg(test)]
-use crate::config::{ImageAlignment, ImageConfig, ImageConfigOverride};
+// Note: ImageConfig, MarkdownStyle removed - these are CLI presentation concerns
 use crate::context::{
     Context, ContextEntry, ContextMeta, ContextState, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION,
     ENTRY_TYPE_CONTEXT_CREATED, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
@@ -519,8 +516,8 @@ impl AppState {
 
     /// Rebuild context.jsonl from transcript.jsonl
     /// This creates a fresh context.jsonl with:
-    /// - [0] anchor entry (context_created or latest compaction/archival from transcript)
-    /// - [1..] entries from transcript since the anchor
+    /// - `[0]` anchor entry (context_created or latest compaction/archival from transcript)
+    /// - `[1..]` entries from transcript since the anchor
     ///
     /// Note: System prompt is NOT stored in context.jsonl. It lives in system_prompt.md
     /// (source of truth) and context_meta.json (last combined prompt sent to API).
@@ -708,6 +705,12 @@ impl AppState {
     }
 
     /// Append a single entry to context.jsonl
+    ///
+    /// # Durability
+    ///
+    /// Writes are flushed to disk via fsync to ensure durability and consistency
+    /// with the transcript (which also fsyncs). This prevents context.jsonl from
+    /// diverging from transcript.jsonl on crash.
     pub fn append_context_entry(&self, name: &str, entry: &TranscriptEntry) -> io::Result<()> {
         self.ensure_context_dir(name)?;
         let path = self.context_file(name);
@@ -716,6 +719,7 @@ impl AppState {
         let json = serde_json::to_string(entry)
             .map_err(|e| io::Error::other(format!("JSON serialize: {}", e)))?;
         writeln!(file, "{}", json)?;
+        file.sync_all()?;
         Ok(())
     }
 
@@ -966,6 +970,16 @@ impl AppState {
         context.updated_at = now_timestamp();
     }
 
+    /// Clear the current context (archive history).
+    ///
+    /// # Concurrency
+    ///
+    /// This function is safe to call without holding a `ContextLock` because:
+    /// - Transcript writes use `FileLock` via `append_to_transcript`
+    /// - Context saves use atomic writes via `save_context`
+    ///
+    /// If another process is running `send_prompt`, the transcript operations
+    /// will serialize correctly via their respective locks.
     pub fn clear_context(&self) -> io::Result<()> {
         let context = self.get_current_context()?;
 
@@ -1513,11 +1527,8 @@ impl AppState {
             auto_cleanup_cache: self.config.auto_cleanup_cache,
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
-            render_markdown: self.config.render_markdown,
-            image: self.config.image.clone(),
             api: api_params,
             tools: ToolsConfig::default(),
-            markdown_style: self.config.markdown_style.clone(),
         };
 
         // Apply local config overrides
@@ -1565,13 +1576,6 @@ impl AppState {
         }
         if let Some(ref file_tools_allowed_paths) = local.file_tools_allowed_paths {
             resolved.file_tools_allowed_paths = file_tools_allowed_paths.clone();
-        }
-        if let Some(render_markdown) = local.render_markdown {
-            resolved.render_markdown = render_markdown;
-        }
-        resolved.image = resolved.image.merge_with(&local.image);
-        if let Some(ref markdown_style) = local.markdown_style {
-            resolved.markdown_style = markdown_style.clone();
         }
 
         // Apply context-level API params (Layer 3)
@@ -1720,7 +1724,6 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::MarkdownStyle;
     use crate::context::InboxEntry;
     use tempfile::TempDir;
 
@@ -1746,11 +1749,8 @@ mod tests {
             auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
-            render_markdown: true,
-            image: ImageConfig::default(),
             api: ApiParams::default(),
             storage: StorageConfig::default(),
-            markdown_style: MarkdownStyle::default(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)
@@ -2324,11 +2324,8 @@ mod tests {
             auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
-            render_markdown: true,
-            image: ImageConfig::default(),
             api: ApiParams::default(),
             storage: StorageConfig::default(),
-            markdown_style: MarkdownStyle::default(),
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -2384,11 +2381,8 @@ mod tests {
             auto_cleanup_cache: true,
             tool_cache_preview_chars: 500,
             file_tools_allowed_paths: vec![],
-            render_markdown: true,
-            image: ImageConfig::default(),
             api: ApiParams::default(),
             storage: StorageConfig::default(),
-            markdown_style: MarkdownStyle::default(),
         };
 
         let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -2465,12 +2459,9 @@ mod tests {
             auto_cleanup_cache: None,
             tool_cache_preview_chars: None,
             file_tools_allowed_paths: None,
-            render_markdown: None,
-            image: ImageConfigOverride::default(),
             api: None,
             tools: None,
             storage: StorageConfig::default(),
-            markdown_style: None,
         };
         app.save_local_config("default", &local).unwrap();
 
@@ -2488,67 +2479,7 @@ mod tests {
         assert!(!resolved.reflection_enabled);
     }
 
-    #[test]
-    fn test_resolve_config_image_display_local_overrides() {
-        let (app, _temp) = create_test_app();
-
-        let local = LocalConfig {
-            image: ImageConfigOverride {
-                max_height_lines: Some(10),
-                max_width_percent: Some(50),
-                alignment: Some(ImageAlignment::Left),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        app.save_local_config("default", &local).unwrap();
-
-        let resolved = app.resolve_config(None, None).unwrap();
-        assert_eq!(resolved.image.max_height_lines, 10);
-        assert_eq!(resolved.image.max_width_percent, 50);
-        assert_eq!(resolved.image.alignment, ImageAlignment::Left);
-    }
-
-    #[test]
-    fn test_resolve_config_image_display_defaults() {
-        let (app, _temp) = create_test_app();
-
-        let resolved = app.resolve_config(None, None).unwrap();
-        assert_eq!(resolved.image.max_height_lines, 25);
-        assert_eq!(resolved.image.max_width_percent, 80);
-        assert_eq!(resolved.image.alignment, ImageAlignment::Center);
-    }
-
-    #[test]
-    fn test_resolve_config_image_cache_defaults() {
-        let (app, _temp) = create_test_app();
-
-        let resolved = app.resolve_config(None, None).unwrap();
-        assert!(resolved.image.cache_enabled);
-        assert_eq!(resolved.image.cache_max_bytes, 104_857_600);
-        assert_eq!(resolved.image.cache_max_age_days, 30);
-    }
-
-    #[test]
-    fn test_resolve_config_image_cache_local_overrides() {
-        let (app, _temp) = create_test_app();
-
-        let local = LocalConfig {
-            image: ImageConfigOverride {
-                cache_enabled: Some(false),
-                cache_max_bytes: Some(50_000_000),
-                cache_max_age_days: Some(7),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        app.save_local_config("default", &local).unwrap();
-
-        let resolved = app.resolve_config(None, None).unwrap();
-        assert!(!resolved.image.cache_enabled);
-        assert_eq!(resolved.image.cache_max_bytes, 50_000_000);
-        assert_eq!(resolved.image.cache_max_age_days, 7);
-    }
+    // Note: Image config tests removed - image presentation is handled by CLI layer
 
     // === Transcript entry creation tests ===
 

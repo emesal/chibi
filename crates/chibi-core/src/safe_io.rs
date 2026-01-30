@@ -18,18 +18,34 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use safe_io::{atomic_write_json, FileLock};
+//! ```
+//! use chibi_core::safe_io::{atomic_write_json, atomic_write_text, FileLock};
+//! use std::path::Path;
+//!
+//! # fn main() -> std::io::Result<()> {
+//! let temp_dir = std::env::temp_dir().join("chibi_doctest");
+//! std::fs::create_dir_all(&temp_dir)?;
 //!
 //! // Atomic JSON write
+//! let path = temp_dir.join("data.json");
 //! let data = serde_json::json!({"key": "value"});
 //! atomic_write_json(&path, &data)?;
 //!
+//! // Atomic text write
+//! let text_path = temp_dir.join("text.txt");
+//! atomic_write_text(&text_path, "hello world")?;
+//!
 //! // File locking with RAII
+//! let lock_path = temp_dir.join("test.lock");
 //! {
 //!     let _lock = FileLock::acquire(&lock_path)?;
 //!     // ... operations protected by lock ...
 //! } // lock released automatically
+//!
+//! // Cleanup
+//! std::fs::remove_dir_all(&temp_dir)?;
+//! # Ok(())
+//! # }
 //! ```
 
 use fs2::FileExt;
@@ -131,10 +147,19 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// let _lock = FileLock::acquire(&Path::new("/tmp/myapp.lock"))?;
+/// ```
+/// use chibi_core::safe_io::FileLock;
+/// use std::path::Path;
+///
+/// # fn main() -> std::io::Result<()> {
+/// let lock_path = std::env::temp_dir().join("chibi_doctest_filelock.lock");
+/// let _lock = FileLock::acquire(&lock_path)?;
 /// // ... protected operations ...
 /// // lock automatically released when _lock goes out of scope
+/// drop(_lock);
+/// std::fs::remove_file(&lock_path)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Blocking Behavior

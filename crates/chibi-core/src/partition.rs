@@ -51,8 +51,8 @@
 //! See: <https://github.com/tomtomwombat/fastbloom>
 
 use crate::context::TranscriptEntry;
+use crate::jsonl::read_jsonl_file;
 use crate::safe_io::{FileLock, atomic_write_json};
-use crate::state::jsonl::read_jsonl_file;
 use fastbloom::BloomFilter;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -358,11 +358,19 @@ impl ActiveState {
 ///
 /// # Example
 ///
-/// ```ignore
-/// let mut pm = PartitionManager::load(&context_dir)?;
-/// pm.append_entry(&entry)?;
-/// pm.rotate_if_needed()?;
+/// ```no_run
+/// // Requires a context directory with transcript/ subdirectory.
+/// use chibi_core::partition::{PartitionManager, StorageConfig};
+/// use std::path::Path;
+///
+/// # fn example() -> std::io::Result<()> {
+/// let config = StorageConfig::default();
+/// let mut pm = PartitionManager::load_with_config(Path::new("/path/to/context"), config)?;
+/// // pm.append_entry(&entry)?;
+/// // pm.rotate_if_needed()?;
 /// let entries = pm.read_all_entries()?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct PartitionManager {
     /// Path to the context directory.
@@ -751,7 +759,16 @@ impl PartitionManager {
     /// Uses bloom filters to skip partitions that definitely don't contain
     /// the term. Returns matching entries and search statistics.
     ///
-    /// The search is case-insensitive and matches whole words.
+    /// The search is case-insensitive and matches substring in content.
+    ///
+    /// # Bloom Filter Behavior
+    ///
+    /// The bloom filter uses `any` semantics for multi-word queries: a partition
+    /// is scanned if ANY query token might be present. This is correct for
+    /// substring search because matching "foo bar" requires matching "foo bar"
+    /// as a substring, not matching "foo" AND "bar" separately. The bloom filter
+    /// acts as a quick pre-filter to skip partitions that definitely don't
+    /// contain any of the query words.
     #[allow(dead_code)] // Public API, will be used when search CLI is added
     pub fn search(&self, query: &str) -> io::Result<SearchResult> {
         let query_lower = query.to_lowercase();

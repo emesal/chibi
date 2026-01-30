@@ -3,9 +3,13 @@
 //! This module handles parsing command-line arguments and converting them
 //! to the unified `ChibiInput` format.
 
-use crate::input::{ChibiInput, Command, ContextSelection, DebugKey, Flags, UsernameOverride};
+use chibi_core::input::{
+    ChibiInput, Command, ContextSelection, DebugKey, Flags, Inspectable, UsernameOverride,
+};
 use clap::Parser;
 use std::io::{self, BufRead, ErrorKind, IsTerminal};
+
+use crate::config::ResolvedConfig;
 
 /// Direct plugin invocation from CLI
 #[derive(Debug, Clone)]
@@ -14,27 +18,14 @@ pub struct PluginInvocation {
     pub args: Vec<String>,
 }
 
-/// Inspectable things via -n/-N
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Inspectable {
-    // File-based items (context-specific)
-    SystemPrompt,
-    Reflection,
-    Todos,
-    Goals,
-    // Global items
-    Home,
-    // Lists all inspectable items
-    List,
-    // Config field (dynamic path like "model", "api.temperature", etc.)
-    // Note: untagged must be last for serde to work correctly
-    #[serde(untagged)]
-    ConfigField(String),
+/// Extension methods for Inspectable that depend on CLI config.
+pub trait InspectableExt {
+    fn from_str_cli(s: &str) -> Option<Inspectable>;
+    fn all_names_cli() -> Vec<&'static str>;
 }
 
-impl Inspectable {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl InspectableExt for Inspectable {
+    fn from_str_cli(s: &str) -> Option<Inspectable> {
         match s {
             // File-based items
             "system_prompt" | "prompt" => Some(Inspectable::SystemPrompt),
@@ -46,7 +37,6 @@ impl Inspectable {
             "list" => Some(Inspectable::List),
             // Check if it's a valid config field path
             other => {
-                use crate::config::ResolvedConfig;
                 if ResolvedConfig::list_fields().contains(&other) {
                     Some(Inspectable::ConfigField(other.to_string()))
                 } else {
@@ -56,8 +46,7 @@ impl Inspectable {
         }
     }
 
-    pub fn all_names() -> Vec<&'static str> {
-        use crate::config::ResolvedConfig;
+    fn all_names_cli() -> Vec<&'static str> {
         let mut names = vec![
             "system_prompt",
             "reflection",
@@ -350,13 +339,13 @@ impl Cli {
     pub fn to_input(&self) -> io::Result<ChibiInput> {
         // Validate inspect values
         let inspect_current = if let Some(ref s) = self.inspect_current {
-            Some(Inspectable::from_str(s).ok_or_else(|| {
+            Some(Inspectable::from_str_cli(s).ok_or_else(|| {
                 io::Error::new(
                     ErrorKind::InvalidInput,
                     format!(
                         "Unknown inspectable: {}. Valid options: {:?}",
                         s,
-                        Inspectable::all_names()
+                        Inspectable::all_names_cli()
                     ),
                 )
             })?)
@@ -368,13 +357,13 @@ impl Cli {
             if v.len() >= 2 {
                 Some((
                     v[0].clone(),
-                    Inspectable::from_str(&v[1]).ok_or_else(|| {
+                    Inspectable::from_str_cli(&v[1]).ok_or_else(|| {
                         io::Error::new(
                             ErrorKind::InvalidInput,
                             format!(
                                 "Unknown inspectable: {}. Valid options: {:?}",
                                 v[1],
-                                Inspectable::all_names()
+                                Inspectable::all_names_cli()
                             ),
                         )
                     })?,
@@ -1389,27 +1378,27 @@ mod tests {
     #[test]
     fn test_inspectable_from_str_all_variants() {
         assert_eq!(
-            Inspectable::from_str("system_prompt"),
+            Inspectable::from_str_cli("system_prompt"),
             Some(Inspectable::SystemPrompt)
         );
         assert_eq!(
-            Inspectable::from_str("prompt"),
+            Inspectable::from_str_cli("prompt"),
             Some(Inspectable::SystemPrompt)
         ); // alias
         assert_eq!(
-            Inspectable::from_str("reflection"),
+            Inspectable::from_str_cli("reflection"),
             Some(Inspectable::Reflection)
         );
-        assert_eq!(Inspectable::from_str("todos"), Some(Inspectable::Todos));
-        assert_eq!(Inspectable::from_str("goals"), Some(Inspectable::Goals));
-        assert_eq!(Inspectable::from_str("list"), Some(Inspectable::List));
-        assert_eq!(Inspectable::from_str("unknown"), None);
-        assert_eq!(Inspectable::from_str(""), None);
+        assert_eq!(Inspectable::from_str_cli("todos"), Some(Inspectable::Todos));
+        assert_eq!(Inspectable::from_str_cli("goals"), Some(Inspectable::Goals));
+        assert_eq!(Inspectable::from_str_cli("list"), Some(Inspectable::List));
+        assert_eq!(Inspectable::from_str_cli("unknown"), None);
+        assert_eq!(Inspectable::from_str_cli(""), None);
     }
 
     #[test]
     fn test_inspectable_all_names() {
-        let names = Inspectable::all_names();
+        let names = Inspectable::all_names_cli();
         assert!(names.contains(&"system_prompt"));
         assert!(names.contains(&"reflection"));
         assert!(names.contains(&"todos"));
@@ -1422,7 +1411,7 @@ mod tests {
     #[test]
     fn test_inspectable_config_field_model() {
         assert_eq!(
-            Inspectable::from_str("model"),
+            Inspectable::from_str_cli("model"),
             Some(Inspectable::ConfigField("model".to_string()))
         );
     }
@@ -1430,7 +1419,7 @@ mod tests {
     #[test]
     fn test_inspectable_config_field_username() {
         assert_eq!(
-            Inspectable::from_str("username"),
+            Inspectable::from_str_cli("username"),
             Some(Inspectable::ConfigField("username".to_string()))
         );
     }
@@ -1438,7 +1427,7 @@ mod tests {
     #[test]
     fn test_inspectable_config_field_api_temperature() {
         assert_eq!(
-            Inspectable::from_str("api.temperature"),
+            Inspectable::from_str_cli("api.temperature"),
             Some(Inspectable::ConfigField("api.temperature".to_string()))
         );
     }
@@ -1446,7 +1435,7 @@ mod tests {
     #[test]
     fn test_inspectable_config_field_api_reasoning_effort() {
         assert_eq!(
-            Inspectable::from_str("api.reasoning.effort"),
+            Inspectable::from_str_cli("api.reasoning.effort"),
             Some(Inspectable::ConfigField("api.reasoning.effort".to_string()))
         );
     }
@@ -1454,14 +1443,14 @@ mod tests {
     #[test]
     fn test_inspectable_config_field_context_window_limit() {
         assert_eq!(
-            Inspectable::from_str("context_window_limit"),
+            Inspectable::from_str_cli("context_window_limit"),
             Some(Inspectable::ConfigField("context_window_limit".to_string()))
         );
     }
 
     #[test]
     fn test_inspectable_all_names_includes_config_fields() {
-        let names = Inspectable::all_names();
+        let names = Inspectable::all_names_cli();
         // Should include config fields
         assert!(names.contains(&"model"));
         assert!(names.contains(&"username"));
@@ -1472,8 +1461,8 @@ mod tests {
     #[test]
     fn test_inspectable_invalid_config_path() {
         // Invalid paths should return None
-        assert_eq!(Inspectable::from_str("api.nonexistent"), None);
-        assert_eq!(Inspectable::from_str("foo.bar.baz"), None);
+        assert_eq!(Inspectable::from_str_cli("api.nonexistent"), None);
+        assert_eq!(Inspectable::from_str_cli("foo.bar.baz"), None);
     }
 
     // === Debug flag tests ===

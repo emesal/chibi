@@ -53,7 +53,7 @@
 //! - `{ "persistent": "username" }`
 //! - `{ "transient": "username" }`
 
-use crate::input::ChibiInput;
+use chibi_core::input::ChibiInput;
 use std::io::{self, ErrorKind};
 
 /// Parse JSON input string to ChibiInput
@@ -65,8 +65,7 @@ pub fn from_str(s: &str) -> io::Result<ChibiInput> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::Inspectable;
-    use crate::input::{Command, ContextSelection, UsernameOverride};
+    use chibi_core::input::{Command, ContextSelection, DebugKey, Inspectable, UsernameOverride};
 
     #[test]
     fn test_parse_simple_prompt() {
@@ -465,10 +464,7 @@ mod tests {
         }"#;
         let input = from_str(json).unwrap();
         assert_eq!(input.flags.debug.len(), 1);
-        assert!(matches!(
-            input.flags.debug[0],
-            crate::input::DebugKey::RequestLog
-        ));
+        assert!(matches!(input.flags.debug[0], DebugKey::RequestLog));
     }
 
     #[test]
@@ -478,10 +474,7 @@ mod tests {
             "flags": {"debug": ["response_meta"]}
         }"#;
         let input = from_str(json).unwrap();
-        assert!(matches!(
-            input.flags.debug[0],
-            crate::input::DebugKey::ResponseMeta
-        ));
+        assert!(matches!(input.flags.debug[0], DebugKey::ResponseMeta));
     }
 
     #[test]
@@ -491,7 +484,7 @@ mod tests {
             "flags": {"debug": ["all"]}
         }"#;
         let input = from_str(json).unwrap();
-        assert!(matches!(input.flags.debug[0], crate::input::DebugKey::All));
+        assert!(matches!(input.flags.debug[0], DebugKey::All));
     }
 
     #[test]
@@ -503,7 +496,7 @@ mod tests {
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.flags.debug[0],
-            crate::input::DebugKey::DestroyAt(1234567890)
+            DebugKey::DestroyAt(1234567890)
         ));
     }
 
@@ -516,7 +509,7 @@ mod tests {
         let input = from_str(json).unwrap();
         assert!(matches!(
             input.flags.debug[0],
-            crate::input::DebugKey::DestroyAfterSecondsInactive(60)
+            DebugKey::DestroyAfterSecondsInactive(60)
         ));
     }
 

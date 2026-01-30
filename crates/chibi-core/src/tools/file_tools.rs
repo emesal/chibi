@@ -195,12 +195,17 @@ fn resolve_file_path(
 
 /// Resolve and validate a file path against allowed paths
 fn resolve_and_validate_path(path: &str, config: &ResolvedConfig) -> io::Result<PathBuf> {
-    let resolved = if path.starts_with('~') {
-        // Expand home directory
+    let resolved = if let Some(rest) = path.strip_prefix("~/") {
+        // Expand home directory with path suffix
         let home = dirs_next::home_dir().ok_or_else(|| {
             io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
         })?;
-        home.join(&path[2..]) // Skip "~/"
+        home.join(rest)
+    } else if path == "~" {
+        // Bare ~ means home directory itself
+        dirs_next::home_dir().ok_or_else(|| {
+            io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
+        })?
     } else {
         PathBuf::from(path)
     };
@@ -223,8 +228,10 @@ fn resolve_and_validate_path(path: &str, config: &ResolvedConfig) -> io::Result<
 
     // Check if path is under any allowed path
     let allowed = config.file_tools_allowed_paths.iter().any(|allowed_path| {
-        let allowed_resolved = if allowed_path.starts_with('~') {
-            dirs_next::home_dir().map(|home| home.join(&allowed_path[2..]))
+        let allowed_resolved = if let Some(rest) = allowed_path.strip_prefix("~/") {
+            dirs_next::home_dir().map(|home| home.join(rest))
+        } else if allowed_path == "~" {
+            dirs_next::home_dir()
         } else {
             Some(PathBuf::from(allowed_path))
         };

@@ -5,14 +5,20 @@ use image::GenericImageView;
 use streamdown_parser::{ParseEvent, Parser};
 use streamdown_render::Renderer;
 
+/// Maximum line buffer size (1 MB). Lines exceeding this are force-flushed
+/// to prevent unbounded memory growth from malformed LLM responses.
+const MAX_LINE_BUFFER_BYTES: usize = 1024 * 1024;
+
+use crate::config::{ConfigImageRenderMode, ImageAlignment, ImageConfig, MarkdownStyle};
+
 /// Configuration for markdown stream rendering.
 #[derive(Clone)]
 pub struct MarkdownConfig {
     pub render_markdown: bool,
     pub force_render: bool,
-    pub image: crate::config::ImageConfig,
+    pub image: ImageConfig,
     pub image_cache_dir: Option<std::path::PathBuf>,
-    pub markdown_style: crate::config::MarkdownStyle,
+    pub markdown_style: MarkdownStyle,
 }
 
 impl MarkdownConfig {
@@ -50,7 +56,7 @@ struct ImageFetchConfig {
 struct ImageDisplayConfig {
     max_height_lines: u32,
     max_width_percent: u32,
-    alignment: crate::config::ImageAlignment,
+    alignment: ImageAlignment,
 }
 
 /// Terminal rendering capabilities detected from environment
@@ -138,18 +144,17 @@ fn detect_terminal_capability() -> TerminalCapability {
 
 /// Resolve the rendering mode based on config and terminal capabilities
 fn resolve_render_mode(
-    mode: crate::config::ConfigImageRenderMode,
+    mode: ConfigImageRenderMode,
     enable_truecolor: bool,
     enable_ansi: bool,
     enable_ascii: bool,
 ) -> ImageRenderMode {
-    use crate::config::ConfigImageRenderMode as CMode;
     match mode {
-        CMode::Truecolor if enable_truecolor => ImageRenderMode::Truecolor,
-        CMode::Ansi if enable_ansi => ImageRenderMode::Ansi,
-        CMode::Ascii if enable_ascii => ImageRenderMode::Ascii,
-        CMode::Placeholder => ImageRenderMode::Placeholder,
-        CMode::Auto => {
+        ConfigImageRenderMode::Truecolor if enable_truecolor => ImageRenderMode::Truecolor,
+        ConfigImageRenderMode::Ansi if enable_ansi => ImageRenderMode::Ansi,
+        ConfigImageRenderMode::Ascii if enable_ascii => ImageRenderMode::Ascii,
+        ConfigImageRenderMode::Placeholder => ImageRenderMode::Placeholder,
+        ConfigImageRenderMode::Auto => {
             let cap = detect_terminal_capability();
             match cap {
                 TerminalCapability::Truecolor if enable_truecolor => ImageRenderMode::Truecolor,
@@ -166,7 +171,12 @@ fn resolve_render_mode(
         }
         _ => {
             // Disabled mode, fallback to auto logic
-            resolve_render_mode(CMode::Auto, enable_truecolor, enable_ansi, enable_ascii)
+            resolve_render_mode(
+                ConfigImageRenderMode::Auto,
+                enable_truecolor,
+                enable_ansi,
+                enable_ascii,
+            )
         }
     }
 }
@@ -281,6 +291,22 @@ impl MarkdownStream {
             self.line_buffer = self.line_buffer[newline_pos + 1..].to_string();
 
             let events = pipeline.parser.parse_line(&line);
+            Self::render_events(
+                pipeline,
+                &events,
+                self.render_images,
+                self.terminal_width,
+                &self.fetch_config,
+                &self.display_config,
+                self.render_mode,
+            )?;
+        }
+
+        // Prevent unbounded buffer growth: force-flush if buffer exceeds limit
+        if self.line_buffer.len() > MAX_LINE_BUFFER_BYTES {
+            let line = std::mem::take(&mut self.line_buffer);
+            let line = line.trim_end_matches('\r');
+            let events = pipeline.parser.parse_line(line);
             Self::render_events(
                 pipeline,
                 &events,
@@ -688,12 +714,7 @@ fn ascii_char(intensity: u8) -> &'static str {
 }
 
 /// Calculate left padding for image alignment
-fn calculate_padding(
-    image_cols: usize,
-    term_width: usize,
-    alignment: crate::config::ImageAlignment,
-) -> usize {
-    use crate::config::ImageAlignment;
+fn calculate_padding(image_cols: usize, term_width: usize, alignment: ImageAlignment) -> usize {
     match alignment {
         ImageAlignment::Center => term_width.saturating_sub(image_cols) / 2,
         ImageAlignment::Right => term_width.saturating_sub(image_cols),
@@ -704,6 +725,7 @@ fn calculate_padding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::default_markdown_style;
 
     /// Encode raw bytes as a data URI string for test helpers.
     fn make_data_uri(mime: &str, data: &[u8]) -> String {
@@ -717,7 +739,7 @@ mod tests {
         use std::io::Cursor;
         let img = image::RgbImage::from_pixel(1, 1, image::Rgb([255, 0, 0]));
         let mut buf = Cursor::new(Vec::new());
-        img.write_to(&mut buf, image::ImageOutputFormat::Png)
+        img.write_to(&mut buf, image::ImageFormat::Png)
             .expect("encoding 1x1 PNG");
         buf.into_inner()
     }
@@ -737,7 +759,7 @@ mod tests {
         ImageDisplayConfig {
             max_height_lines: 25,
             max_width_percent: 80,
-            alignment: crate::config::ImageAlignment::Center,
+            alignment: ImageAlignment::Center,
         }
     }
 
@@ -911,103 +933,52 @@ mod tests {
 
     #[test]
     fn padding_left_alignment_is_always_zero() {
-        assert_eq!(
-            calculate_padding(40, 80, crate::config::ImageAlignment::Left),
-            0
-        );
-        assert_eq!(
-            calculate_padding(80, 80, crate::config::ImageAlignment::Left),
-            0
-        );
-        assert_eq!(
-            calculate_padding(120, 80, crate::config::ImageAlignment::Left),
-            0
-        );
+        assert_eq!(calculate_padding(40, 80, ImageAlignment::Left), 0);
+        assert_eq!(calculate_padding(80, 80, ImageAlignment::Left), 0);
+        assert_eq!(calculate_padding(120, 80, ImageAlignment::Left), 0);
     }
 
     #[test]
     fn padding_center_alignment_splits_remaining_space() {
         // 80 - 40 = 40 remaining, 40 / 2 = 20
-        assert_eq!(
-            calculate_padding(40, 80, crate::config::ImageAlignment::Center),
-            20
-        );
+        assert_eq!(calculate_padding(40, 80, ImageAlignment::Center), 20);
         // 80 - 60 = 20 remaining, 20 / 2 = 10
-        assert_eq!(
-            calculate_padding(60, 80, crate::config::ImageAlignment::Center),
-            10
-        );
+        assert_eq!(calculate_padding(60, 80, ImageAlignment::Center), 10);
         // Odd remainder: 80 - 41 = 39, 39 / 2 = 19 (integer division floors)
-        assert_eq!(
-            calculate_padding(41, 80, crate::config::ImageAlignment::Center),
-            19
-        );
+        assert_eq!(calculate_padding(41, 80, ImageAlignment::Center), 19);
     }
 
     #[test]
     fn padding_right_alignment_uses_full_remaining_space() {
         // 80 - 40 = 40
-        assert_eq!(
-            calculate_padding(40, 80, crate::config::ImageAlignment::Right),
-            40
-        );
+        assert_eq!(calculate_padding(40, 80, ImageAlignment::Right), 40);
         // 80 - 60 = 20
-        assert_eq!(
-            calculate_padding(60, 80, crate::config::ImageAlignment::Right),
-            20
-        );
+        assert_eq!(calculate_padding(60, 80, ImageAlignment::Right), 20);
         // 80 - 1 = 79
-        assert_eq!(
-            calculate_padding(1, 80, crate::config::ImageAlignment::Right),
-            79
-        );
+        assert_eq!(calculate_padding(1, 80, ImageAlignment::Right), 79);
     }
 
     #[test]
     fn padding_image_wider_than_terminal_saturates_to_zero() {
         // Image wider than terminal: saturating_sub prevents underflow
-        assert_eq!(
-            calculate_padding(100, 80, crate::config::ImageAlignment::Center),
-            0
-        );
-        assert_eq!(
-            calculate_padding(100, 80, crate::config::ImageAlignment::Right),
-            0
-        );
-        assert_eq!(
-            calculate_padding(100, 80, crate::config::ImageAlignment::Left),
-            0
-        );
+        assert_eq!(calculate_padding(100, 80, ImageAlignment::Center), 0);
+        assert_eq!(calculate_padding(100, 80, ImageAlignment::Right), 0);
+        assert_eq!(calculate_padding(100, 80, ImageAlignment::Left), 0);
     }
 
     #[test]
     fn padding_image_equals_terminal_width_is_zero() {
         // No space remaining in any alignment
-        assert_eq!(
-            calculate_padding(80, 80, crate::config::ImageAlignment::Center),
-            0
-        );
-        assert_eq!(
-            calculate_padding(80, 80, crate::config::ImageAlignment::Right),
-            0
-        );
+        assert_eq!(calculate_padding(80, 80, ImageAlignment::Center), 0);
+        assert_eq!(calculate_padding(80, 80, ImageAlignment::Right), 0);
     }
 
     #[test]
     fn padding_zero_width_image() {
         // Degenerate case: zero-width image gets full padding
-        assert_eq!(
-            calculate_padding(0, 80, crate::config::ImageAlignment::Center),
-            40
-        );
-        assert_eq!(
-            calculate_padding(0, 80, crate::config::ImageAlignment::Right),
-            80
-        );
-        assert_eq!(
-            calculate_padding(0, 80, crate::config::ImageAlignment::Left),
-            0
-        );
+        assert_eq!(calculate_padding(0, 80, ImageAlignment::Center), 40);
+        assert_eq!(calculate_padding(0, 80, ImageAlignment::Right), 80);
+        assert_eq!(calculate_padding(0, 80, ImageAlignment::Left), 0);
     }
 
     // ========== resolve_render_mode tests ==========
@@ -1015,7 +986,7 @@ mod tests {
     #[test]
     fn resolve_mode_explicit_truecolor_when_enabled() {
         let mode = resolve_render_mode(
-            crate::config::ConfigImageRenderMode::Truecolor,
+            ConfigImageRenderMode::Truecolor,
             true, // enable_truecolor
             true, // enable_ansi
             true, // enable_ascii
@@ -1028,7 +999,7 @@ mod tests {
         // Requesting Truecolor but it's disabled: falls through to catch-all
         // which re-invokes Auto logic
         let mode = resolve_render_mode(
-            crate::config::ConfigImageRenderMode::Truecolor,
+            ConfigImageRenderMode::Truecolor,
             false, // enable_truecolor disabled
             true,  // enable_ansi
             true,  // enable_ascii
@@ -1041,7 +1012,7 @@ mod tests {
     #[test]
     fn resolve_mode_explicit_ansi_when_enabled() {
         let mode = resolve_render_mode(
-            crate::config::ConfigImageRenderMode::Ansi,
+            ConfigImageRenderMode::Ansi,
             true,
             true, // enable_ansi
             true,
@@ -1052,7 +1023,7 @@ mod tests {
     #[test]
     fn resolve_mode_explicit_ansi_falls_back_when_disabled() {
         let mode = resolve_render_mode(
-            crate::config::ConfigImageRenderMode::Ansi,
+            ConfigImageRenderMode::Ansi,
             true,
             false, // enable_ansi disabled
             true,  // enable_ascii available
@@ -1063,7 +1034,7 @@ mod tests {
     #[test]
     fn resolve_mode_explicit_ascii_when_enabled() {
         let mode = resolve_render_mode(
-            crate::config::ConfigImageRenderMode::Ascii,
+            ConfigImageRenderMode::Ascii,
             true,
             true,
             true, // enable_ascii
@@ -1074,7 +1045,7 @@ mod tests {
     #[test]
     fn resolve_mode_explicit_ascii_falls_back_when_disabled() {
         let mode = resolve_render_mode(
-            crate::config::ConfigImageRenderMode::Ascii,
+            ConfigImageRenderMode::Ascii,
             true,
             true,
             false, // enable_ascii disabled
@@ -1084,12 +1055,7 @@ mod tests {
 
     #[test]
     fn resolve_mode_placeholder_ignores_capability_flags() {
-        let mode = resolve_render_mode(
-            crate::config::ConfigImageRenderMode::Placeholder,
-            false,
-            false,
-            false,
-        );
+        let mode = resolve_render_mode(ConfigImageRenderMode::Placeholder, false, false, false);
         assert!(matches!(mode, ImageRenderMode::Placeholder));
     }
 
@@ -1097,7 +1063,7 @@ mod tests {
     fn resolve_mode_all_disabled_yields_placeholder() {
         // Auto mode with all render modes disabled: nothing available
         let mode = resolve_render_mode(
-            crate::config::ConfigImageRenderMode::Auto,
+            ConfigImageRenderMode::Auto,
             false, // no truecolor
             false, // no ansi
             false, // no ascii
@@ -1110,7 +1076,7 @@ mod tests {
         // Auto with only ASCII enabled: regardless of terminal capability
         // the final fallback `_ if enable_ascii` catches it
         let mode = resolve_render_mode(
-            crate::config::ConfigImageRenderMode::Auto,
+            ConfigImageRenderMode::Auto,
             false, // no truecolor
             false, // no ansi
             true,  // ascii only
@@ -1166,7 +1132,7 @@ mod tests {
 
     /// Helper: construct a MarkdownStream with a render pipeline for buffering tests.
     fn rendering_stream() -> MarkdownStream {
-        let style = crate::config::default_markdown_style();
+        let style = default_markdown_style();
 
         MarkdownStream {
             line_buffer: String::new(),

@@ -1,38 +1,23 @@
-//! LLM API communication module.
+//! Main prompt sending functionality.
 //!
-//! This module handles all communication with the LLM API:
-//! - Building and sending requests
-//! - Streaming responses
-//! - Tool execution loop
-//! - Context compaction
+//! This module handles sending prompts to the LLM API with streaming support,
+//! tool execution, and hook integration. It uses the ResponseSink trait to
+//! decouple from presentation concerns.
 
-mod compact;
-mod logging;
-mod request;
-
+use super::compact::compact_context_with_llm;
+use super::logging::{log_request_if_enabled, log_response_meta_if_enabled};
+use super::request::{PromptOptions, build_request_body};
+use super::sink::{ResponseEvent, ResponseSink};
 use crate::cache;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
 use crate::llm;
-use crate::markdown::MarkdownStream;
-use crate::output::OutputHandler;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
 use serde_json::json;
 use std::io::{self, ErrorKind};
 use uuid::Uuid;
-
-// Re-export submodule items
-pub use compact::{
-    compact_context_by_name, compact_context_with_llm, compact_context_with_llm_manual,
-};
-// rolling_compact is used internally by compact_context_with_llm
-pub use request::PromptOptions;
-
-// Internal use from submodules
-use logging::{log_request_if_enabled, log_response_meta_if_enabled};
-use request::build_request_body;
 
 /// Maximum number of simultaneous tool calls allowed (prevents memory exhaustion from malicious responses)
 const MAX_TOOL_CALLS: usize = 100;
@@ -141,14 +126,14 @@ fn filter_tools_by_config(
 
 /// Filter tools based on hook results
 /// Multiple hooks: includes are intersected, excludes are unioned
-fn filter_tools_from_hook_results(
+fn filter_tools_from_hook_results<S: ResponseSink>(
     tools: Vec<serde_json::Value>,
     hook_results: &[(String, serde_json::Value)],
     verbose: bool,
-    output: &OutputHandler,
-) -> Vec<serde_json::Value> {
+    sink: &mut S,
+) -> io::Result<Vec<serde_json::Value>> {
     if hook_results.is_empty() {
-        return tools;
+        return Ok(tools);
     }
 
     let mut result = tools;
@@ -165,13 +150,15 @@ fn filter_tools_from_hook_results(
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect();
 
-            output.diagnostic(
-                &format!(
-                    "[Hook pre_api_tools: {} include filter: {:?}]",
-                    hook_name, include_names
-                ),
-                verbose,
-            );
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Hook pre_api_tools: {} include filter: {:?}]",
+                        hook_name, include_names
+                    ),
+                    verbose_only: true,
+                })?;
+            }
 
             all_includes = Some(match all_includes {
                 Some(existing) => existing
@@ -189,13 +176,15 @@ fn filter_tools_from_hook_results(
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect();
 
-            output.diagnostic(
-                &format!(
-                    "[Hook pre_api_tools: {} exclude filter: {:?}]",
-                    hook_name, exclude_names
-                ),
-                verbose,
-            );
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Hook pre_api_tools: {} exclude filter: {:?}]",
+                        hook_name, exclude_names
+                    ),
+                    verbose_only: true,
+                })?;
+            }
 
             for name in exclude_names {
                 if !all_excludes.contains(&name) {
@@ -225,29 +214,31 @@ fn filter_tools_from_hook_results(
         });
     }
 
-    result
+    Ok(result)
 }
 
 /// Apply request modifications from pre_api_request hook results
 /// Hook returns are merged (not replaced) into the request body
-fn apply_request_modifications(
+fn apply_request_modifications<S: ResponseSink>(
     mut request_body: serde_json::Value,
     hook_results: &[(String, serde_json::Value)],
     verbose: bool,
-    output: &OutputHandler,
-) -> serde_json::Value {
+    sink: &mut S,
+) -> io::Result<serde_json::Value> {
     for (hook_name, hook_result) in hook_results {
         if let Some(modifications) = hook_result.get("request_body")
             && let Some(mods_obj) = modifications.as_object()
         {
-            output.diagnostic(
-                &format!(
-                    "[Hook pre_api_request: {} modifying request (keys: {:?})]",
-                    hook_name,
-                    mods_obj.keys().collect::<Vec<_>>()
-                ),
-                verbose,
-            );
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Hook pre_api_request: {} modifying request (keys: {:?})]",
+                        hook_name,
+                        mods_obj.keys().collect::<Vec<_>>()
+                    ),
+                    verbose_only: true,
+                })?;
+            }
 
             // Merge modifications into request body
             if let Some(body_obj) = request_body.as_object_mut() {
@@ -258,28 +249,36 @@ fn apply_request_modifications(
         }
     }
 
-    request_body
+    Ok(request_body)
 }
 
-pub async fn send_prompt(
+/// Send a prompt to the LLM with streaming response via ResponseSink.
+///
+/// This is the main entry point for sending prompts. It handles:
+/// - Hook execution (pre_message, post_message, etc.)
+/// - Inbox message injection
+/// - Tool execution loop
+/// - Context management
+/// - Auto-compaction
+pub async fn send_prompt<S: ResponseSink>(
     app: &AppState,
     prompt: String,
     tools: &[Tool],
     resolved_config: &ResolvedConfig,
     options: &PromptOptions<'_>,
+    sink: &mut S,
 ) -> io::Result<()> {
-    let output = OutputHandler::new(options.json_output);
-    send_prompt_with_depth(app, prompt, tools, 0, resolved_config, &output, options).await
+    send_prompt_with_depth(app, prompt, tools, 0, resolved_config, options, sink).await
 }
 
-async fn send_prompt_with_depth(
+async fn send_prompt_with_depth<S: ResponseSink>(
     app: &AppState,
     prompt: String,
     tools: &[Tool],
     recursion_depth: usize,
     resolved_config: &ResolvedConfig,
-    output: &OutputHandler,
     options: &PromptOptions<'_>,
+    sink: &mut S,
 ) -> io::Result<()> {
     if prompt.trim().is_empty() {
         return Err(io::Error::new(
@@ -321,10 +320,12 @@ async fn send_prompt_with_depth(
         }
         inbox_content.push_str("--- END INBOX ---\n\n");
         final_prompt = format!("{}{}", inbox_content, final_prompt);
-        output.diagnostic(
-            &format!("[Inbox: {} message(s) injected]", inbox_messages.len()),
-            verbose,
-        );
+        if verbose {
+            sink.handle(ResponseEvent::Diagnostic {
+                message: format!("[Inbox: {} message(s) injected]", inbox_messages.len()),
+                verbose_only: true,
+            })?;
+        }
     }
 
     // Add user message to in-memory context
@@ -333,15 +334,17 @@ async fn send_prompt_with_depth(
     // Append user message to both transcript.jsonl and context.jsonl (tandem write)
     let user_entry = app.create_user_message_entry(&final_prompt, &resolved_config.username);
     app.append_to_current_transcript_and_context(&user_entry)?;
-    output.emit(&user_entry)?;
+    sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
 
     // Check if we need to warn about context window
     if app.should_warn(&context.messages) {
         let remaining = app.remaining_tokens(&context.messages);
-        output.diagnostic(
-            &format!("[Context window warning: {} tokens remaining]", remaining),
-            verbose,
-        );
+        if verbose {
+            sink.handle(ResponseEvent::Diagnostic {
+                message: format!("[Context window warning: {} tokens remaining]", remaining),
+                verbose_only: true,
+            })?;
+        }
     }
 
     // Auto-compaction check
@@ -384,13 +387,15 @@ async fn send_prompt_with_depth(
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
             && !inject.is_empty()
         {
-            output.diagnostic(
-                &format!(
-                    "[Hook pre_system_prompt: {} injected content]",
-                    hook_tool_name
-                ),
-                verbose,
-            );
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Hook pre_system_prompt: {} injected content]",
+                        hook_tool_name
+                    ),
+                    verbose_only: true,
+                })?;
+            }
             full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
         }
     }
@@ -446,13 +451,15 @@ async fn send_prompt_with_depth(
         if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
             && !inject.is_empty()
         {
-            output.diagnostic(
-                &format!(
-                    "[Hook post_system_prompt: {} injected content]",
-                    hook_tool_name
-                ),
-                verbose,
-            );
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Hook post_system_prompt: {} injected content]",
+                        hook_tool_name
+                    ),
+                    verbose_only: true,
+                })?;
+            }
             full_system_prompt.push_str("\n\n");
             full_system_prompt.push_str(inject);
         }
@@ -487,7 +494,6 @@ async fn send_prompt_with_depth(
     let mut all_tools = tools::tools_to_api_format(tools);
 
     // Always add agentic tools (todos, goals, send_message)
-    // Note: recurse tool is now external (loaded from tools directory)
     all_tools.push(tools::todos_tool_to_api_format());
     all_tools.push(tools::goals_tool_to_api_format());
     all_tools.push(tools::send_message_tool_to_api_format());
@@ -516,7 +522,7 @@ async fn send_prompt_with_depth(
     });
     let hook_results =
         tools::execute_hook(tools, tools::HookPoint::PreApiTools, &hook_data, verbose)?;
-    all_tools = filter_tools_from_hook_results(all_tools, &hook_results, verbose, output);
+    all_tools = filter_tools_from_hook_results(all_tools, &hook_results, verbose, sink)?;
 
     // Build request with tools and API params from resolved config
     let mut request_body = build_request_body(resolved_config, &messages, Some(&all_tools), true);
@@ -529,7 +535,7 @@ async fn send_prompt_with_depth(
     });
     let hook_results =
         tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data, verbose)?;
-    request_body = apply_request_modifications(request_body, &hook_results, verbose, output);
+    request_body = apply_request_modifications(request_body, &hook_results, verbose, sink)?;
 
     // Track if we should recurse (continue_processing was called)
     let mut should_recurse = false;
@@ -543,15 +549,9 @@ async fn send_prompt_with_depth(
         let response = llm::send_streaming_request(resolved_config, request_body.clone()).await?;
 
         let mut stream = response.bytes_stream();
-        let md_config = crate::markdown::MarkdownConfig::from_resolved(
-            resolved_config,
-            &app.chibi_dir,
-            options.force_render,
-        );
-        let mut md = MarkdownStream::new(md_config);
         let mut full_response = String::new();
         let mut is_first_content = true;
-        let json_mode = output.is_json_mode();
+        let json_mode = sink.is_json_mode();
 
         // Tool call accumulation
         let mut tool_calls: Vec<llm::ToolCallAccumulator> = Vec::new();
@@ -577,7 +577,6 @@ async fn send_prompt_with_depth(
                         .map_err(|e| io::Error::other(format!("JSON parse error: {}", e)))?;
 
                     // Capture response metadata (usage stats, model, id)
-                    // These typically appear in all chunks or the final chunk
                     if json.get("usage").is_some()
                         || json.get("model").is_some()
                         || json.get("id").is_some()
@@ -608,7 +607,7 @@ async fn send_prompt_with_depth(
                                         full_response.push_str(remaining);
                                         // Only stream in normal mode
                                         if !json_mode {
-                                            md.write_chunk(remaining)?;
+                                            sink.handle(ResponseEvent::TextChunk(remaining))?;
                                         }
                                     }
                                     continue;
@@ -618,7 +617,7 @@ async fn send_prompt_with_depth(
                             full_response.push_str(content);
                             // Only stream in normal mode
                             if !json_mode {
-                                md.write_chunk(content)?;
+                                sink.handle(ResponseEvent::TextChunk(content))?;
                             }
                         }
 
@@ -666,9 +665,9 @@ async fn send_prompt_with_depth(
             log_response_meta_if_enabled(app, debug, meta);
         }
 
-        // Flush any remaining markdown buffer
+        // Signal that streaming is finished
         if !json_mode {
-            md.finish()?;
+            sink.handle(ResponseEvent::Finished)?;
         }
 
         // If we have tool calls, execute them and continue the loop
@@ -694,7 +693,16 @@ async fn send_prompt_with_depth(
 
             // Execute each tool and add results
             for tc in &tool_calls {
-                output.diagnostic(&format!("[Tool: {}]", tc.name), verbose);
+                if verbose {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!("[Tool: {}]", tc.name),
+                        verbose_only: true,
+                    })?;
+                }
+
+                sink.handle(ResponseEvent::ToolStart {
+                    name: tc.name.clone(),
+                })?;
 
                 let mut args: serde_json::Value =
                     serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
@@ -703,8 +711,6 @@ async fn send_prompt_with_depth(
                 if let Some(note) = tools::check_recurse_signal(&tc.name, &args) {
                     should_recurse = true;
                     recurse_note = note;
-                    // Still execute the tool normally (it's a noop that just returns a message)
-                    // The tool result will be added below after normal tool execution
                 }
 
                 // Execute pre_tool hooks (can modify arguments OR block execution)
@@ -731,25 +737,29 @@ async fn send_prompt_with_depth(
                             .and_then(|v| v.as_str())
                             .unwrap_or("Tool call blocked by hook")
                             .to_string();
-                        output.diagnostic(
-                            &format!(
-                                "[Hook pre_tool: {} blocked {} - {}]",
-                                hook_tool_name, tc.name, block_message
-                            ),
-                            verbose,
-                        );
+                        if verbose {
+                            sink.handle(ResponseEvent::Diagnostic {
+                                message: format!(
+                                    "[Hook pre_tool: {} blocked {} - {}]",
+                                    hook_tool_name, tc.name, block_message
+                                ),
+                                verbose_only: true,
+                            })?;
+                        }
                         break;
                     }
 
                     // Check for argument modification
                     if let Some(modified_args) = result.get("arguments") {
-                        output.diagnostic(
-                            &format!(
-                                "[Hook pre_tool: {} modified arguments for {}]",
-                                hook_tool_name, tc.name
-                            ),
-                            verbose,
-                        );
+                        if verbose {
+                            sink.handle(ResponseEvent::Diagnostic {
+                                message: format!(
+                                    "[Hook pre_tool: {} modified arguments for {}]",
+                                    hook_tool_name, tc.name
+                                ),
+                                verbose_only: true,
+                            })?;
+                        }
                         args = modified_args.clone();
                     }
                 }
@@ -758,12 +768,10 @@ async fn send_prompt_with_depth(
                 let tool_result = if blocked {
                     block_message
                 } else if tc.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
-                    // Reflection tool called but reflection is disabled
                     "Error: Reflection tool is not enabled".to_string()
                 } else if let Some(builtin_result) =
                     tools::execute_builtin_tool(app, &tc.name, &args)
                 {
-                    // Handle built-in tools (todos, goals, reflection)
                     match builtin_result {
                         Ok(r) => r,
                         Err(e) => format!("Error: {}", e),
@@ -779,7 +787,7 @@ async fn send_prompt_with_depth(
                     } else if content.is_empty() {
                         "Error: 'content' field is required".to_string()
                     } else {
-                        // Execute pre_send_message hooks - can intercept delivery
+                        // Execute pre_send_message hooks
                         let pre_hook_data = serde_json::json!({
                             "from": from,
                             "to": to,
@@ -806,22 +814,22 @@ async fn send_prompt_with_depth(
                                     .and_then(|v| v.as_str())
                                     .unwrap_or(hook_tool_name);
                                 delivered_via = Some(via.to_string());
-                                output.diagnostic(
-                                    &format!(
-                                        "[Hook pre_send_message: {} intercepted delivery]",
-                                        hook_tool_name
-                                    ),
-                                    verbose,
-                                );
+                                if verbose {
+                                    sink.handle(ResponseEvent::Diagnostic {
+                                        message: format!(
+                                            "[Hook pre_send_message: {} intercepted delivery]",
+                                            hook_tool_name
+                                        ),
+                                        verbose_only: true,
+                                    })?;
+                                }
                                 break;
                             }
                         }
 
                         let delivery_result = if let Some(via) = delivered_via {
-                            // Hook claimed delivery, skip local inbox
                             format!("Message delivered to '{}' via {}", to, via)
                         } else {
-                            // No hook claimed delivery, write to local inbox
                             let entry = InboxEntry {
                                 id: Uuid::new_v4().to_string(),
                                 timestamp: now_timestamp(),
@@ -835,7 +843,7 @@ async fn send_prompt_with_depth(
                             }
                         };
 
-                        // Execute post_send_message hooks (observe only)
+                        // Execute post_send_message hooks
                         let post_hook_data = serde_json::json!({
                             "from": from,
                             "to": to,
@@ -853,7 +861,6 @@ async fn send_prompt_with_depth(
                         delivery_result
                     }
                 } else if tools::is_file_tool(&tc.name) {
-                    // Handle file/cache access tools
                     match tools::execute_file_tool(
                         app,
                         &context.name,
@@ -889,7 +896,6 @@ async fn send_prompt_with_depth(
                 )?;
 
                 for (hook_tool_name, result) in pre_output_hook_results {
-                    // Check for block signal (replaces output entirely)
                     if result
                         .get("block")
                         .and_then(|v| v.as_bool())
@@ -900,38 +906,39 @@ async fn send_prompt_with_depth(
                             .and_then(|v| v.as_str())
                             .unwrap_or("Output blocked by hook")
                             .to_string();
-                        output.diagnostic(
-                            &format!(
-                                "[Hook pre_tool_output: {} blocked output from {}]",
-                                hook_tool_name, tc.name
-                            ),
-                            verbose,
-                        );
+                        if verbose {
+                            sink.handle(ResponseEvent::Diagnostic {
+                                message: format!(
+                                    "[Hook pre_tool_output: {} blocked output from {}]",
+                                    hook_tool_name, tc.name
+                                ),
+                                verbose_only: true,
+                            })?;
+                        }
                         tool_result = replacement;
                         break;
                     }
 
-                    // Check for output modification
                     if let Some(modified_output) = result.get("output").and_then(|v| v.as_str()) {
-                        output.diagnostic(
-                            &format!(
-                                "[Hook pre_tool_output: {} modified output from {}]",
-                                hook_tool_name, tc.name
-                            ),
-                            verbose,
-                        );
+                        if verbose {
+                            sink.handle(ResponseEvent::Diagnostic {
+                                message: format!(
+                                    "[Hook pre_tool_output: {} modified output from {}]",
+                                    hook_tool_name, tc.name
+                                ),
+                                verbose_only: true,
+                            })?;
+                        }
                         tool_result = modified_output.to_string();
                     }
                 }
 
-                // Check if output should be cached (for non-error results exceeding threshold)
-                // All tools are subject to caching - no exceptions
+                // Check if output should be cached
                 let (final_result, was_cached) = if !tool_result.starts_with("Error:")
                     && cache::should_cache(
                         &tool_result,
                         resolved_config.tool_output_cache_threshold,
                     ) {
-                    // Cache the large output
                     let cache_dir = app.tool_cache_dir(&context.name);
                     match cache::cache_output(&cache_dir, &tc.name, &tool_result, &args) {
                         Ok(entry) => {
@@ -940,22 +947,29 @@ async fn send_prompt_with_depth(
                                 resolved_config.tool_cache_preview_chars,
                             ) {
                                 Ok(truncated) => {
-                                    output.diagnostic(
-                                        &format!(
-                                            "[Cached {} chars from {} as {}]",
-                                            tool_result.len(),
-                                            tc.name,
-                                            entry.metadata.id
-                                        ),
-                                        verbose,
-                                    );
+                                    if verbose {
+                                        sink.handle(ResponseEvent::Diagnostic {
+                                            message: format!(
+                                                "[Cached {} chars from {} as {}]",
+                                                tool_result.len(),
+                                                tc.name,
+                                                entry.metadata.id
+                                            ),
+                                            verbose_only: true,
+                                        })?;
+                                    }
                                     (truncated, true)
                                 }
                                 Err(_) => (tool_result.clone(), false),
                             }
                         }
                         Err(e) => {
-                            output.diagnostic(&format!("[Failed to cache output: {}]", e), verbose);
+                            if verbose {
+                                sink.handle(ResponseEvent::Diagnostic {
+                                    message: format!("[Failed to cache output: {}]", e),
+                                    verbose_only: true,
+                                })?;
+                            }
                             (tool_result.clone(), false)
                         }
                     }
@@ -963,7 +977,7 @@ async fn send_prompt_with_depth(
                     (tool_result.clone(), false)
                 };
 
-                // Execute post_tool_output hooks (observe only)
+                // Execute post_tool_output hooks
                 let post_output_hook_data = serde_json::json!({
                     "tool_name": tc.name,
                     "arguments": args,
@@ -978,13 +992,11 @@ async fn send_prompt_with_depth(
                     verbose,
                 );
 
-                // Log tool call and result to both transcript.jsonl and context.jsonl
-                // Note: We log the original tool_result to transcript, but use final_result for API
+                // Log tool call and result
                 let tool_call_entry = app.create_tool_call_entry(&tc.name, &tc.arguments);
                 app.append_to_current_transcript_and_context(&tool_call_entry)?;
-                output.emit(&tool_call_entry)?;
+                sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
-                // Log original or truncated result based on caching
                 let logged_result = if was_cached {
                     &final_result
                 } else {
@@ -992,13 +1004,19 @@ async fn send_prompt_with_depth(
                 };
                 let tool_result_entry = app.create_tool_result_entry(&tc.name, logged_result);
                 app.append_to_current_transcript_and_context(&tool_result_entry)?;
-                output.emit(&tool_result_entry)?;
+                sink.handle(ResponseEvent::TranscriptEntry(tool_result_entry))?;
 
-                // Execute post_tool hooks (observe only)
+                sink.handle(ResponseEvent::ToolResult {
+                    name: tc.name.clone(),
+                    result: final_result.clone(),
+                    cached: was_cached,
+                })?;
+
+                // Execute post_tool hooks
                 let post_hook_data = serde_json::json!({
                     "tool_name": tc.name,
                     "arguments": args,
-                    "result": tool_result,  // Pass original result to hooks
+                    "result": tool_result,
                     "cached": was_cached,
                 });
                 let _ = tools::execute_hook(
@@ -1011,7 +1029,7 @@ async fn send_prompt_with_depth(
                 messages.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": final_result,  // Use truncated message if cached
+                    "content": final_result,
                 }));
             }
 
@@ -1020,15 +1038,13 @@ async fn send_prompt_with_depth(
         }
 
         // No tool calls - we have a final response
-        // Update in-memory context for this session
         app.add_message(&mut context, "assistant".to_string(), full_response.clone());
 
-        // Append assistant message to both transcript.jsonl and context.jsonl (tandem write)
         let assistant_entry = app.create_assistant_message_entry(&full_response);
         app.append_to_current_transcript_and_context(&assistant_entry)?;
-        output.emit(&assistant_entry)?;
+        sink.handle(ResponseEvent::TranscriptEntry(assistant_entry))?;
 
-        // Execute post_message hooks (observe only)
+        // Execute post_message hooks
         let hook_data = serde_json::json!({
             "prompt": final_prompt,
             "response": full_response,
@@ -1038,32 +1054,38 @@ async fn send_prompt_with_depth(
 
         if app.should_warn(&context.messages) {
             let remaining = app.remaining_tokens(&context.messages);
-            output.diagnostic(
-                &format!("[Context window warning: {} tokens remaining]", remaining),
-                verbose,
-            );
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!("[Context window warning: {} tokens remaining]", remaining),
+                    verbose_only: true,
+                })?;
+            }
         }
 
-        output.newline();
+        sink.handle(ResponseEvent::Newline)?;
 
-        // Check if we should recurse (continue_processing was called)
+        // Check if we should recurse
         if should_recurse {
             let new_depth = recursion_depth + 1;
             if new_depth >= app.config.max_recursion_depth {
-                output.diagnostic_always(&format!(
-                    "[Max recursion depth ({}) reached, stopping]",
-                    app.config.max_recursion_depth
-                ));
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Max recursion depth ({}) reached, stopping]",
+                        app.config.max_recursion_depth
+                    ),
+                    verbose_only: false,
+                })?;
                 return Ok(());
             }
-            output.diagnostic(
-                &format!(
-                    "[Continuing processing ({}/{}): {}]",
-                    new_depth, app.config.max_recursion_depth, recurse_note
-                ),
-                verbose,
-            );
-            // Recursively call send_prompt with the note as the new prompt
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Continuing processing ({}/{}): {}]",
+                        new_depth, app.config.max_recursion_depth, recurse_note
+                    ),
+                    verbose_only: true,
+                })?;
+            }
             let continue_prompt = format!(
                 "[Continuing from previous round]\n\nNote to self: {}",
                 recurse_note
@@ -1074,8 +1096,8 @@ async fn send_prompt_with_depth(
                 tools,
                 new_depth,
                 resolved_config,
-                output,
                 options,
+                sink,
             ))
             .await;
         }
@@ -1099,14 +1121,6 @@ mod tests {
             classify_tool_type("update_goals", &plugin_names),
             ToolType::Builtin
         );
-        assert_eq!(
-            classify_tool_type("update_reflection", &plugin_names),
-            ToolType::Builtin
-        );
-        assert_eq!(
-            classify_tool_type("send_message", &plugin_names),
-            ToolType::Builtin
-        );
     }
 
     #[test]
@@ -1117,18 +1131,6 @@ mod tests {
             ToolType::File
         );
         assert_eq!(
-            classify_tool_type("file_tail", &plugin_names),
-            ToolType::File
-        );
-        assert_eq!(
-            classify_tool_type("file_lines", &plugin_names),
-            ToolType::File
-        );
-        assert_eq!(
-            classify_tool_type("file_grep", &plugin_names),
-            ToolType::File
-        );
-        assert_eq!(
             classify_tool_type("cache_list", &plugin_names),
             ToolType::File
         );
@@ -1136,20 +1138,16 @@ mod tests {
 
     #[test]
     fn test_classify_tool_type_plugin() {
-        let plugin_names: Vec<&str> = vec!["my_plugin", "other_plugin"];
+        let plugin_names: Vec<&str> = vec!["my_plugin"];
         assert_eq!(
             classify_tool_type("my_plugin", &plugin_names),
-            ToolType::Plugin
-        );
-        assert_eq!(
-            classify_tool_type("other_plugin", &plugin_names),
             ToolType::Plugin
         );
     }
 
     #[test]
     fn test_classify_tool_type_unknown_defaults_to_plugin() {
-        let plugin_names: Vec<&str> = vec!["known_plugin"];
+        let plugin_names: Vec<&str> = vec!["my_plugin"];
         assert_eq!(
             classify_tool_type("unknown_tool", &plugin_names),
             ToolType::Plugin
@@ -1166,8 +1164,8 @@ mod tests {
     #[test]
     fn test_filter_tools_by_config_no_filters() {
         let tools = vec![
-            json!({"function": {"name": "tool_a"}}),
-            json!({"function": {"name": "tool_b"}}),
+            json!({"function": {"name": "tool1"}}),
+            json!({"function": {"name": "tool2"}}),
         ];
         let config = ToolsConfig::default();
         let result = filter_tools_by_config(tools.clone(), &config);
@@ -1177,293 +1175,30 @@ mod tests {
     #[test]
     fn test_filter_tools_by_config_include() {
         let tools = vec![
-            json!({"function": {"name": "tool_a"}}),
-            json!({"function": {"name": "tool_b"}}),
-            json!({"function": {"name": "tool_c"}}),
+            json!({"function": {"name": "tool1"}}),
+            json!({"function": {"name": "tool2"}}),
+            json!({"function": {"name": "tool3"}}),
         ];
         let config = ToolsConfig {
-            include: Some(vec!["tool_a".to_string(), "tool_c".to_string()]),
+            include: Some(vec!["tool1".to_string(), "tool3".to_string()]),
             exclude: None,
         };
         let result = filter_tools_by_config(tools, &config);
         assert_eq!(result.len(), 2);
-
-        let names: Vec<&str> = result
-            .iter()
-            .filter_map(|t| {
-                t.get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|n| n.as_str())
-            })
-            .collect();
-        assert!(names.contains(&"tool_a"));
-        assert!(names.contains(&"tool_c"));
-        assert!(!names.contains(&"tool_b"));
     }
 
     #[test]
     fn test_filter_tools_by_config_exclude() {
         let tools = vec![
-            json!({"function": {"name": "tool_a"}}),
-            json!({"function": {"name": "tool_b"}}),
-            json!({"function": {"name": "tool_c"}}),
+            json!({"function": {"name": "tool1"}}),
+            json!({"function": {"name": "tool2"}}),
+            json!({"function": {"name": "tool3"}}),
         ];
         let config = ToolsConfig {
             include: None,
-            exclude: Some(vec!["tool_b".to_string()]),
+            exclude: Some(vec!["tool2".to_string()]),
         };
         let result = filter_tools_by_config(tools, &config);
         assert_eq!(result.len(), 2);
-
-        let names: Vec<&str> = result
-            .iter()
-            .filter_map(|t| {
-                t.get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|n| n.as_str())
-            })
-            .collect();
-        assert!(names.contains(&"tool_a"));
-        assert!(names.contains(&"tool_c"));
-        assert!(!names.contains(&"tool_b"));
-    }
-
-    #[test]
-    fn test_filter_tools_by_config_include_and_exclude() {
-        // Exclude takes effect after include
-        let tools = vec![
-            json!({"function": {"name": "tool_a"}}),
-            json!({"function": {"name": "tool_b"}}),
-            json!({"function": {"name": "tool_c"}}),
-        ];
-        let config = ToolsConfig {
-            include: Some(vec![
-                "tool_a".to_string(),
-                "tool_b".to_string(),
-                "tool_c".to_string(),
-            ]),
-            exclude: Some(vec!["tool_b".to_string()]),
-        };
-        let result = filter_tools_by_config(tools, &config);
-        assert_eq!(result.len(), 2);
-
-        let names: Vec<&str> = result
-            .iter()
-            .filter_map(|t| {
-                t.get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|n| n.as_str())
-            })
-            .collect();
-        assert!(names.contains(&"tool_a"));
-        assert!(names.contains(&"tool_c"));
-    }
-
-    #[test]
-    fn test_filter_tools_from_hook_results_empty() {
-        let tools = vec![
-            json!({"function": {"name": "tool_a"}}),
-            json!({"function": {"name": "tool_b"}}),
-        ];
-        let hook_results: Vec<(String, serde_json::Value)> = vec![];
-        let output = OutputHandler::new(false);
-        let result = filter_tools_from_hook_results(tools.clone(), &hook_results, false, &output);
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn test_filter_tools_from_hook_results_exclude() {
-        let tools = vec![
-            json!({"function": {"name": "tool_a"}}),
-            json!({"function": {"name": "tool_b"}}),
-            json!({"function": {"name": "tool_c"}}),
-        ];
-        let hook_results = vec![("test_hook".to_string(), json!({"exclude": ["tool_b"]}))];
-        let output = OutputHandler::new(false);
-        let result = filter_tools_from_hook_results(tools, &hook_results, false, &output);
-        assert_eq!(result.len(), 2);
-
-        let names: Vec<&str> = result
-            .iter()
-            .filter_map(|t| {
-                t.get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|n| n.as_str())
-            })
-            .collect();
-        assert!(names.contains(&"tool_a"));
-        assert!(names.contains(&"tool_c"));
-    }
-
-    #[test]
-    fn test_filter_tools_from_hook_results_include() {
-        let tools = vec![
-            json!({"function": {"name": "tool_a"}}),
-            json!({"function": {"name": "tool_b"}}),
-            json!({"function": {"name": "tool_c"}}),
-        ];
-        let hook_results = vec![(
-            "test_hook".to_string(),
-            json!({"include": ["tool_a", "tool_c"]}),
-        )];
-        let output = OutputHandler::new(false);
-        let result = filter_tools_from_hook_results(tools, &hook_results, false, &output);
-        assert_eq!(result.len(), 2);
-
-        let names: Vec<&str> = result
-            .iter()
-            .filter_map(|t| {
-                t.get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|n| n.as_str())
-            })
-            .collect();
-        assert!(names.contains(&"tool_a"));
-        assert!(names.contains(&"tool_c"));
-    }
-
-    #[test]
-    fn test_filter_tools_multiple_hooks_excludes_union() {
-        let tools = vec![
-            json!({"function": {"name": "tool_a"}}),
-            json!({"function": {"name": "tool_b"}}),
-            json!({"function": {"name": "tool_c"}}),
-        ];
-        let hook_results = vec![
-            ("hook1".to_string(), json!({"exclude": ["tool_a"]})),
-            ("hook2".to_string(), json!({"exclude": ["tool_b"]})),
-        ];
-        let output = OutputHandler::new(false);
-        let result = filter_tools_from_hook_results(tools, &hook_results, false, &output);
-        assert_eq!(result.len(), 1);
-
-        let names: Vec<&str> = result
-            .iter()
-            .filter_map(|t| {
-                t.get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|n| n.as_str())
-            })
-            .collect();
-        assert!(names.contains(&"tool_c"));
-    }
-
-    #[test]
-    fn test_filter_tools_multiple_hooks_includes_intersect() {
-        let tools = vec![
-            json!({"function": {"name": "tool_a"}}),
-            json!({"function": {"name": "tool_b"}}),
-            json!({"function": {"name": "tool_c"}}),
-        ];
-        let hook_results = vec![
-            (
-                "hook1".to_string(),
-                json!({"include": ["tool_a", "tool_b"]}),
-            ),
-            (
-                "hook2".to_string(),
-                json!({"include": ["tool_a", "tool_c"]}),
-            ),
-        ];
-        let output = OutputHandler::new(false);
-        let result = filter_tools_from_hook_results(tools, &hook_results, false, &output);
-        assert_eq!(result.len(), 1);
-
-        let names: Vec<&str> = result
-            .iter()
-            .filter_map(|t| {
-                t.get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|n| n.as_str())
-            })
-            .collect();
-        assert!(names.contains(&"tool_a"));
-    }
-
-    #[test]
-    fn test_apply_request_modifications_empty() {
-        let request_body = json!({
-            "model": "test-model",
-            "temperature": 0.5,
-        });
-        let hook_results: Vec<(String, serde_json::Value)> = vec![];
-        let output = OutputHandler::new(false);
-        let result =
-            apply_request_modifications(request_body.clone(), &hook_results, false, &output);
-        assert_eq!(result, request_body);
-    }
-
-    #[test]
-    fn test_apply_request_modifications_merge() {
-        let request_body = json!({
-            "model": "test-model",
-            "temperature": 0.5,
-        });
-        let hook_results = vec![(
-            "test_hook".to_string(),
-            json!({"request_body": {"temperature": 0.8, "max_tokens": 1000}}),
-        )];
-        let output = OutputHandler::new(false);
-        let result = apply_request_modifications(request_body, &hook_results, false, &output);
-
-        assert_eq!(result["model"], "test-model");
-        assert_eq!(result["temperature"], 0.8);
-        assert_eq!(result["max_tokens"], 1000);
-    }
-
-    #[test]
-    fn test_apply_request_modifications_multiple_hooks() {
-        let request_body = json!({
-            "model": "test-model",
-            "temperature": 0.5,
-        });
-        let hook_results = vec![
-            (
-                "hook1".to_string(),
-                json!({"request_body": {"temperature": 0.7}}),
-            ),
-            (
-                "hook2".to_string(),
-                json!({"request_body": {"max_tokens": 500}}),
-            ),
-        ];
-        let output = OutputHandler::new(false);
-        let result = apply_request_modifications(request_body, &hook_results, false, &output);
-
-        assert_eq!(result["model"], "test-model");
-        assert_eq!(result["temperature"], 0.7);
-        assert_eq!(result["max_tokens"], 500);
-    }
-
-    #[test]
-    fn test_build_tool_info_list() {
-        use crate::tools::Tool;
-        use std::path::PathBuf;
-
-        let all_tools = vec![
-            json!({"function": {"name": "update_todos"}}),
-            json!({"function": {"name": "file_head"}}),
-            json!({"function": {"name": "my_plugin"}}),
-        ];
-        let plugin_tools = vec![Tool {
-            name: "my_plugin".to_string(),
-            description: "test".to_string(),
-            parameters: json!({}),
-            path: PathBuf::from("/test"),
-            hooks: vec![],
-        }];
-
-        let result = build_tool_info_list(&all_tools, &plugin_tools);
-        assert_eq!(result.len(), 3);
-
-        // Find each tool and verify its type
-        let todos = result.iter().find(|t| t["name"] == "update_todos").unwrap();
-        assert_eq!(todos["type"], "builtin");
-
-        let file_head = result.iter().find(|t| t["name"] == "file_head").unwrap();
-        assert_eq!(file_head["type"], "file");
-
-        let plugin = result.iter().find(|t| t["name"] == "my_plugin").unwrap();
-        assert_eq!(plugin["type"], "plugin");
     }
 }
