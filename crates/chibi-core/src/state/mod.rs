@@ -2107,7 +2107,9 @@ mod tests {
         app.save_local_config("default", &local).unwrap();
 
         // CLI temp username should override local
-        let resolved = app.resolve_config("default", None, Some("cliuser")).unwrap();
+        let resolved = app
+            .resolve_config("default", None, Some("cliuser"))
+            .unwrap();
         assert_eq!(resolved.username, "cliuser");
     }
 
