@@ -15,11 +15,11 @@
 //! #[tokio::main]
 //! async fn main() -> std::io::Result<()> {
 //!     let chibi = Chibi::load()?;
-//!     let config = chibi.resolve_config(None, None)?;
+//!     let config = chibi.resolve_config("default", None)?;
 //!     let options = PromptOptions::new(false, false, false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
-//!     chibi.send_prompt_streaming("Hello!", &config, &options, &mut sink).await?;
+//!     chibi.send_prompt_streaming("default", "Hello!", &config, &options, &mut sink).await?;
 //!     println!("Response: {}", sink.text);
 //!     Ok(())
 //! }
@@ -49,7 +49,7 @@ pub use chibi::{Chibi, LoadOptions};
 pub use api::{CollectingSink, PromptOptions, ResponseEvent, ResponseSink};
 pub use config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
 pub use context::{Context, ContextEntry, Message, TranscriptEntry};
-pub use input::{ChibiInput, Command, Flags, Inspectable};
+pub use input::{Command, Flags, Inspectable};
 pub use partition::StorageConfig;
 pub use state::AppState;
 pub use tools::{HookPoint, Tool};

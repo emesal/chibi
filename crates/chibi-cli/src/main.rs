@@ -4,9 +4,11 @@
 mod cli;
 mod config;
 mod image_cache;
+mod input;
 mod json_input;
 mod markdown;
 mod output;
+mod session;
 mod sink;
 
 // Re-export key types for use by other modules
@@ -18,12 +20,16 @@ pub use config::{
 pub use json_input::from_str as parse_json_input;
 pub use markdown::{MarkdownConfig, MarkdownStream};
 pub use output::OutputHandler;
+pub use session::Session;
 pub use sink::CliResponseSink;
 
 use chibi_core::context::{
-    Context, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
+    Context, ContextEntry, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
+    now_timestamp,
 };
-use chibi_core::input::{ChibiInput, Command, ContextSelection, DebugKey, UsernameOverride};
+use chibi_core::input::{Command, DebugKey};
+
+use crate::input::{ChibiInput, ContextSelection, UsernameOverride};
 use chibi_core::{Chibi, Inspectable, LoadOptions, PromptOptions, api, tools};
 use std::io::{self, ErrorKind, IsTerminal, Read, Write};
 use std::path::PathBuf;
@@ -103,27 +109,10 @@ fn generate_new_context_name(chibi: &Chibi, prefix: Option<&str>) -> String {
     }
 }
 
-/// Resolve previous context reference
-fn resolve_previous_context(chibi: &Chibi) -> io::Result<String> {
-    chibi
-        .app
-        .state
-        .previous_context
-        .as_ref()
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::InvalidInput,
-                "No previous context available (use -c to switch contexts first)",
-            )
-        })
-}
-
 /// Resolve "new" or "new:prefix" or "-" context names
-fn resolve_context_name(chibi: &Chibi, name: &str) -> io::Result<String> {
+fn resolve_context_name(chibi: &Chibi, session: &Session, name: &str) -> io::Result<String> {
     if name == "-" {
-        resolve_previous_context(chibi)
+        session.get_previous()
     } else if name == "new" {
         Ok(generate_new_context_name(chibi, None))
     } else if let Some(prefix) = name.strip_prefix("new:") {
@@ -143,11 +132,11 @@ fn resolve_context_name(chibi: &Chibi, name: &str) -> io::Result<String> {
 /// Combines core config with presentation settings from cli.toml.
 fn resolve_cli_config(
     chibi: &Chibi,
-    persistent_username: Option<&str>,
-    transient_username: Option<&str>,
+    context_name: &str,
+    username_override: Option<&str>,
 ) -> io::Result<ResolvedConfig> {
-    let core = chibi.resolve_config(persistent_username, transient_username)?;
-    let cli = load_cli_config(chibi.home_dir(), Some(chibi.current_context_name()))?;
+    let core = chibi.resolve_config(context_name, username_override)?;
+    let cli = load_cli_config(chibi.home_dir(), Some(context_name))?;
 
     Ok(ResolvedConfig {
         core,
@@ -169,7 +158,7 @@ fn inspect_context(
     let config = if let Some(cfg) = resolved_config {
         cfg
     } else {
-        config_holder = resolve_cli_config(chibi, None, None)?;
+        config_holder = resolve_cli_config(chibi, context_name, None)?;
         &config_holder
     };
 
@@ -338,6 +327,7 @@ fn set_prompt_for_context(
 async fn execute_from_input(
     input: ChibiInput,
     chibi: &mut Chibi,
+    session: &mut Session,
     output: &OutputHandler,
     force_markdown: bool,
 ) -> io::Result<()> {
@@ -346,7 +336,7 @@ async fn execute_from_input(
 
     // Execute on_start hook
     let hook_data = serde_json::json!({
-        "current_context": chibi.app.state.current_context,
+        "implied_context": &session.implied_context,
         "verbose": verbose,
     });
     let _ = chibi.execute_hook(tools::HookPoint::OnStart, &hook_data, verbose);
@@ -355,6 +345,12 @@ async fn execute_from_input(
     let destroyed = chibi.app.auto_destroy_expired_contexts(verbose)?;
     if !destroyed.is_empty() {
         chibi.save()?;
+        // If our session points to a destroyed context, reset to default
+        if destroyed.contains(&session.implied_context) {
+            session.implied_context = "default".to_string();
+            session.previous_context = None;
+            session.save(chibi.home_dir())?;
+        }
         output.diagnostic(
             &format!("[Auto-destroyed {} expired context(s)]", destroyed.len()),
             verbose,
@@ -363,52 +359,58 @@ async fn execute_from_input(
 
     let mut did_action = false;
 
-    // Handle context selection
-    match &input.context {
-        ContextSelection::Current => {}
-        ContextSelection::Transient { name } => {
-            let actual_name = resolve_context_name(chibi, name)?;
-            let prev_context = chibi.app.state.current_context.clone();
-            chibi.switch_context(&actual_name)?;
+    // Handle context selection and determine working_context
+    // - working_context: the context we're actually operating on this invocation
+    // - implied_context: persisted in session.json, what you get when no context is specified
+    let working_context = match &input.context {
+        ContextSelection::Current => session.implied_context.clone(),
+        ContextSelection::Ephemeral { name } => {
+            // Ephemeral: use context directly WITHOUT mutating session
+            let actual_name = resolve_context_name(chibi, session, name)?;
+            chibi.app.ensure_context_dir(&actual_name)?;
             output.diagnostic(
-                &format!("[Using transient context: {}]", actual_name),
+                &format!("[Using ephemeral context: {}]", actual_name),
                 verbose,
             );
             let hook_data = serde_json::json!({
-                "from_context": prev_context,
-                "to_context": actual_name,
-                "is_transient": true,
+                "from_context": &session.implied_context,
+                "to_context": &actual_name,
+                "is_ephemeral": true,
             });
             let _ = chibi.execute_hook(tools::HookPoint::OnContextSwitch, &hook_data, verbose);
+            actual_name
         }
         ContextSelection::Switch { name, persistent } => {
-            let prev_context = chibi.app.state.current_context.clone();
+            let prev_context = session.implied_context.clone();
             if name == "-" {
-                chibi.swap_with_previous()?;
+                session.swap_with_previous()?;
             } else {
-                let actual_name = resolve_context_name(chibi, name)?;
-                chibi.switch_context(&actual_name)?;
+                let actual_name = resolve_context_name(chibi, session, name)?;
+                session.switch_context(actual_name);
             }
+            chibi.app.ensure_context_dir(&session.implied_context)?;
 
             if *persistent {
+                session.save(chibi.home_dir())?;
                 chibi.save()?;
             }
             output.diagnostic(
-                &format!("[Switched to context: {}]", chibi.app.state.current_context),
+                &format!("[Switched to context: {}]", &session.implied_context),
                 verbose,
             );
             let hook_data = serde_json::json!({
                 "from_context": prev_context,
-                "to_context": chibi.app.state.current_context,
-                "is_transient": !persistent,
+                "to_context": &session.implied_context,
+                "is_ephemeral": !persistent,
             });
             let _ = chibi.execute_hook(tools::HookPoint::OnContextSwitch, &hook_data, verbose);
             did_action = true;
+            session.implied_context.clone()
         }
-    }
+    };
 
-    // Touch the current context
-    let current_ctx = chibi.app.state.current_context.clone();
+    // Touch the working context
+    let current_ctx = working_context.clone();
     let debug_destroy_at = input.flags.debug.iter().find_map(|k| match k {
         DebugKey::DestroyAt(ts) => Some(*ts),
         _ => None,
@@ -417,6 +419,19 @@ async fn execute_from_input(
         DebugKey::DestroyAfterSecondsInactive(secs) => Some(*secs),
         _ => None,
     });
+    // Ensure ContextEntry exists before applying destroy settings (fix for #47 regression)
+    if !chibi
+        .app
+        .state
+        .contexts
+        .iter()
+        .any(|e| e.name == current_ctx)
+    {
+        chibi.app.state.contexts.push(ContextEntry::with_created_at(
+            current_ctx.clone(),
+            now_timestamp(),
+        ));
+    }
     if chibi.app.touch_context_with_destroy_settings(
         &current_ctx,
         debug_destroy_at,
@@ -426,26 +441,25 @@ async fn execute_from_input(
     }
 
     // Handle username override
-    if let Some(ref override_) = input.username_override {
-        match override_ {
-            UsernameOverride::Persistent(username) => {
-                let mut local_config = chibi.app.load_local_config(&current_ctx)?;
-                local_config.username = Some(username.clone());
-                chibi.app.save_local_config(&current_ctx, &local_config)?;
-                output.diagnostic(
-                    &format!(
-                        "[Username '{}' saved to context '{}']",
-                        username, current_ctx
-                    ),
-                    verbose,
-                );
-                did_action = true;
-            }
-            UsernameOverride::Transient(_) => {
-                // Applied via resolve_config later
-            }
+    // Persistent (-u) is saved to local.toml; ephemeral (-U) is used for this invocation only
+    let ephemeral_username: Option<&str> = match &input.username_override {
+        Some(UsernameOverride::Persistent(username)) => {
+            let mut local_config = chibi.app.load_local_config(&current_ctx)?;
+            local_config.username = Some(username.clone());
+            chibi.app.save_local_config(&current_ctx, &local_config)?;
+            output.diagnostic(
+                &format!(
+                    "[Username '{}' saved to context '{}']",
+                    username, current_ctx
+                ),
+                verbose,
+            );
+            did_action = true;
+            None // persistent was saved, no runtime override needed
         }
-    }
+        Some(UsernameOverride::Ephemeral(username)) => Some(username.as_str()),
+        None => None,
+    };
 
     // Execute command
     match &input.command {
@@ -457,7 +471,7 @@ async fn execute_from_input(
         }
         Command::ListContexts => {
             let contexts = chibi.list_contexts();
-            let current = chibi.current_context_name();
+            let implied = &session.implied_context;
             for name in contexts {
                 let context_dir = chibi.app.context_dir(&name);
                 let status = chibi_core::lock::ContextLock::get_status(
@@ -465,7 +479,7 @@ async fn execute_from_input(
                     chibi.app.config.lock_heartbeat_seconds,
                 );
                 let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
-                if name == current {
+                if &name == implied {
                     output.emit_result(&format!("* {}{}", name, status_str));
                 } else {
                     output.emit_result(&format!("  {}{}", name, status_str));
@@ -474,8 +488,8 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::ListCurrentContext => {
-            let context_name = chibi.current_context_name();
-            let context = chibi.current_context()?;
+            let context_name = &working_context;
+            let context = chibi.app.get_or_create_context(context_name)?;
             let context_dir = chibi.app.context_dir(context_name);
             let status = chibi_core::lock::ContextLock::get_status(
                 &context_dir,
@@ -494,8 +508,8 @@ async fn execute_from_input(
         }
         Command::DestroyContext { name } => {
             let ctx_name = match name {
-                Some(n) => resolve_context_name(chibi, n)?,
-                None => chibi.current_context_name().to_string(),
+                Some(n) => resolve_context_name(chibi, session, n)?,
+                None => working_context.clone(),
             };
 
             if !chibi.app.context_dir(&ctx_name).exists() {
@@ -503,41 +517,41 @@ async fn execute_from_input(
             } else if !confirm_action(&format!("Destroy context '{}'?", ctx_name)) {
                 output.emit_result("Aborted");
             } else {
-                match chibi.app.destroy_context(&ctx_name) {
-                    Ok(Some(switched_to)) => {
-                        output.emit_result(&format!(
-                            "Destroyed context '{}', switched to '{}'",
-                            ctx_name, switched_to
-                        ));
-                    }
-                    Ok(None) => {
-                        output.emit_result(&format!("Destroyed context: {}", ctx_name));
-                    }
-                    Err(e) => return Err(e),
+                // Handle session fallback if destroying current context
+                if session
+                    .handle_context_destroyed(&ctx_name, |name| {
+                        chibi.app.context_dir(name).exists()
+                    })
+                    .is_some()
+                {
+                    session.save(chibi.home_dir())?;
                 }
+                chibi.app.destroy_context(&ctx_name)?;
+                output.emit_result(&format!("Destroyed context: {}", ctx_name));
             }
             did_action = true;
         }
         Command::ArchiveHistory { name } => {
             let ctx_name = match name {
-                Some(n) => resolve_context_name(chibi, n)?,
-                None => chibi.current_context_name().to_string(),
+                Some(n) => resolve_context_name(chibi, session, n)?,
+                None => working_context.clone(),
             };
             if name.is_none() {
-                let context = chibi.current_context()?;
+                let context = chibi.app.get_or_create_context(&ctx_name)?;
                 let hook_data = serde_json::json!({
                     "context_name": context.name,
                     "message_count": context.messages.len(),
                     "summary": context.summary,
                 });
                 let _ = chibi.execute_hook(tools::HookPoint::PreClear, &hook_data, verbose);
-                chibi.app.clear_context()?;
+                chibi.app.clear_context(&ctx_name)?;
                 let hook_data = serde_json::json!({
-                    "context_name": chibi.current_context_name(),
+                    "context_name": &working_context,
                 });
                 let _ = chibi.execute_hook(tools::HookPoint::PostClear, &hook_data, verbose);
             } else {
-                chibi.app.clear_context_by_name(&ctx_name)?;
+                // For named contexts, just clear without hooks (hooks are for interactive use)
+                chibi.app.clear_context(&ctx_name)?;
             }
             output.emit_result(&format!(
                 "Context '{}' archived (history saved to transcript)",
@@ -547,45 +561,63 @@ async fn execute_from_input(
         }
         Command::CompactContext { name } => {
             if let Some(ctx_name) = name {
-                let resolved_name = resolve_context_name(chibi, ctx_name)?;
+                let resolved_name = resolve_context_name(chibi, session, ctx_name)?;
                 api::compact_context_by_name(&chibi.app, &resolved_name, verbose).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
-                let resolved = chibi.resolve_config(None, None)?;
-                api::compact_context_with_llm_manual(&chibi.app, &resolved, verbose).await?;
+                let resolved = chibi.resolve_config(&working_context, None)?;
+                api::compact_context_with_llm_manual(
+                    &chibi.app,
+                    &working_context,
+                    &resolved,
+                    verbose,
+                )
+                .await?;
             }
             did_action = true;
         }
         Command::RenameContext { old, new } => {
             let old_name = match old {
-                Some(n) => resolve_context_name(chibi, n)?,
-                None => chibi.current_context_name().to_string(),
+                Some(n) => resolve_context_name(chibi, session, n)?,
+                None => working_context.clone(),
             };
             chibi.app.rename_context(&old_name, new)?;
+            // Update session if we renamed the implied context
+            if session.implied_context == old_name {
+                session.implied_context = new.clone();
+                session.save(chibi.home_dir())?;
+            }
+            // Also update previous_context if needed
+            if session.previous_context.as_deref() == Some(&old_name) {
+                session.previous_context = Some(new.clone());
+                session.save(chibi.home_dir())?;
+            }
             output.emit_result(&format!("Renamed context '{}' to '{}'", old_name, new));
             did_action = true;
         }
         Command::ShowLog { context, count } => {
             let ctx_name = match context {
-                Some(n) => resolve_context_name(chibi, n)?,
-                None => chibi.current_context_name().to_string(),
+                Some(n) => resolve_context_name(chibi, session, n)?,
+                None => working_context.clone(),
             };
-            let config = resolve_cli_config(chibi, None, None)?;
+            let config = resolve_cli_config(chibi, &ctx_name, None)?;
             show_log(chibi, &ctx_name, *count, verbose, &config, force_markdown)?;
             did_action = true;
         }
         Command::Inspect { context, thing } => {
             let ctx_name = match context {
-                Some(n) => resolve_context_name(chibi, n)?,
-                None => chibi.current_context_name().to_string(),
+                Some(n) => resolve_context_name(chibi, session, n)?,
+                None => working_context.clone(),
             };
-            inspect_context(chibi, &ctx_name, thing, None, force_markdown)?;
+            // Pass ephemeral username so -U works with -n
+            let config = resolve_cli_config(chibi, &ctx_name, ephemeral_username)?;
+            inspect_context(chibi, &ctx_name, thing, Some(&config), force_markdown)?;
             did_action = true;
         }
         Command::SetSystemPrompt { context, prompt } => {
             let ctx_name = match context {
-                Some(n) => resolve_context_name(chibi, n)?,
-                None => chibi.current_context_name().to_string(),
+                Some(n) => resolve_context_name(chibi, session, n)?,
+                None => working_context.clone(),
             };
             set_prompt_for_context(chibi, &ctx_name, prompt, verbose)?;
             did_action = true;
@@ -612,21 +644,21 @@ async fn execute_from_input(
                 })?
             };
 
-            let result = chibi.execute_tool(name, args_json)?;
+            let result = chibi.execute_tool(&working_context, name, args_json)?;
             output.emit_result(&result);
             did_action = true;
         }
         Command::ClearCache { name } => {
             let ctx_name = match name {
-                Some(n) => resolve_context_name(chibi, n)?,
-                None => chibi.current_context_name().to_string(),
+                Some(n) => resolve_context_name(chibi, session, n)?,
+                None => working_context.clone(),
             };
             chibi.app.clear_tool_cache(&ctx_name)?;
             output.emit_result(&format!("Cleared tool cache for context '{}'", ctx_name));
             did_action = true;
         }
         Command::CleanupCache => {
-            let resolved = chibi.resolve_config(None, None)?;
+            let resolved = chibi.resolve_config(&working_context, None)?;
             let removed = chibi
                 .app
                 .cleanup_all_tool_caches(resolved.tool_cache_max_age_days)?;
@@ -638,19 +670,14 @@ async fn execute_from_input(
         }
         Command::SendPrompt { prompt } => {
             // Ensure context exists
-            let ctx_name = chibi.current_context_name().to_string();
+            let ctx_name = working_context.clone();
             if !chibi.app.context_dir(&ctx_name).exists() {
                 let new_context = Context::new(ctx_name.clone());
-                chibi.app.save_current_context(&new_context)?;
+                chibi.app.save_and_register_context(&new_context)?;
             }
 
-            // Resolve config with runtime overrides
-            let (persistent_username, transient_username) = match &input.username_override {
-                Some(UsernameOverride::Persistent(u)) => (Some(u.as_str()), None),
-                Some(UsernameOverride::Transient(u)) => (None, Some(u.as_str())),
-                None => (None, None),
-            };
-            let mut resolved = resolve_cli_config(chibi, persistent_username, transient_username)?;
+            // Resolve config with runtime override (ephemeral username extracted earlier)
+            let mut resolved = resolve_cli_config(chibi, &ctx_name, ephemeral_username)?;
             if input.flags.raw {
                 resolved.render_markdown = false;
             }
@@ -681,7 +708,13 @@ async fn execute_from_input(
 
             let mut sink = CliResponseSink::new(output, markdown, verbose);
             chibi
-                .send_prompt_streaming(prompt, &resolved.core, &options, &mut sink)
+                .send_prompt_streaming(
+                    &working_context,
+                    prompt,
+                    &resolved.core,
+                    &options,
+                    &mut sink,
+                )
                 .await?;
             did_action = true;
         }
@@ -692,12 +725,12 @@ async fn execute_from_input(
 
     // Execute on_end hook
     let hook_data = serde_json::json!({
-        "current_context": chibi.current_context_name(),
+        "working_context": &working_context,
     });
     let _ = chibi.execute_hook(tools::HookPoint::OnEnd, &hook_data, verbose);
 
     // Automatic cache cleanup
-    let resolved = chibi.resolve_config(None, None)?;
+    let resolved = chibi.resolve_config(&working_context, None)?;
     if resolved.auto_cleanup_cache {
         let removed = chibi
             .app
@@ -715,7 +748,7 @@ async fn execute_from_input(
     }
 
     // Image cache cleanup
-    let cli_config = resolve_cli_config(chibi, None, None)?;
+    let cli_config = resolve_cli_config(chibi, &working_context, None)?;
     if cli_config.image.cache_enabled {
         let image_cache_dir = chibi.home_dir().join("image_cache");
         match image_cache::cleanup_image_cache(
@@ -806,13 +839,14 @@ async fn main() -> io::Result<()> {
             verbose: input.flags.verbose,
             home: home_override,
         })?;
+        let mut session = Session::load(chibi.home_dir())?;
 
         output.diagnostic(
             &format!("[Loaded {} tool(s)]", chibi.tool_count()),
             input.flags.verbose,
         );
 
-        return execute_from_input(input, &mut chibi, &output, false).await;
+        return execute_from_input(input, &mut chibi, &mut session, &output, false).await;
     }
 
     // CLI mode: parse to ChibiInput and use unified execution
@@ -852,6 +886,7 @@ async fn main() -> io::Result<()> {
         verbose,
         home: home_override,
     })?;
+    let mut session = Session::load(chibi.home_dir())?;
 
     // Print tool list if verbose
     if verbose && !chibi.tools.is_empty() {
@@ -869,5 +904,5 @@ async fn main() -> io::Result<()> {
 
     let output = OutputHandler::new(input.flags.json_output);
 
-    execute_from_input(input, &mut chibi, &output, force_markdown).await
+    execute_from_input(input, &mut chibi, &mut session, &output, force_markdown).await
 }

@@ -96,10 +96,13 @@ When a hook fires, registered plugins are called with environment variables:
 
 ```json
 {
-  "current_context": "default",
+  "implied_context": "default",
+  "working_context": "default",
   "verbose": true
 }
 ```
+
+Note: `implied_context` is what's stored in session.json; `working_context` is what we're actually operating on (may differ if using `-C`).
 
 ### pre_message
 
@@ -365,7 +368,7 @@ Notification after output has been cached.
 {
   "from_context": "default",
   "to_context": "coding",
-  "is_transient": false
+  "is_ephemeral": false
 }
 ```
 

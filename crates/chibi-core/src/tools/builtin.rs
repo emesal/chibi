@@ -160,6 +160,7 @@ pub fn execute_reflection_tool(
 /// for CLI usage (main.rs).
 pub fn execute_builtin_tool(
     app: &AppState,
+    context_name: &str,
     tool_name: &str,
     args: &serde_json::Value,
 ) -> Option<io::Result<String>> {
@@ -167,14 +168,14 @@ pub fn execute_builtin_tool(
         TODOS_TOOL_NAME => {
             let content = args.get("content").and_then(|v| v.as_str())?;
             Some(
-                app.save_current_todos(content)
+                app.save_todos(context_name, content)
                     .map(|_| format!("Todos updated ({} characters).", content.len())),
             )
         }
         GOALS_TOOL_NAME => {
             let content = args.get("content").and_then(|v| v.as_str())?;
             Some(
-                app.save_current_goals(content)
+                app.save_goals(context_name, content)
                     .map(|_| format!("Goals updated ({} characters).", content.len())),
             )
         }
@@ -187,7 +188,7 @@ pub fn execute_builtin_tool(
             let to = args.get("to").and_then(|v| v.as_str())?;
             let content = args.get("content").and_then(|v| v.as_str())?;
             Some(
-                app.send_inbox_message(to, content)
+                app.send_inbox_message_from(context_name, to, content)
                     .map(|_| format!("Message sent to '{}'", to)),
             )
         }
