@@ -51,5 +51,5 @@ pub use config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, T
 pub use context::{Context, ContextEntry, Message, TranscriptEntry};
 pub use input::{Command, Flags, Inspectable};
 pub use partition::StorageConfig;
-pub use state::AppState;
+pub use state::{AppState, StatePaths};
 pub use tools::{HookPoint, Tool};

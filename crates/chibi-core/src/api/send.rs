@@ -12,7 +12,10 @@ use crate::cache;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
 use crate::llm;
-use crate::state::AppState;
+use crate::state::{
+    create_assistant_message_entry, create_tool_call_entry, create_tool_result_entry,
+    create_user_message_entry, AppState, StatePaths,
+};
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
 use serde_json::json;
@@ -350,7 +353,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
     // Append user message to both transcript.jsonl and context.jsonl (tandem write)
     let user_entry =
-        app.create_user_message_entry(context_name, &final_prompt, &resolved_config.username);
+        create_user_message_entry(context_name, &final_prompt, &resolved_config.username);
     app.append_to_transcript_and_context(context_name, &user_entry)?;
     sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
 
@@ -1012,7 +1015,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
                 // Log tool call and result
                 let tool_call_entry =
-                    app.create_tool_call_entry(context_name, &tc.name, &tc.arguments);
+                    create_tool_call_entry(context_name, &tc.name, &tc.arguments);
                 app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
                 sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
@@ -1022,7 +1025,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     &tool_result
                 };
                 let tool_result_entry =
-                    app.create_tool_result_entry(context_name, &tc.name, logged_result);
+                    create_tool_result_entry(context_name, &tc.name, logged_result);
                 app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
                 sink.handle(ResponseEvent::TranscriptEntry(tool_result_entry))?;
 
@@ -1060,7 +1063,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         // No tool calls - we have a final response
         app.add_message(&mut context, "assistant".to_string(), full_response.clone());
 
-        let assistant_entry = app.create_assistant_message_entry(context_name, &full_response);
+        let assistant_entry = create_assistant_message_entry(context_name, &full_response);
         app.append_to_transcript_and_context(context_name, &assistant_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(assistant_entry))?;
 

@@ -5,15 +5,23 @@
 //! - Configuration loading and resolution
 //! - Transcript and inbox operations
 
+mod entries;
+mod paths;
+
+pub use entries::{
+    create_archival_anchor, create_assistant_message_entry, create_compaction_anchor,
+    create_context_created_anchor, create_tool_call_entry, create_tool_result_entry,
+    create_user_message_entry,
+};
+pub use paths::StatePaths;
+
 use crate::jsonl::read_jsonl_file;
 
 use crate::config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
 // Note: ImageConfig, MarkdownStyle removed - these are CLI presentation concerns
 use crate::context::{
-    Context, ContextEntry, ContextMeta, ContextState, ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION,
-    ENTRY_TYPE_CONTEXT_CREATED, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
-    EntryMetadata, Message, TranscriptEntry, is_valid_context_name, now_timestamp,
-    validate_context_name,
+    Context, ContextEntry, ContextMeta, ContextState, Message, TranscriptEntry,
+    is_valid_context_name, now_timestamp, validate_context_name,
 };
 use crate::partition::{ActiveState, PartitionManager, StorageConfig};
 use dirs_next::home_dir;
@@ -37,6 +45,12 @@ pub struct AppState {
     /// Uses interior mutability since caching is a side effect that doesn't change
     /// logical state.
     active_state_cache: RefCell<HashMap<String, ActiveState>>,
+}
+
+impl StatePaths for AppState {
+    fn contexts_dir(&self) -> &PathBuf {
+        &self.contexts_dir
+    }
 }
 
 impl AppState {
@@ -274,74 +288,6 @@ impl AppState {
         }
 
         Ok(destroyed)
-    }
-
-    pub fn context_dir(&self, name: &str) -> PathBuf {
-        self.contexts_dir.join(name)
-    }
-
-    pub fn context_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("context.jsonl")
-    }
-
-    /// Path to the old context.json format (for migration)
-    fn context_file_old(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("context.json")
-    }
-
-    /// Path to context metadata file
-    pub fn context_meta_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("context_meta.json")
-    }
-
-    /// Path to human-readable transcript (transcript.md)
-    pub fn transcript_md_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript.md")
-    }
-
-    /// Alias for transcript_md_file (backwards compatibility)
-    pub fn transcript_file(&self, name: &str) -> PathBuf {
-        self.transcript_md_file(name)
-    }
-
-    /// Path to JSONL transcript (transcript.jsonl) - legacy location
-    fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript.jsonl")
-    }
-
-    /// Path to partitioned transcript directory
-    pub fn transcript_dir(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript")
-    }
-
-    /// Path to dirty context marker file (.dirty)
-    /// A "dirty" context has a stale prefix (anchor + system prompt) that needs rebuilding.
-    /// A "clean" context has a valid prefix that caches well.
-    pub fn dirty_marker_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join(".dirty")
-    }
-
-    pub fn summary_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("summary.md")
-    }
-
-    /// Path to tool cache directory for a context
-    pub fn tool_cache_dir(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("tool_cache")
-    }
-
-    /// Path to a cached tool output file (kept for potential future use)
-    #[allow(dead_code)]
-    pub fn cache_file(&self, name: &str, cache_id: &str) -> PathBuf {
-        self.tool_cache_dir(name)
-            .join(format!("{}.cache", cache_id))
-    }
-
-    /// Path to cache metadata file (kept for potential future use)
-    #[allow(dead_code)]
-    pub fn cache_meta_file(&self, name: &str, cache_id: &str) -> PathBuf {
-        self.tool_cache_dir(name)
-            .join(format!("{}.meta.json", cache_id))
     }
 
     pub fn ensure_context_dir(&self, name: &str) -> io::Result<()> {
@@ -778,7 +724,7 @@ impl AppState {
         // Don't mark dirty - new contexts don't need a rebuild since they're being
         // created fresh. The anchor is just for transcript history.
         if is_new_context {
-            let anchor = self.create_context_created_anchor(&context.name);
+            let anchor = create_context_created_anchor(&context.name);
             self.append_to_transcript(&context.name, &anchor)?;
 
             // Also write the initial messages to transcript so they're preserved
@@ -953,7 +899,7 @@ impl AppState {
         self.append_to_transcript_md(&context)?;
 
         // Write archival anchor to transcript.jsonl
-        let archival_anchor = self.create_archival_anchor(&context.name);
+        let archival_anchor = create_archival_anchor(&context.name);
         self.append_to_transcript(&context.name, &archival_anchor)?;
 
         // Mark context dirty so it rebuilds with new anchor on next load
@@ -1069,11 +1015,6 @@ impl AppState {
         } else {
             Ok(String::new())
         }
-    }
-
-    /// Get the path to a context's system prompt file
-    pub fn context_prompt_file(&self, context_name: &str) -> PathBuf {
-        self.context_dir(context_name).join("system_prompt.md")
     }
 
     // NOTE: load_system_prompt() (no args) was removed in stateless-core refactor.
@@ -1245,16 +1186,6 @@ impl AppState {
 
     // --- Todos and Goals file helpers ---
 
-    /// Get the path to a context's todos file
-    pub fn todos_file(&self, context_name: &str) -> PathBuf {
-        self.context_dir(context_name).join("todos.md")
-    }
-
-    /// Get the path to a context's goals file
-    pub fn goals_file(&self, context_name: &str) -> PathBuf {
-        self.context_dir(context_name).join("goals.md")
-    }
-
     /// Load todos for a context (returns empty string if file doesn't exist)
     pub fn load_todos(&self, context_name: &str) -> io::Result<String> {
         let path = self.todos_file(context_name);
@@ -1291,11 +1222,6 @@ impl AppState {
     // were removed in the stateless-core refactor. Use the parameterized versions:
     // - load_todos(context_name) / save_todos(context_name, content)
     // - load_goals(context_name) / save_goals(context_name, content)
-
-    /// Get the path to a context's local config file
-    pub fn local_config_file(&self, context_name: &str) -> PathBuf {
-        self.context_dir(context_name).join("local.toml")
-    }
 
     /// Load local config for a context (returns default if doesn't exist)
     pub fn load_local_config(&self, context_name: &str) -> io::Result<LocalConfig> {
@@ -1467,111 +1393,12 @@ impl AppState {
         self.read_context_entries(context_name)
     }
 
-    // === Entry Creation ===
-    // These methods create transcript entries using the builder pattern.
-    // Each method encapsulates context-specific logic (from/to derivation).
-
-    /// Create a transcript entry for a user message
-    pub fn create_user_message_entry(
-        &self,
-        context_name: &str,
-        content: &str,
-        username: &str,
-    ) -> TranscriptEntry {
-        TranscriptEntry::builder()
-            .from(username)
-            .to(context_name)
-            .content(content)
-            .entry_type(ENTRY_TYPE_MESSAGE)
-            .build()
-    }
-
-    /// Create a transcript entry for an assistant message
-    pub fn create_assistant_message_entry(
-        &self,
-        context_name: &str,
-        content: &str,
-    ) -> TranscriptEntry {
-        TranscriptEntry::builder()
-            .from(context_name)
-            .to("user")
-            .content(content)
-            .entry_type(ENTRY_TYPE_MESSAGE)
-            .build()
-    }
-
-    /// Create a transcript entry for a tool call
-    pub fn create_tool_call_entry(
-        &self,
-        context_name: &str,
-        tool_name: &str,
-        arguments: &str,
-    ) -> TranscriptEntry {
-        TranscriptEntry::builder()
-            .from(context_name)
-            .to(tool_name)
-            .content(arguments)
-            .entry_type(ENTRY_TYPE_TOOL_CALL)
-            .build()
-    }
-
-    /// Create a transcript entry for a tool result
-    pub fn create_tool_result_entry(
-        &self,
-        context_name: &str,
-        tool_name: &str,
-        result: &str,
-    ) -> TranscriptEntry {
-        TranscriptEntry::builder()
-            .from(tool_name)
-            .to(context_name)
-            .content(result)
-            .entry_type(ENTRY_TYPE_TOOL_RESULT)
-            .build()
-    }
-
-    // === Anchor Entry Creation ===
-
-    /// Create a context_created anchor entry
-    pub fn create_context_created_anchor(&self, context_name: &str) -> TranscriptEntry {
-        TranscriptEntry::builder()
-            .from("system")
-            .to(context_name)
-            .content("Context created")
-            .entry_type(ENTRY_TYPE_CONTEXT_CREATED)
-            .build()
-    }
-
-    /// Create a compaction anchor entry with summary
-    pub fn create_compaction_anchor(&self, context_name: &str, summary: &str) -> TranscriptEntry {
-        TranscriptEntry::builder()
-            .from("system")
-            .to(context_name)
-            .content("Context compacted")
-            .entry_type(ENTRY_TYPE_COMPACTION)
-            .metadata(EntryMetadata {
-                summary: Some(summary.to_string()),
-                transcript_anchor_id: None,
-            })
-            .build()
-    }
-
-    /// Create an archival anchor entry
-    pub fn create_archival_anchor(&self, context_name: &str) -> TranscriptEntry {
-        TranscriptEntry::builder()
-            .from("system")
-            .to(context_name)
-            .content("Context archived/cleared")
-            .entry_type(ENTRY_TYPE_ARCHIVAL)
-            .build()
-    }
-
     // === Compaction Finalization ===
 
     /// Finalize a compaction operation by writing the anchor to transcript and marking dirty.
     /// This is the common final step for all compaction operations (rolling, manual, by-name).
     pub fn finalize_compaction(&self, context_name: &str, summary: &str) -> io::Result<()> {
-        let compaction_anchor = self.create_compaction_anchor(context_name, summary);
+        let compaction_anchor = create_compaction_anchor(context_name, summary);
         self.append_to_transcript(context_name, &compaction_anchor)?;
         self.mark_context_dirty(context_name)?;
 
@@ -2246,7 +2073,7 @@ mod tests {
     #[test]
     fn test_create_user_message_entry() {
         let (app, _temp) = create_test_app();
-        let entry = app.create_user_message_entry("default", "Hello", "alice");
+        let entry = create_user_message_entry("default", "Hello", "alice");
 
         assert!(!entry.id.is_empty());
         assert!(entry.timestamp > 0);
@@ -2259,7 +2086,7 @@ mod tests {
     #[test]
     fn test_create_assistant_message_entry() {
         let (app, _temp) = create_test_app();
-        let entry = app.create_assistant_message_entry("default", "Hi there!");
+        let entry = create_assistant_message_entry("default", "Hi there!");
 
         assert_eq!(entry.from, "default");
         assert_eq!(entry.to, "user");
@@ -2270,7 +2097,7 @@ mod tests {
     #[test]
     fn test_create_tool_call_entry() {
         let (app, _temp) = create_test_app();
-        let entry = app.create_tool_call_entry("default", "web_search", r#"{"query": "rust"}"#);
+        let entry = create_tool_call_entry("default", "web_search", r#"{"query": "rust"}"#);
 
         assert_eq!(entry.from, "default");
         assert_eq!(entry.to, "web_search");
@@ -2280,7 +2107,7 @@ mod tests {
     #[test]
     fn test_create_tool_result_entry() {
         let (app, _temp) = create_test_app();
-        let entry = app.create_tool_result_entry("default", "web_search", "Search results...");
+        let entry = create_tool_result_entry("default", "web_search", "Search results...");
 
         assert_eq!(entry.from, "web_search");
         assert_eq!(entry.to, "default");
@@ -2660,7 +2487,7 @@ not valid json at all
             .unwrap_or(0);
 
         // Append an explicit entry
-        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
+        let entry = create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("test-context", &entry).unwrap();
 
         // Cache should exist and have incremented
@@ -2684,7 +2511,7 @@ not valid json at all
         let ctx = Context::new("test-context");
         app.save_context(&ctx).unwrap();
 
-        let entry1 = app.create_user_message_entry("test-context", "Hello", "testuser");
+        let entry1 = create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("test-context", &entry1).unwrap();
         let count_after_first = app
             .active_state_cache
@@ -2693,7 +2520,7 @@ not valid json at all
             .unwrap()
             .entry_count();
 
-        let entry2 = app.create_user_message_entry("test-context", "World", "testuser");
+        let entry2 = create_user_message_entry("test-context", "World", "testuser");
         app.append_to_transcript("test-context", &entry2).unwrap();
 
         // Cache should have incremented by exactly 1 from the second append
@@ -2713,7 +2540,7 @@ not valid json at all
         let ctx = Context::new("test-context");
         app.save_context(&ctx).unwrap();
 
-        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
+        let entry = create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("test-context", &entry).unwrap();
 
         // Verify cache has entry
@@ -2737,7 +2564,7 @@ not valid json at all
         let ctx = Context::new("test-context");
         app.save_context(&ctx).unwrap();
 
-        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
+        let entry = create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("test-context", &entry).unwrap();
 
         // Verify cache has entry
@@ -2766,7 +2593,7 @@ not valid json at all
         app.save_context(&ctx).unwrap();
 
         // Populate cache explicitly
-        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
+        let entry = create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("default", &entry).unwrap();
         assert!(app.active_state_cache.borrow().contains_key("default"));
 

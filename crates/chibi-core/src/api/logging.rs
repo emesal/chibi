@@ -5,7 +5,7 @@
 
 use crate::context::now_timestamp;
 use crate::input::DebugKey;
-use crate::state::AppState;
+use crate::state::{AppState, StatePaths};
 use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;

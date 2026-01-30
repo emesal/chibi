@@ -5,7 +5,7 @@
 
 use crate::cache;
 use crate::config::ResolvedConfig;
-use crate::state::AppState;
+use crate::state::{AppState, StatePaths};
 use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 
