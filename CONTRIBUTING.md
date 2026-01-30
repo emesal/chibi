@@ -9,11 +9,12 @@ Chibi aims to be a minimal, secure core with extensibility through plugins.
 
 ## Guidelines
 
+- see justfile for workflow
 - cargo fmt your patches
 - don't make clippy sad
-- test-drive development appreciated
+- test-driven development appreciated
 - documentation bugs are serious bugs
-- be nice to your chibis
+- be nice to the chibis
 
 ## Plugins vs Core
 
