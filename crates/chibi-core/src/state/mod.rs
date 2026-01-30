@@ -1731,9 +1731,9 @@ mod tests {
     // === Context lifecycle tests ===
 
     #[test]
-    fn test_get_current_context_creates_default() {
+    fn test_get_or_create_context_creates_default() {
         let (app, _temp) = create_test_app();
-        let context = app.get_current_context().unwrap();
+        let context = app.get_or_create_context("default").unwrap();
         assert_eq!(context.name, "default");
         assert!(context.messages.is_empty());
     }
@@ -1765,7 +1765,7 @@ mod tests {
     #[test]
     fn test_add_message() {
         let (app, _temp) = create_test_app();
-        let mut context = app.get_current_context().unwrap();
+        let mut context = app.get_or_create_context("default").unwrap();
 
         assert!(context.messages.is_empty());
 
@@ -1825,9 +1825,6 @@ mod tests {
         };
         app.save_context(&context).unwrap();
 
-        // Set it as current
-        app.state.current_context = "old-name".to_string();
-
         // Rename
         app.rename_context("old-name", "new-name").unwrap();
 
@@ -1842,7 +1839,7 @@ mod tests {
 
     #[test]
     fn test_rename_nonexistent_context() {
-        let (app, _temp) = create_test_app();
+        let (mut app, _temp) = create_test_app();
         let result = app.rename_context("nonexistent", "new-name");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not exist"));
@@ -1850,7 +1847,7 @@ mod tests {
 
     #[test]
     fn test_rename_to_existing_context() {
-        let (app, _temp) = create_test_app();
+        let (mut app, _temp) = create_test_app();
 
         // Create both contexts
         for name in &["source", "target"] {
@@ -1883,106 +1880,22 @@ mod tests {
         };
         app.save_context(&context).unwrap();
 
-        // Make sure we're not on this context
-        app.state.current_context = "default".to_string();
-
         // Destroy
         let result = app.destroy_context("to-destroy").unwrap();
-        assert!(result.is_none()); // No switch occurred
+        assert!(result); // Destroyed successfully
         assert!(!app.context_dir("to-destroy").exists());
-    }
-
-    #[test]
-    fn test_destroy_current_context_switches_to_previous() {
-        let (mut app, _temp) = create_test_app();
-
-        // Create two contexts
-        let ctx1 = Context::new("context-one");
-        let ctx2 = Context::new("context-two");
-        app.save_context(&ctx1).unwrap();
-        app.save_context(&ctx2).unwrap();
-
-        // Set up state: current is context-two, previous is context-one
-        app.state.current_context = "context-two".to_string();
-        app.state.previous_context = Some("context-one".to_string());
-
-        // Destroy current context
-        let result = app.destroy_context("context-two").unwrap();
-        assert_eq!(result, Some("context-one".to_string()));
-        assert_eq!(app.state.current_context, "context-one");
-        assert_eq!(app.state.previous_context, None);
-        assert!(!app.context_dir("context-two").exists());
-    }
-
-    #[test]
-    fn test_destroy_current_context_falls_back_to_default() {
-        let (mut app, _temp) = create_test_app();
-
-        // Create a context
-        let ctx = Context::new("my-context");
-        app.save_context(&ctx).unwrap();
-
-        // Set up state: current is my-context, no previous
-        app.state.current_context = "my-context".to_string();
-        app.state.previous_context = None;
-
-        // Destroy current context
-        let result = app.destroy_context("my-context").unwrap();
-        assert_eq!(result, Some("default".to_string()));
-        assert_eq!(app.state.current_context, "default");
-        assert!(!app.context_dir("my-context").exists());
-    }
-
-    #[test]
-    fn test_destroy_current_context_skips_deleted_previous() {
-        let (mut app, _temp) = create_test_app();
-
-        // Create contexts
-        let ctx1 = Context::new("context-one");
-        let ctx2 = Context::new("context-two");
-        app.save_context(&ctx1).unwrap();
-        app.save_context(&ctx2).unwrap();
-
-        // Delete context-one's directory manually (simulate it being gone)
-        fs::remove_dir_all(app.context_dir("context-one")).unwrap();
-
-        // Set up state: current is context-two, previous points to non-existent context
-        app.state.current_context = "context-two".to_string();
-        app.state.previous_context = Some("context-one".to_string());
-
-        // Destroy current context - should fall back to default since previous doesn't exist
-        let result = app.destroy_context("context-two").unwrap();
-        assert_eq!(result, Some("default".to_string()));
-        assert_eq!(app.state.current_context, "default");
     }
 
     #[test]
     fn test_destroy_nonexistent_context() {
         let (mut app, _temp) = create_test_app();
         let result = app.destroy_context("nonexistent").unwrap();
-        assert!(result.is_none());
+        assert!(!result); // Nothing to destroy
     }
 
-    #[test]
-    fn test_destroy_clears_previous_context_reference() {
-        let (mut app, _temp) = create_test_app();
-
-        // Create two contexts
-        let ctx1 = Context::new("context-one");
-        let ctx2 = Context::new("context-two");
-        app.save_context(&ctx1).unwrap();
-        app.save_context(&ctx2).unwrap();
-
-        // Set up state: current is context-one, previous is context-two
-        app.state.current_context = "context-one".to_string();
-        app.state.previous_context = Some("context-two".to_string());
-
-        // Destroy context-two (which is the previous context)
-        let result = app.destroy_context("context-two").unwrap();
-        assert!(result.is_none()); // No switch occurred
-        assert_eq!(app.state.previous_context, None); // Previous should be cleared
-        assert!(!app.context_dir("context-two").exists());
-    }
+    // NOTE: Tests for "destroy current context switches to previous" were removed
+    // in the stateless-core refactor. Session state (current/previous context)
+    // is now managed by the CLI layer, not chibi-core.
 
     // === Token calculation tests ===
 
@@ -2091,7 +2004,7 @@ mod tests {
     #[test]
     fn test_inbox_empty() {
         let (app, _temp) = create_test_app();
-        let entries = app.load_and_clear_current_inbox().unwrap();
+        let entries = app.load_and_clear_inbox("default").unwrap();
         assert!(entries.is_empty());
     }
 
@@ -2117,13 +2030,13 @@ mod tests {
         app.append_to_inbox("default", &entry1).unwrap();
         app.append_to_inbox("default", &entry2).unwrap();
 
-        let entries = app.load_and_clear_current_inbox().unwrap();
+        let entries = app.load_and_clear_inbox("default").unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].content, "Message 1");
         assert_eq!(entries[1].content, "Message 2");
 
         // Should be cleared
-        let entries_after = app.load_and_clear_current_inbox().unwrap();
+        let entries_after = app.load_and_clear_inbox("default").unwrap();
         assert!(entries_after.is_empty());
     }
 
@@ -2133,9 +2046,9 @@ mod tests {
     fn test_set_and_load_system_prompt() {
         let (app, _temp) = create_test_app();
 
-        app.set_system_prompt_for(&app.state.current_context, "You are a helpful assistant.")
+        app.set_system_prompt_for("default", "You are a helpful assistant.")
             .unwrap();
-        let loaded = app.load_system_prompt().unwrap();
+        let loaded = app.load_system_prompt_for("default").unwrap();
         assert_eq!(loaded, "You are a helpful assistant.");
     }
 
@@ -2147,7 +2060,7 @@ mod tests {
         fs::write(app.prompts_dir.join("chibi.md"), "Default prompt").unwrap();
 
         // No context-specific prompt, should fall back
-        let loaded = app.load_system_prompt().unwrap();
+        let loaded = app.load_system_prompt_for("default").unwrap();
         assert_eq!(loaded, "Default prompt");
     }
 
@@ -2156,7 +2069,7 @@ mod tests {
     #[test]
     fn test_resolve_config_defaults() {
         let (app, _temp) = create_test_app();
-        let resolved = app.resolve_config(None, None).unwrap();
+        let resolved = app.resolve_config("default", None, None).unwrap();
 
         assert_eq!(resolved.api_key, "test-key");
         assert_eq!(resolved.model, "test-model");
@@ -2176,7 +2089,7 @@ mod tests {
         };
         app.save_local_config("default", &local).unwrap();
 
-        let resolved = app.resolve_config(None, None).unwrap();
+        let resolved = app.resolve_config("default", None, None).unwrap();
         assert_eq!(resolved.model, "local-model");
         assert_eq!(resolved.username, "localuser");
         assert!(resolved.auto_compact);
@@ -2194,14 +2107,14 @@ mod tests {
         app.save_local_config("default", &local).unwrap();
 
         // CLI temp username should override local
-        let resolved = app.resolve_config(None, Some("cliuser")).unwrap();
+        let resolved = app.resolve_config("default", None, Some("cliuser")).unwrap();
         assert_eq!(resolved.username, "cliuser");
     }
 
     #[test]
     fn test_resolve_config_api_params_global_defaults() {
         let (app, _temp) = create_test_app();
-        let resolved = app.resolve_config(None, None).unwrap();
+        let resolved = app.resolve_config("default", None, None).unwrap();
 
         // Should have defaults from ApiParams::defaults()
         assert_eq!(resolved.api.prompt_caching, Some(true));
@@ -2227,7 +2140,7 @@ mod tests {
         };
         app.save_local_config("default", &local).unwrap();
 
-        let resolved = app.resolve_config(None, None).unwrap();
+        let resolved = app.resolve_config("default", None, None).unwrap();
 
         // Context-level API params should override
         assert_eq!(resolved.api.temperature, Some(0.7));
@@ -2281,7 +2194,7 @@ mod tests {
             },
         );
 
-        let resolved = app.resolve_config(None, None).unwrap();
+        let resolved = app.resolve_config("default", None, None).unwrap();
 
         // Model-level params should be applied
         assert_eq!(resolved.api.temperature, Some(0.5));
@@ -2345,7 +2258,7 @@ mod tests {
         };
         app.save_local_config("default", &local).unwrap();
 
-        let resolved = app.resolve_config(None, None).unwrap();
+        let resolved = app.resolve_config("default", None, None).unwrap();
 
         // Context should override model
         assert_eq!(resolved.api.temperature, Some(0.9));
@@ -2358,7 +2271,9 @@ mod tests {
         let (app, _temp) = create_test_app();
 
         // CLI persistent username (simulates -u flag)
-        let resolved = app.resolve_config(Some("persistentuser"), None).unwrap();
+        let resolved = app
+            .resolve_config("default", Some("persistentuser"), None)
+            .unwrap();
         assert_eq!(resolved.username, "persistentuser");
     }
 
@@ -2368,7 +2283,7 @@ mod tests {
 
         // Temp username should override persistent
         let resolved = app
-            .resolve_config(Some("persistentuser"), Some("tempuser"))
+            .resolve_config("default", Some("persistentuser"), Some("tempuser"))
             .unwrap();
         assert_eq!(resolved.username, "tempuser");
     }
@@ -2400,7 +2315,7 @@ mod tests {
         };
         app.save_local_config("default", &local).unwrap();
 
-        let resolved = app.resolve_config(None, None).unwrap();
+        let resolved = app.resolve_config("default", None, None).unwrap();
 
         assert_eq!(resolved.model, "local-model");
         assert_eq!(resolved.api_key, "local-key");
@@ -2421,7 +2336,7 @@ mod tests {
     #[test]
     fn test_create_user_message_entry() {
         let (app, _temp) = create_test_app();
-        let entry = app.create_user_message_entry("Hello", "alice");
+        let entry = app.create_user_message_entry("default", "Hello", "alice");
 
         assert!(!entry.id.is_empty());
         assert!(entry.timestamp > 0);
@@ -2434,7 +2349,7 @@ mod tests {
     #[test]
     fn test_create_assistant_message_entry() {
         let (app, _temp) = create_test_app();
-        let entry = app.create_assistant_message_entry("Hi there!");
+        let entry = app.create_assistant_message_entry("default", "Hi there!");
 
         assert_eq!(entry.from, "default");
         assert_eq!(entry.to, "user");
@@ -2445,7 +2360,7 @@ mod tests {
     #[test]
     fn test_create_tool_call_entry() {
         let (app, _temp) = create_test_app();
-        let entry = app.create_tool_call_entry("web_search", r#"{"query": "rust"}"#);
+        let entry = app.create_tool_call_entry("default", "web_search", r#"{"query": "rust"}"#);
 
         assert_eq!(entry.from, "default");
         assert_eq!(entry.to, "web_search");
@@ -2455,7 +2370,7 @@ mod tests {
     #[test]
     fn test_create_tool_result_entry() {
         let (app, _temp) = create_test_app();
-        let entry = app.create_tool_result_entry("web_search", "Search results...");
+        let entry = app.create_tool_result_entry("default", "web_search", "Search results...");
 
         assert_eq!(entry.from, "web_search");
         assert_eq!(entry.to, "default");
@@ -2682,18 +2597,19 @@ not valid json at all
     }
 
     #[test]
-    fn test_save_context_adds_to_state_contexts() {
-        // Verify that saving a new context adds it to state.json
+    fn test_save_current_context_adds_to_state_contexts() {
+        // Verify that save_current_context adds new contexts to state.json
         let (app, _temp) = create_test_app();
+
+        // First save initial state so state.json exists
+        app.save().unwrap();
 
         assert!(!app.state.contexts.iter().any(|e| e.name == "new-context"));
 
         let ctx = Context::new("new-context");
         app.save_current_context(&ctx).unwrap();
 
-        // Need to reload state to see the change
-        // Actually save_current_context should add it - let's verify
-        // by checking the state file directly
+        // Check the state file directly
         let state_content = fs::read_to_string(&app.state_path).unwrap();
         assert!(
             state_content.contains("new-context"),
@@ -2701,35 +2617,9 @@ not valid json at all
         );
     }
 
-    #[test]
-    fn test_save_current_context_preserves_disk_current_context() {
-        // Verify that save_current_context doesn't persist in-memory current_context
-        // This is critical for transient context (-C) support
-        let (mut app, _temp) = create_test_app();
-
-        // Save initial state with "default" as current_context
-        app.save().unwrap();
-
-        // Simulate transient context switch (in-memory only)
-        app.state.current_context = "transient-ctx".to_string();
-
-        // Create and save a new context while "transient-ctx" is in memory
-        let ctx = Context::new("new-context");
-        app.save_current_context(&ctx).unwrap();
-
-        // Verify the state file still has original current_context, not the transient one
-        let state_content = fs::read_to_string(&app.state_path).unwrap();
-        let saved_state: ContextState = serde_json::from_str(&state_content).unwrap();
-
-        assert_eq!(
-            saved_state.current_context, "default",
-            "Transient current_context should not be persisted to state.json"
-        );
-        assert!(
-            saved_state.contexts.iter().any(|e| e.name == "new-context"),
-            "New context should still be added to contexts list"
-        );
-    }
+    // NOTE: test_save_current_context_preserves_disk_current_context was removed
+    // in the stateless-core refactor. current_context is no longer stored in state.json;
+    // it's now managed by the CLI Session layer.
 
     // === clear_context_by_name archival anchor tests (Bug #2) ===
 
@@ -2746,8 +2636,8 @@ not valid json at all
         app.save_context(&ctx).unwrap();
 
         // Create transcript.jsonl with the messages
-        let user_entry = app.create_user_message_entry("Hello", "testuser");
-        let asst_entry = app.create_assistant_message_entry("Hi there");
+        let user_entry = app.create_user_message_entry("test-context", "Hello", "testuser");
+        let asst_entry = app.create_assistant_message_entry("test-context", "Hi there");
         app.append_to_transcript("test-context", &user_entry)
             .unwrap();
         app.append_to_transcript("test-context", &asst_entry)
@@ -2872,9 +2762,6 @@ not valid json at all
         entry.destroy_at = 1; // Way in the past
         app.state.contexts.push(entry);
 
-        // Also set the current context to something else
-        app.state.current_context = "default".to_string();
-
         // Run auto-destroy
         let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
         assert_eq!(destroyed, vec!["to-destroy".to_string()]);
@@ -2895,62 +2782,18 @@ not valid json at all
         entry.destroy_after_seconds_inactive = 60; // 1 minute
         app.state.contexts.push(entry);
 
-        // Also set the current context to something else
-        app.state.current_context = "default".to_string();
-
         // Run auto-destroy
         let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
         assert_eq!(destroyed, vec!["to-destroy".to_string()]);
         assert!(!app.context_dir("to-destroy").exists());
     }
 
-    #[test]
-    fn test_auto_destroy_skips_current_context() {
-        let (mut app, _temp) = create_test_app();
+    // NOTE: test_auto_destroy_skips_current_context was removed in the stateless-core
+    // refactor. Core no longer tracks "current context" - that's CLI's responsibility.
+    // auto_destroy_expired_contexts now destroys all expired contexts unconditionally.
 
-        // Create a context to be destroyed
-        let ctx = Context::new("current-context");
-        app.save_context(&ctx).unwrap();
-
-        // Add entry to state.contexts with destroy_at in the past
-        let mut entry = ContextEntry::new("current-context");
-        entry.destroy_at = 1; // Way in the past
-        app.state.contexts.push(entry);
-
-        // Set this as the current context
-        app.state.current_context = "current-context".to_string();
-
-        // Run auto-destroy - should NOT destroy the current context
-        let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
-        assert!(destroyed.is_empty());
-        assert!(app.context_dir("current-context").exists());
-    }
-
-    #[test]
-    fn test_auto_destroy_clears_previous_context_reference() {
-        let (mut app, _temp) = create_test_app();
-
-        // Create contexts
-        let ctx1 = Context::new("context-one");
-        let ctx2 = Context::new("context-two");
-        app.save_context(&ctx1).unwrap();
-        app.save_context(&ctx2).unwrap();
-
-        // Add entries to state.contexts
-        app.state.contexts.push(ContextEntry::new("context-one"));
-        let mut entry2 = ContextEntry::new("context-two");
-        entry2.destroy_at = 1; // Way in the past
-        app.state.contexts.push(entry2);
-
-        // Set up state: current is context-one, previous is context-two
-        app.state.current_context = "context-one".to_string();
-        app.state.previous_context = Some("context-two".to_string());
-
-        // Run auto-destroy
-        let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
-        assert_eq!(destroyed, vec!["context-two".to_string()]);
-        assert_eq!(app.state.previous_context, None); // Should be cleared
-    }
+    // NOTE: test_auto_destroy_clears_previous_context_reference was removed in the
+    // stateless-core refactor. previous_context is now CLI session state.
 
     #[test]
     fn test_auto_destroy_respects_disabled_settings() {
@@ -2966,9 +2809,6 @@ not valid json at all
         entry.destroy_after_seconds_inactive = 0; // Disabled
         entry.destroy_at = 0; // Disabled
         app.state.contexts.push(entry);
-
-        // Also set the current context to something else
-        app.state.current_context = "default".to_string();
 
         // Run auto-destroy - should NOT destroy since both are disabled
         let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
@@ -2993,7 +2833,7 @@ not valid json at all
             .unwrap_or(0);
 
         // Append an explicit entry
-        let entry = app.create_user_message_entry("Hello", "testuser");
+        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("test-context", &entry).unwrap();
 
         // Cache should exist and have incremented
@@ -3017,7 +2857,7 @@ not valid json at all
         let ctx = Context::new("test-context");
         app.save_context(&ctx).unwrap();
 
-        let entry1 = app.create_user_message_entry("Hello", "testuser");
+        let entry1 = app.create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("test-context", &entry1).unwrap();
         let count_after_first = app
             .active_state_cache
@@ -3026,7 +2866,7 @@ not valid json at all
             .unwrap()
             .entry_count();
 
-        let entry2 = app.create_user_message_entry("World", "testuser");
+        let entry2 = app.create_user_message_entry("test-context", "World", "testuser");
         app.append_to_transcript("test-context", &entry2).unwrap();
 
         // Cache should have incremented by exactly 1 from the second append
@@ -3046,7 +2886,7 @@ not valid json at all
         let ctx = Context::new("test-context");
         app.save_context(&ctx).unwrap();
 
-        let entry = app.create_user_message_entry("Hello", "testuser");
+        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("test-context", &entry).unwrap();
 
         // Verify cache has entry
@@ -3070,7 +2910,7 @@ not valid json at all
         let ctx = Context::new("test-context");
         app.save_context(&ctx).unwrap();
 
-        let entry = app.create_user_message_entry("Hello", "testuser");
+        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("test-context", &entry).unwrap();
 
         // Verify cache has entry
@@ -3096,16 +2936,16 @@ not valid json at all
         let mut ctx = Context::new("default");
         ctx.messages
             .push(Message::new("user".to_string(), "Hello".to_string()));
-        app.save_current_context(&ctx).unwrap();
+        app.save_context(&ctx).unwrap();
 
         // Populate cache explicitly
-        let entry = app.create_user_message_entry("Hello", "testuser");
+        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("default", &entry).unwrap();
         assert!(app.active_state_cache.borrow().contains_key("default"));
 
         // clear_context writes archival anchor and saves fresh context (both populate
         // cache), then invalidates the cache as the final step
-        app.clear_context().unwrap();
+        app.clear_context("default").unwrap();
 
         // Cache should be absent after clear
         assert!(
@@ -3125,7 +2965,7 @@ not valid json at all
         app.save_context(&ctx).unwrap();
 
         // Append to transcript to populate cache
-        let entry = app.create_user_message_entry("Hello", "testuser");
+        let entry = app.create_user_message_entry("test-context", "Hello", "testuser");
         app.append_to_transcript("test-context", &entry).unwrap();
         assert!(app.active_state_cache.borrow().contains_key("test-context"));
 

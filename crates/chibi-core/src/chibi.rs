@@ -15,8 +15,8 @@
 //! async fn main() -> std::io::Result<()> {
 //!     let mut chibi = Chibi::load()?;
 //!
-//!     // Get the config for the current context
-//!     let config = chibi.resolve_config(None, None)?;
+//!     // Get the config for the default context
+//!     let config = chibi.resolve_config("default", None, None)?;
 //!
 //!     // Create options and a sink to collect the response
 //!     let options = PromptOptions::new(false, false, false, &[], false);
@@ -36,7 +36,7 @@ use std::path::Path;
 use crate::api::sink::ResponseSink;
 use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
-use crate::context::{Context, ContextEntry};
+use crate::context::ContextEntry;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 
@@ -154,7 +154,7 @@ impl Chibi {
     /// # use chibi_core::api::PromptOptions;
     /// # async fn example() -> std::io::Result<()> {
     /// # let chibi = Chibi::load()?;
-    /// # let config = chibi.resolve_config(None, None)?;
+    /// # let config = chibi.resolve_config("default", None, None)?;
     /// # let options = PromptOptions::new(false, false, false, &[], false);
     /// let mut sink = CollectingSink::new();
     /// chibi.send_prompt_streaming("default", "Hello", &config, &options, &mut sink).await?;
@@ -305,7 +305,7 @@ impl Chibi {
     /// # fn example() -> std::io::Result<()> {
     /// let chibi = Chibi::load()?;
     /// let hook_data = json!({
-    ///     "context": chibi.current_context_name(),
+    ///     "context": "default",
     /// });
     /// let results = chibi.execute_hook(HookPoint::OnStart, &hook_data, false)?;
     /// for (tool_name, result) in results {
