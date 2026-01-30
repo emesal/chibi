@@ -7,6 +7,7 @@ mod image_cache;
 mod json_input;
 mod markdown;
 mod output;
+mod session;
 mod sink;
 
 // Re-export key types for use by other modules
@@ -18,6 +19,7 @@ pub use config::{
 pub use json_input::from_str as parse_json_input;
 pub use markdown::{MarkdownConfig, MarkdownStream};
 pub use output::OutputHandler;
+pub use session::Session;
 pub use sink::CliResponseSink;
 
 use chibi_core::context::{
@@ -552,7 +554,13 @@ async fn execute_from_input(
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
                 let resolved = chibi.resolve_config(None, None)?;
-                api::compact_context_with_llm_manual(&chibi.app, &resolved, verbose).await?;
+                api::compact_context_with_llm_manual(
+                    &chibi.app,
+                    chibi.current_context_name(),
+                    &resolved,
+                    verbose,
+                )
+                .await?;
             }
             did_action = true;
         }
@@ -612,7 +620,7 @@ async fn execute_from_input(
                 })?
             };
 
-            let result = chibi.execute_tool(name, args_json)?;
+            let result = chibi.execute_tool(chibi.current_context_name(), name, args_json)?;
             output.emit_result(&result);
             did_action = true;
         }
@@ -681,7 +689,13 @@ async fn execute_from_input(
 
             let mut sink = CliResponseSink::new(output, markdown, verbose);
             chibi
-                .send_prompt_streaming(prompt, &resolved.core, &options, &mut sink)
+                .send_prompt_streaming(
+                    chibi.current_context_name(),
+                    prompt,
+                    &resolved.core,
+                    &options,
+                    &mut sink,
+                )
                 .await?;
             did_action = true;
         }

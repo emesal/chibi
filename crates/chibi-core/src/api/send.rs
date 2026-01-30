@@ -260,19 +260,25 @@ fn apply_request_modifications<S: ResponseSink>(
 /// - Tool execution loop
 /// - Context management
 /// - Auto-compaction
+///
+/// # Arguments
+///
+/// * `context_name` - The name of the context to use for this prompt
 pub async fn send_prompt<S: ResponseSink>(
     app: &AppState,
+    context_name: &str,
     prompt: String,
     tools: &[Tool],
     resolved_config: &ResolvedConfig,
     options: &PromptOptions<'_>,
     sink: &mut S,
 ) -> io::Result<()> {
-    send_prompt_with_depth(app, prompt, tools, 0, resolved_config, options, sink).await
+    send_prompt_with_depth(app, context_name, prompt, tools, 0, resolved_config, options, sink).await
 }
 
 async fn send_prompt_with_depth<S: ResponseSink>(
     app: &AppState,
+    context_name: &str,
     prompt: String,
     tools: &[Tool],
     recursion_depth: usize,
@@ -291,7 +297,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     let use_reflection = options.use_reflection;
     let debug = options.debug;
 
-    let mut context = app.get_current_context()?;
+    let mut context = app.get_or_create_context(context_name)?;
 
     // Execute pre_message hooks (can modify prompt)
     let mut final_prompt = prompt.clone();
@@ -312,7 +318,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     }
 
     // Check inbox and inject messages before the user prompt
-    let inbox_messages = app.load_and_clear_current_inbox()?;
+    let inbox_messages = app.load_and_clear_inbox(context_name)?;
     if !inbox_messages.is_empty() {
         let mut inbox_content = String::from("--- INBOX MESSAGES ---\n");
         for msg in &inbox_messages {
@@ -333,7 +339,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
     // Append user message to both transcript.jsonl and context.jsonl (tandem write)
     let user_entry = app.create_user_message_entry(&final_prompt, &resolved_config.username);
-    app.append_to_current_transcript_and_context(&user_entry)?;
+    app.append_to_transcript_and_context(context_name, &user_entry)?;
     sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
 
     // Check if we need to warn about context window
@@ -349,7 +355,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
     // Auto-compaction check
     if app.should_auto_compact(&context, resolved_config) {
-        return compact_context_with_llm(app, resolved_config, verbose).await;
+        return compact_context_with_llm(app, context_name, resolved_config, verbose).await;
     }
 
     // Prepare messages for API
@@ -361,8 +367,8 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     };
 
     // Load context-specific state: todos, goals, and summary
-    let todos = app.load_current_todos()?;
-    let goals = app.load_current_goals()?;
+    let todos = app.load_todos(context_name)?;
+    let goals = app.load_goals(context_name)?;
     let summary = &context.summary;
 
     // Execute pre_system_prompt hook - can inject content before system prompt sections
@@ -994,7 +1000,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
                 // Log tool call and result
                 let tool_call_entry = app.create_tool_call_entry(&tc.name, &tc.arguments);
-                app.append_to_current_transcript_and_context(&tool_call_entry)?;
+                app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
                 sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
                 let logged_result = if was_cached {
@@ -1003,7 +1009,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     &tool_result
                 };
                 let tool_result_entry = app.create_tool_result_entry(&tc.name, logged_result);
-                app.append_to_current_transcript_and_context(&tool_result_entry)?;
+                app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
                 sink.handle(ResponseEvent::TranscriptEntry(tool_result_entry))?;
 
                 sink.handle(ResponseEvent::ToolResult {
@@ -1041,7 +1047,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         app.add_message(&mut context, "assistant".to_string(), full_response.clone());
 
         let assistant_entry = app.create_assistant_message_entry(&full_response);
-        app.append_to_current_transcript_and_context(&assistant_entry)?;
+        app.append_to_transcript_and_context(context_name, &assistant_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(assistant_entry))?;
 
         // Execute post_message hooks
@@ -1092,6 +1098,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
             );
             return Box::pin(send_prompt_with_depth(
                 app,
+                context_name,
                 continue_prompt,
                 tools,
                 new_depth,

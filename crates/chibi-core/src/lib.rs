@@ -19,7 +19,7 @@
 //!     let options = PromptOptions::new(false, false, false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
-//!     chibi.send_prompt_streaming("Hello!", &config, &options, &mut sink).await?;
+//!     chibi.send_prompt_streaming("default", "Hello!", &config, &options, &mut sink).await?;
 //!     println!("Response: {}", sink.text);
 //!     Ok(())
 //! }

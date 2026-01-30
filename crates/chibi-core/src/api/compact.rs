@@ -20,10 +20,11 @@ use std::io;
 /// The LLM decides which messages to drop based on goals/todos, with fallback to percentage
 pub async fn rolling_compact(
     app: &AppState,
+    context_name: &str,
     resolved_config: &ResolvedConfig,
     verbose: bool,
 ) -> io::Result<()> {
-    let mut context = app.get_current_context()?;
+    let mut context = app.get_or_create_context(context_name)?;
 
     // Skip system messages when counting
     let non_system_messages: Vec<_> = context
@@ -53,8 +54,8 @@ pub async fn rolling_compact(
     );
 
     // Load goals and todos to guide compaction decisions
-    let goals = app.load_current_goals()?;
-    let todos = app.load_current_todos()?;
+    let goals = app.load_goals(context_name)?;
+    let todos = app.load_todos(context_name)?;
 
     // Build message list in transcript format for LLM to analyze
     let messages_for_llm: Vec<serde_json::Value> = non_system_messages
@@ -301,7 +302,7 @@ Output ONLY the updated summary, no preamble."#,
     app.finalize_compaction(&context.name, &new_summary)?;
 
     // Save updated context (summary.md, context_meta.json, etc.)
-    app.save_current_context(&context)?;
+    app.save_context(&context)?;
 
     if verbose {
         eprintln!(
@@ -331,20 +332,22 @@ Output ONLY the updated summary, no preamble."#,
 /// Full compaction: summarizes all messages and starts fresh (auto-triggered)
 pub async fn compact_context_with_llm(
     app: &AppState,
+    context_name: &str,
     resolved_config: &ResolvedConfig,
     verbose: bool,
 ) -> io::Result<()> {
     // Use rolling compaction for auto-triggered compaction
-    rolling_compact(app, resolved_config, verbose).await
+    rolling_compact(app, context_name, resolved_config, verbose).await
 }
 
 /// Full compaction: summarizes all messages and starts fresh (manual -c flag)
 pub async fn compact_context_with_llm_manual(
     app: &AppState,
+    context_name: &str,
     resolved_config: &ResolvedConfig,
     verbose: bool,
 ) -> io::Result<()> {
-    compact_context_with_llm_internal(app, resolved_config, true, verbose).await
+    compact_context_with_llm_internal(app, context_name, resolved_config, true, verbose).await
 }
 
 /// Compact a specific context by name (for -Z flag)
@@ -407,11 +410,12 @@ pub async fn compact_context_by_name(
 
 async fn compact_context_with_llm_internal(
     app: &AppState,
+    context_name: &str,
     resolved_config: &ResolvedConfig,
     print_message: bool,
     verbose: bool,
 ) -> io::Result<()> {
-    let context = app.get_current_context()?;
+    let context = app.get_or_create_context(context_name)?;
 
     if context.messages.is_empty() {
         if print_message {
@@ -616,7 +620,7 @@ async fn compact_context_with_llm_internal(
     app.finalize_compaction(&new_context.name, &summary)?;
 
     // Save the new context
-    app.save_current_context(&new_context)?;
+    app.save_context(&new_context)?;
 
     if print_message {
         println!("Context compacted (history saved to transcript)");
