@@ -1,0 +1,36 @@
+name: Auto-tag Merged Features
+
+permissions:
+  contents: write
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [dev]
+
+jobs:
+  auto-tag:
+    name: Tag Merged Feature
+    # Only run if PR was actually merged (not just closed)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Tag merged feature
+        env:
+          BRANCH_NAME: ${{ github.head_ref }}
+        run: |
+          # Only tag if branch matches our prefixes
+          if [[ "$BRANCH_NAME" =~ ^(feature|bugfix|refactor|chore|docs|hotfix)/ ]]; then
+            echo "Creating tag: $BRANCH_NAME"
+            git tag "$BRANCH_NAME"
+            git push origin "$BRANCH_NAME"
+            echo "✓ Tagged $BRANCH_NAME"
+          else
+            echo "Branch $BRANCH_NAME doesn't match tagging pattern, skipping"
+          fi
