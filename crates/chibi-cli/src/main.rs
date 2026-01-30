@@ -105,25 +105,10 @@ fn generate_new_context_name(chibi: &Chibi, prefix: Option<&str>) -> String {
     }
 }
 
-/// Resolve previous context reference
-fn resolve_previous_context(session: &Session) -> io::Result<String> {
-    session
-        .previous_context
-        .as_ref()
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::InvalidInput,
-                "No previous context available (use -c to switch contexts first)",
-            )
-        })
-}
-
 /// Resolve "new" or "new:prefix" or "-" context names
 fn resolve_context_name(chibi: &Chibi, session: &Session, name: &str) -> io::Result<String> {
     if name == "-" {
-        resolve_previous_context(session)
+        session.get_previous()
     } else if name == "new" {
         Ok(generate_new_context_name(chibi, None))
     } else if let Some(prefix) = name.strip_prefix("new:") {

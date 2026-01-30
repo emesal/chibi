@@ -84,6 +84,20 @@ impl Session {
         self.current_context == name
     }
 
+    /// Get the previous context name, or error if none available
+    pub fn get_previous(&self) -> io::Result<String> {
+        self.previous_context
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "No previous context available (use -c to switch contexts first)",
+                )
+            })
+    }
+
     /// Check if a context name matches the previous context.
     pub fn is_previous(&self, name: &str) -> bool {
         self.previous_context.as_deref() == Some(name)
@@ -158,6 +172,32 @@ mod tests {
             previous_context: Some("".to_string()),
         };
         let result = session.swap_with_previous();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_previous() {
+        let mut session = Session::default();
+        session.switch_context("test".to_string());
+
+        let result = session.get_previous().unwrap();
+        assert_eq!(result, "default");
+    }
+
+    #[test]
+    fn test_get_previous_none() {
+        let session = Session::default();
+        let result = session.get_previous();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_previous_empty() {
+        let session = Session {
+            current_context: "test".to_string(),
+            previous_context: Some("".to_string()),
+        };
+        let result = session.get_previous();
         assert!(result.is_err());
     }
 
