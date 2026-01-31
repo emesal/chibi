@@ -74,8 +74,8 @@ chibi -c -            # current='work', previous='personal'
 
 | Flag | Description |
 |------|-------------|
-| `-p, --plugin <NAME> [ARGS...]` | Run a plugin directly (bypasses LLM) |
-| `-P, --call-tool <TOOL> [ARGS...]` | Call a tool directly (plugin or built-in) |
+| `-p, --plugin <NAME> "ARGS"` | Run a plugin directly with shell-style args |
+| `-P, --call-tool <TOOL> JSON` | Call a tool directly with JSON arguments |
 
 ## Cache Management
 
