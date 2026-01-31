@@ -140,6 +140,63 @@ Each context has an inbox (`~/.chibi/contexts/<name>/inbox.jsonl`). When a conte
 2. Next time that context is used, inbox messages are injected into the prompt
 3. Inbox is cleared after injection
 
+### Checking Inboxes
+
+Chibi can check context inboxes and automatically process any pending messages:
+
+- `-b` / `--check-all-inboxes`: Check all context inboxes. For each context with pending messages, the LLM is activated to process them.
+- `-B <context>` / `--check-inbox-for <context>`: Check only the specified context's inbox.
+
+When messages are found, the LLM receives the inbox messages followed by a system prompt instructing it to take appropriate action. Contexts with empty inboxes are silently skipped.
+
+This is useful for scheduled tasks (e.g., cron jobs) that periodically wake up contexts to handle inter-context communication:
+
+```bash
+# Check all inboxes every hour
+0 * * * * chibi -b
+
+# Check specific context inbox
+chibi -B work-assistant
+```
+
+These commands work with `--json-config`:
+
+```json
+{"command": "check_all_inboxes"}
+{"command": {"check_inbox": {"context": "work"}}}
+```
+
+### Sending Messages from External Programs
+
+External programs can deliver messages to any context's inbox using the `-P` flag to call the `send_message` tool directly:
+
+```bash
+# Send a message to a context
+chibi -P send_message '{"to": "work-assistant", "content": "New task: review PR #123"}'
+
+# Optionally specify a sender
+chibi -P send_message '{"to": "work-assistant", "content": "Build failed", "from": "ci-bot"}'
+```
+
+This also works with `--json-config` for programmatic use:
+
+```bash
+echo '{"command": {"call_tool": {"name": "send_message", "args": ["{\"to\": \"work-assistant\", \"content\": \"Hello!\"}"]}}}' | chibi --json-config
+```
+
+The `from` field defaults to the current context name if not specified.
+
+**Example: CI/CD integration**
+
+```bash
+#!/bin/bash
+# Notify chibi context when build completes
+chibi -P send_message "{\"to\": \"dev-assistant\", \"content\": \"Build $BUILD_ID completed with status: $STATUS\", \"from\": \"jenkins\"}"
+
+# Optionally trigger immediate processing
+chibi -B dev-assistant
+```
+
 ### Hooks for Message Routing
 
 The `pre_send_message` hook can intercept delivery for custom routing:

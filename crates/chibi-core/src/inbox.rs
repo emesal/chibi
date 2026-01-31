@@ -111,4 +111,36 @@ impl AppState {
 
     // NOTE: load_and_clear_current_inbox was removed in the stateless-core refactor.
     // Use load_and_clear_inbox(context_name) instead.
+
+    /// Peek at a context's inbox without clearing it.
+    ///
+    /// This is useful for checking if there are messages before deciding
+    /// whether to activate a context. Unlike `load_and_clear_inbox`, this
+    /// does not modify the inbox file.
+    pub fn peek_inbox(&self, context_name: &str) -> io::Result<Vec<InboxEntry>> {
+        let inbox_path = self.inbox_file(context_name);
+
+        // If inbox doesn't exist, return empty
+        if !inbox_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        // No lock needed for read-only peek
+        let file = File::open(&inbox_path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<InboxEntry>(&line) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => eprintln!("[Warning: Failed to parse inbox entry: {}]", e),
+            }
+        }
+
+        Ok(entries)
+    }
 }

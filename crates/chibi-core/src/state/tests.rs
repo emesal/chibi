@@ -383,6 +383,37 @@ fn test_inbox_append_and_load() {
     assert!(entries_after.is_empty());
 }
 
+#[test]
+fn test_peek_inbox_returns_entries_without_clearing() {
+    let (app, _temp) = create_test_app();
+
+    let entry = InboxEntry {
+        id: "test-1".to_string(),
+        timestamp: 1000,
+        from: "other".to_string(),
+        to: "default".to_string(),
+        content: "Hello!".to_string(),
+    };
+    app.append_to_inbox("default", &entry).unwrap();
+
+    // Peek should return the message
+    let peeked = app.peek_inbox("default").unwrap();
+    assert_eq!(peeked.len(), 1);
+    assert_eq!(peeked[0].content, "Hello!");
+
+    // Peek again - should still be there (not cleared)
+    let peeked2 = app.peek_inbox("default").unwrap();
+    assert_eq!(peeked2.len(), 1);
+
+    // load_and_clear should still work
+    let cleared = app.load_and_clear_inbox("default").unwrap();
+    assert_eq!(cleared.len(), 1);
+
+    // Now peek should return empty
+    let peeked3 = app.peek_inbox("default").unwrap();
+    assert!(peeked3.is_empty());
+}
+
 // === System prompt tests ===
 
 #[test]
