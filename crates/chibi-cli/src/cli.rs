@@ -233,13 +233,16 @@ pub struct Cli {
     pub ephemeral_username: Option<String>,
 
     // === Plugin/tool options ===
-    // Note: These are handled specially because they consume all remaining args
-    /// Run a plugin directly (-p NAME [ARGS...])
-    #[arg(short = 'p', long = "plugin", value_name = "NAME", num_args = 1.., allow_hyphen_values = true)]
+    /// Run a plugin directly (-p NAME "ARGS")
+    /// For args with spaces or special chars: -p myplugin "arg1 'quoted arg' arg2"
+    /// For no args: -p myplugin ""
+    #[arg(short = 'p', long = "plugin", value_names = ["NAME", "ARGS"], num_args = 2, allow_hyphen_values = true)]
     pub plugin: Option<Vec<String>>,
 
-    /// Call a tool directly (-P TOOL [ARGS...])
-    #[arg(short = 'P', long = "call-tool", value_name = "TOOL", num_args = 1.., allow_hyphen_values = true)]
+    /// Call a tool directly (-P TOOL JSON_ARGS)
+    /// Example: -P send_message '{"to":"foo","content":"hi"}'
+    /// For no args: -P mytool '{}'
+    #[arg(short = 'P', long = "call-tool", value_names = ["TOOL", "JSON"], num_args = 2, allow_hyphen_values = true)]
     pub call_tool: Option<Vec<String>>,
 
     // === Control flags ===
@@ -308,6 +311,9 @@ const CLI_AFTER_HELP: &str = r#"EXAMPLES:
   chibi -a hello                  Archive history, then send prompt
   chibi -b                        Check all inboxes, process any messages
   chibi -B work                   Check inbox for 'work' context only
+  chibi -p myplugin "arg1 arg2"   Run plugin with args (shell-style split)
+  chibi -P mytool '{}'            Call tool with empty JSON args
+  chibi -P send '{"to":"x"}'      Call tool with JSON args
   chibi --json-schema             Print JSON schema for --json-config
 
 FLAG BEHAVIOR:
@@ -422,16 +428,32 @@ impl Cli {
             }
         });
 
-        // Parse plugin invocation
-        let plugin = self.plugin.as_ref().map(|v| PluginInvocation {
-            name: v.first().cloned().unwrap_or_default(),
-            args: v.get(1..).unwrap_or(&[]).to_vec(),
-        });
+        // Parse plugin invocation with shell-style arg splitting
+        let plugin = if let Some(v) = &self.plugin {
+            let name = v.first().cloned().unwrap_or_default();
+            let args = if let Some(args_str) = v.get(1) {
+                if args_str.is_empty() {
+                    vec![]
+                } else {
+                    shlex::split(args_str).ok_or_else(|| {
+                        io::Error::new(
+                            ErrorKind::InvalidInput,
+                            format!("Invalid shell syntax in plugin args: {}", args_str),
+                        )
+                    })?
+                }
+            } else {
+                vec![]
+            };
+            Some(PluginInvocation { name, args })
+        } else {
+            None
+        };
 
-        // Parse call_tool invocation
+        // Parse call_tool invocation (takes JSON directly)
         let call_tool = self.call_tool.as_ref().map(|v| PluginInvocation {
             name: v.first().cloned().unwrap_or_default(),
-            args: v.get(1..).unwrap_or(&[]).to_vec(),
+            args: v.get(1).cloned().into_iter().collect(),
         });
 
         // Parse debug keys (comma-separated) to check for md=<file>
@@ -758,10 +780,10 @@ pub fn parse() -> io::Result<ChibiInput> {
 mod tests {
     use super::*;
 
-    /// Helper to create args from a command string
+    /// Helper to create args from a command string (shell-style parsing)
     fn args(s: &str) -> Vec<String> {
         std::iter::once("chibi".to_string())
-            .chain(s.split_whitespace().map(|s| s.to_string()))
+            .chain(shlex::split(s).unwrap_or_default())
             .collect()
     }
 
@@ -1135,7 +1157,8 @@ mod tests {
 
     #[test]
     fn test_plugin_short() {
-        let input = parse_input("-p myplugin").unwrap();
+        // -p now requires exactly 2 args: NAME and ARGS (use empty string for no args)
+        let input = parse_input("-p myplugin \"\"").unwrap();
         assert!(
             matches!(input.command, Command::RunPlugin { ref name, ref args }
             if name == "myplugin" && args.is_empty())
@@ -1145,7 +1168,8 @@ mod tests {
 
     #[test]
     fn test_plugin_with_args() {
-        let input = parse_input("-p myplugin list --all").unwrap();
+        // Args are now passed as a single quoted string, split using shell rules
+        let input = parse_input("-p myplugin \"list --all\"").unwrap();
         assert!(
             matches!(input.command, Command::RunPlugin { ref name, ref args }
             if name == "myplugin" && args == &["list", "--all"])
@@ -1154,10 +1178,11 @@ mod tests {
 
     #[test]
     fn test_call_tool_short() {
-        let input = parse_input("-P update_todos").unwrap();
+        // -P now requires exactly 2 args: TOOL and JSON (use {} for no args)
+        let input = parse_input("-P update_todos \"{}\"").unwrap();
         assert!(
             matches!(input.command, Command::CallTool { ref name, ref args }
-            if name == "update_todos" && args.is_empty())
+            if name == "update_todos" && args == &["{}"])
         );
         assert!(input.flags.force_call_user);
     }
@@ -1287,8 +1312,10 @@ mod tests {
     // === Plugin captures everything after ===
 
     #[test]
-    fn test_plugin_captures_trailing_flags() {
-        let input = parse_input("-p myplugin -l --verbose").unwrap();
+    fn test_plugin_no_longer_captures_trailing_flags() {
+        // With the new 2-arg format, flags after -p are parsed normally
+        let input = parse_input("-p myplugin '-l --verbose' -v").unwrap();
+        assert!(input.flags.verbose); // -v is now parsed as verbose flag
         assert!(
             matches!(input.command, Command::RunPlugin { ref name, ref args }
             if name == "myplugin" && args == &["-l", "--verbose"])
@@ -1297,11 +1324,55 @@ mod tests {
 
     #[test]
     fn test_plugin_verbose_before() {
-        let input = parse_input("-v -p myplugin arg1").unwrap();
+        let input = parse_input("-v -p myplugin \"arg1\"").unwrap();
         assert!(input.flags.verbose);
         assert!(
             matches!(input.command, Command::RunPlugin { ref name, ref args }
             if name == "myplugin" && args == &["arg1"])
+        );
+    }
+
+    #[test]
+    fn test_plugin_with_quoted_args() {
+        // Shell-style quoting within the args string
+        let input = parse_input("-p myplugin \"arg1 'with spaces' arg2\"").unwrap();
+        assert!(
+            matches!(input.command, Command::RunPlugin { ref name, ref args }
+            if name == "myplugin" && args == &["arg1", "with spaces", "arg2"])
+        );
+    }
+
+    #[test]
+    fn test_plugin_verbose_after() {
+        // Flags can now come after -p since it only takes 2 args
+        let input = parse_input("-p myplugin \"arg1\" -v").unwrap();
+        assert!(input.flags.verbose);
+        assert!(
+            matches!(input.command, Command::RunPlugin { ref name, ref args }
+            if name == "myplugin" && args == &["arg1"])
+        );
+    }
+
+    #[test]
+    fn test_call_tool_with_json() {
+        let input = parse_input("-P send_message '{\"to\":\"foo\",\"content\":\"hi\"}'").unwrap();
+        assert!(
+            matches!(input.command, Command::CallTool { ref name, ref args }
+            if name == "send_message" && args == &["{\"to\":\"foo\",\"content\":\"hi\"}"])
+        );
+    }
+
+    #[test]
+    fn test_call_tool_with_flags_after() {
+        // Flags can now come after -P since it only takes 2 args
+        let input = parse_input("-P mytool '{}' -v -C ephemeral").unwrap();
+        assert!(input.flags.verbose);
+        assert!(
+            matches!(input.context, ContextSelection::Ephemeral { ref name } if name == "ephemeral")
+        );
+        assert!(
+            matches!(input.command, Command::CallTool { ref name, ref args }
+            if name == "mytool" && args == &["{}"])
         );
     }
 
