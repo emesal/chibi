@@ -619,7 +619,7 @@ async fn execute_from_input(
 
             let result = chibi.execute_tool(&working_context, name, args_json.clone())?;
 
-            if input.flags.force_recurse {
+            if input.flags.force_call_agent {
                 // Tool-first with continuation to LLM
                 let tool_context = format!(
                     "[User initiated tool call: {}]\n[Arguments: {}]\n[Result: {}]",

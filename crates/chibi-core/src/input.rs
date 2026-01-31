@@ -150,12 +150,12 @@ pub struct Flags {
     /// Output in JSON format (--json-output)
     #[serde(default)]
     pub json_output: bool,
-    /// Force return to user immediately (-x)
+    /// Force handoff to user immediately (-x)
     #[serde(default)]
-    pub force_return: bool,
-    /// Force fallback to call_agent (-X)
+    pub force_call_user: bool,
+    /// Force handoff to agent (-X)
     #[serde(default)]
-    pub force_recurse: bool,
+    pub force_call_agent: bool,
     /// Disable markdown rendering (--raw)
     #[serde(default)]
     pub raw: bool,
@@ -179,8 +179,8 @@ mod tests {
         let flags = Flags::default();
         assert!(!flags.verbose);
         assert!(!flags.json_output);
-        assert!(!flags.force_return);
-        assert!(!flags.force_recurse);
+        assert!(!flags.force_call_user);
+        assert!(!flags.force_call_agent);
         assert!(flags.debug.is_empty());
     }
 
@@ -189,8 +189,8 @@ mod tests {
         let flags = Flags {
             verbose: true,
             json_output: true,
-            force_return: false,
-            force_recurse: false,
+            force_call_user: false,
+            force_call_agent: false,
             raw: false,
             debug: vec![DebugKey::RequestLog],
         };
@@ -202,11 +202,11 @@ mod tests {
 
     #[test]
     fn test_flags_deserialization() {
-        let json = r#"{"verbose":true,"json_output":false,"force_return":true}"#;
+        let json = r#"{"verbose":true,"json_output":false,"force_call_user":true}"#;
         let flags: Flags = serde_json::from_str(json).unwrap();
         assert!(flags.verbose);
         assert!(!flags.json_output);
-        assert!(flags.force_return);
+        assert!(flags.force_call_user);
     }
 
     // === DebugKey tests ===

@@ -201,8 +201,8 @@ mod tests {
             flags: Flags {
                 verbose: true,
                 json_output: true,
-                force_return: true,
-                force_recurse: false,
+                force_call_user: true,
+                force_call_agent: false,
                 raw: false,
                 debug: vec![DebugKey::All],
             },
@@ -221,7 +221,7 @@ mod tests {
         );
         assert!(deserialized.flags.verbose);
         assert!(deserialized.flags.json_output);
-        assert!(deserialized.flags.force_return);
+        assert!(deserialized.flags.force_call_user);
         assert_eq!(deserialized.flags.debug, vec![DebugKey::All]);
         assert!(
             matches!(deserialized.context, ContextSelection::Switch { ref name, persistent: false } if name == "coding")
