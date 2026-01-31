@@ -41,6 +41,13 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 | `pre_api_tools` | Before tools are sent to API | Yes (filter tools) |
 | `pre_api_request` | Before API request is sent | Yes (modify request body) |
 
+### Agentic Loop Lifecycle
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_agentic_loop` | Before entering the tool loop | Yes (fallback target) |
+| `post_tool_batch` | After processing a batch of tool calls | Yes (fallback target) |
+
 ### Tool Output Caching
 
 | Hook | When | Can Modify |
@@ -212,6 +219,53 @@ Called after tools are filtered but before the HTTP request is sent. Allows modi
 ```
 
 Returned fields are **merged** into the request body, not replaced entirely. This allows targeted modifications without needing to echo back the entire body.
+
+### pre_agentic_loop
+
+Called once before entering the agentic tool loop. Allows plugins to override the fallback handoff target (what happens when the LLM doesn't explicitly call `call_agent` or `call_user`).
+
+```json
+{
+  "context_name": "default",
+  "recursion_depth": 0,
+  "current_fallback": "call_agent",
+  "message": "user's message here"
+}
+```
+
+**Can return (to override fallback):**
+```json
+{
+  "fallback": "call_user"
+}
+```
+
+Valid fallback values are `"call_agent"` (continue processing) or `"call_user"` (return to user).
+
+### post_tool_batch
+
+Called after processing a batch of tool calls, before deciding whether to recurse or return. Allows plugins to override the fallback based on which tools were called.
+
+```json
+{
+  "context_name": "default",
+  "recursion_depth": 1,
+  "current_fallback": "call_agent",
+  "tool_calls": [
+    {"name": "read_file", "arguments": {"path": "Cargo.toml"}},
+    {"name": "update_todos", "arguments": {"content": "..."}}
+  ]
+}
+```
+
+**Can return (to override fallback):**
+```json
+{
+  "fallback": "call_user"
+}
+```
+
+**Priority:** `post_tool_batch` output > `pre_agentic_loop` output > config fallback. Each `post_tool_batch` hook can keep overriding, so the last hook to set a fallback wins.
 
 ### pre_tool
 
@@ -581,6 +635,44 @@ if hook == "pre_api_request":
 print("{}")
 ```
 
+## Example: Guardrails (Fallback Override)
+
+A hook that forces user confirmation after dangerous tool calls:
+
+```python
+#!/usr/bin/env python3
+# ~/.chibi/plugins/guardrails
+
+import sys
+import json
+import os
+
+if len(sys.argv) > 1 and sys.argv[1] == "--schema":
+    print(json.dumps({
+        "name": "guardrails",
+        "description": "Forces user confirmation for dangerous operations",
+        "parameters": {"type": "object", "properties": {}},
+        "hooks": ["post_tool_batch"]
+    }))
+    sys.exit(0)
+
+hook = os.environ.get("CHIBI_HOOK", "")
+if hook == "post_tool_batch":
+    data = json.loads(os.environ.get("CHIBI_HOOK_DATA", "{}"))
+    tool_calls = data.get("tool_calls", [])
+
+    # List of tools that should require user confirmation
+    dangerous_tools = ["run_command", "write_file", "delete_file"]
+
+    for call in tool_calls:
+        if call.get("name") in dangerous_tools:
+            # Force return to user after dangerous tool calls
+            print(json.dumps({"fallback": "call_user"}))
+            sys.exit(0)
+
+print("{}")
+```
+
 ## Use Cases
 
 - **Logging** - Record all interactions for debugging or auditing
@@ -592,3 +684,4 @@ print("{}")
 - **Enrichment** - Add context or metadata to prompts
 - **Tool Restriction** - Filter available tools based on context or permissions
 - **API Customization** - Modify temperature, max_tokens, or other API parameters
+- **Guardrails** - Override fallback behavior to force user confirmation after risky operations

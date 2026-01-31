@@ -255,6 +255,36 @@ fn apply_request_modifications<S: ResponseSink>(
     Ok(request_body)
 }
 
+/// Apply fallback override from hook results.
+/// Hooks can return `{"fallback": "call_agent"}` or `{"fallback": "call_user"}` to override.
+fn apply_fallback_override<S: ResponseSink>(
+    handoff: &mut tools::Handoff,
+    hook_results: &[(String, serde_json::Value)],
+    verbose: bool,
+    sink: &mut S,
+) -> io::Result<()> {
+    for (hook_name, hook_result) in hook_results {
+        if let Some(fallback_str) = hook_result.get("fallback").and_then(|v| v.as_str()) {
+            let new_fallback = match fallback_str {
+                "call_user" => tools::HandoffTarget::User {
+                    message: String::new(),
+                },
+                _ => tools::HandoffTarget::Agent {
+                    prompt: String::new(),
+                },
+            };
+            handoff.set_fallback(new_fallback);
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!("[Hook {} set fallback to {}]", hook_name, fallback_str),
+                    verbose_only: true,
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Send a prompt to the LLM with streaming response via ResponseSink.
 ///
 /// This is the main entry point for sending prompts. It handles:
@@ -566,6 +596,16 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         }
     });
     let mut handoff = tools::Handoff::new(fallback);
+
+    // Execute pre_agentic_loop hook - allows plugins to override fallback before the loop
+    let hook_data = json!({
+        "context_name": context.name,
+        "recursion_depth": recursion_depth,
+        "current_fallback": resolved_config.fallback_tool,
+        "message": final_prompt,
+    });
+    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreAgenticLoop, &hook_data)?;
+    apply_fallback_override(&mut handoff, &hook_results, verbose, sink)?;
 
     // Tool call loop - keep going until we get a final text response
     loop {
@@ -1081,6 +1121,26 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     "content": final_result,
                 }));
             }
+
+            // Execute post_tool_batch hook - allows plugins to override fallback after seeing tool results
+            let tool_batch_info: Vec<serde_json::Value> = tool_calls
+                .iter()
+                .map(|tc| {
+                    json!({
+                        "name": tc.name,
+                        "arguments": serde_json::from_str::<serde_json::Value>(&tc.arguments).unwrap_or(json!({})),
+                    })
+                })
+                .collect();
+            let hook_data = json!({
+                "context_name": context.name,
+                "recursion_depth": recursion_depth,
+                "current_fallback": resolved_config.fallback_tool,
+                "tool_calls": tool_batch_info,
+            });
+            let hook_results =
+                tools::execute_hook(tools, tools::HookPoint::PostToolBatch, &hook_data)?;
+            apply_fallback_override(&mut handoff, &hook_results, verbose, sink)?;
 
             request_body["messages"] = serde_json::json!(messages);
             continue;

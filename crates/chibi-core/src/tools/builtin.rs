@@ -81,6 +81,11 @@ impl Handoff {
     pub fn take(&mut self) -> HandoffTarget {
         self.next.take().unwrap_or_else(|| self.fallback.clone())
     }
+
+    /// Override the fallback target (used by hooks)
+    pub fn set_fallback(&mut self, target: HandoffTarget) {
+        self.fallback = target;
+    }
 }
 
 // === Tool API Format Definitions ===
@@ -485,5 +490,59 @@ mod tests {
     fn test_handoff_constants() {
         assert_eq!(CALL_AGENT_TOOL_NAME, "call_agent");
         assert_eq!(CALL_USER_TOOL_NAME, "call_user");
+    }
+
+    #[test]
+    fn test_handoff_set_fallback() {
+        // Start with agent fallback
+        let fallback = HandoffTarget::Agent {
+            prompt: "original".to_string(),
+        };
+        let mut handoff = Handoff::new(fallback);
+
+        // Without explicit call, should use original fallback
+        match handoff.take() {
+            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "original"),
+            _ => panic!("Expected Agent variant"),
+        }
+
+        // Override fallback to user
+        handoff.set_fallback(HandoffTarget::User {
+            message: "new fallback".to_string(),
+        });
+
+        // Now take should return the new fallback
+        match handoff.take() {
+            HandoffTarget::User { message } => assert_eq!(message, "new fallback"),
+            _ => panic!("Expected User variant"),
+        }
+    }
+
+    #[test]
+    fn test_handoff_explicit_still_beats_set_fallback() {
+        let fallback = HandoffTarget::Agent {
+            prompt: String::new(),
+        };
+        let mut handoff = Handoff::new(fallback);
+
+        // Override fallback
+        handoff.set_fallback(HandoffTarget::User {
+            message: "fallback".to_string(),
+        });
+
+        // But also set an explicit call
+        handoff.set_agent("explicit".to_string());
+
+        // Explicit should still win
+        match handoff.take() {
+            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "explicit"),
+            _ => panic!("Expected Agent variant"),
+        }
+
+        // But next take uses the new fallback
+        match handoff.take() {
+            HandoffTarget::User { message } => assert_eq!(message, "fallback"),
+            _ => panic!("Expected User variant"),
+        }
     }
 }
