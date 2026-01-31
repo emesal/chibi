@@ -67,6 +67,10 @@ pub enum Command {
     ClearCache { name: Option<String> },
     /// Cleanup old cache entries (--cleanup-cache)
     CleanupCache,
+    /// Check inbox for a specific context and process any messages (-B)
+    CheckInbox { context: String },
+    /// Check all context inboxes and process any messages (-b)
+    CheckAllInboxes,
     /// Show help
     ShowHelp,
     /// Show version

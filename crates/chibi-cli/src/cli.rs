@@ -140,6 +140,19 @@ pub struct Cli {
     #[arg(long = "cleanup-cache")]
     pub cleanup_cache: bool,
 
+    /// Check all context inboxes and process any messages
+    #[arg(short = 'b', long = "check-all-inboxes")]
+    pub check_all_inboxes: bool,
+
+    /// Check inbox for specified context and process any messages
+    #[arg(
+        short = 'B',
+        long = "check-inbox-for",
+        value_name = "CTX",
+        allow_hyphen_values = true
+    )]
+    pub check_inbox_for: Option<String>,
+
     /// Compact current context (summarize and clear)
     #[arg(short = 'z', long = "compact-current-context")]
     pub compact_current_context: bool,
@@ -293,6 +306,8 @@ const CLI_AFTER_HELP: &str = r#"EXAMPLES:
   chibi -x -c test                Switch context without LLM
   chibi -X -L                     List contexts then invoke LLM
   chibi -a hello                  Archive history, then send prompt
+  chibi -b                        Check all inboxes, process any messages
+  chibi -B work                   Check inbox for 'work' context only
   chibi --json-schema             Print JSON schema for --json-config
 
 FLAG BEHAVIOR:
@@ -554,6 +569,12 @@ impl Cli {
             Command::CallTool {
                 name: invocation.name.clone(),
                 args: invocation.args.clone(),
+            }
+        } else if self.check_all_inboxes {
+            Command::CheckAllInboxes
+        } else if let Some(ref ctx) = self.check_inbox_for {
+            Command::CheckInbox {
+                context: ctx.clone(),
             }
         } else {
             Command::NoOp
@@ -935,6 +956,42 @@ mod tests {
             matches!(input.command, Command::CompactContext { ref name } if *name == Some("other".to_string()))
         );
         assert!(input.flags.no_chibi);
+    }
+
+    // === Inbox check tests ===
+
+    #[test]
+    fn test_check_all_inboxes_short() {
+        let input = parse_input("-b").unwrap();
+        assert!(matches!(input.command, Command::CheckAllInboxes));
+        assert!(!input.flags.no_chibi); // will invoke LLM if inbox has messages
+    }
+
+    #[test]
+    fn test_check_all_inboxes_long() {
+        let input = parse_input("--check-all-inboxes").unwrap();
+        assert!(matches!(input.command, Command::CheckAllInboxes));
+    }
+
+    #[test]
+    fn test_check_inbox_for_short() {
+        let input = parse_input("-B work").unwrap();
+        assert!(matches!(input.command, Command::CheckInbox { ref context } if context == "work"));
+        assert!(!input.flags.no_chibi);
+    }
+
+    #[test]
+    fn test_check_inbox_for_long() {
+        let input = parse_input("--check-inbox-for work").unwrap();
+        assert!(matches!(input.command, Command::CheckInbox { ref context } if context == "work"));
+    }
+
+    #[test]
+    fn test_check_inbox_for_with_hyphen_context() {
+        let input = parse_input("-B my-context").unwrap();
+        assert!(
+            matches!(input.command, Command::CheckInbox { ref context } if context == "my-context")
+        );
     }
 
     // === Rename tests ===

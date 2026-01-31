@@ -718,6 +718,151 @@ async fn execute_from_input(
                 .await?;
             did_action = true;
         }
+        Command::CheckInbox { context } => {
+            let ctx_name = resolve_context_name(chibi, session, context)?;
+
+            // Peek to see if there are messages
+            let messages = chibi.app.peek_inbox(&ctx_name)?;
+            if messages.is_empty() {
+                output.diagnostic(
+                    &format!("[No messages in inbox for '{}'.]", ctx_name),
+                    verbose,
+                );
+            } else {
+                output.diagnostic(
+                    &format!(
+                        "[Processing {} message(s) from inbox for '{}']",
+                        messages.len(),
+                        ctx_name
+                    ),
+                    verbose,
+                );
+
+                // Ensure context exists
+                if !chibi.app.context_dir(&ctx_name).exists() {
+                    let new_context = Context::new(ctx_name.clone());
+                    chibi.app.save_and_register_context(&new_context)?;
+                }
+
+                // Resolve config for this context
+                let mut resolved = resolve_cli_config(chibi, &ctx_name, None)?;
+                if input.flags.raw {
+                    resolved.render_markdown = false;
+                }
+                let use_reflection = chibi.app.config.reflection_enabled;
+
+                // Acquire context lock
+                let context_dir = chibi.app.context_dir(&ctx_name);
+                let _lock = chibi_core::lock::ContextLock::acquire(
+                    &context_dir,
+                    chibi.app.config.lock_heartbeat_seconds,
+                )?;
+
+                let options = PromptOptions::new(
+                    verbose,
+                    use_reflection,
+                    json_output,
+                    &input.flags.debug,
+                    force_markdown,
+                );
+
+                // Create markdown stream if enabled
+                let markdown = if resolved.render_markdown && !input.flags.raw {
+                    let md_cfg =
+                        md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
+                    Some(MarkdownStream::new(md_cfg))
+                } else {
+                    None
+                };
+
+                let mut sink = CliResponseSink::new(output, markdown, verbose);
+                chibi
+                    .send_prompt_streaming(
+                        &ctx_name,
+                        chibi_core::INBOX_CHECK_PROMPT,
+                        &resolved.core,
+                        &options,
+                        &mut sink,
+                    )
+                    .await?;
+            }
+            did_action = true;
+        }
+        Command::CheckAllInboxes => {
+            let contexts = chibi.app.list_contexts();
+            let mut processed_count = 0;
+
+            for ctx_name in contexts {
+                // Peek to see if there are messages
+                let messages = chibi.app.peek_inbox(&ctx_name)?;
+                if messages.is_empty() {
+                    continue;
+                }
+
+                output.diagnostic(
+                    &format!(
+                        "[Processing {} message(s) from inbox for '{}']",
+                        messages.len(),
+                        ctx_name
+                    ),
+                    verbose,
+                );
+
+                // Resolve config for this context
+                let mut resolved = resolve_cli_config(chibi, &ctx_name, None)?;
+                if input.flags.raw {
+                    resolved.render_markdown = false;
+                }
+                let use_reflection = chibi.app.config.reflection_enabled;
+
+                // Acquire context lock
+                let context_dir = chibi.app.context_dir(&ctx_name);
+                let _lock = chibi_core::lock::ContextLock::acquire(
+                    &context_dir,
+                    chibi.app.config.lock_heartbeat_seconds,
+                )?;
+
+                let options = PromptOptions::new(
+                    verbose,
+                    use_reflection,
+                    json_output,
+                    &input.flags.debug,
+                    force_markdown,
+                );
+
+                // Create markdown stream if enabled
+                let markdown = if resolved.render_markdown && !input.flags.raw {
+                    let md_cfg =
+                        md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
+                    Some(MarkdownStream::new(md_cfg))
+                } else {
+                    None
+                };
+
+                let mut sink = CliResponseSink::new(output, markdown, verbose);
+                chibi
+                    .send_prompt_streaming(
+                        &ctx_name,
+                        chibi_core::INBOX_CHECK_PROMPT,
+                        &resolved.core,
+                        &options,
+                        &mut sink,
+                    )
+                    .await?;
+
+                processed_count += 1;
+            }
+
+            if processed_count == 0 {
+                output.diagnostic("[No messages in any inbox.]", verbose);
+            } else {
+                output.diagnostic(
+                    &format!("[Processed inboxes for {} context(s).]", processed_count),
+                    verbose,
+                );
+            }
+            did_action = true;
+        }
         Command::NoOp => {
             // No operation - just context switch, already handled above
         }
