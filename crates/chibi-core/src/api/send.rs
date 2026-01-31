@@ -320,8 +320,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         "context_name": context.name,
         "summary": context.summary,
     });
-    let hook_results =
-        tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data, verbose)?;
+    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data)?;
     for (tool_name, result) in hook_results {
         if let Some(modified) = result.get("prompt").and_then(|v| v.as_str()) {
             if verbose {
@@ -393,12 +392,8 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         "todos": todos,
         "goals": goals,
     });
-    let pre_sys_hook_results = tools::execute_hook(
-        tools,
-        tools::HookPoint::PreSystemPrompt,
-        &pre_sys_hook_data,
-        verbose,
-    )?;
+    let pre_sys_hook_results =
+        tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data)?;
 
     // Build full system prompt with all components
     let mut full_system_prompt = system_prompt.clone();
@@ -464,7 +459,6 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         tools,
         tools::HookPoint::PostSystemPrompt,
         &post_sys_hook_data,
-        verbose,
     )?;
 
     // Append any content from post_system_prompt hooks
@@ -541,8 +535,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         "tools": tool_info,
         "recursion_depth": recursion_depth,
     });
-    let hook_results =
-        tools::execute_hook(tools, tools::HookPoint::PreApiTools, &hook_data, verbose)?;
+    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiTools, &hook_data)?;
     all_tools = filter_tools_from_hook_results(all_tools, &hook_results, verbose, sink)?;
 
     // Build request with tools and API params from resolved config
@@ -554,8 +547,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         "request_body": request_body,
         "recursion_depth": recursion_depth,
     });
-    let hook_results =
-        tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data, verbose)?;
+    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
     request_body = apply_request_modifications(request_body, &hook_results, verbose, sink)?;
 
     // Track if we should recurse (continue_processing was called)
@@ -740,7 +732,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     "arguments": args,
                 });
                 let pre_hook_results =
-                    tools::execute_hook(tools, tools::HookPoint::PreTool, &pre_hook_data, verbose)?;
+                    tools::execute_hook(tools, tools::HookPoint::PreTool, &pre_hook_data)?;
 
                 let mut blocked = false;
                 let mut block_message = String::new();
@@ -819,7 +811,6 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                             tools,
                             tools::HookPoint::PreSendMessage,
                             &pre_hook_data,
-                            verbose,
                         )?;
 
                         // Check if any hook claimed delivery
@@ -876,7 +867,6 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                             tools,
                             tools::HookPoint::PostSendMessage,
                             &post_hook_data,
-                            verbose,
                         );
 
                         delivery_result
@@ -913,7 +903,6 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     tools,
                     tools::HookPoint::PreToolOutput,
                     &pre_output_hook_data,
-                    verbose,
                 )?;
 
                 for (hook_tool_name, result) in pre_output_hook_results {
@@ -1010,7 +999,6 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     tools,
                     tools::HookPoint::PostToolOutput,
                     &post_output_hook_data,
-                    verbose,
                 );
 
                 // Log tool call and result
@@ -1041,12 +1029,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     "result": tool_result,
                     "cached": was_cached,
                 });
-                let _ = tools::execute_hook(
-                    tools,
-                    tools::HookPoint::PostTool,
-                    &post_hook_data,
-                    verbose,
-                );
+                let _ = tools::execute_hook(tools, tools::HookPoint::PostTool, &post_hook_data);
 
                 messages.push(serde_json::json!({
                     "role": "tool",
@@ -1072,7 +1055,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
             "response": full_response,
             "context_name": context.name,
         });
-        let _ = tools::execute_hook(tools, tools::HookPoint::PostMessage, &hook_data, verbose);
+        let _ = tools::execute_hook(tools, tools::HookPoint::PostMessage, &hook_data);
 
         if app.should_warn(&context.messages) {
             let remaining = app.remaining_tokens(&context.messages);

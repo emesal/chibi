@@ -46,12 +46,7 @@ pub async fn rolling_compact(
         "non_system_count": non_system_messages.len(),
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(
-        &tools,
-        tools::HookPoint::PreRollingCompact,
-        &hook_data,
-        verbose,
-    );
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PreRollingCompact, &hook_data);
 
     // Load goals and todos to guide compaction decisions
     let goals = app.load_goals(context_name)?;
@@ -319,12 +314,7 @@ Output ONLY the updated summary, no preamble."#,
         "messages_archived": archived_count,
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(
-        &tools,
-        tools::HookPoint::PostRollingCompact,
-        &hook_data,
-        verbose,
-    );
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PostRollingCompact, &hook_data);
 
     Ok(())
 }
@@ -438,7 +428,7 @@ async fn compact_context_with_llm_internal(
         "message_count": context.messages.len(),
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PreCompact, &hook_data, verbose);
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PreCompact, &hook_data);
 
     // Append to transcript.md before compacting (for archival)
     app.append_to_transcript_md(&context)?;
@@ -632,7 +622,7 @@ async fn compact_context_with_llm_internal(
         "message_count": new_context.messages.len(),
         "summary": new_context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PostCompact, &hook_data, verbose);
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PostCompact, &hook_data);
 
     Ok(())
 }

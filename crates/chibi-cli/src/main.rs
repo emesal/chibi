@@ -334,12 +334,8 @@ async fn execute_from_input(
     let verbose = input.flags.verbose;
     let json_output = input.flags.json_output;
 
-    // Execute on_start hook
-    let hook_data = serde_json::json!({
-        "implied_context": &session.implied_context,
-        "verbose": verbose,
-    });
-    let _ = chibi.execute_hook(tools::HookPoint::OnStart, &hook_data, verbose);
+    // Initialize session (executes OnStart hooks)
+    let _ = chibi.init();
 
     // Auto-destroy expired contexts
     let destroyed = chibi.app.auto_destroy_expired_contexts(verbose)?;
@@ -372,16 +368,9 @@ async fn execute_from_input(
                 &format!("[Using ephemeral context: {}]", actual_name),
                 verbose,
             );
-            let hook_data = serde_json::json!({
-                "from_context": &session.implied_context,
-                "to_context": &actual_name,
-                "is_ephemeral": true,
-            });
-            let _ = chibi.execute_hook(tools::HookPoint::OnContextSwitch, &hook_data, verbose);
             actual_name
         }
         ContextSelection::Switch { name, persistent } => {
-            let prev_context = session.implied_context.clone();
             if name == "-" {
                 session.swap_with_previous()?;
             } else {
@@ -398,12 +387,6 @@ async fn execute_from_input(
                 &format!("[Switched to context: {}]", &session.implied_context),
                 verbose,
             );
-            let hook_data = serde_json::json!({
-                "from_context": prev_context,
-                "to_context": &session.implied_context,
-                "is_ephemeral": !persistent,
-            });
-            let _ = chibi.execute_hook(tools::HookPoint::OnContextSwitch, &hook_data, verbose);
             did_action = true;
             session.implied_context.clone()
         }
@@ -537,18 +520,8 @@ async fn execute_from_input(
                 None => working_context.clone(),
             };
             if name.is_none() {
-                let context = chibi.app.get_or_create_context(&ctx_name)?;
-                let hook_data = serde_json::json!({
-                    "context_name": context.name,
-                    "message_count": context.messages.len(),
-                    "summary": context.summary,
-                });
-                let _ = chibi.execute_hook(tools::HookPoint::PreClear, &hook_data, verbose);
-                chibi.app.clear_context(&ctx_name)?;
-                let hook_data = serde_json::json!({
-                    "context_name": &working_context,
-                });
-                let _ = chibi.execute_hook(tools::HookPoint::PostClear, &hook_data, verbose);
+                // Use wrapper with hooks for current context
+                chibi.clear_context(&ctx_name)?;
             } else {
                 // For named contexts, just clear without hooks (hooks are for interactive use)
                 chibi.app.clear_context(&ctx_name)?;
@@ -868,11 +841,8 @@ async fn execute_from_input(
         }
     }
 
-    // Execute on_end hook
-    let hook_data = serde_json::json!({
-        "working_context": &working_context,
-    });
-    let _ = chibi.execute_hook(tools::HookPoint::OnEnd, &hook_data, verbose);
+    // Shutdown session (executes OnEnd hooks)
+    let _ = chibi.shutdown();
 
     // Automatic cache cleanup
     let resolved = chibi.resolve_config(&working_context, None)?;
