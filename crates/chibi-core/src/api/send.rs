@@ -525,6 +525,10 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     all_tools.push(tools::file_grep_tool_to_api_format());
     all_tools.push(tools::cache_list_tool_to_api_format());
 
+    // Add control flow tools (call_agent/call_user)
+    all_tools.push(tools::call_agent_tool_to_api_format());
+    all_tools.push(tools::call_user_tool_to_api_format());
+
     // Apply config-based tool filtering (from local.toml [tools] section)
     all_tools = filter_tools_by_config(all_tools, &resolved_config.tools);
 
@@ -550,9 +554,18 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
     request_body = apply_request_modifications(request_body, &hook_results, verbose, sink)?;
 
-    // Track if we should recurse (continue_processing was called)
-    let mut should_recurse = false;
-    let mut recurse_note = String::new();
+    // Determine fallback from config or override
+    let fallback = options.fallback_override.clone().unwrap_or_else(|| {
+        match resolved_config.fallback_tool.as_str() {
+            "call_user" => tools::HandoffTarget::User {
+                message: String::new(),
+            },
+            _ => tools::HandoffTarget::Agent {
+                prompt: String::new(),
+            },
+        }
+    });
+    let mut handoff = tools::Handoff::new(fallback);
 
     // Tool call loop - keep going until we get a final text response
     loop {
@@ -720,11 +733,22 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 let mut args: serde_json::Value =
                     serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-                // Check for recurse tool first (special handling - triggers recursion after this turn)
-                if let Some(note) = tools::check_recurse_signal(&tc.name, &args) {
-                    should_recurse = true;
-                    recurse_note = note;
-                }
+                // Check for control flow tools first
+                let is_handoff_tool = if tc.name == tools::CALL_AGENT_TOOL_NAME {
+                    let prompt = args["prompt"].as_str().unwrap_or("").to_string();
+                    handoff.set_agent(prompt);
+                    true
+                } else if tc.name == tools::CALL_USER_TOOL_NAME {
+                    let message = args["message"].as_str().unwrap_or("").to_string();
+                    handoff.set_user(message);
+                    true
+                } else if let Some(note) = tools::check_recurse_signal(&tc.name, &args) {
+                    // Backwards compat: treat external recurse plugin as call_agent
+                    handoff.set_agent(note);
+                    true
+                } else {
+                    false
+                };
 
                 // Execute pre_tool hooks (can modify arguments OR block execution)
                 let pre_hook_data = serde_json::json!({
@@ -780,6 +804,26 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 // If blocked, skip execution and use block message as result
                 let tool_result = if blocked {
                     block_message
+                } else if is_handoff_tool {
+                    // Handoff tools don't execute - they just set the handoff target
+                    if tc.name == tools::CALL_AGENT_TOOL_NAME {
+                        let prompt = args["prompt"].as_str().unwrap_or("");
+                        if prompt.is_empty() {
+                            "Continuing processing".to_string()
+                        } else {
+                            format!("Continuing with: {}", prompt)
+                        }
+                    } else if tc.name == tools::CALL_USER_TOOL_NAME {
+                        let message = args["message"].as_str().unwrap_or("");
+                        if message.is_empty() {
+                            "Returning to user".to_string()
+                        } else {
+                            message.to_string()
+                        }
+                    } else {
+                        // recurse tool backwards compat
+                        "Continuing...".to_string()
+                    }
                 } else if tc.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
                     "Error: Reflection tool is not enabled".to_string()
                 } else if let Some(builtin_result) =
@@ -1069,46 +1113,61 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
         sink.handle(ResponseEvent::Newline)?;
 
-        // Check if we should recurse
-        if should_recurse {
-            let new_depth = recursion_depth + 1;
-            if new_depth >= app.config.max_recursion_depth {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Max recursion depth ({}) reached, stopping]",
-                        app.config.max_recursion_depth
-                    ),
-                    verbose_only: false,
-                })?;
+        // Determine next action based on handoff
+        match handoff.take() {
+            tools::HandoffTarget::User { message } => {
+                if !message.is_empty() {
+                    // Output the message as final text
+                    sink.handle(ResponseEvent::TextChunk(&message))?;
+                    sink.handle(ResponseEvent::Newline)?;
+                }
                 return Ok(());
             }
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Continuing processing ({}/{}): {}]",
-                        new_depth, app.config.max_recursion_depth, recurse_note
-                    ),
-                    verbose_only: true,
-                })?;
+            tools::HandoffTarget::Agent { prompt } => {
+                let new_depth = recursion_depth + 1;
+                if new_depth >= app.config.max_recursion_depth {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!(
+                            "[Max recursion depth ({}) reached, stopping]",
+                            app.config.max_recursion_depth
+                        ),
+                        verbose_only: false,
+                    })?;
+                    return Ok(());
+                }
+                if verbose {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!(
+                            "[Continuing processing ({}/{}): {}]",
+                            new_depth,
+                            app.config.max_recursion_depth,
+                            if prompt.is_empty() {
+                                "(no prompt)"
+                            } else {
+                                &prompt
+                            }
+                        ),
+                        verbose_only: true,
+                    })?;
+                }
+                let continue_prompt = if prompt.is_empty() {
+                    "[Continuing from previous round]".to_string()
+                } else {
+                    format!("[Continuing from previous round]\n\n{}", prompt)
+                };
+                return Box::pin(send_prompt_with_depth(
+                    app,
+                    context_name,
+                    continue_prompt,
+                    tools,
+                    new_depth,
+                    resolved_config,
+                    options,
+                    sink,
+                ))
+                .await;
             }
-            let continue_prompt = format!(
-                "[Continuing from previous round]\n\nNote to self: {}",
-                recurse_note
-            );
-            return Box::pin(send_prompt_with_depth(
-                app,
-                context_name,
-                continue_prompt,
-                tools,
-                new_depth,
-                resolved_config,
-                options,
-                sink,
-            ))
-            .await;
         }
-
-        return Ok(());
     }
 }
 

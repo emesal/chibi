@@ -87,6 +87,7 @@ impl AppState {
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             api: api_params,
             tools: ToolsConfig::default(),
+            fallback_tool: self.config.fallback_tool.clone(),
         };
 
         // Apply local config overrides
@@ -134,6 +135,9 @@ impl AppState {
         }
         if let Some(ref file_tools_allowed_paths) = local.file_tools_allowed_paths {
             resolved.file_tools_allowed_paths = file_tools_allowed_paths.clone();
+        }
+        if let Some(ref fallback_tool) = local.fallback_tool {
+            resolved.fallback_tool = fallback_tool.clone();
         }
 
         // Apply context-level API params (Layer 3)

@@ -365,6 +365,10 @@ fn default_tool_cache_preview_chars() -> usize {
     500
 }
 
+fn default_fallback_tool() -> String {
+    "call_agent".to_string()
+}
+
 // ============================================================================
 // Configuration Structs
 // ============================================================================
@@ -418,6 +422,9 @@ pub struct Config {
     /// Storage configuration for partitioned context storage
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Fallback tool when LLM doesn't call call_agent/call_user explicitly
+    #[serde(default = "default_fallback_tool")]
+    pub fallback_tool: String,
 }
 
 /// Per-context config from `~/.chibi/contexts/<name>/local.toml`
@@ -453,6 +460,8 @@ pub struct LocalConfig {
     /// Per-context storage configuration overrides
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Override fallback tool for this context
+    pub fallback_tool: Option<String>,
 }
 
 /// Model metadata from ~/.chibi/models.toml
@@ -500,6 +509,8 @@ pub struct ResolvedConfig {
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
     pub tools: ToolsConfig,
+    /// Fallback tool (call_agent or call_user)
+    pub fallback_tool: String,
 }
 
 impl ResolvedConfig {
@@ -675,6 +686,7 @@ mod tests {
             file_tools_allowed_paths: vec!["/tmp".to_string()],
             api: ApiParams::defaults(),
             tools: ToolsConfig::default(),
+            fallback_tool: "call_agent".to_string(),
         };
 
         assert_eq!(config.get_field("model"), Some("test-model".to_string()));

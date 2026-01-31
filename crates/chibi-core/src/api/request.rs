@@ -15,6 +15,8 @@ pub struct PromptOptions<'a> {
     pub json_output: bool,
     pub debug: &'a [DebugKey],
     pub force_render: bool,
+    /// Optional override for the fallback handoff target
+    pub fallback_override: Option<crate::tools::HandoffTarget>,
 }
 
 impl<'a> PromptOptions<'a> {
@@ -31,7 +33,14 @@ impl<'a> PromptOptions<'a> {
             json_output,
             debug,
             force_render,
+            fallback_override: None,
         }
+    }
+
+    /// Set the fallback handoff target override
+    pub fn with_fallback(mut self, fallback: crate::tools::HandoffTarget) -> Self {
+        self.fallback_override = Some(fallback);
+        self
     }
 }
 

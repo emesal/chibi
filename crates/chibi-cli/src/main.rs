@@ -617,8 +617,61 @@ async fn execute_from_input(
                 })?
             };
 
-            let result = chibi.execute_tool(&working_context, name, args_json)?;
-            output.emit_result(&result);
+            let result = chibi.execute_tool(&working_context, name, args_json.clone())?;
+
+            if input.flags.force_recurse {
+                // Tool-first with continuation to LLM
+                let tool_context = format!(
+                    "[User initiated tool call: {}]\n[Arguments: {}]\n[Result: {}]",
+                    name, args_json, result
+                );
+
+                let mut resolved = resolve_cli_config(chibi, &working_context, ephemeral_username)?;
+                if input.flags.raw {
+                    resolved.render_markdown = false;
+                }
+                let use_reflection = chibi.app.config.reflection_enabled;
+
+                let context_dir = chibi.app.context_dir(&working_context);
+                let _lock = chibi_core::lock::ContextLock::acquire(
+                    &context_dir,
+                    chibi.app.config.lock_heartbeat_seconds,
+                )?;
+
+                let fallback = chibi_core::tools::HandoffTarget::Agent {
+                    prompt: String::new(),
+                };
+                let options = PromptOptions::new(
+                    verbose,
+                    use_reflection,
+                    json_output,
+                    &input.flags.debug,
+                    force_markdown,
+                )
+                .with_fallback(fallback);
+
+                let markdown = if resolved.render_markdown && !input.flags.raw {
+                    let md_cfg =
+                        md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
+                    Some(MarkdownStream::new(md_cfg))
+                } else {
+                    None
+                };
+
+                let mut sink = CliResponseSink::new(output, markdown, verbose);
+                chibi
+                    .send_prompt_streaming(
+                        &working_context,
+                        &tool_context,
+                        &resolved.core,
+                        &options,
+                        &mut sink,
+                    )
+                    .await?;
+            } else {
+                // Tool-first with immediate return (default for -P)
+                output.emit_result(&result);
+            }
             did_action = true;
         }
         Command::ClearCache { name } => {

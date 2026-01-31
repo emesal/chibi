@@ -29,6 +29,7 @@ fn create_test_app() -> (AppState, TempDir) {
         file_tools_allowed_paths: vec![],
         api: ApiParams::default(),
         storage: StorageConfig::default(),
+        fallback_tool: "call_agent".to_string(),
     };
     let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
     (app, temp_dir)
@@ -548,6 +549,7 @@ fn test_resolve_config_model_level_api_params() {
         file_tools_allowed_paths: vec![],
         api: ApiParams::default(),
         storage: StorageConfig::default(),
+        fallback_tool: "call_agent".to_string(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -605,6 +607,7 @@ fn test_resolve_config_hierarchy_context_over_model() {
         file_tools_allowed_paths: vec![],
         api: ApiParams::default(),
         storage: StorageConfig::default(),
+        fallback_tool: "call_agent".to_string(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -670,6 +673,7 @@ fn test_resolve_config_all_local_overrides() {
         api: None,
         tools: None,
         storage: StorageConfig::default(),
+        fallback_tool: None,
     };
     app.save_local_config("default", &local).unwrap();
 

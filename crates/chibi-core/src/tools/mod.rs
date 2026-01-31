@@ -22,13 +22,17 @@ pub use hooks::execute_hook;
 pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
 
 // Re-export built-in tool constants (used by api module)
+pub use builtin::{CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME};
 pub use builtin::{REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
+
+// Re-export handoff types for control flow
+pub use builtin::{Handoff, HandoffTarget};
 // Other tool name constants are used internally via execute_builtin_tool and check_recurse_signal
 
 // Re-export built-in tool API format functions
 pub use builtin::{
-    goals_tool_to_api_format, reflection_tool_to_api_format, send_message_tool_to_api_format,
-    todos_tool_to_api_format,
+    call_agent_tool_to_api_format, call_user_tool_to_api_format, goals_tool_to_api_format,
+    reflection_tool_to_api_format, send_message_tool_to_api_format, todos_tool_to_api_format,
 };
 
 // Re-export built-in tool execution functions

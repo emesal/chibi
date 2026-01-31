@@ -150,9 +150,12 @@ pub struct Flags {
     /// Output in JSON format (--json-output)
     #[serde(default)]
     pub json_output: bool,
-    /// Don't invoke the LLM (-x)
+    /// Force return to user immediately (-x)
     #[serde(default)]
-    pub no_chibi: bool,
+    pub force_return: bool,
+    /// Force fallback to call_agent (-X)
+    #[serde(default)]
+    pub force_recurse: bool,
     /// Disable markdown rendering (--raw)
     #[serde(default)]
     pub raw: bool,
@@ -176,7 +179,8 @@ mod tests {
         let flags = Flags::default();
         assert!(!flags.verbose);
         assert!(!flags.json_output);
-        assert!(!flags.no_chibi);
+        assert!(!flags.force_return);
+        assert!(!flags.force_recurse);
         assert!(flags.debug.is_empty());
     }
 
@@ -185,7 +189,8 @@ mod tests {
         let flags = Flags {
             verbose: true,
             json_output: true,
-            no_chibi: false,
+            force_return: false,
+            force_recurse: false,
             raw: false,
             debug: vec![DebugKey::RequestLog],
         };
@@ -197,11 +202,11 @@ mod tests {
 
     #[test]
     fn test_flags_deserialization() {
-        let json = r#"{"verbose":true,"json_output":false,"no_chibi":true}"#;
+        let json = r#"{"verbose":true,"json_output":false,"force_return":true}"#;
         let flags: Flags = serde_json::from_str(json).unwrap();
         assert!(flags.verbose);
         assert!(!flags.json_output);
-        assert!(flags.no_chibi);
+        assert!(flags.force_return);
     }
 
     // === DebugKey tests ===
