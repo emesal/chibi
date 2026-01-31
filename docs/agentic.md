@@ -166,6 +166,37 @@ These commands work with `--json-config`:
 {"command": {"check_inbox": {"context": "work"}}}
 ```
 
+### Sending Messages from External Programs
+
+External programs can deliver messages to any context's inbox using the `-P` flag to call the `send_message` tool directly:
+
+```bash
+# Send a message to a context
+chibi -P send_message '{"to": "work-assistant", "content": "New task: review PR #123"}'
+
+# Optionally specify a sender
+chibi -P send_message '{"to": "work-assistant", "content": "Build failed", "from": "ci-bot"}'
+```
+
+This also works with `--json-config` for programmatic use:
+
+```bash
+echo '{"command": {"call_tool": {"name": "send_message", "args": ["{\"to\": \"work-assistant\", \"content\": \"Hello!\"}"]}}}' | chibi --json-config
+```
+
+The `from` field defaults to the current context name if not specified.
+
+**Example: CI/CD integration**
+
+```bash
+#!/bin/bash
+# Notify chibi context when build completes
+chibi -P send_message "{\"to\": \"dev-assistant\", \"content\": \"Build $BUILD_ID completed with status: $STATUS\", \"from\": \"jenkins\"}"
+
+# Optionally trigger immediate processing
+chibi -B dev-assistant
+```
+
 ### Hooks for Message Routing
 
 The `pre_send_message` hook can intercept delivery for custom routing:
