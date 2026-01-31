@@ -26,16 +26,24 @@ Vendored dependency: `vendor/streamdown-rs/` (forked markdown renderer).
 
 ## Architecture
 
-CLI for LLM conversations via OpenRouter. Persistent context with plugin/hook extensibility.
+Cargo workspace with two crates:
 
-**Key modules:**
-- `cli.rs`, `input.rs` — Argument parsing, command handling
+**`crates/chibi-core/`** — Library crate (reusable logic)
+- `chibi.rs` — Main `Chibi` struct, tool execution
 - `context.rs`, `state/` — Context management, file I/O
 - `api/` — Request building, streaming, tool execution loop
 - `tools/` — Plugins, hooks, built-in tools
 - `partition.rs` — Partitioned transcript storage with bloom filters
+- `config.rs` — Core configuration types
 
-**Data flow:** CLI args → `AppState::load()` → `send_prompt()` (hooks → inbox → system prompt → stream → tool loop → transcript)
+**`crates/chibi-cli/`** — Binary crate (CLI-specific)
+- `main.rs` — Entry point, command dispatch
+- `cli.rs` — Argument parsing (clap)
+- `input.rs` — Input types (`ChibiInput`, `Command`, `Flags`)
+- `session.rs` — CLI session state (implied context)
+- `config.rs` — CLI-specific config (markdown, images)
+
+**Data flow:** CLI args → `parse()` → `ChibiInput` → `execute_from_input()` → core APIs
 
 ## Storage Layout
 
