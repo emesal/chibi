@@ -132,6 +132,62 @@ impl Chibi {
         Ok(Self { app, tools })
     }
 
+    /// Initialize the session.
+    ///
+    /// Executes `OnStart` hooks. Call this once at the start of a session,
+    /// before any prompts are sent.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use chibi_core::Chibi;
+    ///
+    /// # fn example() -> std::io::Result<()> {
+    /// let chibi = Chibi::load()?;
+    /// chibi.init()?;
+    /// // ... use chibi ...
+    /// chibi.shutdown()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn init(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
+        let hook_data = serde_json::json!({});
+        tools::execute_hook(&self.tools, tools::HookPoint::OnStart, &hook_data)
+    }
+
+    /// Shutdown the session.
+    ///
+    /// Executes `OnEnd` hooks. Call this once at the end of a session,
+    /// after all prompts are complete.
+    pub fn shutdown(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
+        let hook_data = serde_json::json!({});
+        tools::execute_hook(&self.tools, tools::HookPoint::OnEnd, &hook_data)
+    }
+
+    /// Clear a context, executing PreClear/PostClear hooks.
+    ///
+    /// This wraps `AppState::clear_context` with hook execution.
+    pub fn clear_context(&self, context_name: &str) -> io::Result<()> {
+        // Get context info for hook data before clearing
+        let context = self.app.get_or_create_context(context_name)?;
+
+        let pre_hook_data = serde_json::json!({
+            "context_name": context_name,
+            "message_count": context.messages.len(),
+            "summary": context.summary,
+        });
+        let _ = tools::execute_hook(&self.tools, tools::HookPoint::PreClear, &pre_hook_data);
+
+        self.app.clear_context(context_name)?;
+
+        let post_hook_data = serde_json::json!({
+            "context_name": context_name,
+        });
+        let _ = tools::execute_hook(&self.tools, tools::HookPoint::PostClear, &post_hook_data);
+
+        Ok(())
+    }
+
     /// Send a prompt with streaming output via a ResponseSink.
     ///
     /// This is the primary method for sending prompts to the LLM. The sink
@@ -275,49 +331,6 @@ impl Chibi {
     /// Get the number of loaded tools.
     pub fn tool_count(&self) -> usize {
         self.tools.len()
-    }
-
-    /// Execute a hook on all tools that registered for it.
-    ///
-    /// This is the facade method for hook execution, allowing embedders to
-    /// trigger hooks without accessing `self.tools` directly.
-    ///
-    /// # Arguments
-    ///
-    /// * `hook` - The hook point to execute
-    /// * `data` - JSON data to pass to the hook
-    /// * `verbose` - Whether to print diagnostic info to stderr
-    ///
-    /// # Returns
-    ///
-    /// A vector of (tool_name, result) for tools that returned non-empty output.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// // Requires ~/.chibi directory with plugins that register hooks.
-    /// use serde_json::json;
-    /// use chibi_core::{Chibi, HookPoint};
-    ///
-    /// # fn example() -> std::io::Result<()> {
-    /// let chibi = Chibi::load()?;
-    /// let hook_data = json!({
-    ///     "context": "default",
-    /// });
-    /// let results = chibi.execute_hook(HookPoint::OnStart, &hook_data, false)?;
-    /// for (tool_name, result) in results {
-    ///     println!("{}: {:?}", tool_name, result);
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn execute_hook(
-        &self,
-        hook: tools::HookPoint,
-        data: &serde_json::Value,
-        verbose: bool,
-    ) -> io::Result<Vec<(String, serde_json::Value)>> {
-        tools::execute_hook(&self.tools, hook, data, verbose)
     }
 }
 

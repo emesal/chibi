@@ -59,7 +59,6 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `on_context_switch` | When switching contexts | No |
 | `pre_clear` | Before clearing context | No |
 | `post_clear` | After clearing context | No |
 | `pre_compact` | Before full compaction | No |
@@ -95,14 +94,10 @@ When a hook fires, registered plugins are called with environment variables:
 ### on_start / on_end
 
 ```json
-{
-  "implied_context": "default",
-  "working_context": "default",
-  "verbose": true
-}
+{}
 ```
 
-Note: `implied_context` is what's stored in session.json; `working_context` is what we're actually operating on (may differ if using `-C`).
+These hooks receive an empty payload. Session context is no longer passed to lifecycle hooks.
 
 ### pre_message
 
@@ -359,16 +354,6 @@ Notification after output has been cached.
   "content": "message content",
   "context_name": "default",
   "delivery_result": "Message delivered to 'research' via local inbox"
-}
-```
-
-### on_context_switch
-
-```json
-{
-  "from_context": "default",
-  "to_context": "coding",
-  "is_ephemeral": false
 }
 ```
 

@@ -18,7 +18,6 @@ pub enum HookPoint {
     PostTool,
     PreToolOutput,  // Before tool output is processed (can modify/block output)
     PostToolOutput, // After tool output is processed (observe only)
-    OnContextSwitch,
     PreClear,
     PostClear,
     PreCompact,
@@ -43,17 +42,12 @@ pub fn execute_hook(
     tools: &[Tool],
     hook: HookPoint,
     data: &serde_json::Value,
-    verbose: bool,
 ) -> io::Result<Vec<(String, serde_json::Value)>> {
     let mut results = Vec::new();
 
     for tool in tools {
         if !tool.hooks.contains(&hook) {
             continue;
-        }
-
-        if verbose {
-            eprintln!("[Hook {}: {}]", hook.as_ref(), tool.name);
         }
 
         let output = Command::new(&tool.path)
@@ -73,14 +67,6 @@ pub fn execute_hook(
             })?;
 
         if !output.status.success() {
-            if verbose {
-                eprintln!(
-                    "[WARN] Hook {} on {} failed (exit code {:?})",
-                    hook.as_ref(),
-                    tool.name,
-                    output.status.code()
-                );
-            }
             continue;
         }
 
@@ -105,7 +91,7 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
-    // All 23 hook points for testing
+    // All 22 hook points for testing
     const ALL_HOOKS: &[(&str, HookPoint)] = &[
         ("pre_message", HookPoint::PreMessage),
         ("post_message", HookPoint::PostMessage),
@@ -113,7 +99,6 @@ mod tests {
         ("post_tool", HookPoint::PostTool),
         ("pre_tool_output", HookPoint::PreToolOutput),
         ("post_tool_output", HookPoint::PostToolOutput),
-        ("on_context_switch", HookPoint::OnContextSwitch),
         ("pre_clear", HookPoint::PreClear),
         ("post_clear", HookPoint::PostClear),
         ("pre_compact", HookPoint::PreCompact),
