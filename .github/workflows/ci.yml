@@ -5,9 +5,9 @@ permissions:
 
 on:
   push:
-    branches: [main, "terra/**"]
+    branches: [main, dev, "terra/**"]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 concurrency:
