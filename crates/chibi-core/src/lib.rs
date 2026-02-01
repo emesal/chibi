@@ -32,6 +32,7 @@ pub mod cache;
 mod chibi;
 pub mod config;
 pub mod context;
+pub mod gateway;
 mod inbox;
 pub mod input;
 pub mod json_ext;
