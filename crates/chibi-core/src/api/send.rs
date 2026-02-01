@@ -11,16 +11,18 @@ use super::sink::{ResponseEvent, ResponseSink};
 use crate::cache;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
-use crate::gateway::{build_gateway, json_tool_to_definition, to_chat_options, to_ratatoskr_message};
+use crate::gateway::{
+    build_gateway, json_tool_to_definition, to_chat_options, to_ratatoskr_message,
+};
 use crate::json_ext::JsonExt;
 use crate::llm;
-use ratatoskr::{ChatEvent, ModelGateway};
 use crate::state::{
     AppState, StatePaths, create_assistant_message_entry, create_tool_call_entry,
     create_tool_result_entry, create_user_message_entry,
 };
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
+use ratatoskr::{ChatEvent, ModelGateway};
 use serde_json::json;
 use std::io::{self, ErrorKind};
 use uuid::Uuid;
