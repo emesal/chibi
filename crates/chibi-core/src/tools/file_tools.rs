@@ -3,8 +3,10 @@
 //! These tools provide surgical access to cached tool outputs, allowing the LLM
 //! to examine large outputs without overwhelming the context window.
 
+use super::builtin::{BuiltinToolDef, ToolPropertyDef};
 use crate::cache;
 use crate::config::ResolvedConfig;
+use crate::json_ext::JsonExt;
 use crate::state::{AppState, StatePaths};
 use std::io::{self, ErrorKind};
 use std::path::PathBuf;
@@ -17,146 +19,148 @@ pub const FILE_LINES_TOOL_NAME: &str = "file_lines";
 pub const FILE_GREP_TOOL_NAME: &str = "file_grep";
 pub const CACHE_LIST_TOOL_NAME: &str = "cache_list";
 
-// === Tool API Format Definitions ===
+// === Tool Definition Registry ===
 
-pub fn file_head_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": FILE_HEAD_TOOL_NAME,
-            "description": "Read the first N lines from a cached tool output or file. Use this to examine the beginning of large outputs.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "cache_id": {
-                        "type": "string",
-                        "description": "ID of a cached tool output (from [Output cached: ID] messages)"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Path to a file (if not using cache_id)"
-                    },
-                    "lines": {
-                        "type": "integer",
-                        "description": "Number of lines to read (default: 50)",
-                        "default": 50
-                    }
-                }
-            }
-        }
-    })
+/// All file tool definitions
+pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
+    BuiltinToolDef {
+        name: FILE_HEAD_TOOL_NAME,
+        description: "Read the first N lines from a cached tool output or file. Use this to examine the beginning of large outputs.",
+        properties: &[
+            ToolPropertyDef {
+                name: "cache_id",
+                prop_type: "string",
+                description: "ID of a cached tool output (from [Output cached: ID] messages)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to a file (if not using cache_id)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "lines",
+                prop_type: "integer",
+                description: "Number of lines to read (default: 50)",
+                default: Some(50),
+            },
+        ],
+        required: &[],
+    },
+    BuiltinToolDef {
+        name: FILE_TAIL_TOOL_NAME,
+        description: "Read the last N lines from a cached tool output or file. Use this to examine the end of large outputs.",
+        properties: &[
+            ToolPropertyDef {
+                name: "cache_id",
+                prop_type: "string",
+                description: "ID of a cached tool output (from [Output cached: ID] messages)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to a file (if not using cache_id)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "lines",
+                prop_type: "integer",
+                description: "Number of lines to read (default: 50)",
+                default: Some(50),
+            },
+        ],
+        required: &[],
+    },
+    BuiltinToolDef {
+        name: FILE_LINES_TOOL_NAME,
+        description: "Read a specific range of lines from a cached tool output or file. Lines are 1-indexed.",
+        properties: &[
+            ToolPropertyDef {
+                name: "cache_id",
+                prop_type: "string",
+                description: "ID of a cached tool output (from [Output cached: ID] messages)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to a file (if not using cache_id)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "start",
+                prop_type: "integer",
+                description: "First line number (1-indexed)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "end",
+                prop_type: "integer",
+                description: "Last line number (1-indexed, inclusive)",
+                default: None,
+            },
+        ],
+        required: &["start", "end"],
+    },
+    BuiltinToolDef {
+        name: FILE_GREP_TOOL_NAME,
+        description: "Search for a pattern in a cached tool output or file. Returns matching lines with optional context.",
+        properties: &[
+            ToolPropertyDef {
+                name: "cache_id",
+                prop_type: "string",
+                description: "ID of a cached tool output (from [Output cached: ID] messages)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to a file (if not using cache_id)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "pattern",
+                prop_type: "string",
+                description: "Regular expression pattern to search for",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "context_before",
+                prop_type: "integer",
+                description: "Number of lines to show before each match (default: 2)",
+                default: Some(2),
+            },
+            ToolPropertyDef {
+                name: "context_after",
+                prop_type: "integer",
+                description: "Number of lines to show after each match (default: 2)",
+                default: Some(2),
+            },
+        ],
+        required: &["pattern"],
+    },
+    BuiltinToolDef {
+        name: CACHE_LIST_TOOL_NAME,
+        description: "List all cached tool outputs for this context. Shows cache IDs, tool names, sizes, and timestamps.",
+        properties: &[],
+        required: &[],
+    },
+];
+
+/// Convert all file tools to API format
+pub fn all_file_tools_to_api_format() -> Vec<serde_json::Value> {
+    FILE_TOOL_DEFS
+        .iter()
+        .map(|def| def.to_api_format())
+        .collect()
 }
 
-pub fn file_tail_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": FILE_TAIL_TOOL_NAME,
-            "description": "Read the last N lines from a cached tool output or file. Use this to examine the end of large outputs.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "cache_id": {
-                        "type": "string",
-                        "description": "ID of a cached tool output (from [Output cached: ID] messages)"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Path to a file (if not using cache_id)"
-                    },
-                    "lines": {
-                        "type": "integer",
-                        "description": "Number of lines to read (default: 50)",
-                        "default": 50
-                    }
-                }
-            }
-        }
-    })
-}
-
-pub fn file_lines_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": FILE_LINES_TOOL_NAME,
-            "description": "Read a specific range of lines from a cached tool output or file. Lines are 1-indexed.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "cache_id": {
-                        "type": "string",
-                        "description": "ID of a cached tool output (from [Output cached: ID] messages)"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Path to a file (if not using cache_id)"
-                    },
-                    "start": {
-                        "type": "integer",
-                        "description": "First line number (1-indexed)"
-                    },
-                    "end": {
-                        "type": "integer",
-                        "description": "Last line number (1-indexed, inclusive)"
-                    }
-                },
-                "required": ["start", "end"]
-            }
-        }
-    })
-}
-
-pub fn file_grep_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": FILE_GREP_TOOL_NAME,
-            "description": "Search for a pattern in a cached tool output or file. Returns matching lines with optional context.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "cache_id": {
-                        "type": "string",
-                        "description": "ID of a cached tool output (from [Output cached: ID] messages)"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Path to a file (if not using cache_id)"
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "Regular expression pattern to search for"
-                    },
-                    "context_before": {
-                        "type": "integer",
-                        "description": "Number of lines to show before each match (default: 2)",
-                        "default": 2
-                    },
-                    "context_after": {
-                        "type": "integer",
-                        "description": "Number of lines to show after each match (default: 2)",
-                        "default": 2
-                    }
-                },
-                "required": ["pattern"]
-            }
-        }
-    })
-}
-
-pub fn cache_list_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": CACHE_LIST_TOOL_NAME,
-            "description": "List all cached tool outputs for this context. Shows cache IDs, tool names, sizes, and timestamps.",
-            "parameters": {
-                "type": "object",
-                "properties": {}
-            }
-        }
-    })
+/// Look up a specific file tool definition by name.
+/// Returns None if not found. Use this for testing or conditional tool access.
+pub fn get_file_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
+    FILE_TOOL_DEFS.iter().find(|d| d.name == name)
 }
 
 // === Path Resolution ===
@@ -168,8 +172,8 @@ fn resolve_file_path(
     args: &serde_json::Value,
     config: &ResolvedConfig,
 ) -> io::Result<PathBuf> {
-    let cache_id = args.get("cache_id").and_then(|v| v.as_str());
-    let path = args.get("path").and_then(|v| v.as_str());
+    let cache_id = args.get_str("cache_id");
+    let path = args.get_str("path");
 
     match (cache_id, path) {
         (Some(id), None) => {
@@ -256,6 +260,56 @@ fn resolve_and_validate_path(path: &str, config: &ResolvedConfig) -> io::Result<
 
 // === Tool Execution ===
 
+// --- Helpers for parameter extraction ---
+
+/// Extract a required string parameter, returning a helpful error if missing.
+/// Use this pattern for required params in future file tools.
+fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String> {
+    args.get_str(name).map(String::from).ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Missing '{}' parameter", name),
+        )
+    })
+}
+
+/// Extract a required u64 parameter, returning a helpful error if missing.
+/// Use this pattern for required numeric params in future file tools.
+fn require_u64_param(args: &serde_json::Value, name: &str) -> io::Result<u64> {
+    args.get_u64(name).ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Missing '{}' parameter", name),
+        )
+    })
+}
+
+// --- Head/Tail shared implementation ---
+
+/// Direction for head/tail reading
+enum ReadDirection {
+    Head,
+    Tail,
+}
+
+/// Shared implementation for file_head and file_tail.
+/// When adding similar "read N lines from start/end" tools, follow this pattern.
+fn execute_file_head_or_tail(
+    app: &AppState,
+    context_name: &str,
+    args: &serde_json::Value,
+    config: &ResolvedConfig,
+    direction: ReadDirection,
+) -> io::Result<String> {
+    let path = resolve_file_path(app, context_name, args, config)?;
+    let lines = args.get_u64_or("lines", 50) as usize;
+
+    match direction {
+        ReadDirection::Head => cache::read_cache_head(&path, lines),
+        ReadDirection::Tail => cache::read_cache_tail(&path, lines),
+    }
+}
+
 /// Execute file_head tool
 pub fn execute_file_head(
     app: &AppState,
@@ -263,10 +317,7 @@ pub fn execute_file_head(
     args: &serde_json::Value,
     config: &ResolvedConfig,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config)?;
-    let lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
-
-    cache::read_cache_head(&path, lines)
+    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Head)
 }
 
 /// Execute file_tail tool
@@ -276,10 +327,7 @@ pub fn execute_file_tail(
     args: &serde_json::Value,
     config: &ResolvedConfig,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config)?;
-    let lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
-
-    cache::read_cache_tail(&path, lines)
+    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Tail)
 }
 
 /// Execute file_lines tool
@@ -290,26 +338,16 @@ pub fn execute_file_lines(
     config: &ResolvedConfig,
 ) -> io::Result<String> {
     let path = resolve_file_path(app, context_name, args, config)?;
+    let start = require_u64_param(args, "start")? as usize;
+    let end = require_u64_param(args, "end")? as usize;
 
-    let start = args
-        .get("start")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'start' parameter"))?
-        as usize;
-
-    let end = args
-        .get("end")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'end' parameter"))?
-        as usize;
-
+    // Validation specific to line ranges
     if start == 0 {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
             "Line numbers are 1-indexed, start must be >= 1",
         ));
     }
-
     if end < start {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
@@ -328,23 +366,11 @@ pub fn execute_file_grep(
     config: &ResolvedConfig,
 ) -> io::Result<String> {
     let path = resolve_file_path(app, context_name, args, config)?;
+    let pattern = require_str_param(args, "pattern")?;
+    let context_before = args.get_u64_or("context_before", 2) as usize;
+    let context_after = args.get_u64_or("context_after", 2) as usize;
 
-    let pattern = args
-        .get("pattern")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'pattern' parameter"))?;
-
-    let context_before = args
-        .get("context_before")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(2) as usize;
-
-    let context_after = args
-        .get("context_after")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(2) as usize;
-
-    let result = cache::read_cache_grep(&path, pattern, context_before, context_after)?;
+    let result = cache::read_cache_grep(&path, &pattern, context_before, context_after)?;
 
     if result.is_empty() {
         Ok(format!("No matches found for pattern: {}", pattern))
@@ -418,22 +444,31 @@ pub fn execute_file_tool(
 mod tests {
     use super::*;
 
+    // === Helper for tests: get API format for a specific tool ===
+    fn get_tool_api(name: &str) -> serde_json::Value {
+        get_file_tool_def(name)
+            .expect("tool should exist in registry")
+            .to_api_format()
+    }
+
+    // === Individual Tool Tests (using registry lookup) ===
+
     #[test]
     fn test_file_head_tool_api_format() {
-        let tool = file_head_tool_to_api_format();
+        let tool = get_tool_api(FILE_HEAD_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], FILE_HEAD_TOOL_NAME);
     }
 
     #[test]
     fn test_file_tail_tool_api_format() {
-        let tool = file_tail_tool_to_api_format();
+        let tool = get_tool_api(FILE_TAIL_TOOL_NAME);
         assert_eq!(tool["function"]["name"], FILE_TAIL_TOOL_NAME);
     }
 
     #[test]
     fn test_file_lines_tool_api_format() {
-        let tool = file_lines_tool_to_api_format();
+        let tool = get_tool_api(FILE_LINES_TOOL_NAME);
         assert_eq!(tool["function"]["name"], FILE_LINES_TOOL_NAME);
         let required = tool["function"]["parameters"]["required"]
             .as_array()
@@ -444,7 +479,7 @@ mod tests {
 
     #[test]
     fn test_file_grep_tool_api_format() {
-        let tool = file_grep_tool_to_api_format();
+        let tool = get_tool_api(FILE_GREP_TOOL_NAME);
         assert_eq!(tool["function"]["name"], FILE_GREP_TOOL_NAME);
         let required = tool["function"]["parameters"]["required"]
             .as_array()
@@ -454,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_cache_list_tool_api_format() {
-        let tool = cache_list_tool_to_api_format();
+        let tool = get_tool_api(CACHE_LIST_TOOL_NAME);
         assert_eq!(tool["function"]["name"], CACHE_LIST_TOOL_NAME);
     }
 
@@ -475,5 +510,88 @@ mod tests {
         assert_eq!(FILE_LINES_TOOL_NAME, "file_lines");
         assert_eq!(FILE_GREP_TOOL_NAME, "file_grep");
         assert_eq!(CACHE_LIST_TOOL_NAME, "cache_list");
+    }
+
+    // === Registry Tests ===
+
+    #[test]
+    fn test_file_tool_registry_contains_all_tools() {
+        assert_eq!(FILE_TOOL_DEFS.len(), 5);
+        let names: Vec<_> = FILE_TOOL_DEFS.iter().map(|d| d.name).collect();
+        assert!(names.contains(&FILE_HEAD_TOOL_NAME));
+        assert!(names.contains(&FILE_TAIL_TOOL_NAME));
+        assert!(names.contains(&FILE_LINES_TOOL_NAME));
+        assert!(names.contains(&FILE_GREP_TOOL_NAME));
+        assert!(names.contains(&CACHE_LIST_TOOL_NAME));
+    }
+
+    #[test]
+    fn test_get_file_tool_def() {
+        assert!(get_file_tool_def(FILE_HEAD_TOOL_NAME).is_some());
+        assert!(get_file_tool_def("nonexistent_tool").is_none());
+    }
+
+    #[test]
+    fn test_all_file_tools_to_api_format() {
+        let tools = all_file_tools_to_api_format();
+        assert_eq!(tools.len(), 5);
+        for tool in &tools {
+            assert_eq!(tool["type"], "function");
+            assert!(tool["function"]["name"].is_string());
+        }
+    }
+
+    #[test]
+    fn test_file_tool_defaults() {
+        // file_head/file_tail have lines default: 50
+        let head = get_tool_api(FILE_HEAD_TOOL_NAME);
+        assert_eq!(
+            head["function"]["parameters"]["properties"]["lines"]["default"],
+            50
+        );
+
+        let tail = get_tool_api(FILE_TAIL_TOOL_NAME);
+        assert_eq!(
+            tail["function"]["parameters"]["properties"]["lines"]["default"],
+            50
+        );
+
+        // file_grep has context defaults: 2
+        let grep = get_tool_api(FILE_GREP_TOOL_NAME);
+        assert_eq!(
+            grep["function"]["parameters"]["properties"]["context_before"]["default"],
+            2
+        );
+        assert_eq!(
+            grep["function"]["parameters"]["properties"]["context_after"]["default"],
+            2
+        );
+    }
+
+    #[test]
+    fn test_file_tool_required_fields() {
+        // file_lines requires start and end
+        let lines = get_tool_api(FILE_LINES_TOOL_NAME);
+        let required = lines["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert_eq!(required.len(), 2);
+        assert!(required.contains(&serde_json::json!("start")));
+        assert!(required.contains(&serde_json::json!("end")));
+
+        // file_grep requires pattern
+        let grep = get_tool_api(FILE_GREP_TOOL_NAME);
+        let required = grep["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert_eq!(required.len(), 1);
+        assert!(required.contains(&serde_json::json!("pattern")));
+
+        // cache_list has no required
+        let cache = get_tool_api(CACHE_LIST_TOOL_NAME);
+        let required = cache["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.is_empty());
     }
 }

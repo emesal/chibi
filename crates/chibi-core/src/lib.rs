@@ -34,6 +34,7 @@ pub mod config;
 pub mod context;
 mod inbox;
 pub mod input;
+pub mod json_ext;
 pub mod jsonl;
 pub mod llm;
 pub mod lock;

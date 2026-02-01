@@ -31,6 +31,162 @@ pub const CALL_AGENT_TOOL_NAME: &str = "call_agent";
 /// Name of the built-in call_user tool for control handoff
 pub const CALL_USER_TOOL_NAME: &str = "call_user";
 
+// === Tool Definition Registry ===
+
+/// Property definition for a tool parameter
+pub struct ToolPropertyDef {
+    pub name: &'static str,
+    pub prop_type: &'static str,
+    pub description: &'static str,
+    /// Optional default value (for integer defaults only, as used by file tools)
+    pub default: Option<i64>,
+}
+
+/// Built-in tool definition for declarative registry
+pub struct BuiltinToolDef {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub properties: &'static [ToolPropertyDef],
+    pub required: &'static [&'static str],
+}
+
+impl BuiltinToolDef {
+    /// Convert this tool definition to API format
+    pub fn to_api_format(&self) -> serde_json::Value {
+        let mut props = serde_json::Map::new();
+        for prop in self.properties {
+            let mut prop_obj = serde_json::json!({
+                "type": prop.prop_type,
+                "description": prop.description,
+            });
+            if let Some(default) = prop.default {
+                prop_obj["default"] = serde_json::json!(default);
+            }
+            props.insert(prop.name.to_string(), prop_obj);
+        }
+
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": props,
+                    "required": self.required,
+                }
+            }
+        })
+    }
+}
+
+/// All built-in tool definitions
+pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
+    BuiltinToolDef {
+        name: REFLECTION_TOOL_NAME,
+        description: "Update your persistent reflection/memory that persists across all contexts and sessions. Use this to store anything you want to remember: insights about the user, preferences, important facts, or notes to your future self. Keep it concise and organized. The content will completely replace the previous reflection.",
+        properties: &[ToolPropertyDef {
+            name: "content",
+            prop_type: "string",
+            description: "The new reflection content. This replaces the entire previous reflection.",
+            default: None,
+        }],
+        required: &["content"],
+    },
+    BuiltinToolDef {
+        name: TODOS_TOOL_NAME,
+        description: "Update the todo list for this context. Use this to track tasks you need to complete during this conversation. Todos persist across messages but are specific to this context. Format as markdown checklist.",
+        properties: &[ToolPropertyDef {
+            name: "content",
+            prop_type: "string",
+            description: "The todo list content (markdown format, e.g., '- [ ] Task 1\\n- [x] Completed task')",
+            default: None,
+        }],
+        required: &["content"],
+    },
+    BuiltinToolDef {
+        name: GOALS_TOOL_NAME,
+        description: "Update the goals for this context. Goals are high-level objectives that persist between conversation rounds and guide your work. Use goals to track what you're trying to achieve overall.",
+        properties: &[ToolPropertyDef {
+            name: "content",
+            prop_type: "string",
+            description: "The goals content (markdown format)",
+            default: None,
+        }],
+        required: &["content"],
+    },
+    BuiltinToolDef {
+        name: SEND_MESSAGE_TOOL_NAME,
+        description: "Send a message to another context's inbox. The message will be delivered to the target context and shown to them before their next prompt.",
+        properties: &[
+            ToolPropertyDef {
+                name: "to",
+                prop_type: "string",
+                description: "Target context name",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "content",
+                prop_type: "string",
+                description: "Message content",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "from",
+                prop_type: "string",
+                description: "Optional sender name (defaults to current context)",
+                default: None,
+            },
+        ],
+        required: &["to", "content"],
+    },
+    BuiltinToolDef {
+        name: CALL_AGENT_TOOL_NAME,
+        description: "Continue processing.",
+        properties: &[ToolPropertyDef {
+            name: "prompt",
+            prop_type: "string",
+            description: "Focus for the next turn",
+            default: None,
+        }],
+        required: &["prompt"],
+    },
+    BuiltinToolDef {
+        name: CALL_USER_TOOL_NAME,
+        description: "Return control to user.",
+        properties: &[ToolPropertyDef {
+            name: "message",
+            prop_type: "string",
+            description: "Optional message to display",
+            default: None,
+        }],
+        required: &[],
+    },
+];
+
+/// Look up a specific builtin tool definition by name.
+/// Returns None if not found. Use this for testing or conditional tool access.
+pub fn get_builtin_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
+    BUILTIN_TOOL_DEFS.iter().find(|def| def.name == name)
+}
+
+/// Convert all built-in tools to API format
+pub fn all_builtin_tools_to_api_format() -> Vec<serde_json::Value> {
+    BUILTIN_TOOL_DEFS
+        .iter()
+        .map(|def| def.to_api_format())
+        .collect()
+}
+
+/// Convert built-in tools to API format, optionally excluding reflection tool
+pub fn builtin_tools_to_api_format(include_reflection: bool) -> Vec<serde_json::Value> {
+    BUILTIN_TOOL_DEFS
+        .iter()
+        .filter(|def| include_reflection || def.name != REFLECTION_TOOL_NAME)
+        .map(|def| def.to_api_format())
+        .collect()
+}
+
 use super::ToolMetadata;
 
 /// Get metadata for builtin tools
@@ -102,142 +258,6 @@ impl Handoff {
     pub fn set_fallback(&mut self, target: HandoffTarget) {
         self.fallback = target;
     }
-}
-
-// === Tool API Format Definitions ===
-
-/// Create the built-in update_reflection tool definition for the API
-pub fn reflection_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": REFLECTION_TOOL_NAME,
-            "description": "Update your persistent reflection/memory that persists across all contexts and sessions. Use this to store anything you want to remember: insights about the user, preferences, important facts, or notes to your future self. Keep it concise and organized. The content will completely replace the previous reflection.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "The new reflection content. This replaces the entire previous reflection."
-                    }
-                },
-                "required": ["content"]
-            }
-        }
-    })
-}
-
-/// Create the built-in update_todos tool definition for the API
-pub fn todos_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": TODOS_TOOL_NAME,
-            "description": "Update the todo list for this context. Use this to track tasks you need to complete during this conversation. Todos persist across messages but are specific to this context. Format as markdown checklist.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "The todo list content (markdown format, e.g., '- [ ] Task 1\\n- [x] Completed task')"
-                    }
-                },
-                "required": ["content"]
-            }
-        }
-    })
-}
-
-/// Create the built-in update_goals tool definition for the API
-pub fn goals_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": GOALS_TOOL_NAME,
-            "description": "Update the goals for this context. Goals are high-level objectives that persist between conversation rounds and guide your work. Use goals to track what you're trying to achieve overall.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "The goals content (markdown format)"
-                    }
-                },
-                "required": ["content"]
-            }
-        }
-    })
-}
-
-/// Create the built-in send_message tool definition for the API
-pub fn send_message_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": SEND_MESSAGE_TOOL_NAME,
-            "description": "Send a message to another context's inbox. The message will be delivered to the target context and shown to them before their next prompt.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "to": {
-                        "type": "string",
-                        "description": "Target context name"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Message content"
-                    },
-                    "from": {
-                        "type": "string",
-                        "description": "Optional sender name (defaults to current context)"
-                    }
-                },
-                "required": ["to", "content"]
-            }
-        }
-    })
-}
-
-/// Create the built-in call_agent tool definition for the API
-pub fn call_agent_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": CALL_AGENT_TOOL_NAME,
-            "description": "Continue processing.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "Focus for the next turn"
-                    }
-                },
-                "required": ["prompt"]
-            }
-        }
-    })
-}
-
-/// Create the built-in call_user tool definition for the API
-pub fn call_user_tool_to_api_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": CALL_USER_TOOL_NAME,
-            "description": "Return control to user.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "Optional message to display"
-                    }
-                },
-                "required": []
-            }
-        }
-    })
 }
 
 // === Tool Execution ===
@@ -318,9 +338,18 @@ pub fn execute_builtin_tool(
 mod tests {
     use super::*;
 
+    // === Helper for tests: get API format for a specific tool ===
+    fn get_tool_api(name: &str) -> serde_json::Value {
+        get_builtin_tool_def(name)
+            .expect("tool should exist in registry")
+            .to_api_format()
+    }
+
+    // === Individual Tool Tests (using registry lookup) ===
+
     #[test]
     fn test_reflection_tool_api_format() {
-        let tool = reflection_tool_to_api_format();
+        let tool = get_tool_api(REFLECTION_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], REFLECTION_TOOL_NAME);
         assert!(
@@ -339,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_todos_tool_api_format() {
-        let tool = todos_tool_to_api_format();
+        let tool = get_tool_api(TODOS_TOOL_NAME);
         assert_eq!(tool["function"]["name"], TODOS_TOOL_NAME);
         assert!(
             tool["function"]["description"]
@@ -351,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_goals_tool_api_format() {
-        let tool = goals_tool_to_api_format();
+        let tool = get_tool_api(GOALS_TOOL_NAME);
         assert_eq!(tool["function"]["name"], GOALS_TOOL_NAME);
         assert!(
             tool["function"]["description"]
@@ -363,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_send_message_tool_api_format() {
-        let tool = send_message_tool_to_api_format();
+        let tool = get_tool_api(SEND_MESSAGE_TOOL_NAME);
         assert_eq!(tool["function"]["name"], SEND_MESSAGE_TOOL_NAME);
         assert!(
             tool["function"]["description"]
@@ -412,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_call_agent_tool_api_format() {
-        let tool = call_agent_tool_to_api_format();
+        let tool = get_tool_api(CALL_AGENT_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], CALL_AGENT_TOOL_NAME);
         assert!(
@@ -431,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_call_user_tool_api_format() {
-        let tool = call_user_tool_to_api_format();
+        let tool = get_tool_api(CALL_USER_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], CALL_USER_TOOL_NAME);
         assert!(
@@ -447,6 +476,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn test_get_builtin_tool_def() {
+        assert!(get_builtin_tool_def(REFLECTION_TOOL_NAME).is_some());
+        assert!(get_builtin_tool_def("nonexistent_tool").is_none());
     }
 
     #[test]
@@ -555,6 +590,46 @@ mod tests {
         match handoff.take() {
             HandoffTarget::User { message } => assert_eq!(message, "fallback"),
             _ => panic!("Expected User variant"),
+        }
+    }
+
+    // === Registry Tests ===
+
+    #[test]
+    fn test_registry_contains_all_tools() {
+        assert_eq!(BUILTIN_TOOL_DEFS.len(), 6);
+        let names: Vec<_> = BUILTIN_TOOL_DEFS.iter().map(|d| d.name).collect();
+        assert!(names.contains(&REFLECTION_TOOL_NAME));
+        assert!(names.contains(&TODOS_TOOL_NAME));
+        assert!(names.contains(&GOALS_TOOL_NAME));
+        assert!(names.contains(&SEND_MESSAGE_TOOL_NAME));
+        assert!(names.contains(&CALL_AGENT_TOOL_NAME));
+        assert!(names.contains(&CALL_USER_TOOL_NAME));
+    }
+
+    #[test]
+    fn test_all_builtin_tools_to_api_format() {
+        let tools = all_builtin_tools_to_api_format();
+        assert_eq!(tools.len(), 6);
+        for tool in &tools {
+            assert_eq!(tool["type"], "function");
+            assert!(tool["function"]["name"].as_str().is_some());
+            assert!(tool["function"]["description"].as_str().is_some());
+        }
+    }
+
+    #[test]
+    fn test_builtin_tools_to_api_format_with_reflection() {
+        let tools = builtin_tools_to_api_format(true);
+        assert_eq!(tools.len(), 6);
+    }
+
+    #[test]
+    fn test_builtin_tools_to_api_format_without_reflection() {
+        let tools = builtin_tools_to_api_format(false);
+        assert_eq!(tools.len(), 5);
+        for tool in &tools {
+            assert_ne!(tool["function"]["name"], REFLECTION_TOOL_NAME);
         }
     }
 }

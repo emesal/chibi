@@ -6,7 +6,7 @@ Chibi is a minimal, composable building block for LLM interactions — not an ag
 
 ## Principles
 
-- Early development; backwards compatibility not a priority. Refactor liberally.
+- Backwards compatibility not a priority; establish patterns that scale well for future maintainability; refactor liberally when beneficial. 
 - Focused, secure core. Protect file operations from corruption and race conditions.
 - Self-documenting code; keep symbols, comments, and docs consistent.
 - Missing docs/* for user-facing features are critical bugs.
