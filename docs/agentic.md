@@ -24,7 +24,6 @@ These plugins are available in [chibi-plugins](https://github.com/emesal/chibi-p
 
 | Plugin | Description |
 |--------|-------------|
-| `recurse` | Continue working without returning to user |
 | `read_context` | Read another context's state (read-only) |
 | `sub-agent` | Spawn sub-agents in another context |
 
@@ -85,35 +84,6 @@ reflection_character_limit = 10000
 
 ```bash
 chibi -n reflection
-```
-
-## Recurse (Autonomous Mode)
-
-The `recurse` plugin (from chibi-plugins) lets the LLM work autonomously across multiple rounds.
-
-### How It Works
-
-1. LLM calls `recurse` with a note about what to do next
-2. Current response finishes
-3. A new round starts automatically with the note injected
-4. LLM continues working
-
-```
-Round 1:
-LLM: "I need to check test results next."
-     [calls recurse with note: "Check the test results"]
-
-Round 2:
-LLM: (sees note) "Continuing. Note to self: Check the test results"
-     ... continues working ...
-```
-
-### Safety Limits
-
-The `max_recursion_depth` config limits how many rounds can happen (default: 30).
-
-```toml
-max_recursion_depth = 30
 ```
 
 ## Inter-Context Communication

@@ -279,7 +279,8 @@ fn apply_request_modifications<S: ResponseSink>(
 }
 
 /// Apply fallback override from hook results.
-/// Hooks can return `{"fallback": "call_agent"}` or `{"fallback": "call_user"}` to override.
+/// Hooks can return `{"fallback": "<tool_name>"}` to override the fallback tool.
+/// The tool must be a flow_control tool (validated elsewhere).
 fn apply_fallback_override<S: ResponseSink>(
     handoff: &mut tools::Handoff,
     hook_results: &[(String, serde_json::Value)],
@@ -288,13 +289,16 @@ fn apply_fallback_override<S: ResponseSink>(
 ) -> io::Result<()> {
     for (hook_name, hook_result) in hook_results {
         if let Some(fallback_str) = hook_result.get("fallback").and_then(|v| v.as_str()) {
-            let new_fallback = match fallback_str {
-                "call_user" => tools::HandoffTarget::User {
+            // Use builtin metadata since hooks can only override to builtins
+            let meta = tools::builtin_tool_metadata(fallback_str);
+            let new_fallback = if meta.ends_turn {
+                tools::HandoffTarget::User {
                     message: String::new(),
-                },
-                _ => tools::HandoffTarget::Agent {
+                }
+            } else {
+                tools::HandoffTarget::Agent {
                     prompt: String::new(),
-                },
+                }
             };
             handoff.set_fallback(new_fallback);
             if verbose {
@@ -359,6 +363,9 @@ async fn send_prompt_with_depth<S: ResponseSink>(
             "Prompt cannot be empty",
         ));
     }
+
+    // Validate config (fallback tool must exist and have flow_control=true)
+    app.validate_config(resolved_config, tools)?;
 
     let verbose = options.verbose;
     let use_reflection = options.use_reflection;
@@ -610,15 +617,17 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
     request_body = apply_request_modifications(request_body, &hook_results, verbose, sink)?;
 
-    // Determine fallback from config or override
+    // Determine fallback from config or override using metadata
     let fallback = options.fallback_override.clone().unwrap_or_else(|| {
-        match resolved_config.fallback_tool.as_str() {
-            "call_user" => tools::HandoffTarget::User {
+        let meta = tools::get_tool_metadata(tools, &resolved_config.fallback_tool);
+        if meta.ends_turn {
+            tools::HandoffTarget::User {
                 message: String::new(),
-            },
-            _ => tools::HandoffTarget::Agent {
+            }
+        } else {
+            tools::HandoffTarget::Agent {
                 prompt: String::new(),
-            },
+            }
         }
     });
     let mut handoff = tools::Handoff::new(fallback);
@@ -802,18 +811,16 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 let mut args: serde_json::Value =
                     serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-                // Check for control flow tools first
-                let is_handoff_tool = if tc.name == tools::CALL_AGENT_TOOL_NAME {
-                    let prompt = args["prompt"].as_str().unwrap_or("").to_string();
-                    handoff.set_agent(prompt);
-                    true
-                } else if tc.name == tools::CALL_USER_TOOL_NAME {
-                    let message = args["message"].as_str().unwrap_or("").to_string();
-                    handoff.set_user(message);
-                    true
-                } else if let Some(note) = tools::check_recurse_signal(&tc.name, &args) {
-                    // Backwards compat: treat external recurse plugin as call_agent
-                    handoff.set_agent(note);
+                // Check for control flow tools using metadata
+                let tool_metadata = tools::get_tool_metadata(tools, &tc.name);
+                let is_handoff_tool = if tool_metadata.flow_control {
+                    if tool_metadata.ends_turn {
+                        let message = args["message"].as_str().unwrap_or("").to_string();
+                        handoff.set_user(message);
+                    } else {
+                        let prompt = args["prompt"].as_str().unwrap_or("").to_string();
+                        handoff.set_agent(prompt);
+                    }
                     true
                 } else {
                     false
@@ -875,14 +882,8 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     block_message
                 } else if is_handoff_tool {
                     // Handoff tools don't execute - they just set the handoff target
-                    if tc.name == tools::CALL_AGENT_TOOL_NAME {
-                        let prompt = args["prompt"].as_str().unwrap_or("");
-                        if prompt.is_empty() {
-                            "Continuing processing".to_string()
-                        } else {
-                            format!("Continuing with: {}", prompt)
-                        }
-                    } else if tc.name == tools::CALL_USER_TOOL_NAME {
+                    // Use metadata to determine the result message
+                    if tool_metadata.ends_turn {
                         let message = args["message"].as_str().unwrap_or("");
                         if message.is_empty() {
                             "Returning to user".to_string()
@@ -890,8 +891,12 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                             message.to_string()
                         }
                     } else {
-                        // recurse tool backwards compat
-                        "Continuing...".to_string()
+                        let prompt = args["prompt"].as_str().unwrap_or("");
+                        if prompt.is_empty() {
+                            "Continuing processing".to_string()
+                        } else {
+                            format!("Continuing with: {}", prompt)
+                        }
                     }
                 } else if tc.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
                     "Error: Reflection tool is not enabled".to_string()

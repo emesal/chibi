@@ -177,4 +177,45 @@ impl AppState {
 
         Ok(resolved)
     }
+
+    /// Validate resolved config against loaded tools
+    ///
+    /// Checks that fallback_tool exists and has flow_control=true metadata.
+    pub fn validate_config(
+        &self,
+        resolved: &ResolvedConfig,
+        tools: &[crate::tools::Tool],
+    ) -> io::Result<()> {
+        let fallback = &resolved.fallback_tool;
+
+        // Get metadata (checks plugins then builtins)
+        let meta = crate::tools::get_tool_metadata(tools, fallback);
+
+        // Verify tool exists: must be in plugins OR be a known builtin
+        let is_builtin = matches!(
+            fallback.as_str(),
+            crate::tools::CALL_AGENT_TOOL_NAME | crate::tools::CALL_USER_TOOL_NAME
+        );
+        let in_plugins = tools.iter().any(|t| t.name == *fallback);
+
+        if !is_builtin && !in_plugins {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("fallback_tool '{}' not found", fallback),
+            ));
+        }
+
+        // Enforce: fallback must be a flow_control tool
+        if !meta.flow_control {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "fallback_tool '{}' must have flow_control=true metadata",
+                    fallback
+                ),
+            ));
+        }
+
+        Ok(())
+    }
 }

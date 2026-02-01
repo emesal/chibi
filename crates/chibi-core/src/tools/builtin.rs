@@ -22,9 +22,6 @@ pub const TODOS_TOOL_NAME: &str = "update_todos";
 /// Name of the built-in goals tool
 pub const GOALS_TOOL_NAME: &str = "update_goals";
 
-/// Name of the external recurse tool that triggers recursion
-pub const RECURSE_TOOL_NAME: &str = "recurse";
-
 /// Name of the built-in send_message tool for inter-context messaging
 pub const SEND_MESSAGE_TOOL_NAME: &str = "send_message";
 
@@ -33,6 +30,25 @@ pub const CALL_AGENT_TOOL_NAME: &str = "call_agent";
 
 /// Name of the built-in call_user tool for control handoff
 pub const CALL_USER_TOOL_NAME: &str = "call_user";
+
+use super::ToolMetadata;
+
+/// Get metadata for builtin tools
+pub fn builtin_tool_metadata(name: &str) -> ToolMetadata {
+    match name {
+        CALL_AGENT_TOOL_NAME => ToolMetadata {
+            parallel: false,
+            flow_control: true,
+            ends_turn: false,
+        },
+        CALL_USER_TOOL_NAME => ToolMetadata {
+            parallel: false,
+            flow_control: true,
+            ends_turn: true,
+        },
+        _ => ToolMetadata::new(),
+    }
+}
 
 // === Handoff Types ===
 
@@ -298,16 +314,6 @@ pub fn execute_builtin_tool(
     }
 }
 
-/// Check if the tool call is for the recurse tool and extract the note
-pub fn check_recurse_signal(tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
-    if tool_name == RECURSE_TOOL_NAME {
-        let note = arguments["note"].as_str().unwrap_or("").to_string();
-        Some(note)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,29 +379,35 @@ mod tests {
     }
 
     #[test]
-    fn test_check_recurse_signal() {
-        // With recurse tool and note
-        let args = serde_json::json!({"note": "test note"});
-        let result = check_recurse_signal(RECURSE_TOOL_NAME, &args);
-        assert_eq!(result, Some("test note".to_string()));
-
-        // With recurse tool but no note
-        let args_empty = serde_json::json!({});
-        let result_empty = check_recurse_signal(RECURSE_TOOL_NAME, &args_empty);
-        assert_eq!(result_empty, Some("".to_string()));
-
-        // With different tool
-        let result_other = check_recurse_signal("other_tool", &args);
-        assert!(result_other.is_none());
-    }
-
-    #[test]
     fn test_tool_constants() {
         assert_eq!(REFLECTION_TOOL_NAME, "update_reflection");
         assert_eq!(TODOS_TOOL_NAME, "update_todos");
         assert_eq!(GOALS_TOOL_NAME, "update_goals");
-        assert_eq!(RECURSE_TOOL_NAME, "recurse");
         assert_eq!(SEND_MESSAGE_TOOL_NAME, "send_message");
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_call_agent() {
+        let meta = builtin_tool_metadata(CALL_AGENT_TOOL_NAME);
+        assert!(!meta.parallel);
+        assert!(meta.flow_control);
+        assert!(!meta.ends_turn); // call_agent continues processing
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_call_user() {
+        let meta = builtin_tool_metadata(CALL_USER_TOOL_NAME);
+        assert!(!meta.parallel);
+        assert!(meta.flow_control);
+        assert!(meta.ends_turn); // call_user ends turn
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_other() {
+        let meta = builtin_tool_metadata("update_todos");
+        assert!(meta.parallel);
+        assert!(!meta.flow_control);
+        assert!(!meta.ends_turn);
     }
 
     #[test]
