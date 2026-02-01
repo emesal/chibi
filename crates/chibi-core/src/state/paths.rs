@@ -35,11 +35,6 @@ pub trait StatePaths {
         self.context_dir(name).join("transcript.md")
     }
 
-    /// Alias for transcript_md_file (backwards compatibility)
-    fn transcript_file(&self, name: &str) -> PathBuf {
-        self.transcript_md_file(name)
-    }
-
     /// Path to JSONL transcript (transcript.jsonl) - legacy location
     fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("transcript.jsonl")
