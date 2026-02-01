@@ -527,13 +527,19 @@ impl Cli {
         } else if self.cleanup_cache {
             Command::CleanupCache
         // Current/specific context pairs (data-driven dispatch)
-        } else if let Some(name) = check_context_pair(self.destroy_current_context, &self.destroy_context) {
+        } else if let Some(name) =
+            check_context_pair(self.destroy_current_context, &self.destroy_context)
+        {
             Command::DestroyContext { name }
-        } else if let Some(name) = check_context_pair(self.archive_current_history, &self.archive_history) {
+        } else if let Some(name) =
+            check_context_pair(self.archive_current_history, &self.archive_history)
+        {
             Command::ArchiveHistory { name }
         } else if let Some(name) = check_context_pair(self.clear_cache, &self.clear_cache_for) {
             Command::ClearCache { name }
-        } else if let Some(name) = check_context_pair(self.compact_current_context, &self.compact_context) {
+        } else if let Some(name) =
+            check_context_pair(self.compact_current_context, &self.compact_context)
+        {
             Command::CompactContext { name }
         // Complex cases that need pre-parsed values
         } else if let Some(ref new_name) = self.rename_current_context {

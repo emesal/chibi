@@ -164,14 +164,18 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
     },
 ];
 
-/// Get a tool definition by name
-fn get_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
+/// Look up a specific builtin tool definition by name.
+/// Returns None if not found. Use this for testing or conditional tool access.
+pub fn get_builtin_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
     BUILTIN_TOOL_DEFS.iter().find(|def| def.name == name)
 }
 
 /// Convert all built-in tools to API format
 pub fn all_builtin_tools_to_api_format() -> Vec<serde_json::Value> {
-    BUILTIN_TOOL_DEFS.iter().map(|def| def.to_api_format()).collect()
+    BUILTIN_TOOL_DEFS
+        .iter()
+        .map(|def| def.to_api_format())
+        .collect()
 }
 
 /// Convert built-in tools to API format, optionally excluding reflection tool
@@ -256,39 +260,6 @@ impl Handoff {
     }
 }
 
-// === Legacy Tool API Format Functions ===
-// These wrappers delegate to the registry. They'll be removed in Phase 3.
-
-/// Create the built-in update_reflection tool definition for the API
-pub fn reflection_tool_to_api_format() -> serde_json::Value {
-    get_tool_def(REFLECTION_TOOL_NAME).unwrap().to_api_format()
-}
-
-/// Create the built-in update_todos tool definition for the API
-pub fn todos_tool_to_api_format() -> serde_json::Value {
-    get_tool_def(TODOS_TOOL_NAME).unwrap().to_api_format()
-}
-
-/// Create the built-in update_goals tool definition for the API
-pub fn goals_tool_to_api_format() -> serde_json::Value {
-    get_tool_def(GOALS_TOOL_NAME).unwrap().to_api_format()
-}
-
-/// Create the built-in send_message tool definition for the API
-pub fn send_message_tool_to_api_format() -> serde_json::Value {
-    get_tool_def(SEND_MESSAGE_TOOL_NAME).unwrap().to_api_format()
-}
-
-/// Create the built-in call_agent tool definition for the API
-pub fn call_agent_tool_to_api_format() -> serde_json::Value {
-    get_tool_def(CALL_AGENT_TOOL_NAME).unwrap().to_api_format()
-}
-
-/// Create the built-in call_user tool definition for the API
-pub fn call_user_tool_to_api_format() -> serde_json::Value {
-    get_tool_def(CALL_USER_TOOL_NAME).unwrap().to_api_format()
-}
-
 // === Tool Execution ===
 
 /// Execute the built-in update_reflection tool
@@ -367,9 +338,18 @@ pub fn execute_builtin_tool(
 mod tests {
     use super::*;
 
+    // === Helper for tests: get API format for a specific tool ===
+    fn get_tool_api(name: &str) -> serde_json::Value {
+        get_builtin_tool_def(name)
+            .expect("tool should exist in registry")
+            .to_api_format()
+    }
+
+    // === Individual Tool Tests (using registry lookup) ===
+
     #[test]
     fn test_reflection_tool_api_format() {
-        let tool = reflection_tool_to_api_format();
+        let tool = get_tool_api(REFLECTION_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], REFLECTION_TOOL_NAME);
         assert!(
@@ -388,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_todos_tool_api_format() {
-        let tool = todos_tool_to_api_format();
+        let tool = get_tool_api(TODOS_TOOL_NAME);
         assert_eq!(tool["function"]["name"], TODOS_TOOL_NAME);
         assert!(
             tool["function"]["description"]
@@ -400,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_goals_tool_api_format() {
-        let tool = goals_tool_to_api_format();
+        let tool = get_tool_api(GOALS_TOOL_NAME);
         assert_eq!(tool["function"]["name"], GOALS_TOOL_NAME);
         assert!(
             tool["function"]["description"]
@@ -412,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_send_message_tool_api_format() {
-        let tool = send_message_tool_to_api_format();
+        let tool = get_tool_api(SEND_MESSAGE_TOOL_NAME);
         assert_eq!(tool["function"]["name"], SEND_MESSAGE_TOOL_NAME);
         assert!(
             tool["function"]["description"]
@@ -461,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_call_agent_tool_api_format() {
-        let tool = call_agent_tool_to_api_format();
+        let tool = get_tool_api(CALL_AGENT_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], CALL_AGENT_TOOL_NAME);
         assert!(
@@ -480,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_call_user_tool_api_format() {
-        let tool = call_user_tool_to_api_format();
+        let tool = get_tool_api(CALL_USER_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], CALL_USER_TOOL_NAME);
         assert!(
@@ -496,6 +476,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn test_get_builtin_tool_def() {
+        assert!(get_builtin_tool_def(REFLECTION_TOOL_NAME).is_some());
+        assert!(get_builtin_tool_def("nonexistent_tool").is_none());
     }
 
     #[test]

@@ -222,7 +222,9 @@ pub fn read_cache_grep(
 
 /// Iterate over cache metadata files in a directory.
 /// Yields (metadata_path, CacheMetadata) for each valid .meta.json file.
-fn iter_cache_metadata(cache_dir: &Path) -> impl Iterator<Item = (std::path::PathBuf, CacheMetadata)> {
+fn iter_cache_metadata(
+    cache_dir: &Path,
+) -> impl Iterator<Item = (std::path::PathBuf, CacheMetadata)> {
     fs::read_dir(cache_dir)
         .into_iter()
         .flatten()

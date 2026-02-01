@@ -151,49 +151,16 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
 
 /// Convert all file tools to API format
 pub fn all_file_tools_to_api_format() -> Vec<serde_json::Value> {
-    FILE_TOOL_DEFS.iter().map(|def| def.to_api_format()).collect()
+    FILE_TOOL_DEFS
+        .iter()
+        .map(|def| def.to_api_format())
+        .collect()
 }
 
-// === Legacy Tool API Format Functions (thin wrappers for backwards compatibility) ===
-
-/// Legacy wrapper - delegates to registry
-pub fn file_head_tool_to_api_format() -> serde_json::Value {
-    FILE_TOOL_DEFS.iter()
-        .find(|d| d.name == FILE_HEAD_TOOL_NAME)
-        .unwrap()
-        .to_api_format()
-}
-
-/// Legacy wrapper - delegates to registry
-pub fn file_tail_tool_to_api_format() -> serde_json::Value {
-    FILE_TOOL_DEFS.iter()
-        .find(|d| d.name == FILE_TAIL_TOOL_NAME)
-        .unwrap()
-        .to_api_format()
-}
-
-/// Legacy wrapper - delegates to registry
-pub fn file_lines_tool_to_api_format() -> serde_json::Value {
-    FILE_TOOL_DEFS.iter()
-        .find(|d| d.name == FILE_LINES_TOOL_NAME)
-        .unwrap()
-        .to_api_format()
-}
-
-/// Legacy wrapper - delegates to registry
-pub fn file_grep_tool_to_api_format() -> serde_json::Value {
-    FILE_TOOL_DEFS.iter()
-        .find(|d| d.name == FILE_GREP_TOOL_NAME)
-        .unwrap()
-        .to_api_format()
-}
-
-/// Legacy wrapper - delegates to registry
-pub fn cache_list_tool_to_api_format() -> serde_json::Value {
-    FILE_TOOL_DEFS.iter()
-        .find(|d| d.name == CACHE_LIST_TOOL_NAME)
-        .unwrap()
-        .to_api_format()
+/// Look up a specific file tool definition by name.
+/// Returns None if not found. Use this for testing or conditional tool access.
+pub fn get_file_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
+    FILE_TOOL_DEFS.iter().find(|d| d.name == name)
 }
 
 // === Path Resolution ===
@@ -293,6 +260,56 @@ fn resolve_and_validate_path(path: &str, config: &ResolvedConfig) -> io::Result<
 
 // === Tool Execution ===
 
+// --- Helpers for parameter extraction ---
+
+/// Extract a required string parameter, returning a helpful error if missing.
+/// Use this pattern for required params in future file tools.
+fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String> {
+    args.get_str(name).map(String::from).ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Missing '{}' parameter", name),
+        )
+    })
+}
+
+/// Extract a required u64 parameter, returning a helpful error if missing.
+/// Use this pattern for required numeric params in future file tools.
+fn require_u64_param(args: &serde_json::Value, name: &str) -> io::Result<u64> {
+    args.get_u64(name).ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Missing '{}' parameter", name),
+        )
+    })
+}
+
+// --- Head/Tail shared implementation ---
+
+/// Direction for head/tail reading
+enum ReadDirection {
+    Head,
+    Tail,
+}
+
+/// Shared implementation for file_head and file_tail.
+/// When adding similar "read N lines from start/end" tools, follow this pattern.
+fn execute_file_head_or_tail(
+    app: &AppState,
+    context_name: &str,
+    args: &serde_json::Value,
+    config: &ResolvedConfig,
+    direction: ReadDirection,
+) -> io::Result<String> {
+    let path = resolve_file_path(app, context_name, args, config)?;
+    let lines = args.get_u64_or("lines", 50) as usize;
+
+    match direction {
+        ReadDirection::Head => cache::read_cache_head(&path, lines),
+        ReadDirection::Tail => cache::read_cache_tail(&path, lines),
+    }
+}
+
 /// Execute file_head tool
 pub fn execute_file_head(
     app: &AppState,
@@ -300,10 +317,7 @@ pub fn execute_file_head(
     args: &serde_json::Value,
     config: &ResolvedConfig,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config)?;
-    let lines = args.get_u64_or("lines", 50) as usize;
-
-    cache::read_cache_head(&path, lines)
+    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Head)
 }
 
 /// Execute file_tail tool
@@ -313,10 +327,7 @@ pub fn execute_file_tail(
     args: &serde_json::Value,
     config: &ResolvedConfig,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config)?;
-    let lines = args.get_u64_or("lines", 50) as usize;
-
-    cache::read_cache_tail(&path, lines)
+    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Tail)
 }
 
 /// Execute file_lines tool
@@ -327,24 +338,16 @@ pub fn execute_file_lines(
     config: &ResolvedConfig,
 ) -> io::Result<String> {
     let path = resolve_file_path(app, context_name, args, config)?;
+    let start = require_u64_param(args, "start")? as usize;
+    let end = require_u64_param(args, "end")? as usize;
 
-    let start = args
-        .get_u64("start")
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'start' parameter"))?
-        as usize;
-
-    let end = args
-        .get_u64("end")
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'end' parameter"))?
-        as usize;
-
+    // Validation specific to line ranges
     if start == 0 {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
             "Line numbers are 1-indexed, start must be >= 1",
         ));
     }
-
     if end < start {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
@@ -363,15 +366,11 @@ pub fn execute_file_grep(
     config: &ResolvedConfig,
 ) -> io::Result<String> {
     let path = resolve_file_path(app, context_name, args, config)?;
-
-    let pattern = args
-        .get_str("pattern")
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'pattern' parameter"))?;
-
+    let pattern = require_str_param(args, "pattern")?;
     let context_before = args.get_u64_or("context_before", 2) as usize;
     let context_after = args.get_u64_or("context_after", 2) as usize;
 
-    let result = cache::read_cache_grep(&path, pattern, context_before, context_after)?;
+    let result = cache::read_cache_grep(&path, &pattern, context_before, context_after)?;
 
     if result.is_empty() {
         Ok(format!("No matches found for pattern: {}", pattern))
@@ -445,22 +444,31 @@ pub fn execute_file_tool(
 mod tests {
     use super::*;
 
+    // === Helper for tests: get API format for a specific tool ===
+    fn get_tool_api(name: &str) -> serde_json::Value {
+        get_file_tool_def(name)
+            .expect("tool should exist in registry")
+            .to_api_format()
+    }
+
+    // === Individual Tool Tests (using registry lookup) ===
+
     #[test]
     fn test_file_head_tool_api_format() {
-        let tool = file_head_tool_to_api_format();
+        let tool = get_tool_api(FILE_HEAD_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], FILE_HEAD_TOOL_NAME);
     }
 
     #[test]
     fn test_file_tail_tool_api_format() {
-        let tool = file_tail_tool_to_api_format();
+        let tool = get_tool_api(FILE_TAIL_TOOL_NAME);
         assert_eq!(tool["function"]["name"], FILE_TAIL_TOOL_NAME);
     }
 
     #[test]
     fn test_file_lines_tool_api_format() {
-        let tool = file_lines_tool_to_api_format();
+        let tool = get_tool_api(FILE_LINES_TOOL_NAME);
         assert_eq!(tool["function"]["name"], FILE_LINES_TOOL_NAME);
         let required = tool["function"]["parameters"]["required"]
             .as_array()
@@ -471,7 +479,7 @@ mod tests {
 
     #[test]
     fn test_file_grep_tool_api_format() {
-        let tool = file_grep_tool_to_api_format();
+        let tool = get_tool_api(FILE_GREP_TOOL_NAME);
         assert_eq!(tool["function"]["name"], FILE_GREP_TOOL_NAME);
         let required = tool["function"]["parameters"]["required"]
             .as_array()
@@ -481,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_cache_list_tool_api_format() {
-        let tool = cache_list_tool_to_api_format();
+        let tool = get_tool_api(CACHE_LIST_TOOL_NAME);
         assert_eq!(tool["function"]["name"], CACHE_LIST_TOOL_NAME);
     }
 
@@ -518,6 +526,12 @@ mod tests {
     }
 
     #[test]
+    fn test_get_file_tool_def() {
+        assert!(get_file_tool_def(FILE_HEAD_TOOL_NAME).is_some());
+        assert!(get_file_tool_def("nonexistent_tool").is_none());
+    }
+
+    #[test]
     fn test_all_file_tools_to_api_format() {
         let tools = all_file_tools_to_api_format();
         assert_eq!(tools.len(), 5);
@@ -530,36 +544,54 @@ mod tests {
     #[test]
     fn test_file_tool_defaults() {
         // file_head/file_tail have lines default: 50
-        let head = file_head_tool_to_api_format();
-        assert_eq!(head["function"]["parameters"]["properties"]["lines"]["default"], 50);
+        let head = get_tool_api(FILE_HEAD_TOOL_NAME);
+        assert_eq!(
+            head["function"]["parameters"]["properties"]["lines"]["default"],
+            50
+        );
 
-        let tail = file_tail_tool_to_api_format();
-        assert_eq!(tail["function"]["parameters"]["properties"]["lines"]["default"], 50);
+        let tail = get_tool_api(FILE_TAIL_TOOL_NAME);
+        assert_eq!(
+            tail["function"]["parameters"]["properties"]["lines"]["default"],
+            50
+        );
 
         // file_grep has context defaults: 2
-        let grep = file_grep_tool_to_api_format();
-        assert_eq!(grep["function"]["parameters"]["properties"]["context_before"]["default"], 2);
-        assert_eq!(grep["function"]["parameters"]["properties"]["context_after"]["default"], 2);
+        let grep = get_tool_api(FILE_GREP_TOOL_NAME);
+        assert_eq!(
+            grep["function"]["parameters"]["properties"]["context_before"]["default"],
+            2
+        );
+        assert_eq!(
+            grep["function"]["parameters"]["properties"]["context_after"]["default"],
+            2
+        );
     }
 
     #[test]
     fn test_file_tool_required_fields() {
         // file_lines requires start and end
-        let lines = file_lines_tool_to_api_format();
-        let required = lines["function"]["parameters"]["required"].as_array().unwrap();
+        let lines = get_tool_api(FILE_LINES_TOOL_NAME);
+        let required = lines["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
         assert_eq!(required.len(), 2);
         assert!(required.contains(&serde_json::json!("start")));
         assert!(required.contains(&serde_json::json!("end")));
 
         // file_grep requires pattern
-        let grep = file_grep_tool_to_api_format();
-        let required = grep["function"]["parameters"]["required"].as_array().unwrap();
+        let grep = get_tool_api(FILE_GREP_TOOL_NAME);
+        let required = grep["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
         assert_eq!(required.len(), 1);
         assert!(required.contains(&serde_json::json!("pattern")));
 
         // cache_list has no required
-        let cache = cache_list_tool_to_api_format();
-        let required = cache["function"]["parameters"]["required"].as_array().unwrap();
+        let cache = get_tool_api(CACHE_LIST_TOOL_NAME);
+        let required = cache["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
         assert!(required.is_empty());
     }
 }
