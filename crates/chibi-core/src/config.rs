@@ -310,67 +310,80 @@ pub struct ToolsConfig {
 }
 
 // ============================================================================
-// Default Value Functions
+// Default Values
 // ============================================================================
 
+/// Central source of truth for all configuration defaults.
+pub struct ConfigDefaults;
+
+impl ConfigDefaults {
+    // Boolean defaults
+    pub const AUTO_COMPACT: bool = false;
+    pub const REFLECTION_ENABLED: bool = true;
+    pub const AUTO_CLEANUP_CACHE: bool = true;
+
+    // Numeric defaults
+    pub const AUTO_COMPACT_THRESHOLD: f32 = 80.0;
+    pub const REFLECTION_CHARACTER_LIMIT: usize = 10_000;
+    pub const MAX_RECURSION_DEPTH: usize = 30;
+    pub const MAX_EMPTY_RESPONSES: usize = 2;
+    pub const LOCK_HEARTBEAT_SECONDS: u64 = 30;
+    pub const ROLLING_COMPACT_DROP_PERCENTAGE: f32 = 50.0;
+    pub const TOOL_OUTPUT_CACHE_THRESHOLD: usize = 4_000;
+    pub const TOOL_CACHE_MAX_AGE_DAYS: u64 = 7;
+    pub const TOOL_CACHE_PREVIEW_CHARS: usize = 500;
+
+    // String defaults
+    pub const USERNAME: &'static str = "user";
+    pub const FALLBACK_TOOL: &'static str = "call_agent";
+    // Note: BASE_URL uses existing DEFAULT_API_URL constant
+}
+
+// Thin wrappers for serde's #[serde(default = "...")] requirement
 fn default_auto_compact() -> bool {
-    false
+    ConfigDefaults::AUTO_COMPACT
 }
-
 fn default_auto_compact_threshold() -> f32 {
-    80.0
+    ConfigDefaults::AUTO_COMPACT_THRESHOLD
 }
-
 fn default_base_url() -> String {
     DEFAULT_API_URL.to_string()
 }
-
 fn default_reflection_enabled() -> bool {
-    true
+    ConfigDefaults::REFLECTION_ENABLED
 }
-
 fn default_reflection_character_limit() -> usize {
-    10000
+    ConfigDefaults::REFLECTION_CHARACTER_LIMIT
 }
-
 fn default_max_recursion_depth() -> usize {
-    30
+    ConfigDefaults::MAX_RECURSION_DEPTH
 }
-
 fn default_max_empty_responses() -> usize {
-    2
+    ConfigDefaults::MAX_EMPTY_RESPONSES
 }
-
 fn default_lock_heartbeat_seconds() -> u64 {
-    30
+    ConfigDefaults::LOCK_HEARTBEAT_SECONDS
 }
-
 fn default_username() -> String {
-    "user".to_string()
+    ConfigDefaults::USERNAME.to_string()
 }
-
 fn default_rolling_compact_drop_percentage() -> f32 {
-    50.0
+    ConfigDefaults::ROLLING_COMPACT_DROP_PERCENTAGE
 }
-
 fn default_tool_output_cache_threshold() -> usize {
-    4000
+    ConfigDefaults::TOOL_OUTPUT_CACHE_THRESHOLD
 }
-
 fn default_tool_cache_max_age_days() -> u64 {
-    7
+    ConfigDefaults::TOOL_CACHE_MAX_AGE_DAYS
 }
-
 fn default_auto_cleanup_cache() -> bool {
-    true
+    ConfigDefaults::AUTO_CLEANUP_CACHE
 }
-
 fn default_tool_cache_preview_chars() -> usize {
-    500
+    ConfigDefaults::TOOL_CACHE_PREVIEW_CHARS
 }
-
 fn default_fallback_tool() -> String {
-    "call_agent".to_string()
+    ConfigDefaults::FALLBACK_TOOL.to_string()
 }
 
 // ============================================================================

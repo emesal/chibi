@@ -716,9 +716,9 @@ impl AppState {
     pub fn save_context(&self, context: &Context) -> io::Result<()> {
         self.ensure_context_dir(&context.name)?;
 
-        // Check if this is a brand new context (no transcript.jsonl exists yet)
-        let transcript_path = self.transcript_jsonl_file(&context.name);
-        let is_new_context = !transcript_path.exists();
+        // Check if this is a brand new context (no transcript/manifest.json exists yet)
+        let transcript_manifest = self.transcript_dir(&context.name).join("manifest.json");
+        let is_new_context = !transcript_manifest.exists();
 
         // Note: created_at is stored in state.json, not context_meta.json
         // context_meta.json is used for system_prompt_md_mtime and last_combined_prompt
