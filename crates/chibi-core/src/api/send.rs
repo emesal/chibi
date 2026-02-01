@@ -97,6 +97,29 @@ fn build_tool_info_list(
         .collect()
 }
 
+/// Annotate the fallback tool's description to indicate it's called automatically.
+fn annotate_fallback_tool(tools: &mut [serde_json::Value], fallback_name: &str) {
+    const FALLBACK_SUFFIX: &str = " Called automatically if no other tool is used.";
+
+    for tool in tools.iter_mut() {
+        let name_matches = tool
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            .is_some_and(|name| name == fallback_name);
+
+        if name_matches {
+            if let Some(func) = tool.get_mut("function")
+                && let Some(desc) = func.get_mut("description")
+                && let Some(desc_str) = desc.as_str()
+            {
+                *desc = serde_json::Value::String(format!("{}{}", desc_str, FALLBACK_SUFFIX));
+            }
+            break; // Only annotate the first match
+        }
+    }
+}
+
 /// Filter tools based on config include/exclude lists
 fn filter_tools_by_config(
     tools: Vec<serde_json::Value>,
@@ -558,6 +581,9 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     // Add control flow tools (call_agent/call_user)
     all_tools.push(tools::call_agent_tool_to_api_format());
     all_tools.push(tools::call_user_tool_to_api_format());
+
+    // Annotate whichever tool is configured as the fallback
+    annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
 
     // Apply config-based tool filtering (from local.toml [tools] section)
     all_tools = filter_tools_by_config(all_tools, &resolved_config.tools);
@@ -1337,5 +1363,59 @@ mod tests {
         };
         let result = filter_tools_by_config(tools, &config);
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_annotate_fallback_tool() {
+        let mut tools = vec![
+            json!({"function": {"name": "call_agent", "description": "Continue processing."}}),
+            json!({"function": {"name": "call_user", "description": "Return control to user."}}),
+            json!({"function": {"name": "my_plugin", "description": "Does something."}}),
+        ];
+
+        // Annotate call_agent as fallback
+        annotate_fallback_tool(&mut tools, "call_agent");
+        assert!(
+            tools[0]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("automatically")
+        );
+        assert!(
+            !tools[1]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("automatically")
+        );
+
+        // Reset and annotate a plugin instead
+        tools[0]["function"]["description"] = json!("Continue processing.");
+        annotate_fallback_tool(&mut tools, "my_plugin");
+        assert!(
+            !tools[0]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("automatically")
+        );
+        assert!(
+            tools[2]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("automatically")
+        );
+    }
+
+    #[test]
+    fn test_annotate_fallback_tool_not_found() {
+        let mut tools = vec![
+            json!({"function": {"name": "call_agent", "description": "Continue processing."}}),
+        ];
+
+        // Should not panic if fallback tool doesn't exist
+        annotate_fallback_tool(&mut tools, "nonexistent_tool");
+        assert_eq!(
+            tools[0]["function"]["description"].as_str().unwrap(),
+            "Continue processing."
+        );
     }
 }
