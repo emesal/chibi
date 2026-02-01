@@ -38,6 +38,8 @@ pub struct ToolPropertyDef {
     pub name: &'static str,
     pub prop_type: &'static str,
     pub description: &'static str,
+    /// Optional default value (for integer defaults only, as used by file tools)
+    pub default: Option<i64>,
 }
 
 /// Built-in tool definition for declarative registry
@@ -53,13 +55,14 @@ impl BuiltinToolDef {
     pub fn to_api_format(&self) -> serde_json::Value {
         let mut props = serde_json::Map::new();
         for prop in self.properties {
-            props.insert(
-                prop.name.to_string(),
-                serde_json::json!({
-                    "type": prop.prop_type,
-                    "description": prop.description,
-                }),
-            );
+            let mut prop_obj = serde_json::json!({
+                "type": prop.prop_type,
+                "description": prop.description,
+            });
+            if let Some(default) = prop.default {
+                prop_obj["default"] = serde_json::json!(default);
+            }
+            props.insert(prop.name.to_string(), prop_obj);
         }
 
         serde_json::json!({
@@ -86,6 +89,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             name: "content",
             prop_type: "string",
             description: "The new reflection content. This replaces the entire previous reflection.",
+            default: None,
         }],
         required: &["content"],
     },
@@ -96,6 +100,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             name: "content",
             prop_type: "string",
             description: "The todo list content (markdown format, e.g., '- [ ] Task 1\\n- [x] Completed task')",
+            default: None,
         }],
         required: &["content"],
     },
@@ -106,6 +111,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             name: "content",
             prop_type: "string",
             description: "The goals content (markdown format)",
+            default: None,
         }],
         required: &["content"],
     },
@@ -117,16 +123,19 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
                 name: "to",
                 prop_type: "string",
                 description: "Target context name",
+                default: None,
             },
             ToolPropertyDef {
                 name: "content",
                 prop_type: "string",
                 description: "Message content",
+                default: None,
             },
             ToolPropertyDef {
                 name: "from",
                 prop_type: "string",
                 description: "Optional sender name (defaults to current context)",
+                default: None,
             },
         ],
         required: &["to", "content"],
@@ -138,6 +147,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             name: "prompt",
             prop_type: "string",
             description: "Focus for the next turn",
+            default: None,
         }],
         required: &["prompt"],
     },
@@ -148,6 +158,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             name: "message",
             prop_type: "string",
             description: "Optional message to display",
+            default: None,
         }],
         required: &[],
     },

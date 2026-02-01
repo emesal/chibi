@@ -43,10 +43,10 @@ pub use builtin::execute_builtin_tool;
 // Re-export tool metadata functions
 pub use builtin::builtin_tool_metadata;
 
-// Re-export file tool API format functions
+// Re-export file tool API format functions (legacy wrappers + new registry function)
 pub use file_tools::{
-    cache_list_tool_to_api_format, file_grep_tool_to_api_format, file_head_tool_to_api_format,
-    file_lines_tool_to_api_format, file_tail_tool_to_api_format,
+    all_file_tools_to_api_format, cache_list_tool_to_api_format, file_grep_tool_to_api_format,
+    file_head_tool_to_api_format, file_lines_tool_to_api_format, file_tail_tool_to_api_format,
 };
 
 // Re-export file tool execution and utilities
