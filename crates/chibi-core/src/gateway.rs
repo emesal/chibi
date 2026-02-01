@@ -106,6 +106,14 @@ pub fn to_tool_definition(tool: &Tool) -> ToolDefinition {
     ToolDefinition::new(&tool.name, &tool.description, tool.parameters.clone())
 }
 
+/// Convert OpenAI-format tool JSON to ratatoskr ToolDefinition.
+///
+/// Expects the format: `{"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}`
+pub fn json_tool_to_definition(json: &serde_json::Value) -> io::Result<ToolDefinition> {
+    ToolDefinition::try_from(json)
+        .map_err(|e| io::Error::other(format!("Invalid tool definition: {}", e)))
+}
+
 /// Convert ResolvedConfig to ChatOptions.
 pub fn to_chat_options(config: &ResolvedConfig) -> ChatOptions {
     let mut opts = ChatOptions::default().model(&config.model);
