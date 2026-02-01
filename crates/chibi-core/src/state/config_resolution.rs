@@ -78,6 +78,7 @@ impl AppState {
             auto_compact: self.config.auto_compact,
             auto_compact_threshold: self.config.auto_compact_threshold,
             max_recursion_depth: self.config.max_recursion_depth,
+            max_empty_responses: self.config.max_empty_responses,
             username: self.config.username.clone(),
             reflection_enabled: self.config.reflection_enabled,
             tool_output_cache_threshold: self.config.tool_output_cache_threshold,
@@ -114,6 +115,9 @@ impl AppState {
         }
         if let Some(max_recursion_depth) = local.max_recursion_depth {
             resolved.max_recursion_depth = max_recursion_depth;
+        }
+        if let Some(max_empty_responses) = local.max_empty_responses {
+            resolved.max_empty_responses = max_empty_responses;
         }
         if let Some(ref username) = local.username {
             resolved.username = username.clone();

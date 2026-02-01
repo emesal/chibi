@@ -643,6 +643,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     apply_fallback_override(&mut handoff, &hook_results, verbose, sink)?;
 
     // Tool call loop - keep going until we get a final text response
+    let mut consecutive_empty_responses = 0usize;
     loop {
         // Signal start of a new response (allows sink to reset state)
         sink.handle(ResponseEvent::StartResponse)?;
@@ -1177,6 +1178,32 @@ async fn send_prompt_with_depth<S: ResponseSink>(
             apply_fallback_override(&mut handoff, &hook_results, verbose, sink)?;
 
             request_body["messages"] = serde_json::json!(messages);
+            consecutive_empty_responses = 0; // Tool calls count as meaningful work
+            continue;
+        }
+
+        // Check for empty response (no tool calls AND no text content)
+        if full_response.trim().is_empty() {
+            consecutive_empty_responses += 1;
+            if consecutive_empty_responses >= app.config.max_empty_responses {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Max consecutive empty responses ({}) reached, stopping]",
+                        app.config.max_empty_responses
+                    ),
+                    verbose_only: false,
+                })?;
+                return Ok(());
+            }
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Empty response {}/{}, retrying]",
+                        consecutive_empty_responses, app.config.max_empty_responses
+                    ),
+                    verbose_only: true,
+                })?;
+            }
             continue;
         }
 

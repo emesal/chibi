@@ -337,6 +337,10 @@ fn default_max_recursion_depth() -> usize {
     30
 }
 
+fn default_max_empty_responses() -> usize {
+    2
+}
+
 fn default_lock_heartbeat_seconds() -> u64 {
     30
 }
@@ -395,6 +399,9 @@ pub struct Config {
     pub reflection_character_limit: usize,
     #[serde(default = "default_max_recursion_depth")]
     pub max_recursion_depth: usize,
+    /// Maximum consecutive empty responses before stopping the agentic loop
+    #[serde(default = "default_max_empty_responses")]
+    pub max_empty_responses: usize,
     #[serde(default = "default_username")]
     pub username: String,
     #[serde(default = "default_lock_heartbeat_seconds")]
@@ -438,6 +445,8 @@ pub struct LocalConfig {
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
     pub max_recursion_depth: Option<usize>,
+    /// Maximum consecutive empty responses before stopping the agentic loop
+    pub max_empty_responses: Option<usize>,
     pub warn_threshold_percent: Option<f32>,
     pub context_window_limit: Option<usize>,
     pub reflection_enabled: Option<bool>,
@@ -493,6 +502,8 @@ pub struct ResolvedConfig {
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
     pub max_recursion_depth: usize,
+    /// Maximum consecutive empty responses before stopping the agentic loop
+    pub max_empty_responses: usize,
     pub username: String,
     pub reflection_enabled: bool,
     /// Threshold (in chars) above which tool output is cached
@@ -528,6 +539,7 @@ impl ResolvedConfig {
             "auto_compact" => Some(self.auto_compact.to_string()),
             "auto_compact_threshold" => Some(format!("{}", self.auto_compact_threshold as i32)),
             "max_recursion_depth" => Some(self.max_recursion_depth.to_string()),
+            "max_empty_responses" => Some(self.max_empty_responses.to_string()),
             "reflection_enabled" => Some(self.reflection_enabled.to_string()),
             "tool_output_cache_threshold" => Some(self.tool_output_cache_threshold.to_string()),
             "tool_cache_max_age_days" => Some(self.tool_cache_max_age_days.to_string()),
@@ -575,6 +587,7 @@ impl ResolvedConfig {
             "auto_compact",
             "auto_compact_threshold",
             "max_recursion_depth",
+            "max_empty_responses",
             "reflection_enabled",
             "tool_output_cache_threshold",
             "tool_cache_max_age_days",
@@ -677,6 +690,7 @@ mod tests {
             auto_compact: false,
             auto_compact_threshold: 80.0,
             max_recursion_depth: 30,
+            max_empty_responses: 2,
             username: "testuser".to_string(),
             reflection_enabled: true,
             tool_output_cache_threshold: 4000,
