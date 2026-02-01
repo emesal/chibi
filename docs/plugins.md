@@ -154,8 +154,21 @@ print("This plugin only handles hooks")
 Users can run plugins directly without the LLM using `-p` (plugin) or `-P` (call-tool):
 
 ```bash
-chibi -p myplugin arg1 arg2    # Run a plugin directly
-chibi -P update_todos '{"content": "..."}'  # Call any tool (plugin or built-in)
+chibi -p myplugin "arg1 arg2"        # Run a plugin with args (shell-style split)
+chibi -p myplugin "'with spaces'"    # Args with spaces need inner quotes
+chibi -p myplugin ""                 # No args (empty string required)
+chibi -P update_todos '{}'           # Call tool with empty JSON
+chibi -P send '{"to":"x"}'           # Call tool with JSON args
+```
+
+Both flags take exactly 2 arguments. For `-p`, the second argument is a shell-style
+args string that gets split into an array. For `-P`, it's a JSON object passed directly.
+
+This allows mixing with other flags in any order:
+
+```bash
+chibi -p myplugin "list --all" -v    # -v works as verbose flag
+chibi -P send '{}' -C ephemeral      # -C works for context
 ```
 
 The args are passed as `{"args": ["arg1", "arg2"]}` in `CHIBI_TOOL_ARGS`. Design your plugin to handle both LLM calls (structured parameters) and direct calls (args array) if needed:
@@ -164,8 +177,8 @@ The args are passed as `{"args": ["arg1", "arg2"]}` in `CHIBI_TOOL_ARGS`. Design
 params = json.loads(os.environ["CHIBI_TOOL_ARGS"])
 
 if "args" in params:
-    # Direct invocation: chibi -P myplugin list --all
-    args = params["args"]
+    # Direct invocation: chibi -p myplugin "list --all"
+    args = params["args"]  # ["list", "--all"]
     # Parse args as needed
 else:
     # LLM invocation: structured parameters
