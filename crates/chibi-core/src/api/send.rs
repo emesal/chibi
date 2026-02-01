@@ -11,6 +11,7 @@ use super::sink::{ResponseEvent, ResponseSink};
 use crate::cache;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
+use crate::json_ext::JsonExt;
 use crate::llm;
 use crate::state::{
     AppState, StatePaths, create_assistant_message_entry, create_tool_call_entry,
@@ -170,7 +171,7 @@ fn filter_tools_from_hook_results<S: ResponseSink>(
 
     for (hook_name, hook_result) in hook_results {
         // Handle include lists (intersection)
-        if let Some(include) = hook_result.get("include").and_then(|v| v.as_array()) {
+        if let Some(include) = hook_result.get_array("include") {
             let include_names: Vec<String> = include
                 .iter()
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -196,7 +197,7 @@ fn filter_tools_from_hook_results<S: ResponseSink>(
         }
 
         // Handle exclude lists (union)
-        if let Some(exclude) = hook_result.get("exclude").and_then(|v| v.as_array()) {
+        if let Some(exclude) = hook_result.get_array("exclude") {
             let exclude_names: Vec<String> = exclude
                 .iter()
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -288,7 +289,7 @@ fn apply_fallback_override<S: ResponseSink>(
     sink: &mut S,
 ) -> io::Result<()> {
     for (hook_name, hook_result) in hook_results {
-        if let Some(fallback_str) = hook_result.get("fallback").and_then(|v| v.as_str()) {
+        if let Some(fallback_str) = hook_result.get_str("fallback") {
             // Use builtin metadata since hooks can only override to builtins
             let meta = tools::builtin_tool_metadata(fallback_str);
             let new_fallback = if meta.ends_turn {
@@ -382,7 +383,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     });
     let hook_results = tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data)?;
     for (tool_name, result) in hook_results {
-        if let Some(modified) = result.get("prompt").and_then(|v| v.as_str()) {
+        if let Some(modified) = result.get_str("prompt") {
             if verbose {
                 eprintln!("[Hook pre_message: {} modified prompt]", tool_name);
             }
@@ -460,7 +461,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
     // Prepend any content from pre_system_prompt hooks
     for (hook_tool_name, result) in &pre_sys_hook_results {
-        if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
+        if let Some(inject) = result.get_str("inject")
             && !inject.is_empty()
         {
             if verbose {
@@ -523,7 +524,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
     // Append any content from post_system_prompt hooks
     for (hook_tool_name, result) in &post_sys_hook_results {
-        if let Some(inject) = result.get("inject").and_then(|v| v.as_str())
+        if let Some(inject) = result.get_str("inject")
             && !inject.is_empty()
         {
             if verbose {
@@ -797,10 +798,10 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 let tool_metadata = tools::get_tool_metadata(tools, &tc.name);
                 let is_handoff_tool = if tool_metadata.flow_control {
                     if tool_metadata.ends_turn {
-                        let message = args["message"].as_str().unwrap_or("").to_string();
+                        let message = args.get_str_or("message", "").to_string();
                         handoff.set_user(message);
                     } else {
-                        let prompt = args["prompt"].as_str().unwrap_or("").to_string();
+                        let prompt = args.get_str_or("prompt", "").to_string();
                         handoff.set_agent(prompt);
                     }
                     true
@@ -821,16 +822,10 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
                 for (hook_tool_name, result) in pre_hook_results {
                     // Check for block signal first
-                    if result
-                        .get("block")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                    {
+                    if result.get_bool_or("block", false) {
                         blocked = true;
                         block_message = result
-                            .get("message")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Tool call blocked by hook")
+                            .get_str_or("message", "Tool call blocked by hook")
                             .to_string();
                         if verbose {
                             sink.handle(ResponseEvent::Diagnostic {
@@ -866,14 +861,14 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     // Handoff tools don't execute - they just set the handoff target
                     // Use metadata to determine the result message
                     if tool_metadata.ends_turn {
-                        let message = args["message"].as_str().unwrap_or("");
+                        let message = args.get_str_or("message", "");
                         if message.is_empty() {
                             "Returning to user".to_string()
                         } else {
                             message.to_string()
                         }
                     } else {
-                        let prompt = args["prompt"].as_str().unwrap_or("");
+                        let prompt = args.get_str_or("prompt", "");
                         if prompt.is_empty() {
                             "Continuing processing".to_string()
                         } else {
@@ -891,9 +886,9 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     }
                 } else if tc.name == tools::SEND_MESSAGE_TOOL_NAME {
                     // Handle built-in send_message tool
-                    let to = args["to"].as_str().unwrap_or("");
-                    let content = args["content"].as_str().unwrap_or("");
-                    let from = args["from"].as_str().unwrap_or(&context.name);
+                    let to = args.get_str_or("to", "");
+                    let content = args.get_str_or("content", "");
+                    let from = args.get_str("from").unwrap_or(&context.name);
 
                     if to.is_empty() {
                         "Error: 'to' field is required".to_string()
@@ -916,15 +911,8 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                         // Check if any hook claimed delivery
                         let mut delivered_via: Option<String> = None;
                         for (hook_tool_name, hook_result) in &pre_hook_results {
-                            if hook_result
-                                .get("delivered")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                let via = hook_result
-                                    .get("via")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or(hook_tool_name);
+                            if hook_result.get_bool_or("delivered", false) {
+                                let via = hook_result.get_str_or("via", hook_tool_name);
                                 delivered_via = Some(via.to_string());
                                 if verbose {
                                     sink.handle(ResponseEvent::Diagnostic {
@@ -1006,15 +994,9 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 )?;
 
                 for (hook_tool_name, result) in pre_output_hook_results {
-                    if result
-                        .get("block")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                    {
+                    if result.get_bool_or("block", false) {
                         let replacement = result
-                            .get("message")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Output blocked by hook")
+                            .get_str_or("message", "Output blocked by hook")
                             .to_string();
                         if verbose {
                             sink.handle(ResponseEvent::Diagnostic {
@@ -1029,7 +1011,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                         break;
                     }
 
-                    if let Some(modified_output) = result.get("output").and_then(|v| v.as_str()) {
+                    if let Some(modified_output) = result.get_str("output") {
                         if verbose {
                             sink.handle(ResponseEvent::Diagnostic {
                                 message: format!(

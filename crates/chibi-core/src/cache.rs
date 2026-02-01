@@ -220,35 +220,37 @@ pub fn read_cache_grep(
     Ok(result.join("\n"))
 }
 
+/// Iterate over cache metadata files in a directory.
+/// Yields (metadata_path, CacheMetadata) for each valid .meta.json file.
+fn iter_cache_metadata(cache_dir: &Path) -> impl Iterator<Item = (std::path::PathBuf, CacheMetadata)> {
+    fs::read_dir(cache_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            // Check for .meta.json files
+            let is_meta_file = path
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(".meta.json"));
+            if !is_meta_file {
+                return None;
+            }
+            let content = fs::read_to_string(&path).ok()?;
+            let metadata = serde_json::from_str::<CacheMetadata>(&content).ok()?;
+            Some((path, metadata))
+        })
+}
+
 /// List all cache entries for a context
 pub fn list_cache_entries(cache_dir: &Path) -> io::Result<Vec<CacheMetadata>> {
     if !cache_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let mut entries = Vec::new();
-
-    for entry in fs::read_dir(cache_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Check for .meta.json files
-        let is_meta_file = path
-            .file_name()
-            .is_some_and(|n| n.to_string_lossy().ends_with(".meta.json"));
-
-        if !is_meta_file {
-            continue;
-        }
-
-        let Ok(content) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(metadata) = serde_json::from_str::<CacheMetadata>(&content) else {
-            continue;
-        };
-        entries.push(metadata);
-    }
+    let mut entries: Vec<CacheMetadata> = iter_cache_metadata(cache_dir)
+        .map(|(_, metadata)| metadata)
+        .collect();
 
     // Sort by timestamp (newest first)
     entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
@@ -276,31 +278,12 @@ pub fn cleanup_old_cache(cache_dir: &Path, max_age_days: u64) -> io::Result<usiz
 
     let mut removed = 0;
 
-    for entry in fs::read_dir(cache_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Check for .meta.json files
-        let is_meta_file = path
-            .file_name()
-            .is_some_and(|n| n.to_string_lossy().ends_with(".meta.json"));
-
-        if !is_meta_file {
-            continue;
-        }
-
-        let Ok(content) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(metadata) = serde_json::from_str::<CacheMetadata>(&content) else {
-            continue;
-        };
-
+    for (meta_path, metadata) in iter_cache_metadata(cache_dir) {
         if metadata.timestamp < cutoff {
             // Remove both cache and meta files
             let cache_path = cache_dir.join(format!("{}.cache", metadata.id));
             let _ = fs::remove_file(&cache_path);
-            let _ = fs::remove_file(&path);
+            let _ = fs::remove_file(&meta_path);
             removed += 1;
         }
     }

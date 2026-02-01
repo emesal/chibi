@@ -6,6 +6,7 @@
 use super::builtin::{BuiltinToolDef, ToolPropertyDef};
 use crate::cache;
 use crate::config::ResolvedConfig;
+use crate::json_ext::JsonExt;
 use crate::state::{AppState, StatePaths};
 use std::io::{self, ErrorKind};
 use std::path::PathBuf;
@@ -204,8 +205,8 @@ fn resolve_file_path(
     args: &serde_json::Value,
     config: &ResolvedConfig,
 ) -> io::Result<PathBuf> {
-    let cache_id = args.get("cache_id").and_then(|v| v.as_str());
-    let path = args.get("path").and_then(|v| v.as_str());
+    let cache_id = args.get_str("cache_id");
+    let path = args.get_str("path");
 
     match (cache_id, path) {
         (Some(id), None) => {
@@ -300,7 +301,7 @@ pub fn execute_file_head(
     config: &ResolvedConfig,
 ) -> io::Result<String> {
     let path = resolve_file_path(app, context_name, args, config)?;
-    let lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+    let lines = args.get_u64_or("lines", 50) as usize;
 
     cache::read_cache_head(&path, lines)
 }
@@ -313,7 +314,7 @@ pub fn execute_file_tail(
     config: &ResolvedConfig,
 ) -> io::Result<String> {
     let path = resolve_file_path(app, context_name, args, config)?;
-    let lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+    let lines = args.get_u64_or("lines", 50) as usize;
 
     cache::read_cache_tail(&path, lines)
 }
@@ -328,14 +329,12 @@ pub fn execute_file_lines(
     let path = resolve_file_path(app, context_name, args, config)?;
 
     let start = args
-        .get("start")
-        .and_then(|v| v.as_u64())
+        .get_u64("start")
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'start' parameter"))?
         as usize;
 
     let end = args
-        .get("end")
-        .and_then(|v| v.as_u64())
+        .get_u64("end")
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'end' parameter"))?
         as usize;
 
@@ -366,19 +365,11 @@ pub fn execute_file_grep(
     let path = resolve_file_path(app, context_name, args, config)?;
 
     let pattern = args
-        .get("pattern")
-        .and_then(|v| v.as_str())
+        .get_str("pattern")
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'pattern' parameter"))?;
 
-    let context_before = args
-        .get("context_before")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(2) as usize;
-
-    let context_after = args
-        .get("context_after")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(2) as usize;
+    let context_before = args.get_u64_or("context_before", 2) as usize;
+    let context_after = args.get_u64_or("context_after", 2) as usize;
 
     let result = cache::read_cache_grep(&path, pattern, context_before, context_after)?;
 
