@@ -565,29 +565,10 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         }));
     }
 
-    // Collect all tools (user-defined + built-in tools)
+    // Collect all tools (user-defined + built-in + file tools)
     let mut all_tools = tools::tools_to_api_format(tools);
-
-    // Always add agentic tools (todos, goals, send_message)
-    all_tools.push(tools::todos_tool_to_api_format());
-    all_tools.push(tools::goals_tool_to_api_format());
-    all_tools.push(tools::send_message_tool_to_api_format());
-
-    // Add reflection tool if enabled
-    if use_reflection {
-        all_tools.push(tools::reflection_tool_to_api_format());
-    }
-
-    // Add file/cache access tools
-    all_tools.push(tools::file_head_tool_to_api_format());
-    all_tools.push(tools::file_tail_tool_to_api_format());
-    all_tools.push(tools::file_lines_tool_to_api_format());
-    all_tools.push(tools::file_grep_tool_to_api_format());
-    all_tools.push(tools::cache_list_tool_to_api_format());
-
-    // Add control flow tools (call_agent/call_user)
-    all_tools.push(tools::call_agent_tool_to_api_format());
-    all_tools.push(tools::call_user_tool_to_api_format());
+    all_tools.extend(tools::builtin_tools_to_api_format(use_reflection));
+    all_tools.extend(tools::all_file_tools_to_api_format());
 
     // Annotate whichever tool is configured as the fallback
     annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
