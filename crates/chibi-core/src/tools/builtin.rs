@@ -188,13 +188,13 @@ pub fn call_agent_tool_to_api_format() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": CALL_AGENT_TOOL_NAME,
-            "description": "Hand control to the agent (yourself) with a prompt. Use this to continue processing with a specific focus or task.",
+            "description": "Continue processing.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "The prompt for the next turn"
+                        "description": "Focus for the next turn"
                     }
                 },
                 "required": ["prompt"]
@@ -209,13 +209,13 @@ pub fn call_user_tool_to_api_format() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": CALL_USER_TOOL_NAME,
-            "description": "Hand control back to the user with an optional message. Use this when you are done or need user input.",
+            "description": "Return control to user.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message": {
                         "type": "string",
-                        "description": "Optional message to display to the user"
+                        "description": "Optional message to display"
                     }
                 },
                 "required": []
@@ -407,7 +407,7 @@ mod tests {
             tool["function"]["description"]
                 .as_str()
                 .unwrap()
-                .contains("agent")
+                .contains("processing")
         );
         assert!(
             tool["function"]["parameters"]["required"]

@@ -1214,9 +1214,18 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                     })?;
                 }
                 let continue_prompt = if prompt.is_empty() {
-                    "[Continuing from previous round]".to_string()
+                    format!(
+                        "[Reengaged ({}/{}) via {} tool. call_user(<message>) to end turn.]",
+                        new_depth, app.config.max_recursion_depth, resolved_config.fallback_tool
+                    )
                 } else {
-                    format!("[Continuing from previous round]\n\n{}", prompt)
+                    format!(
+                        "[Reengaged ({}/{}) via {} tool: {}]",
+                        new_depth,
+                        app.config.max_recursion_depth,
+                        resolved_config.fallback_tool,
+                        prompt
+                    )
                 };
                 return Box::pin(send_prompt_with_depth(
                     app,
