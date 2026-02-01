@@ -329,6 +329,17 @@ PROMPT INPUT:
   No arguments: read from stdin (end with . on empty line)
   Piped input: echo 'text' | chibi"#;
 
+/// Helper for current/specific context command dispatch.
+/// Checks the bool (current context) and Option (specific context) flags,
+/// returning Some(name) if either is set, where name is None for current context.
+fn check_context_pair(current: bool, specific: &Option<String>) -> Option<Option<String>> {
+    if current {
+        Some(None)
+    } else {
+        specific.as_ref().map(|name| Some(name.clone()))
+    }
+}
+
 impl Cli {
     /// Parse CLI arguments from environment
     pub fn parse_args() -> io::Result<Self> {
@@ -516,40 +527,28 @@ impl Cli {
         };
 
         // Determine command
+        // First check prompt (highest priority when not force_call_user)
         let command = if !self.prompt.is_empty() && !force_call_user {
             Command::SendPrompt {
                 prompt: self.prompt.join(" "),
             }
+        // Simple standalone commands
         } else if self.list_contexts {
             Command::ListContexts
         } else if self.list_current_context {
             Command::ListCurrentContext
-        } else if self.destroy_current_context {
-            Command::DestroyContext { name: None }
-        } else if let Some(ref name) = self.destroy_context {
-            Command::DestroyContext {
-                name: Some(name.clone()),
-            }
-        } else if self.archive_current_history {
-            Command::ArchiveHistory { name: None }
-        } else if let Some(ref name) = self.archive_history {
-            Command::ArchiveHistory {
-                name: Some(name.clone()),
-            }
-        } else if self.clear_cache {
-            Command::ClearCache { name: None }
-        } else if let Some(ref name) = self.clear_cache_for {
-            Command::ClearCache {
-                name: Some(name.clone()),
-            }
         } else if self.cleanup_cache {
             Command::CleanupCache
-        } else if self.compact_current_context {
-            Command::CompactContext { name: None }
-        } else if let Some(ref name) = self.compact_context {
-            Command::CompactContext {
-                name: Some(name.clone()),
-            }
+        // Current/specific context pairs (data-driven dispatch)
+        } else if let Some(name) = check_context_pair(self.destroy_current_context, &self.destroy_context) {
+            Command::DestroyContext { name }
+        } else if let Some(name) = check_context_pair(self.archive_current_history, &self.archive_history) {
+            Command::ArchiveHistory { name }
+        } else if let Some(name) = check_context_pair(self.clear_cache, &self.clear_cache_for) {
+            Command::ClearCache { name }
+        } else if let Some(name) = check_context_pair(self.compact_current_context, &self.compact_context) {
+            Command::CompactContext { name }
+        // Complex cases that need pre-parsed values
         } else if let Some(ref new_name) = self.rename_current_context {
             Command::RenameContext {
                 old: None,
