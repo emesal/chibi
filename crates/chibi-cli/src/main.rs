@@ -650,15 +650,17 @@ async fn execute_from_input(
                 )
                 .with_fallback(fallback);
 
-                let markdown = if resolved.render_markdown && !input.flags.raw {
-                    let md_cfg =
-                        md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
-                    Some(MarkdownStream::new(md_cfg))
+                let md_config = if resolved.render_markdown && !input.flags.raw {
+                    Some(md_config_from_resolved(
+                        &resolved,
+                        chibi.home_dir(),
+                        force_markdown,
+                    ))
                 } else {
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, markdown, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose);
                 chibi
                     .send_prompt_streaming(
                         &working_context,
@@ -724,15 +726,18 @@ async fn execute_from_input(
                 force_markdown,
             );
 
-            // Create markdown stream if enabled
-            let markdown = if resolved.render_markdown && !input.flags.raw {
-                let md_cfg = md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
-                Some(MarkdownStream::new(md_cfg))
+            // Create markdown config if enabled
+            let md_config = if resolved.render_markdown && !input.flags.raw {
+                Some(md_config_from_resolved(
+                    &resolved,
+                    chibi.home_dir(),
+                    force_markdown,
+                ))
             } else {
                 None
             };
 
-            let mut sink = CliResponseSink::new(output, markdown, verbose);
+            let mut sink = CliResponseSink::new(output, md_config, verbose);
             chibi
                 .send_prompt_streaming(
                     &working_context,
@@ -793,15 +798,17 @@ async fn execute_from_input(
                 );
 
                 // Create markdown stream if enabled
-                let markdown = if resolved.render_markdown && !input.flags.raw {
-                    let md_cfg =
-                        md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
-                    Some(MarkdownStream::new(md_cfg))
+                let md_config = if resolved.render_markdown && !input.flags.raw {
+                    Some(md_config_from_resolved(
+                        &resolved,
+                        chibi.home_dir(),
+                        force_markdown,
+                    ))
                 } else {
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, markdown, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose);
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
@@ -857,15 +864,17 @@ async fn execute_from_input(
                 );
 
                 // Create markdown stream if enabled
-                let markdown = if resolved.render_markdown && !input.flags.raw {
-                    let md_cfg =
-                        md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
-                    Some(MarkdownStream::new(md_cfg))
+                let md_config = if resolved.render_markdown && !input.flags.raw {
+                    Some(md_config_from_resolved(
+                        &resolved,
+                        chibi.home_dir(),
+                        force_markdown,
+                    ))
                 } else {
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, markdown, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose);
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,

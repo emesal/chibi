@@ -609,6 +609,9 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
     // Tool call loop - keep going until we get a final text response
     loop {
+        // Signal start of a new response (allows sink to reset state)
+        sink.handle(ResponseEvent::StartResponse)?;
+
         // Log request if debug logging is enabled
         log_request_if_enabled(app, context_name, debug, &request_body);
 
