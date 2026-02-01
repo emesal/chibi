@@ -250,13 +250,13 @@ pub struct Cli {
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 
-    /// Don't invoke the LLM
-    #[arg(short = 'x', long = "no-chibi")]
-    pub no_chibi: bool,
+    /// Force handoff to user (-x)
+    #[arg(short = 'x', long = "force-call-user")]
+    pub force_call_user: bool,
 
-    /// Force LLM invocation (overrides implied -x)
-    #[arg(short = 'X', long = "force-chibi")]
-    pub force_chibi: bool,
+    /// Force handoff to agent (-X)
+    #[arg(short = 'X', long = "force-call-agent")]
+    pub force_call_agent: bool,
 
     // === JSON modes ===
     /// Read input as JSON from stdin (exclusive with config flags)
@@ -462,10 +462,10 @@ impl Cli {
             .as_ref()
             .map(|s| DebugKey::parse_list(s))
             .unwrap_or_default();
-        let debug_implies_no_chibi = debug_keys.iter().any(|k| matches!(k, DebugKey::Md(_)));
+        let debug_implies_force_call_user = debug_keys.iter().any(|k| matches!(k, DebugKey::Md(_)));
 
-        // Compute implied no_chibi based on flags
-        let implies_no_chibi = self.list_current_context
+        // Compute implied force_call_user based on flags
+        let implies_force_call_user = self.list_current_context
             || self.list_contexts
             || self.destroy_current_context
             || self.destroy_context.is_some()
@@ -479,11 +479,19 @@ impl Cli {
             || set_system_prompt.is_some()
             || plugin.is_some()
             || call_tool.is_some()
-            || debug_implies_no_chibi;
+            || debug_implies_force_call_user;
 
-        let mut no_chibi = self.no_chibi || implies_no_chibi;
-        if self.force_chibi {
-            no_chibi = false;
+        let mut force_call_user = self.force_call_user || implies_force_call_user;
+        if self.force_call_agent {
+            force_call_user = false;
+        }
+
+        // Validate: -x with prompt is an error
+        if self.force_call_user && !self.prompt.is_empty() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "-x (force-call-user) is incompatible with a prompt",
+            ));
         }
 
         // Determine context selection
@@ -508,7 +516,7 @@ impl Cli {
         };
 
         // Determine command
-        let command = if !self.prompt.is_empty() && !no_chibi {
+        let command = if !self.prompt.is_empty() && !force_call_user {
             Command::SendPrompt {
                 prompt: self.prompt.join(" "),
             }
@@ -605,7 +613,8 @@ impl Cli {
         let flags = Flags {
             verbose: self.verbose,
             json_output: self.json_output,
-            no_chibi,
+            force_call_user,
+            force_call_agent: self.force_call_agent,
             raw: self.raw,
             debug: debug_keys,
         };
@@ -731,7 +740,7 @@ pub fn parse() -> io::Result<ChibiInput> {
     // Handle stdin prompt reading (CLI-specific behavior)
     // This happens when there's no command that produces output and we might need
     // to read from stdin or interactive input
-    let should_read_prompt = !input.flags.no_chibi && matches!(input.command, Command::NoOp);
+    let should_read_prompt = !input.flags.force_call_user && matches!(input.command, Command::NoOp);
 
     if should_read_prompt {
         let stdin_is_pipe = !io::stdin().is_terminal();
@@ -813,7 +822,7 @@ mod tests {
         assert!(
             matches!(input.context, ContextSelection::Switch { ref name, persistent: true } if name == "coding")
         );
-        assert!(!input.flags.no_chibi); // combinable, not implied
+        assert!(!input.flags.force_call_user); // combinable, not implied
     }
 
     #[test]
@@ -837,7 +846,7 @@ mod tests {
         // After removing allow_hyphen_values from prompt, -xc- now works correctly
         let input = parse_input("-xc-").unwrap();
         assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "-"));
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     #[test]
@@ -845,7 +854,7 @@ mod tests {
         // With a space also works
         let input = parse_input("-xc -").unwrap();
         assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "-"));
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     #[test]
@@ -899,14 +908,14 @@ mod tests {
     fn test_list_current_context_short() {
         let input = parse_input("-l").unwrap();
         assert!(matches!(input.command, Command::ListCurrentContext));
-        assert!(input.flags.no_chibi); // implied
+        assert!(input.flags.force_call_user); // implied
     }
 
     #[test]
     fn test_list_contexts_short() {
         let input = parse_input("-L").unwrap();
         assert!(matches!(input.command, Command::ListContexts));
-        assert!(input.flags.no_chibi); // implied
+        assert!(input.flags.force_call_user); // implied
     }
 
     // === Destroy tests ===
@@ -918,7 +927,7 @@ mod tests {
             input.command,
             Command::DestroyContext { name: None }
         ));
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     #[test]
@@ -927,7 +936,7 @@ mod tests {
         assert!(
             matches!(input.command, Command::DestroyContext { ref name } if *name == Some("old-context".to_string()))
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     #[test]
@@ -947,7 +956,7 @@ mod tests {
             input.command,
             Command::ArchiveHistory { name: None }
         ));
-        assert!(!input.flags.no_chibi); // combinable
+        assert!(!input.flags.force_call_user); // combinable
     }
 
     #[test]
@@ -956,7 +965,7 @@ mod tests {
         assert!(
             matches!(input.command, Command::ArchiveHistory { ref name } if *name == Some("other".to_string()))
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     // === Compact tests ===
@@ -968,7 +977,7 @@ mod tests {
             input.command,
             Command::CompactContext { name: None }
         ));
-        assert!(!input.flags.no_chibi); // combinable
+        assert!(!input.flags.force_call_user); // combinable
     }
 
     #[test]
@@ -977,7 +986,7 @@ mod tests {
         assert!(
             matches!(input.command, Command::CompactContext { ref name } if *name == Some("other".to_string()))
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     // === Inbox check tests ===
@@ -986,7 +995,7 @@ mod tests {
     fn test_check_all_inboxes_short() {
         let input = parse_input("-b").unwrap();
         assert!(matches!(input.command, Command::CheckAllInboxes));
-        assert!(!input.flags.no_chibi); // will invoke LLM if inbox has messages
+        assert!(!input.flags.force_call_user); // will invoke LLM if inbox has messages
     }
 
     #[test]
@@ -999,7 +1008,7 @@ mod tests {
     fn test_check_inbox_for_short() {
         let input = parse_input("-B work").unwrap();
         assert!(matches!(input.command, Command::CheckInbox { ref context } if context == "work"));
-        assert!(!input.flags.no_chibi);
+        assert!(!input.flags.force_call_user);
     }
 
     #[test]
@@ -1024,7 +1033,7 @@ mod tests {
         assert!(
             matches!(input.command, Command::RenameContext { old: None, ref new } if new == "newname")
         );
-        assert!(!input.flags.no_chibi); // combinable
+        assert!(!input.flags.force_call_user); // combinable
     }
 
     #[test]
@@ -1033,7 +1042,7 @@ mod tests {
         assert!(
             matches!(input.command, Command::RenameContext { ref old, ref new } if *old == Some("old".to_string()) && new == "new")
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     // === Log/history tests ===
@@ -1048,7 +1057,7 @@ mod tests {
                 count: 10
             }
         ));
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     #[test]
@@ -1069,7 +1078,7 @@ mod tests {
         assert!(
             matches!(input.command, Command::ShowLog { ref context, count: 10 } if *context == Some("other".to_string()))
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     // === Inspect tests ===
@@ -1080,7 +1089,7 @@ mod tests {
         assert!(
             matches!(input.command, Command::Inspect { context: None, ref thing } if *thing == Inspectable::SystemPrompt)
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     #[test]
@@ -1102,7 +1111,7 @@ mod tests {
             matches!(input.command, Command::Inspect { ref context, ref thing }
             if *context == Some("other".to_string()) && *thing == Inspectable::Todos)
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     // === Set system prompt tests ===
@@ -1113,7 +1122,7 @@ mod tests {
         assert!(
             matches!(input.command, Command::SetSystemPrompt { context: None, ref prompt } if prompt == "prompt.md")
         );
-        assert!(!input.flags.no_chibi); // combinable
+        assert!(!input.flags.force_call_user); // combinable
     }
 
     #[test]
@@ -1123,7 +1132,7 @@ mod tests {
             matches!(input.command, Command::SetSystemPrompt { ref context, ref prompt }
             if *context == Some("other".to_string()) && prompt == "prompt.md")
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     // === Username tests ===
@@ -1154,7 +1163,7 @@ mod tests {
             matches!(input.command, Command::RunPlugin { ref name, ref args }
             if name == "myplugin" && args.is_empty())
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     #[test]
@@ -1175,7 +1184,7 @@ mod tests {
             matches!(input.command, Command::CallTool { ref name, ref args }
             if name == "update_todos" && args == &["{}"])
         );
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     // === Verbose and control flags ===
@@ -1187,24 +1196,26 @@ mod tests {
     }
 
     #[test]
-    fn test_no_chibi_explicit() {
+    fn test_force_call_user_explicit() {
         let input = parse_input("-x").unwrap();
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     #[test]
-    fn test_force_chibi_short() {
+    fn test_force_call_agent_short() {
         let input = parse_input("-X").unwrap();
-        // force_chibi is handled during parsing, not stored in flags
-        assert!(!input.flags.no_chibi);
+        // force_call_agent is stored in flags
+        assert!(input.flags.force_call_agent);
+        assert!(!input.flags.force_call_user);
     }
 
     #[test]
-    fn test_force_chibi_overrides_implied() {
+    fn test_force_call_agent_overrides_implied() {
         let input = parse_input("-X -L").unwrap();
         assert!(matches!(input.command, Command::ListContexts));
-        // force_chibi overrides the implied no_chibi from -L
-        assert!(!input.flags.no_chibi);
+        // force_call_agent overrides the implied force_call_user from -L
+        assert!(!input.flags.force_call_user);
+        assert!(input.flags.force_call_agent);
     }
 
     // === Double dash handling ===
@@ -1596,9 +1607,9 @@ mod tests {
     // === Debug flag tests ===
 
     #[test]
-    fn test_debug_md_implies_no_chibi() {
+    fn test_debug_md_implies_force_call_user() {
         let input = parse_input("--debug md=README.md").unwrap();
-        assert!(input.flags.no_chibi); // should imply -x
+        assert!(input.flags.force_call_user); // should imply -x
         assert!(
             input
                 .flags
@@ -1609,9 +1620,10 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_md_can_be_overridden_with_force_chibi() {
+    fn test_debug_md_can_be_overridden_with_force_call_agent() {
         let input = parse_input("-X --debug md=README.md").unwrap();
-        assert!(!input.flags.no_chibi); // -X should override
+        assert!(!input.flags.force_call_user); // -X should override
+        assert!(input.flags.force_call_agent);
         assert!(
             input
                 .flags
@@ -1622,9 +1634,9 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_request_log_does_not_imply_no_chibi() {
+    fn test_debug_request_log_does_not_imply_force_call_user() {
         let input = parse_input("--debug request-log").unwrap();
-        assert!(!input.flags.no_chibi); // should NOT imply -x
+        assert!(!input.flags.force_call_user); // should NOT imply -x
         assert!(
             input
                 .flags

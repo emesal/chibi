@@ -284,7 +284,7 @@ mod tests {
         let input = from_str(json).unwrap();
         assert!(!input.flags.verbose);
         assert!(!input.flags.json_output);
-        assert!(!input.flags.no_chibi);
+        assert!(!input.flags.force_call_user);
     }
 
     #[test]
@@ -318,12 +318,12 @@ mod tests {
     fn test_all_flags() {
         let json = r#"{
             "command": "list_contexts",
-            "flags": {"verbose": true, "json_output": true, "no_chibi": true}
+            "flags": {"verbose": true, "json_output": true, "force_call_user": true}
         }"#;
         let input = from_str(json).unwrap();
         assert!(input.flags.verbose);
         assert!(input.flags.json_output);
-        assert!(input.flags.no_chibi);
+        assert!(input.flags.force_call_user);
     }
 
     #[test]

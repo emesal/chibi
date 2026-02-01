@@ -97,6 +97,29 @@ fn build_tool_info_list(
         .collect()
 }
 
+/// Annotate the fallback tool's description to indicate it's called automatically.
+fn annotate_fallback_tool(tools: &mut [serde_json::Value], fallback_name: &str) {
+    const FALLBACK_SUFFIX: &str = " Called automatically if no other tool is used.";
+
+    for tool in tools.iter_mut() {
+        let name_matches = tool
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            .is_some_and(|name| name == fallback_name);
+
+        if name_matches {
+            if let Some(func) = tool.get_mut("function")
+                && let Some(desc) = func.get_mut("description")
+                && let Some(desc_str) = desc.as_str()
+            {
+                *desc = serde_json::Value::String(format!("{}{}", desc_str, FALLBACK_SUFFIX));
+            }
+            break; // Only annotate the first match
+        }
+    }
+}
+
 /// Filter tools based on config include/exclude lists
 fn filter_tools_by_config(
     tools: Vec<serde_json::Value>,
@@ -255,6 +278,40 @@ fn apply_request_modifications<S: ResponseSink>(
     Ok(request_body)
 }
 
+/// Apply fallback override from hook results.
+/// Hooks can return `{"fallback": "<tool_name>"}` to override the fallback tool.
+/// The tool must be a flow_control tool (validated elsewhere).
+fn apply_fallback_override<S: ResponseSink>(
+    handoff: &mut tools::Handoff,
+    hook_results: &[(String, serde_json::Value)],
+    verbose: bool,
+    sink: &mut S,
+) -> io::Result<()> {
+    for (hook_name, hook_result) in hook_results {
+        if let Some(fallback_str) = hook_result.get("fallback").and_then(|v| v.as_str()) {
+            // Use builtin metadata since hooks can only override to builtins
+            let meta = tools::builtin_tool_metadata(fallback_str);
+            let new_fallback = if meta.ends_turn {
+                tools::HandoffTarget::User {
+                    message: String::new(),
+                }
+            } else {
+                tools::HandoffTarget::Agent {
+                    prompt: String::new(),
+                }
+            };
+            handoff.set_fallback(new_fallback);
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!("[Hook {} set fallback to {}]", hook_name, fallback_str),
+                    verbose_only: true,
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Send a prompt to the LLM with streaming response via ResponseSink.
 ///
 /// This is the main entry point for sending prompts. It handles:
@@ -306,6 +363,9 @@ async fn send_prompt_with_depth<S: ResponseSink>(
             "Prompt cannot be empty",
         ));
     }
+
+    // Validate config (fallback tool must exist and have flow_control=true)
+    app.validate_config(resolved_config, tools)?;
 
     let verbose = options.verbose;
     let use_reflection = options.use_reflection;
@@ -525,6 +585,13 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     all_tools.push(tools::file_grep_tool_to_api_format());
     all_tools.push(tools::cache_list_tool_to_api_format());
 
+    // Add control flow tools (call_agent/call_user)
+    all_tools.push(tools::call_agent_tool_to_api_format());
+    all_tools.push(tools::call_user_tool_to_api_format());
+
+    // Annotate whichever tool is configured as the fallback
+    annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
+
     // Apply config-based tool filtering (from local.toml [tools] section)
     all_tools = filter_tools_by_config(all_tools, &resolved_config.tools);
 
@@ -550,12 +617,37 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
     request_body = apply_request_modifications(request_body, &hook_results, verbose, sink)?;
 
-    // Track if we should recurse (continue_processing was called)
-    let mut should_recurse = false;
-    let mut recurse_note = String::new();
+    // Determine fallback from config or override using metadata
+    let fallback = options.fallback_override.clone().unwrap_or_else(|| {
+        let meta = tools::get_tool_metadata(tools, &resolved_config.fallback_tool);
+        if meta.ends_turn {
+            tools::HandoffTarget::User {
+                message: String::new(),
+            }
+        } else {
+            tools::HandoffTarget::Agent {
+                prompt: String::new(),
+            }
+        }
+    });
+    let mut handoff = tools::Handoff::new(fallback);
+
+    // Execute pre_agentic_loop hook - allows plugins to override fallback before the loop
+    let hook_data = json!({
+        "context_name": context.name,
+        "recursion_depth": recursion_depth,
+        "current_fallback": resolved_config.fallback_tool,
+        "message": final_prompt,
+    });
+    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreAgenticLoop, &hook_data)?;
+    apply_fallback_override(&mut handoff, &hook_results, verbose, sink)?;
 
     // Tool call loop - keep going until we get a final text response
+    let mut consecutive_empty_responses = 0usize;
     loop {
+        // Signal start of a new response (allows sink to reset state)
+        sink.handle(ResponseEvent::StartResponse)?;
+
         // Log request if debug logging is enabled
         log_request_if_enabled(app, context_name, debug, &request_body);
 
@@ -720,11 +812,20 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 let mut args: serde_json::Value =
                     serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
 
-                // Check for recurse tool first (special handling - triggers recursion after this turn)
-                if let Some(note) = tools::check_recurse_signal(&tc.name, &args) {
-                    should_recurse = true;
-                    recurse_note = note;
-                }
+                // Check for control flow tools using metadata
+                let tool_metadata = tools::get_tool_metadata(tools, &tc.name);
+                let is_handoff_tool = if tool_metadata.flow_control {
+                    if tool_metadata.ends_turn {
+                        let message = args["message"].as_str().unwrap_or("").to_string();
+                        handoff.set_user(message);
+                    } else {
+                        let prompt = args["prompt"].as_str().unwrap_or("").to_string();
+                        handoff.set_agent(prompt);
+                    }
+                    true
+                } else {
+                    false
+                };
 
                 // Execute pre_tool hooks (can modify arguments OR block execution)
                 let pre_hook_data = serde_json::json!({
@@ -780,6 +881,24 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 // If blocked, skip execution and use block message as result
                 let tool_result = if blocked {
                     block_message
+                } else if is_handoff_tool {
+                    // Handoff tools don't execute - they just set the handoff target
+                    // Use metadata to determine the result message
+                    if tool_metadata.ends_turn {
+                        let message = args["message"].as_str().unwrap_or("");
+                        if message.is_empty() {
+                            "Returning to user".to_string()
+                        } else {
+                            message.to_string()
+                        }
+                    } else {
+                        let prompt = args["prompt"].as_str().unwrap_or("");
+                        if prompt.is_empty() {
+                            "Continuing processing".to_string()
+                        } else {
+                            format!("Continuing with: {}", prompt)
+                        }
+                    }
                 } else if tc.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
                     "Error: Reflection tool is not enabled".to_string()
                 } else if let Some(builtin_result) =
@@ -1038,7 +1157,53 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 }));
             }
 
+            // Execute post_tool_batch hook - allows plugins to override fallback after seeing tool results
+            let tool_batch_info: Vec<serde_json::Value> = tool_calls
+                .iter()
+                .map(|tc| {
+                    json!({
+                        "name": tc.name,
+                        "arguments": serde_json::from_str::<serde_json::Value>(&tc.arguments).unwrap_or(json!({})),
+                    })
+                })
+                .collect();
+            let hook_data = json!({
+                "context_name": context.name,
+                "recursion_depth": recursion_depth,
+                "current_fallback": resolved_config.fallback_tool,
+                "tool_calls": tool_batch_info,
+            });
+            let hook_results =
+                tools::execute_hook(tools, tools::HookPoint::PostToolBatch, &hook_data)?;
+            apply_fallback_override(&mut handoff, &hook_results, verbose, sink)?;
+
             request_body["messages"] = serde_json::json!(messages);
+            consecutive_empty_responses = 0; // Tool calls count as meaningful work
+            continue;
+        }
+
+        // Check for empty response (no tool calls AND no text content)
+        if full_response.trim().is_empty() {
+            consecutive_empty_responses += 1;
+            if consecutive_empty_responses >= app.config.max_empty_responses {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Max consecutive empty responses ({}) reached, stopping]",
+                        app.config.max_empty_responses
+                    ),
+                    verbose_only: false,
+                })?;
+                return Ok(());
+            }
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!(
+                        "[Empty response {}/{}, retrying]",
+                        consecutive_empty_responses, app.config.max_empty_responses
+                    ),
+                    verbose_only: true,
+                })?;
+            }
             continue;
         }
 
@@ -1069,46 +1234,70 @@ async fn send_prompt_with_depth<S: ResponseSink>(
 
         sink.handle(ResponseEvent::Newline)?;
 
-        // Check if we should recurse
-        if should_recurse {
-            let new_depth = recursion_depth + 1;
-            if new_depth >= app.config.max_recursion_depth {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Max recursion depth ({}) reached, stopping]",
-                        app.config.max_recursion_depth
-                    ),
-                    verbose_only: false,
-                })?;
+        // Determine next action based on handoff
+        match handoff.take() {
+            tools::HandoffTarget::User { message } => {
+                if !message.is_empty() {
+                    // Output the message as final text
+                    sink.handle(ResponseEvent::TextChunk(&message))?;
+                    sink.handle(ResponseEvent::Newline)?;
+                }
                 return Ok(());
             }
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Continuing processing ({}/{}): {}]",
-                        new_depth, app.config.max_recursion_depth, recurse_note
-                    ),
-                    verbose_only: true,
-                })?;
+            tools::HandoffTarget::Agent { prompt } => {
+                let new_depth = recursion_depth + 1;
+                if new_depth >= app.config.max_recursion_depth {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!(
+                            "[Max recursion depth ({}) reached, stopping]",
+                            app.config.max_recursion_depth
+                        ),
+                        verbose_only: false,
+                    })?;
+                    return Ok(());
+                }
+                if verbose {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!(
+                            "[Continuing processing ({}/{}): {}]",
+                            new_depth,
+                            app.config.max_recursion_depth,
+                            if prompt.is_empty() {
+                                "(no prompt)"
+                            } else {
+                                &prompt
+                            }
+                        ),
+                        verbose_only: true,
+                    })?;
+                }
+                let continue_prompt = if prompt.is_empty() {
+                    format!(
+                        "[Reengaged ({}/{}) via {} tool. call_user(<message>) to end turn.]",
+                        new_depth, app.config.max_recursion_depth, resolved_config.fallback_tool
+                    )
+                } else {
+                    format!(
+                        "[Reengaged ({}/{}) via {} tool: {}]",
+                        new_depth,
+                        app.config.max_recursion_depth,
+                        resolved_config.fallback_tool,
+                        prompt
+                    )
+                };
+                return Box::pin(send_prompt_with_depth(
+                    app,
+                    context_name,
+                    continue_prompt,
+                    tools,
+                    new_depth,
+                    resolved_config,
+                    options,
+                    sink,
+                ))
+                .await;
             }
-            let continue_prompt = format!(
-                "[Continuing from previous round]\n\nNote to self: {}",
-                recurse_note
-            );
-            return Box::pin(send_prompt_with_depth(
-                app,
-                context_name,
-                continue_prompt,
-                tools,
-                new_depth,
-                resolved_config,
-                options,
-                sink,
-            ))
-            .await;
         }
-
-        return Ok(());
     }
 }
 
@@ -1206,5 +1395,59 @@ mod tests {
         };
         let result = filter_tools_by_config(tools, &config);
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_annotate_fallback_tool() {
+        let mut tools = vec![
+            json!({"function": {"name": "call_agent", "description": "Continue processing."}}),
+            json!({"function": {"name": "call_user", "description": "Return control to user."}}),
+            json!({"function": {"name": "my_plugin", "description": "Does something."}}),
+        ];
+
+        // Annotate call_agent as fallback
+        annotate_fallback_tool(&mut tools, "call_agent");
+        assert!(
+            tools[0]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("automatically")
+        );
+        assert!(
+            !tools[1]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("automatically")
+        );
+
+        // Reset and annotate a plugin instead
+        tools[0]["function"]["description"] = json!("Continue processing.");
+        annotate_fallback_tool(&mut tools, "my_plugin");
+        assert!(
+            !tools[0]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("automatically")
+        );
+        assert!(
+            tools[2]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("automatically")
+        );
+    }
+
+    #[test]
+    fn test_annotate_fallback_tool_not_found() {
+        let mut tools = vec![
+            json!({"function": {"name": "call_agent", "description": "Continue processing."}}),
+        ];
+
+        // Should not panic if fallback tool doesn't exist
+        annotate_fallback_tool(&mut tools, "nonexistent_tool");
+        assert_eq!(
+            tools[0]["function"]["description"].as_str().unwrap(),
+            "Continue processing."
+        );
     }
 }

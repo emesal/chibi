@@ -116,7 +116,7 @@ When using `--json-config`, pass a JSON object to stdin:
 }
 ```
 
-**Flags:** `"verbose"`, `"json_output"`, `"no_chibi"`, `"raw"`
+**Flags:** `"verbose"`, `"json_output"`, `"force_call_user"`, `"force_call_agent"`, `"raw"`
 
 **Simple commands:** `"list_contexts"`, `"list_current_context"`, `"no_op"`
 

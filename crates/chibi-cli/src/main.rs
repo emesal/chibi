@@ -617,8 +617,63 @@ async fn execute_from_input(
                 })?
             };
 
-            let result = chibi.execute_tool(&working_context, name, args_json)?;
-            output.emit_result(&result);
+            let result = chibi.execute_tool(&working_context, name, args_json.clone())?;
+
+            if input.flags.force_call_agent {
+                // Tool-first with continuation to LLM
+                let tool_context = format!(
+                    "[User initiated tool call: {}]\n[Arguments: {}]\n[Result: {}]",
+                    name, args_json, result
+                );
+
+                let mut resolved = resolve_cli_config(chibi, &working_context, ephemeral_username)?;
+                if input.flags.raw {
+                    resolved.render_markdown = false;
+                }
+                let use_reflection = chibi.app.config.reflection_enabled;
+
+                let context_dir = chibi.app.context_dir(&working_context);
+                let _lock = chibi_core::lock::ContextLock::acquire(
+                    &context_dir,
+                    chibi.app.config.lock_heartbeat_seconds,
+                )?;
+
+                let fallback = chibi_core::tools::HandoffTarget::Agent {
+                    prompt: String::new(),
+                };
+                let options = PromptOptions::new(
+                    verbose,
+                    use_reflection,
+                    json_output,
+                    &input.flags.debug,
+                    force_markdown,
+                )
+                .with_fallback(fallback);
+
+                let md_config = if resolved.render_markdown && !input.flags.raw {
+                    Some(md_config_from_resolved(
+                        &resolved,
+                        chibi.home_dir(),
+                        force_markdown,
+                    ))
+                } else {
+                    None
+                };
+
+                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                chibi
+                    .send_prompt_streaming(
+                        &working_context,
+                        &tool_context,
+                        &resolved.core,
+                        &options,
+                        &mut sink,
+                    )
+                    .await?;
+            } else {
+                // Tool-first with immediate return (default for -P)
+                output.emit_result(&result);
+            }
             did_action = true;
         }
         Command::ClearCache { name } => {
@@ -671,15 +726,18 @@ async fn execute_from_input(
                 force_markdown,
             );
 
-            // Create markdown stream if enabled
-            let markdown = if resolved.render_markdown && !input.flags.raw {
-                let md_cfg = md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
-                Some(MarkdownStream::new(md_cfg))
+            // Create markdown config if enabled
+            let md_config = if resolved.render_markdown && !input.flags.raw {
+                Some(md_config_from_resolved(
+                    &resolved,
+                    chibi.home_dir(),
+                    force_markdown,
+                ))
             } else {
                 None
             };
 
-            let mut sink = CliResponseSink::new(output, markdown, verbose);
+            let mut sink = CliResponseSink::new(output, md_config, verbose);
             chibi
                 .send_prompt_streaming(
                     &working_context,
@@ -740,15 +798,17 @@ async fn execute_from_input(
                 );
 
                 // Create markdown stream if enabled
-                let markdown = if resolved.render_markdown && !input.flags.raw {
-                    let md_cfg =
-                        md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
-                    Some(MarkdownStream::new(md_cfg))
+                let md_config = if resolved.render_markdown && !input.flags.raw {
+                    Some(md_config_from_resolved(
+                        &resolved,
+                        chibi.home_dir(),
+                        force_markdown,
+                    ))
                 } else {
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, markdown, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose);
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
@@ -804,15 +864,17 @@ async fn execute_from_input(
                 );
 
                 // Create markdown stream if enabled
-                let markdown = if resolved.render_markdown && !input.flags.raw {
-                    let md_cfg =
-                        md_config_from_resolved(&resolved, chibi.home_dir(), force_markdown);
-                    Some(MarkdownStream::new(md_cfg))
+                let md_config = if resolved.render_markdown && !input.flags.raw {
+                    Some(md_config_from_resolved(
+                        &resolved,
+                        chibi.home_dir(),
+                        force_markdown,
+                    ))
                 } else {
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, markdown, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose);
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,

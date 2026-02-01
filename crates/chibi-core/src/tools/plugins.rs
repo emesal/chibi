@@ -3,8 +3,8 @@
 //! Plugins are executable scripts in the plugins directory that provide tools for the LLM.
 //! They output JSON schema when called with --schema and receive arguments via CHIBI_TOOL_ARGS.
 
-use super::Tool;
 use super::hooks::HookPoint;
+use super::{Tool, ToolMetadata};
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -203,12 +203,20 @@ fn parse_single_tool_schema(
         Vec::new()
     };
 
+    // Parse metadata fields (all optional with defaults)
+    let metadata = ToolMetadata {
+        parallel: schema["parallel"].as_bool().unwrap_or(true),
+        flow_control: schema["flow_control"].as_bool().unwrap_or(false),
+        ends_turn: schema["ends_turn"].as_bool().unwrap_or(false),
+    };
+
     Ok(Tool {
         name,
         description,
         parameters,
         path: path.to_path_buf(),
         hooks,
+        metadata,
     })
 }
 
@@ -292,6 +300,7 @@ mod tests {
             parameters: serde_json::json!({"type": "object", "properties": {}}),
             path: PathBuf::from("/usr/bin/test"),
             hooks: vec![HookPoint::OnStart, HookPoint::OnEnd],
+            metadata: ToolMetadata::new(),
         };
         assert_eq!(tool.name, "test_tool");
         assert_eq!(tool.hooks.len(), 2);
@@ -307,6 +316,7 @@ mod tests {
                 parameters: serde_json::json!({"type": "object", "properties": {"arg": {"type": "string"}}}),
                 path: PathBuf::from("/bin/one"),
                 hooks: vec![],
+                metadata: ToolMetadata::new(),
             },
             Tool {
                 name: "tool_two".to_string(),
@@ -314,6 +324,7 @@ mod tests {
                 parameters: serde_json::json!({"type": "object", "properties": {}}),
                 path: PathBuf::from("/bin/two"),
                 hooks: vec![HookPoint::PreTool],
+                metadata: ToolMetadata::new(),
             },
         ];
 
@@ -338,6 +349,7 @@ mod tests {
                 parameters: serde_json::json!({}),
                 path: PathBuf::from("/bin/alpha"),
                 hooks: vec![],
+                metadata: ToolMetadata::new(),
             },
             Tool {
                 name: "beta".to_string(),
@@ -345,6 +357,7 @@ mod tests {
                 parameters: serde_json::json!({}),
                 path: PathBuf::from("/bin/beta"),
                 hooks: vec![],
+                metadata: ToolMetadata::new(),
             },
         ];
 
@@ -354,5 +367,25 @@ mod tests {
         assert!(find_tool(&tools, "beta").is_some());
         assert!(find_tool(&tools, "gamma").is_none());
         assert!(find_tool(&tools, "").is_none());
+    }
+
+    #[test]
+    fn test_tool_metadata_defaults() {
+        let meta = ToolMetadata::new();
+        assert!(meta.parallel);
+        assert!(!meta.flow_control);
+        assert!(!meta.ends_turn);
+    }
+
+    #[test]
+    fn test_tool_metadata_custom() {
+        let meta = ToolMetadata {
+            parallel: false,
+            flow_control: true,
+            ends_turn: true,
+        };
+        assert!(!meta.parallel);
+        assert!(meta.flow_control);
+        assert!(meta.ends_turn);
     }
 }

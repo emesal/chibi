@@ -34,6 +34,8 @@ pub enum HookPoint {
     PostCacheOutput,  // After output is cached (notification only)
     PreApiTools,      // Before tools are sent to API (can filter tools)
     PreApiRequest,    // Before API request is sent (can modify full request body)
+    PreAgenticLoop,   // Before entering the tool loop (can override fallback)
+    PostToolBatch,    // After processing a batch of tool calls (can override fallback)
 }
 
 /// Execute a hook on all tools that registered for it
@@ -91,7 +93,7 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
-    // All 22 hook points for testing
+    // All 24 hook points for testing
     const ALL_HOOKS: &[(&str, HookPoint)] = &[
         ("pre_message", HookPoint::PreMessage),
         ("post_message", HookPoint::PostMessage),
@@ -115,6 +117,8 @@ mod tests {
         ("post_cache_output", HookPoint::PostCacheOutput),
         ("pre_api_tools", HookPoint::PreApiTools),
         ("pre_api_request", HookPoint::PreApiRequest),
+        ("pre_agentic_loop", HookPoint::PreAgenticLoop),
+        ("post_tool_batch", HookPoint::PostToolBatch),
     ];
 
     #[test]

@@ -6,7 +6,7 @@
 use chibi_core::api::sink::{ResponseEvent, ResponseSink};
 use std::io;
 
-use crate::markdown::MarkdownStream;
+use crate::markdown::{MarkdownConfig, MarkdownStream};
 use crate::output::OutputHandler;
 
 /// CLI-specific response sink for terminal output.
@@ -19,6 +19,7 @@ use crate::output::OutputHandler;
 pub struct CliResponseSink<'a> {
     output: &'a OutputHandler,
     markdown: Option<MarkdownStream>,
+    markdown_config: Option<MarkdownConfig>,
     verbose: bool,
 }
 
@@ -27,12 +28,20 @@ impl<'a> CliResponseSink<'a> {
     ///
     /// # Arguments
     /// * `output` - The output handler for diagnostic and JSON output
-    /// * `markdown` - Optional markdown stream for terminal rendering
+    /// * `markdown_config` - Optional config for creating markdown streams
     /// * `verbose` - Whether verbose diagnostics should be shown
-    pub fn new(output: &'a OutputHandler, markdown: Option<MarkdownStream>, verbose: bool) -> Self {
+    pub fn new(
+        output: &'a OutputHandler,
+        markdown_config: Option<MarkdownConfig>,
+        verbose: bool,
+    ) -> Self {
+        let markdown = markdown_config
+            .as_ref()
+            .map(|cfg| MarkdownStream::new(cfg.clone()));
         Self {
             output,
             markdown,
+            markdown_config,
             verbose,
         }
     }
@@ -76,6 +85,13 @@ impl ResponseSink for CliResponseSink<'_> {
                     self.output
                         .diagnostic(&format!("[Tool {} (cached)]", name), self.verbose);
                 }
+            }
+            ResponseEvent::StartResponse => {
+                // Create a fresh markdown stream for the new response
+                self.markdown = self
+                    .markdown_config
+                    .as_ref()
+                    .map(|cfg| MarkdownStream::new(cfg.clone()));
             }
         }
         Ok(())
@@ -215,5 +231,41 @@ mod tests {
             cached: false,
         })
         .unwrap();
+    }
+
+    #[test]
+    fn test_handle_start_response_no_config() {
+        let output = OutputHandler::new(false);
+        let mut sink = CliResponseSink::new(&output, None, false);
+
+        // Should not panic when no markdown config is present
+        sink.handle(ResponseEvent::StartResponse).unwrap();
+        assert!(sink.markdown.is_none());
+    }
+
+    #[test]
+    fn test_start_response_recreates_markdown_stream() {
+        use crate::config::{ImageConfig, default_markdown_style};
+
+        let output = OutputHandler::new(false);
+        let config = MarkdownConfig {
+            render_markdown: true,
+            force_render: true, // Force render even when not a TTY (for tests)
+            image: ImageConfig::default(),
+            image_cache_dir: None,
+            markdown_style: default_markdown_style(),
+        };
+        let mut sink = CliResponseSink::new(&output, Some(config), false);
+
+        // Initially has a markdown stream
+        assert!(sink.markdown.is_some());
+
+        // Simulate finishing a response (consumes the stream)
+        sink.handle(ResponseEvent::Finished).unwrap();
+        assert!(sink.markdown.is_none());
+
+        // StartResponse should recreate the stream
+        sink.handle(ResponseEvent::StartResponse).unwrap();
+        assert!(sink.markdown.is_some());
     }
 }

@@ -118,17 +118,17 @@ fn integration_multiple_operations_can_combine() {
     // -l and -L together should work (both execute, no error)
     let output = run_chibi_with_test_home(&["-l", "-L"]);
 
-    // Both should execute (no_chibi implied)
+    // Both should execute (force_call_user implied)
     assert!(output.status.success());
 }
 
 #[test]
 fn integration_output_operations_dont_invoke_llm() {
     // -L with a prompt argument should still work
-    // (the prompt is ignored when no_chibi is implied)
+    // (the prompt is ignored when force_call_user is implied)
     let output = run_chibi_with_test_home(&["-L", "hello"]);
 
-    // Should succeed - -L implies no_chibi, so prompt is not sent
+    // Should succeed - -L implies force_call_user, so prompt is not sent
     assert!(output.status.success());
 }
 
@@ -699,14 +699,17 @@ fn integration_json_schema_flags_with_defaults() {
     let props = &flags_def["properties"];
     assert!(props["verbose"].is_object(), "should have verbose");
     assert!(props["json_output"].is_object(), "should have json_output");
-    assert!(props["no_chibi"].is_object(), "should have no_chibi");
+    assert!(
+        props["force_call_user"].is_object(),
+        "should have force_call_user"
+    );
     assert!(props["raw"].is_object(), "should have raw");
     assert!(props["debug"].is_object(), "should have debug");
 
     // Check defaults are documented
     assert_eq!(props["verbose"]["default"], false);
     assert_eq!(props["json_output"]["default"], false);
-    assert_eq!(props["no_chibi"]["default"], false);
+    assert_eq!(props["force_call_user"]["default"], false);
     assert_eq!(props["raw"]["default"], false);
 }
 

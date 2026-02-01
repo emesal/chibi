@@ -22,11 +22,87 @@ pub const TODOS_TOOL_NAME: &str = "update_todos";
 /// Name of the built-in goals tool
 pub const GOALS_TOOL_NAME: &str = "update_goals";
 
-/// Name of the external recurse tool that triggers recursion
-pub const RECURSE_TOOL_NAME: &str = "recurse";
-
 /// Name of the built-in send_message tool for inter-context messaging
 pub const SEND_MESSAGE_TOOL_NAME: &str = "send_message";
+
+/// Name of the built-in call_agent tool for control handoff
+pub const CALL_AGENT_TOOL_NAME: &str = "call_agent";
+
+/// Name of the built-in call_user tool for control handoff
+pub const CALL_USER_TOOL_NAME: &str = "call_user";
+
+use super::ToolMetadata;
+
+/// Get metadata for builtin tools
+pub fn builtin_tool_metadata(name: &str) -> ToolMetadata {
+    match name {
+        CALL_AGENT_TOOL_NAME => ToolMetadata {
+            parallel: false,
+            flow_control: true,
+            ends_turn: false,
+        },
+        CALL_USER_TOOL_NAME => ToolMetadata {
+            parallel: false,
+            flow_control: true,
+            ends_turn: true,
+        },
+        _ => ToolMetadata::new(),
+    }
+}
+
+// === Handoff Types ===
+
+/// Target for control handoff after tool execution
+#[derive(Debug, Clone)]
+pub enum HandoffTarget {
+    /// Continue with LLM processing
+    Agent { prompt: String },
+    /// Return control to user
+    User { message: String },
+}
+
+impl Default for HandoffTarget {
+    fn default() -> Self {
+        Self::Agent {
+            prompt: String::new(),
+        }
+    }
+}
+
+/// Tracks handoff decision during tool execution.
+/// Last explicit call wins; falls back to configured default.
+#[derive(Debug)]
+pub struct Handoff {
+    next: Option<HandoffTarget>,
+    fallback: HandoffTarget,
+}
+
+impl Handoff {
+    pub fn new(fallback: HandoffTarget) -> Self {
+        Self {
+            next: None,
+            fallback,
+        }
+    }
+
+    pub fn set_agent(&mut self, prompt: String) {
+        self.next = Some(HandoffTarget::Agent { prompt });
+    }
+
+    pub fn set_user(&mut self, message: String) {
+        self.next = Some(HandoffTarget::User { message });
+    }
+
+    /// Take the handoff decision, resetting to fallback for next use
+    pub fn take(&mut self) -> HandoffTarget {
+        self.next.take().unwrap_or_else(|| self.fallback.clone())
+    }
+
+    /// Override the fallback target (used by hooks)
+    pub fn set_fallback(&mut self, target: HandoffTarget) {
+        self.fallback = target;
+    }
+}
 
 // === Tool API Format Definitions ===
 
@@ -122,6 +198,48 @@ pub fn send_message_tool_to_api_format() -> serde_json::Value {
     })
 }
 
+/// Create the built-in call_agent tool definition for the API
+pub fn call_agent_tool_to_api_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": CALL_AGENT_TOOL_NAME,
+            "description": "Continue processing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Focus for the next turn"
+                    }
+                },
+                "required": ["prompt"]
+            }
+        }
+    })
+}
+
+/// Create the built-in call_user tool definition for the API
+pub fn call_user_tool_to_api_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": CALL_USER_TOOL_NAME,
+            "description": "Return control to user.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Optional message to display"
+                    }
+                },
+                "required": []
+            }
+        }
+    })
+}
+
 // === Tool Execution ===
 
 /// Execute the built-in update_reflection tool
@@ -196,16 +314,6 @@ pub fn execute_builtin_tool(
     }
 }
 
-/// Check if the tool call is for the recurse tool and extract the note
-pub fn check_recurse_signal(tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
-    if tool_name == RECURSE_TOOL_NAME {
-        let note = arguments["note"].as_str().unwrap_or("").to_string();
-        Some(note)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,28 +379,182 @@ mod tests {
     }
 
     #[test]
-    fn test_check_recurse_signal() {
-        // With recurse tool and note
-        let args = serde_json::json!({"note": "test note"});
-        let result = check_recurse_signal(RECURSE_TOOL_NAME, &args);
-        assert_eq!(result, Some("test note".to_string()));
-
-        // With recurse tool but no note
-        let args_empty = serde_json::json!({});
-        let result_empty = check_recurse_signal(RECURSE_TOOL_NAME, &args_empty);
-        assert_eq!(result_empty, Some("".to_string()));
-
-        // With different tool
-        let result_other = check_recurse_signal("other_tool", &args);
-        assert!(result_other.is_none());
-    }
-
-    #[test]
     fn test_tool_constants() {
         assert_eq!(REFLECTION_TOOL_NAME, "update_reflection");
         assert_eq!(TODOS_TOOL_NAME, "update_todos");
         assert_eq!(GOALS_TOOL_NAME, "update_goals");
-        assert_eq!(RECURSE_TOOL_NAME, "recurse");
         assert_eq!(SEND_MESSAGE_TOOL_NAME, "send_message");
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_call_agent() {
+        let meta = builtin_tool_metadata(CALL_AGENT_TOOL_NAME);
+        assert!(!meta.parallel);
+        assert!(meta.flow_control);
+        assert!(!meta.ends_turn); // call_agent continues processing
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_call_user() {
+        let meta = builtin_tool_metadata(CALL_USER_TOOL_NAME);
+        assert!(!meta.parallel);
+        assert!(meta.flow_control);
+        assert!(meta.ends_turn); // call_user ends turn
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_other() {
+        let meta = builtin_tool_metadata("update_todos");
+        assert!(meta.parallel);
+        assert!(!meta.flow_control);
+        assert!(!meta.ends_turn);
+    }
+
+    #[test]
+    fn test_call_agent_tool_api_format() {
+        let tool = call_agent_tool_to_api_format();
+        assert_eq!(tool["type"], "function");
+        assert_eq!(tool["function"]["name"], CALL_AGENT_TOOL_NAME);
+        assert!(
+            tool["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("processing")
+        );
+        assert!(
+            tool["function"]["parameters"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("prompt"))
+        );
+    }
+
+    #[test]
+    fn test_call_user_tool_api_format() {
+        let tool = call_user_tool_to_api_format();
+        assert_eq!(tool["type"], "function");
+        assert_eq!(tool["function"]["name"], CALL_USER_TOOL_NAME);
+        assert!(
+            tool["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("user")
+        );
+        // message is optional, so required should be empty
+        assert!(
+            tool["function"]["parameters"]["required"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_handoff_default() {
+        let target = HandoffTarget::default();
+        match target {
+            HandoffTarget::Agent { prompt } => assert!(prompt.is_empty()),
+            _ => panic!("Expected Agent variant"),
+        }
+    }
+
+    #[test]
+    fn test_handoff_explicit_takes_precedence() {
+        let fallback = HandoffTarget::User {
+            message: "fallback".to_string(),
+        };
+        let mut handoff = Handoff::new(fallback);
+
+        // Set explicit agent call
+        handoff.set_agent("explicit prompt".to_string());
+
+        // Take should return the explicit value
+        match handoff.take() {
+            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "explicit prompt"),
+            _ => panic!("Expected Agent variant"),
+        }
+
+        // Next take should return fallback
+        match handoff.take() {
+            HandoffTarget::User { message } => assert_eq!(message, "fallback"),
+            _ => panic!("Expected User variant"),
+        }
+    }
+
+    #[test]
+    fn test_handoff_last_wins() {
+        let fallback = HandoffTarget::Agent {
+            prompt: String::new(),
+        };
+        let mut handoff = Handoff::new(fallback);
+
+        handoff.set_agent("first".to_string());
+        handoff.set_user("second".to_string());
+        handoff.set_agent("third".to_string());
+
+        match handoff.take() {
+            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "third"),
+            _ => panic!("Expected Agent variant"),
+        }
+    }
+
+    #[test]
+    fn test_handoff_constants() {
+        assert_eq!(CALL_AGENT_TOOL_NAME, "call_agent");
+        assert_eq!(CALL_USER_TOOL_NAME, "call_user");
+    }
+
+    #[test]
+    fn test_handoff_set_fallback() {
+        // Start with agent fallback
+        let fallback = HandoffTarget::Agent {
+            prompt: "original".to_string(),
+        };
+        let mut handoff = Handoff::new(fallback);
+
+        // Without explicit call, should use original fallback
+        match handoff.take() {
+            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "original"),
+            _ => panic!("Expected Agent variant"),
+        }
+
+        // Override fallback to user
+        handoff.set_fallback(HandoffTarget::User {
+            message: "new fallback".to_string(),
+        });
+
+        // Now take should return the new fallback
+        match handoff.take() {
+            HandoffTarget::User { message } => assert_eq!(message, "new fallback"),
+            _ => panic!("Expected User variant"),
+        }
+    }
+
+    #[test]
+    fn test_handoff_explicit_still_beats_set_fallback() {
+        let fallback = HandoffTarget::Agent {
+            prompt: String::new(),
+        };
+        let mut handoff = Handoff::new(fallback);
+
+        // Override fallback
+        handoff.set_fallback(HandoffTarget::User {
+            message: "fallback".to_string(),
+        });
+
+        // But also set an explicit call
+        handoff.set_agent("explicit".to_string());
+
+        // Explicit should still win
+        match handoff.take() {
+            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "explicit"),
+            _ => panic!("Expected Agent variant"),
+        }
+
+        // But next take uses the new fallback
+        match handoff.take() {
+            HandoffTarget::User { message } => assert_eq!(message, "fallback"),
+            _ => panic!("Expected User variant"),
+        }
     }
 }

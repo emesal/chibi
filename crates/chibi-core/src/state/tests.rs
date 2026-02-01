@@ -19,6 +19,7 @@ fn create_test_app() -> (AppState, TempDir) {
         reflection_enabled: true,
         reflection_character_limit: 10000,
         max_recursion_depth: 15,
+        max_empty_responses: 2,
         username: "testuser".to_string(),
         lock_heartbeat_seconds: 30,
         rolling_compact_drop_percentage: 50.0,
@@ -29,6 +30,7 @@ fn create_test_app() -> (AppState, TempDir) {
         file_tools_allowed_paths: vec![],
         api: ApiParams::default(),
         storage: StorageConfig::default(),
+        fallback_tool: "call_agent".to_string(),
     };
     let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
     (app, temp_dir)
@@ -538,6 +540,7 @@ fn test_resolve_config_model_level_api_params() {
         reflection_enabled: true,
         reflection_character_limit: 10000,
         max_recursion_depth: 15,
+        max_empty_responses: 2,
         username: "testuser".to_string(),
         lock_heartbeat_seconds: 30,
         rolling_compact_drop_percentage: 50.0,
@@ -548,6 +551,7 @@ fn test_resolve_config_model_level_api_params() {
         file_tools_allowed_paths: vec![],
         api: ApiParams::default(),
         storage: StorageConfig::default(),
+        fallback_tool: "call_agent".to_string(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -595,6 +599,7 @@ fn test_resolve_config_hierarchy_context_over_model() {
         reflection_enabled: true,
         reflection_character_limit: 10000,
         max_recursion_depth: 15,
+        max_empty_responses: 2,
         username: "testuser".to_string(),
         lock_heartbeat_seconds: 30,
         rolling_compact_drop_percentage: 50.0,
@@ -605,6 +610,7 @@ fn test_resolve_config_hierarchy_context_over_model() {
         file_tools_allowed_paths: vec![],
         api: ApiParams::default(),
         storage: StorageConfig::default(),
+        fallback_tool: "call_agent".to_string(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -659,6 +665,7 @@ fn test_resolve_config_all_local_overrides() {
         auto_compact: Some(true),
         auto_compact_threshold: Some(90.0),
         max_recursion_depth: Some(50),
+        max_empty_responses: None,
         warn_threshold_percent: Some(85.0),
         context_window_limit: Some(16000),
         reflection_enabled: Some(false),
@@ -670,6 +677,7 @@ fn test_resolve_config_all_local_overrides() {
         api: None,
         tools: None,
         storage: StorageConfig::default(),
+        fallback_tool: None,
     };
     app.save_local_config("default", &local).unwrap();
 

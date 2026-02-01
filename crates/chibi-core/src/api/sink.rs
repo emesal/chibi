@@ -41,6 +41,9 @@ pub enum ResponseEvent<'a> {
 
     /// A newline should be emitted (typically after response completion).
     Newline,
+
+    /// A new response is starting (used to reset state between agentic loop iterations).
+    StartResponse,
 }
 
 /// Trait for handling response events during prompt processing.
@@ -121,7 +124,7 @@ impl ResponseSink for CollectingSink {
             ResponseEvent::Diagnostic { message, .. } => {
                 self.diagnostics.push(message);
             }
-            ResponseEvent::Finished | ResponseEvent::Newline => {}
+            ResponseEvent::Finished | ResponseEvent::Newline | ResponseEvent::StartResponse => {}
             ResponseEvent::ToolStart { .. } | ResponseEvent::ToolResult { .. } => {}
         }
         Ok(())

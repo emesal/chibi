@@ -337,6 +337,10 @@ fn default_max_recursion_depth() -> usize {
     30
 }
 
+fn default_max_empty_responses() -> usize {
+    2
+}
+
 fn default_lock_heartbeat_seconds() -> u64 {
     30
 }
@@ -365,6 +369,10 @@ fn default_tool_cache_preview_chars() -> usize {
     500
 }
 
+fn default_fallback_tool() -> String {
+    "call_agent".to_string()
+}
+
 // ============================================================================
 // Configuration Structs
 // ============================================================================
@@ -391,6 +399,9 @@ pub struct Config {
     pub reflection_character_limit: usize,
     #[serde(default = "default_max_recursion_depth")]
     pub max_recursion_depth: usize,
+    /// Maximum consecutive empty responses before stopping the agentic loop
+    #[serde(default = "default_max_empty_responses")]
+    pub max_empty_responses: usize,
     #[serde(default = "default_username")]
     pub username: String,
     #[serde(default = "default_lock_heartbeat_seconds")]
@@ -418,6 +429,9 @@ pub struct Config {
     /// Storage configuration for partitioned context storage
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Fallback tool when LLM doesn't call call_agent/call_user explicitly
+    #[serde(default = "default_fallback_tool")]
+    pub fallback_tool: String,
 }
 
 /// Per-context config from `~/.chibi/contexts/<name>/local.toml`
@@ -431,6 +445,8 @@ pub struct LocalConfig {
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
     pub max_recursion_depth: Option<usize>,
+    /// Maximum consecutive empty responses before stopping the agentic loop
+    pub max_empty_responses: Option<usize>,
     pub warn_threshold_percent: Option<f32>,
     pub context_window_limit: Option<usize>,
     pub reflection_enabled: Option<bool>,
@@ -453,6 +469,8 @@ pub struct LocalConfig {
     /// Per-context storage configuration overrides
     #[serde(default)]
     pub storage: StorageConfig,
+    /// Override fallback tool for this context
+    pub fallback_tool: Option<String>,
 }
 
 /// Model metadata from ~/.chibi/models.toml
@@ -484,6 +502,8 @@ pub struct ResolvedConfig {
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
     pub max_recursion_depth: usize,
+    /// Maximum consecutive empty responses before stopping the agentic loop
+    pub max_empty_responses: usize,
     pub username: String,
     pub reflection_enabled: bool,
     /// Threshold (in chars) above which tool output is cached
@@ -500,6 +520,8 @@ pub struct ResolvedConfig {
     pub api: ApiParams,
     /// Tool filtering configuration (include/exclude lists)
     pub tools: ToolsConfig,
+    /// Fallback tool (call_agent or call_user)
+    pub fallback_tool: String,
 }
 
 impl ResolvedConfig {
@@ -517,6 +539,7 @@ impl ResolvedConfig {
             "auto_compact" => Some(self.auto_compact.to_string()),
             "auto_compact_threshold" => Some(format!("{}", self.auto_compact_threshold as i32)),
             "max_recursion_depth" => Some(self.max_recursion_depth.to_string()),
+            "max_empty_responses" => Some(self.max_empty_responses.to_string()),
             "reflection_enabled" => Some(self.reflection_enabled.to_string()),
             "tool_output_cache_threshold" => Some(self.tool_output_cache_threshold.to_string()),
             "tool_cache_max_age_days" => Some(self.tool_cache_max_age_days.to_string()),
@@ -564,6 +587,7 @@ impl ResolvedConfig {
             "auto_compact",
             "auto_compact_threshold",
             "max_recursion_depth",
+            "max_empty_responses",
             "reflection_enabled",
             "tool_output_cache_threshold",
             "tool_cache_max_age_days",
@@ -666,6 +690,7 @@ mod tests {
             auto_compact: false,
             auto_compact_threshold: 80.0,
             max_recursion_depth: 30,
+            max_empty_responses: 2,
             username: "testuser".to_string(),
             reflection_enabled: true,
             tool_output_cache_threshold: 4000,
@@ -675,6 +700,7 @@ mod tests {
             file_tools_allowed_paths: vec!["/tmp".to_string()],
             api: ApiParams::defaults(),
             tools: ToolsConfig::default(),
+            fallback_tool: "call_agent".to_string(),
         };
 
         assert_eq!(config.get_field("model"), Some("test-model".to_string()));
