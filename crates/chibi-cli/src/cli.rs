@@ -340,6 +340,28 @@ fn check_context_pair(current: bool, specific: &Option<String>) -> Option<Option
     }
 }
 
+/// Extract a string pair from an Option<Vec<String>>.
+/// Returns Some((first, second)) if vec has at least 2 elements.
+fn extract_string_pair(v: &Option<Vec<String>>) -> Option<(String, String)> {
+    v.as_ref()
+        .filter(|v| v.len() >= 2)
+        .map(|v| (v[0].clone(), v[1].clone()))
+}
+
+/// Parse an Inspectable from a string, returning an io::Error on failure.
+fn parse_inspectable(s: &str) -> io::Result<Inspectable> {
+    Inspectable::from_str_cli(s).ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "Unknown inspectable: {}. Valid options: {:?}",
+                s,
+                Inspectable::all_names_cli()
+            ),
+        )
+    })
+}
+
 impl Cli {
     /// Parse CLI arguments from environment
     pub fn parse_args() -> io::Result<Self> {
@@ -370,36 +392,15 @@ impl Cli {
     /// Convert to ChibiInput format
     pub fn to_input(&self) -> io::Result<ChibiInput> {
         // Validate inspect values
-        let inspect_current = if let Some(ref s) = self.inspect_current {
-            Some(Inspectable::from_str_cli(s).ok_or_else(|| {
-                io::Error::new(
-                    ErrorKind::InvalidInput,
-                    format!(
-                        "Unknown inspectable: {}. Valid options: {:?}",
-                        s,
-                        Inspectable::all_names_cli()
-                    ),
-                )
-            })?)
-        } else {
-            None
-        };
+        let inspect_current = self
+            .inspect_current
+            .as_ref()
+            .map(|s| parse_inspectable(s))
+            .transpose()?;
 
         let inspect = if let Some(ref v) = self.inspect {
             if v.len() >= 2 {
-                Some((
-                    v[0].clone(),
-                    Inspectable::from_str_cli(&v[1]).ok_or_else(|| {
-                        io::Error::new(
-                            ErrorKind::InvalidInput,
-                            format!(
-                                "Unknown inspectable: {}. Valid options: {:?}",
-                                v[1],
-                                Inspectable::all_names_cli()
-                            ),
-                        )
-                    })?,
-                ))
+                Some((v[0].clone(), parse_inspectable(&v[1])?))
             } else {
                 None
             }
@@ -421,23 +422,9 @@ impl Cli {
             None
         };
 
-        // Parse rename_context tuple
-        let rename_context = self.rename_context.as_ref().and_then(|v| {
-            if v.len() >= 2 {
-                Some((v[0].clone(), v[1].clone()))
-            } else {
-                None
-            }
-        });
-
-        // Parse set_system_prompt tuple
-        let set_system_prompt = self.set_system_prompt.as_ref().and_then(|v| {
-            if v.len() >= 2 {
-                Some((v[0].clone(), v[1].clone()))
-            } else {
-                None
-            }
-        });
+        // Parse string pair tuples
+        let rename_context = extract_string_pair(&self.rename_context);
+        let set_system_prompt = extract_string_pair(&self.set_system_prompt);
 
         // Parse plugin invocation with shell-style arg splitting
         let plugin = if let Some(v) = &self.plugin {
