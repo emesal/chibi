@@ -28,11 +28,14 @@ pub use builtin::{REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
 // Re-export handoff types for control flow
 pub use builtin::{Handoff, HandoffTarget};
 
-// Re-export built-in tool API format functions
+// Re-export built-in tool API format functions (legacy wrappers)
 pub use builtin::{
     call_agent_tool_to_api_format, call_user_tool_to_api_format, goals_tool_to_api_format,
     reflection_tool_to_api_format, send_message_tool_to_api_format, todos_tool_to_api_format,
 };
+
+// Re-export registry-based tool generation
+pub use builtin::{all_builtin_tools_to_api_format, builtin_tools_to_api_format};
 
 // Re-export built-in tool execution functions
 pub use builtin::execute_builtin_tool;
