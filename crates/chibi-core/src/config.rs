@@ -8,8 +8,6 @@ use crate::partition::StorageConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const DEFAULT_API_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
-
 // ============================================================================
 // API Parameters Types
 // ============================================================================
@@ -336,7 +334,6 @@ impl ConfigDefaults {
     // String defaults
     pub const USERNAME: &'static str = "user";
     pub const FALLBACK_TOOL: &'static str = "call_user";
-    // Note: BASE_URL uses existing DEFAULT_API_URL constant
 }
 
 // Thin wrappers for serde's #[serde(default = "...")] requirement
@@ -345,9 +342,6 @@ fn default_auto_compact() -> bool {
 }
 fn default_auto_compact_threshold() -> f32 {
     ConfigDefaults::AUTO_COMPACT_THRESHOLD
-}
-fn default_base_url() -> String {
-    DEFAULT_API_URL.to_string()
 }
 fn default_reflection_enabled() -> bool {
     ConfigDefaults::REFLECTION_ENABLED
@@ -403,8 +397,6 @@ pub struct Config {
     pub auto_compact: bool,
     #[serde(default = "default_auto_compact_threshold")]
     pub auto_compact_threshold: f32,
-    #[serde(default = "default_base_url")]
-    pub base_url: String,
     #[serde(default = "default_reflection_enabled")]
     pub reflection_enabled: bool,
     /// Maximum characters for reflection tool output
@@ -453,7 +445,6 @@ pub struct Config {
 pub struct LocalConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
-    pub base_url: Option<String>,
     pub username: Option<String>,
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
@@ -511,7 +502,6 @@ pub struct ResolvedConfig {
     pub model: String,
     pub context_window_limit: usize,
     pub warn_threshold_percent: f32,
-    pub base_url: String,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
     pub max_recursion_depth: usize,
@@ -546,7 +536,6 @@ impl ResolvedConfig {
             // Top-level fields (excluding api_key for security)
             "model" => Some(self.model.clone()),
             "username" => Some(self.username.clone()),
-            "base_url" => Some(self.base_url.clone()),
             "context_window_limit" => Some(self.context_window_limit.to_string()),
             "warn_threshold_percent" => Some(format!("{}", self.warn_threshold_percent as i32)),
             "auto_compact" => Some(self.auto_compact.to_string()),
@@ -594,7 +583,6 @@ impl ResolvedConfig {
             // Top-level fields
             "model",
             "username",
-            "base_url",
             "context_window_limit",
             "warn_threshold_percent",
             "auto_compact",
@@ -699,7 +687,6 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,
-            base_url: DEFAULT_API_URL.to_string(),
             auto_compact: false,
             auto_compact_threshold: 80.0,
             max_recursion_depth: 30,

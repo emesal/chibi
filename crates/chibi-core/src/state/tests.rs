@@ -15,7 +15,6 @@ fn create_test_app() -> (AppState, TempDir) {
         warn_threshold_percent: 75.0,
         auto_compact: false,
         auto_compact_threshold: 80.0,
-        base_url: "https://test.api/v1".to_string(),
         reflection_enabled: true,
         reflection_character_limit: 10000,
         max_recursion_depth: 15,
@@ -536,7 +535,6 @@ fn test_resolve_config_model_level_api_params() {
         warn_threshold_percent: 75.0,
         auto_compact: false,
         auto_compact_threshold: 80.0,
-        base_url: "https://test.api/v1".to_string(),
         reflection_enabled: true,
         reflection_character_limit: 10000,
         max_recursion_depth: 15,
@@ -595,7 +593,6 @@ fn test_resolve_config_hierarchy_context_over_model() {
         warn_threshold_percent: 75.0,
         auto_compact: false,
         auto_compact_threshold: 80.0,
-        base_url: "https://test.api/v1".to_string(),
         reflection_enabled: true,
         reflection_character_limit: 10000,
         max_recursion_depth: 15,
@@ -660,7 +657,6 @@ fn test_resolve_config_all_local_overrides() {
     let local = LocalConfig {
         model: Some("local-model".to_string()),
         api_key: Some("local-key".to_string()),
-        base_url: Some("https://local.api/v1".to_string()),
         username: Some("localuser".to_string()),
         auto_compact: Some(true),
         auto_compact_threshold: Some(90.0),
@@ -685,7 +681,6 @@ fn test_resolve_config_all_local_overrides() {
 
     assert_eq!(resolved.model, "local-model");
     assert_eq!(resolved.api_key, "local-key");
-    assert_eq!(resolved.base_url, "https://local.api/v1");
     assert_eq!(resolved.username, "localuser");
     assert!(resolved.auto_compact);
     assert!((resolved.auto_compact_threshold - 90.0).abs() < f32::EPSILON);

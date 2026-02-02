@@ -5,7 +5,7 @@
 
 use crate::config::ResolvedConfig;
 use crate::tools::Tool;
-use ratatoskr::{ChatOptions, EmbeddedGateway, Message, Ratatoskr, Role, ToolCall, ToolDefinition};
+use ratatoskr::{ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr, Role, ToolCall, ToolDefinition};
 use std::io;
 
 /// Convert chibi's JSON message format to ratatoskr Message.
@@ -56,6 +56,9 @@ pub fn to_ratatoskr_message(json: &serde_json::Value) -> io::Result<Message> {
 }
 
 /// Convert ratatoskr Message back to chibi's JSON format.
+///
+/// Currently unused — will be needed when chibi's internals migrate from JSON to ratatoskr types.
+#[allow(dead_code)]
 pub fn from_ratatoskr_message(msg: &Message) -> serde_json::Value {
     use serde_json::json;
 
@@ -102,6 +105,9 @@ pub fn from_ratatoskr_message(msg: &Message) -> serde_json::Value {
 }
 
 /// Convert chibi Tool to ratatoskr ToolDefinition.
+///
+/// Currently unused — will be needed when chibi's internals migrate from JSON to ratatoskr types.
+#[allow(dead_code)]
 pub fn to_tool_definition(tool: &Tool) -> ToolDefinition {
     ToolDefinition::new(&tool.name, &tool.description, tool.parameters.clone())
 }
@@ -146,6 +152,29 @@ pub fn build_gateway(config: &ResolvedConfig) -> io::Result<EmbeddedGateway> {
         .openrouter(&config.api_key)
         .build()
         .map_err(|e| io::Error::other(format!("Failed to build gateway: {}", e)))
+}
+
+/// Simple non-streaming chat completion.
+///
+/// Converts JSON messages to ratatoskr format, sends request, returns content string.
+pub async fn chat(
+    config: &ResolvedConfig,
+    messages: &[serde_json::Value],
+) -> io::Result<String> {
+    let gateway = build_gateway(config)?;
+    let options = to_chat_options(config);
+
+    let ratatoskr_messages: Vec<Message> = messages
+        .iter()
+        .map(to_ratatoskr_message)
+        .collect::<io::Result<Vec<_>>>()?;
+
+    let response = gateway
+        .chat(&ratatoskr_messages, None, &options)
+        .await
+        .map_err(|e| io::Error::other(format!("Chat request failed: {}", e)))?;
+
+    Ok(response.content)
 }
 
 #[cfg(test)]

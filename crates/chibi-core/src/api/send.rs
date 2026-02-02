@@ -22,6 +22,7 @@ use crate::state::{
 };
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
+// ModelGateway trait must be in scope to call chat_stream() on EmbeddedGateway
 use ratatoskr::{ChatEvent, ModelGateway};
 use serde_json::json;
 use std::io::{self, ErrorKind};

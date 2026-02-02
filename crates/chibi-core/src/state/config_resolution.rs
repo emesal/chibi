@@ -74,7 +74,6 @@ impl AppState {
             model: self.config.model.clone(),
             context_window_limit: self.config.context_window_limit,
             warn_threshold_percent: self.config.warn_threshold_percent,
-            base_url: self.config.base_url.clone(),
             auto_compact: self.config.auto_compact,
             auto_compact_threshold: self.config.auto_compact_threshold,
             max_recursion_depth: self.config.max_recursion_depth,
@@ -97,9 +96,6 @@ impl AppState {
         }
         if let Some(ref model) = local.model {
             resolved.model = model.clone();
-        }
-        if let Some(ref base_url) = local.base_url {
-            resolved.base_url = base_url.clone();
         }
         if let Some(context_window_limit) = local.context_window_limit {
             resolved.context_window_limit = context_window_limit;

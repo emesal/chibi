@@ -44,16 +44,6 @@ impl<'a> PromptOptions<'a> {
     }
 }
 
-/// Safely extract content from an API response's first choice.
-/// Returns None if the response is malformed or empty.
-pub fn extract_choice_content(json: &serde_json::Value) -> Option<&str> {
-    json.get("choices")?
-        .get(0)?
-        .get("message")?
-        .get("content")?
-        .as_str()
-}
-
 /// Build the request body for the LLM API, applying all API parameters from ResolvedConfig
 pub fn build_request_body(
     config: &ResolvedConfig,
