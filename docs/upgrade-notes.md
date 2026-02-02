@@ -6,7 +6,7 @@
   - HTTP/SSE streaming is now handled by ratatoskr's `ModelGateway`
   - chibi's `gateway.rs` provides type conversions between internal types and ratatoskr
   - some API parameters not yet passed through — see [#109](https://github.com/emesal/chibi/issues/109)
-- **removed `base_url`**: custom API endpoints are no longer supported (chibi currently only works with OpenRouter)
+- **removed `base_url`**: custom API endpoints are not currently supported
 
 ## 0.5.0 -> 0.5.1
 
