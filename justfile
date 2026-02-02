@@ -1,8 +1,8 @@
-# Chibi development workflow automation
+# Development workflow automation
 
 # Show workflow cheat sheet
 default:
-  @echo "=== Chibi Development Workflow ==="
+  @echo "=== Development Workflow ==="
   @echo ""
   @echo "📝 Starting work:"
   @echo "  just feature <name>       → Start new feature branch (from dev)"
@@ -22,6 +22,8 @@ default:
   @echo "  just pr                   → Create PR to dev (auto-tags on merge)"
   @echo ""
   @echo "🚀 Release cycle:"
+  @echo "  just freeze <reason>      → Lock tree for release (bugfixes only)"
+  @echo "  just thaw                 → Unlock tree for features again"
   @echo "  just release v0.x         → Squash dev→main, run tests, tag release"
   @echo "  just push-release v0.x    → Push release to github"
   @echo "  just update-deps          → Update dependencies post-release"
@@ -45,10 +47,71 @@ default:
 list:
   @just --list
 
+# === Tree Freeze (Release Discipline) ===
+
+# Lock the tree for release preparation (bugfixes only)
+freeze reason:
+  #!/usr/bin/env bash
+  set -e
+  if [ -f .freeze ]; then
+    echo "⚠️  Tree is already frozen:"
+    cat .freeze
+    exit 1
+  fi
+  echo "{{reason}}" > .freeze
+  echo "frozen: $(date -Iseconds)" >> .freeze
+  git add .freeze
+  echo "🧊 Tree frozen: {{reason}}"
+  echo "   Use 'just push-bugfix' for bugfix commits"
+  echo "   Use 'just thaw' when ready to unfreeze"
+
+# Unlock the tree for normal development
+thaw:
+  #!/usr/bin/env bash
+  set -e
+  if [ ! -f .freeze ]; then
+    echo "Tree isn't frozen, nothing to thaw~"
+    exit 0
+  fi
+  rm -f .freeze
+  git add .freeze 2>/dev/null || true
+  echo "🌸 Tree unfrozen, features welcome again~"
+
+# Check if tree is frozen (used by pre-push)
+check-freeze:
+  #!/usr/bin/env bash
+  if [ -f .freeze ]; then
+    echo ""
+    echo "⚠️  TREE IS FROZEN ⚠️"
+    echo "$(head -1 .freeze)"
+    echo ""
+    echo "Options:"
+    echo "  • If this is a bugfix: just push-bugfix"
+    echo "  • To unfreeze:         just thaw"
+    echo ""
+    exit 1
+  fi
+
+# Push during freeze (confirms this is a bugfix)
+push-bugfix: _frozen-guard lint test
+  #!/usr/bin/env bash
+  set -e
+  BRANCH=$(git branch --show-current)
+  echo "🐛 Pushing bugfix on $BRANCH during freeze..."
+  git push
+
+# Internal: ensure tree IS frozen (for push-bugfix)
+_frozen-guard:
+  #!/usr/bin/env bash
+  if [ ! -f .freeze ]; then
+    echo "Tree isn't frozen — just use regular 'git push' or 'just pre-push'"
+    exit 1
+  fi
+
 # === Development Commands ===
 
 # Start a new feature branch from dev
-feature name:
+feature name: check-freeze
   #!/usr/bin/env bash
   set -e
   git checkout dev
@@ -66,7 +129,7 @@ bugfix name:
   echo "✓ Created and switched to bugfix/{{name}}"
 
 # Start a new refactor branch from dev
-refactor name:
+refactor name: check-freeze
   #!/usr/bin/env bash
   set -e
   git checkout dev
@@ -75,7 +138,7 @@ refactor name:
   echo "✓ Created and switched to refactor/{{name}}"
 
 # Start a new chore branch from dev
-chore name:
+chore name: check-freeze
   #!/usr/bin/env bash
   set -e
   git checkout dev
@@ -104,7 +167,7 @@ hotfix name:
   echo "  After merging to main, sync back to dev with: git checkout dev && git merge main"
 
 # Merge current branch into dev and tag it (local merge, for quick changes)
-merge-to-dev:
+merge-to-dev: _merge-freeze-check
   #!/usr/bin/env bash
   set -e
   BRANCH=$(git branch --show-current)
@@ -120,8 +183,27 @@ merge-to-dev:
   echo "  Branch $BRANCH is now preserved as a tag"
   echo "  You can delete the branch with: git branch -d $BRANCH"
 
+# Internal: check freeze status for merge (allows bugfix/* and docs/*)
+_merge-freeze-check:
+  #!/usr/bin/env bash
+  if [ -f .freeze ]; then
+    BRANCH=$(git branch --show-current)
+    if [[ "$BRANCH" == bugfix/* ]] || [[ "$BRANCH" == docs/* ]] || [[ "$BRANCH" == hotfix/* ]]; then
+      echo "🐛 Merging $BRANCH during freeze (allowed)"
+    else
+      echo ""
+      echo "⚠️  TREE IS FROZEN ⚠️"
+      echo "$(head -1 .freeze)"
+      echo ""
+      echo "Only bugfix/*, docs/*, and hotfix/* branches can be merged during freeze."
+      echo "To unfreeze: just thaw"
+      echo ""
+      exit 1
+    fi
+  fi
+
 # Create a pull request to dev (auto-tags on merge via GitHub Actions)
-pr:
+pr: _merge-freeze-check
   #!/usr/bin/env bash
   set -e
   BRANCH=$(git branch --show-current)
@@ -156,8 +238,16 @@ test:
   cargo nextest run --all-targets --locked
 
 # Full pre-push check (format, clippy, tests)
-pre-push: lint test
+pre-push: check-freeze lint test
   @echo "✓ All checks passed, ready to push"
+
+# Push with freeze check and all validations
+push: pre-push
+  git push
+
+# Install to ~/.cargo/bin
+install:
+  cargo install --path crates/chibi-cli
 
 # === Documentation ===
 
