@@ -17,11 +17,8 @@
 # Override model for this context
 # model = "openai/o3"
 
-# Override API key (useful for different providers or billing)
+# Override API key (useful for different billing accounts)
 # api_key = "sk-different-key"
-
-# Override base URL (for different API endpoints)
-# base_url = "https://api.openai.com/v1/chat/completions"
 
 # =============================================================================
 # Context Window

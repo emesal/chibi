@@ -8,10 +8,11 @@
 # Required Settings
 # =============================================================================
 
-# OpenRouter API key (get one at https://openrouter.ai/settings/keys)
-api_key = "your-openrouter-api-key-here"
+# API key for your LLM provider
+# Currently chibi uses OpenRouter (https://openrouter.ai/settings/keys)
+api_key = "your-api-key-here"
 
-# Model to use (see https://openrouter.ai/models for options)
+# Model to use (see https://openrouter.ai/models for available models)
 # Common choices:
 # - anthropic/claude-sonnet-4
 # - anthropic/claude-3.5-haiku
@@ -34,9 +35,6 @@ warn_threshold_percent = 80.0
 # =============================================================================
 # Optional Settings
 # =============================================================================
-
-# Custom API endpoint (default: OpenRouter)
-# base_url = "https://openrouter.ai/api/v1/chat/completions"
 
 # Default username shown to the LLM (default: "user")
 # Can be overridden per-context in local.toml or via -u/-U flags

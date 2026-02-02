@@ -38,7 +38,7 @@ Cargo workspace with two crates:
 - `partition.rs` — Partitioned transcript storage with bloom filters
 - `config.rs` — Core configuration types
 
-LLM communication (HTTP, SSE parsing) is delegated to the `ratatoskr` crate.
+**LLM Communication:** Delegated to the [ratatoskr](https://github.com/emesal/ratatoskr) crate, which handles HTTP requests, SSE streaming, and response parsing. Chibi's `gateway.rs` converts between internal types and ratatoskr's `ModelGateway` interface. This abstraction keeps HTTP/networking concerns out of chibi's core logic.
 
 **`crates/chibi-cli/`** — Binary crate (CLI-specific)
 - `main.rs` — Entry point, command dispatch

@@ -38,10 +38,11 @@ Create `~/.chibi/config.toml` (or `<CHIBI_HOME>/config.toml` if overridden):
 # Required Settings
 # =============================================================================
 
-# OpenRouter API key (get one at https://openrouter.ai/settings/keys)
-api_key = "your-openrouter-api-key-here"
+# API key for your LLM provider
+# Currently chibi uses OpenRouter (https://openrouter.ai/settings/keys)
+api_key = "your-api-key-here"
 
-# Model to use (see https://openrouter.ai/models)
+# Model to use (see https://openrouter.ai/models for available models)
 model = "anthropic/claude-sonnet-4"
 
 # Context window limit (tokens) - used for warning calculations
@@ -53,9 +54,6 @@ warn_threshold_percent = 80.0
 # =============================================================================
 # Optional Settings
 # =============================================================================
-
-# Custom API endpoint (default: OpenRouter)
-# base_url = "https://openrouter.ai/api/v1/chat/completions"
 
 # Default username shown to the LLM (default: "user")
 username = "user"
@@ -234,11 +232,8 @@ Each context can override settings in `~/.chibi/contexts/<name>/local.toml`:
 # Override model for this context
 model = "openai/o3"
 
-# Override API key (useful for different providers)
+# Override API key (useful for different billing accounts)
 api_key = "sk-different-key"
-
-# Override base URL
-base_url = "https://api.openai.com/v1/chat/completions"
 
 # Override username
 username = "alice"
@@ -379,7 +374,9 @@ bright = "#00FF00"
 
 ## API Parameters Reference
 
-### Generation Control
+Chibi delegates LLM communication to the [ratatoskr](https://github.com/emesal/ratatoskr) crate. Currently, only a subset of API parameters are passed through — see [issue #109](https://github.com/emesal/chibi/issues/109) for status.
+
+### Generation Control (supported)
 
 | Parameter | Type | Range | Description |
 |-----------|------|-------|-------------|
@@ -389,29 +386,23 @@ bright = "#00FF00"
 | `stop` | array | - | Sequences that stop generation. |
 | `seed` | integer | - | Random seed for reproducibility. |
 
-### Sampling Penalties
+### Not Yet Passed Through
 
-| Parameter | Type | Range | Description |
-|-----------|------|-------|-------------|
-| `frequency_penalty` | float | -2.0 to 2.0 | Penalize frequent tokens. |
-| `presence_penalty` | float | -2.0 to 2.0 | Penalize tokens that appeared. |
-
-### Tool Control
-
-| Parameter | Type | Values | Description |
-|-----------|------|--------|-------------|
-| `tool_choice` | string | `auto`, `none`, `required` | How the model uses tools. |
-| `parallel_tool_calls` | boolean | - | Allow multiple tool calls at once. |
-
-### OpenRouter-Specific
+The following parameters are parsed from config but not yet sent to the API ([#109](https://github.com/emesal/chibi/issues/109)):
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `prompt_caching` | boolean | Enable prompt caching (default: true). |
+| `frequency_penalty` | float | Penalize frequent tokens. |
+| `presence_penalty` | float | Penalize tokens that appeared. |
+| `tool_choice` | string | How the model uses tools (`auto`, `none`, `required`). |
+| `parallel_tool_calls` | boolean | Allow multiple tool calls at once. |
+| `prompt_caching` | boolean | Enable prompt caching. |
+| `response_format` | object | Force JSON output format. |
+| `reasoning.*` | various | Extended thinking configuration (see below). |
 
 ### Reasoning Configuration
 
-For models that support extended thinking (chain-of-thought reasoning):
+For models that support extended thinking (chain-of-thought reasoning). **Not yet passed through** — see [#109](https://github.com/emesal/chibi/issues/109).
 
 | Parameter | Type | Values | Description |
 |-----------|------|--------|-------------|
@@ -424,16 +415,6 @@ For models that support extended thinking (chain-of-thought reasoning):
 
 - **Effort-based:** OpenAI o1/o3/GPT-5 series, Grok models
 - **Token-based:** Anthropic Claude, Gemini thinking models, Qwen models
-
-### Response Format
-
-```toml
-[api.response_format]
-type = "text"  # or "json_object" or "json_schema"
-
-# For json_schema, also provide:
-# json_schema = { ... }
-```
 
 ## Configuration Merge Order
 
