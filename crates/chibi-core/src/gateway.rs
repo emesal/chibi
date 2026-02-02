@@ -5,7 +5,9 @@
 
 use crate::config::ResolvedConfig;
 use crate::tools::Tool;
-use ratatoskr::{ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr, Role, ToolCall, ToolDefinition};
+use ratatoskr::{
+    ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr, Role, ToolCall, ToolDefinition,
+};
 use std::io;
 
 /// Convert chibi's JSON message format to ratatoskr Message.
@@ -157,10 +159,7 @@ pub fn build_gateway(config: &ResolvedConfig) -> io::Result<EmbeddedGateway> {
 /// Simple non-streaming chat completion.
 ///
 /// Converts JSON messages to ratatoskr format, sends request, returns content string.
-pub async fn chat(
-    config: &ResolvedConfig,
-    messages: &[serde_json::Value],
-) -> io::Result<String> {
+pub async fn chat(config: &ResolvedConfig, messages: &[serde_json::Value]) -> io::Result<String> {
     let gateway = build_gateway(config)?;
     let options = to_chat_options(config);
 
