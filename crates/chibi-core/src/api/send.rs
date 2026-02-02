@@ -552,61 +552,66 @@ async fn collect_streaming_response<S: ResponseSink>(
 
                 if let Some(choices) = json["choices"].as_array()
                     && let Some(choice) = choices.first()
-                    && let Some(delta) = choice.get("delta")
                 {
-                    // Handle regular content
-                    if let Some(content) = delta["content"].as_str() {
-                        if is_first_content {
-                            is_first_content = false;
-                            if let Some(remaining) = content.strip_prefix('\n') {
-                                if !remaining.is_empty() {
-                                    full_response.push_str(remaining);
-                                    // Only stream in normal mode
-                                    if !json_mode {
-                                        sink.handle(ResponseEvent::TextChunk(remaining))?;
+                    // Some providers use "delta" for streaming chunks, others use "message"
+                    // for the final response. We check both to handle all providers.
+                    let content_obj = choice.get("delta").or_else(|| choice.get("message"));
+
+                    if let Some(obj) = content_obj {
+                        // Handle regular content
+                        if let Some(content) = obj["content"].as_str() {
+                            if is_first_content {
+                                is_first_content = false;
+                                if let Some(remaining) = content.strip_prefix('\n') {
+                                    if !remaining.is_empty() {
+                                        full_response.push_str(remaining);
+                                        // Only stream in normal mode
+                                        if !json_mode {
+                                            sink.handle(ResponseEvent::TextChunk(remaining))?;
+                                        }
                                     }
+                                    continue;
                                 }
-                                continue;
+                            }
+
+                            full_response.push_str(content);
+                            // Only stream in normal mode
+                            if !json_mode {
+                                sink.handle(ResponseEvent::TextChunk(content))?;
                             }
                         }
 
-                        full_response.push_str(content);
-                        // Only stream in normal mode
-                        if !json_mode {
-                            sink.handle(ResponseEvent::TextChunk(content))?;
-                        }
-                    }
+                        // Handle tool calls (both incremental delta and complete message formats)
+                        if let Some(tc_array) = obj["tool_calls"].as_array() {
+                            has_tool_calls = true;
+                            for tc in tc_array {
+                                let index = tc["index"].as_u64().unwrap_or(0) as usize;
 
-                    // Handle tool calls
-                    if let Some(tc_array) = delta["tool_calls"].as_array() {
-                        has_tool_calls = true;
-                        for tc in tc_array {
-                            let index = tc["index"].as_u64().unwrap_or(0) as usize;
-
-                            // Prevent memory exhaustion from malicious API responses
-                            if index >= MAX_TOOL_CALLS {
-                                if verbose {
-                                    eprintln!(
-                                        "[WARN] Tool call index {} exceeds limit {}, skipping",
-                                        index, MAX_TOOL_CALLS
-                                    );
+                                // Prevent memory exhaustion from malicious API responses
+                                if index >= MAX_TOOL_CALLS {
+                                    if verbose {
+                                        eprintln!(
+                                            "[WARN] Tool call index {} exceeds limit {}, skipping",
+                                            index, MAX_TOOL_CALLS
+                                        );
+                                    }
+                                    continue;
                                 }
-                                continue;
-                            }
 
-                            while tool_calls.len() <= index {
-                                tool_calls.push(llm::ToolCallAccumulator::default());
-                            }
-
-                            if let Some(id) = tc["id"].as_str() {
-                                tool_calls[index].id = id.to_string();
-                            }
-                            if let Some(func) = tc.get("function") {
-                                if let Some(name) = func["name"].as_str() {
-                                    tool_calls[index].name = name.to_string();
+                                while tool_calls.len() <= index {
+                                    tool_calls.push(llm::ToolCallAccumulator::default());
                                 }
-                                if let Some(args) = func["arguments"].as_str() {
-                                    tool_calls[index].arguments.push_str(args);
+
+                                if let Some(id) = tc["id"].as_str() {
+                                    tool_calls[index].id = id.to_string();
+                                }
+                                if let Some(func) = tc.get("function") {
+                                    if let Some(name) = func["name"].as_str() {
+                                        tool_calls[index].name = name.to_string();
+                                    }
+                                    if let Some(args) = func["arguments"].as_str() {
+                                        tool_calls[index].arguments.push_str(args);
+                                    }
                                 }
                             }
                         }
