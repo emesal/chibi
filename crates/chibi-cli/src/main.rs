@@ -1002,7 +1002,11 @@ async fn main() -> io::Result<()> {
             return Ok(());
         }
         if matches!(input.command, Command::ShowVersion) {
-            println!("chibi {}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "chibi v{}-{}",
+                env!("CARGO_PKG_VERSION"),
+                option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown")
+            );
             return Ok(());
         }
 
