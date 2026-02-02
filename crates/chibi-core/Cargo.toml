@@ -1,8 +1,8 @@
 [package]
 name = "chibi-core"
-version = "0.6.0-dev"
-edition = "2024"
-rust-version = "1.88"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 chrono = "0.4"

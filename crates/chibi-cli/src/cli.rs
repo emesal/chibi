@@ -723,7 +723,11 @@ pub fn parse() -> io::Result<ChibiInput> {
         std::process::exit(0);
     }
     if cli.version {
-        println!("chibi {}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "chibi v{}-{}",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown")
+        );
         std::process::exit(0);
     }
 
