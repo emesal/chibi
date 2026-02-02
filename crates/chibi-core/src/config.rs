@@ -335,7 +335,7 @@ impl ConfigDefaults {
 
     // String defaults
     pub const USERNAME: &'static str = "user";
-    pub const FALLBACK_TOOL: &'static str = "call_agent";
+    pub const FALLBACK_TOOL: &'static str = "call_user";
     // Note: BASE_URL uses existing DEFAULT_API_URL constant
 }
 
@@ -713,7 +713,7 @@ mod tests {
             file_tools_allowed_paths: vec!["/tmp".to_string()],
             api: ApiParams::defaults(),
             tools: ToolsConfig::default(),
-            fallback_tool: "call_agent".to_string(),
+            fallback_tool: "call_user".to_string(),
         };
 
         assert_eq!(config.get_field("model"), Some("test-model".to_string()));
