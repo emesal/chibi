@@ -754,10 +754,65 @@ fn execute_single_tool<S: ResponseSink>(
         // Handle built-in send_message tool
         execute_send_message_tool(app, context_name, tools, &args, verbose, sink)?
     } else if tools::is_file_tool(&tool_call.name) {
-        match tools::execute_file_tool(app, context_name, &tool_call.name, &args, resolved_config) {
-            Some(Ok(r)) => r,
-            Some(Err(e)) => format!("Error: {}", e),
-            None => format!("Error: Unknown file tool '{}'", tool_call.name),
+        // For write tools, check permission via pre_file_write hook first
+        if tool_call.name == tools::WRITE_FILE_TOOL_NAME
+            || tool_call.name == tools::PATCH_FILE_TOOL_NAME
+        {
+            let hook_data = serde_json::json!({
+                "tool_name": tool_call.name,
+                "path": args.get_str("path").unwrap_or(""),
+                "content": args.get_str("content"),
+                "find": args.get_str("find"),
+                "replace": args.get_str("replace"),
+            });
+            let hook_results =
+                tools::execute_hook(tools, tools::HookPoint::PreFileWrite, &hook_data)?;
+
+            // Check if any hook denied the operation
+            let mut denied = false;
+            let mut deny_reason = String::new();
+            for (_hook_name, result) in &hook_results {
+                if !result.get_bool_or("approved", false) {
+                    denied = true;
+                    deny_reason = result
+                        .get_str_or("reason", "Permission denied by hook")
+                        .to_string();
+                    break;
+                }
+            }
+
+            if denied {
+                format!("Error: {}", deny_reason)
+            } else if hook_results.is_empty() {
+                // No hooks registered = fail-safe deny
+                "Error: No permission handler configured. File write tools require a pre_file_write hook plugin.".to_string()
+            } else {
+                // Permission granted, execute the tool
+                match tools::execute_file_tool(
+                    app,
+                    context_name,
+                    &tool_call.name,
+                    &args,
+                    resolved_config,
+                ) {
+                    Some(Ok(r)) => r,
+                    Some(Err(e)) => format!("Error: {}", e),
+                    None => format!("Error: Unknown file tool '{}'", tool_call.name),
+                }
+            }
+        } else {
+            // Regular file tools (read-only) don't need permission
+            match tools::execute_file_tool(
+                app,
+                context_name,
+                &tool_call.name,
+                &args,
+                resolved_config,
+            ) {
+                Some(Ok(r)) => r,
+                Some(Err(e)) => format!("Error: {}", e),
+                None => format!("Error: Unknown file tool '{}'", tool_call.name),
+            }
         }
     } else if let Some(tool) = tools::find_tool(tools, &tool_call.name) {
         match tools::execute_tool(tool, &args, verbose) {

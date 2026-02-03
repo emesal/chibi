@@ -456,6 +456,60 @@ pub fn execute_cache_list(app: &AppState, context_name: &str) -> io::Result<Stri
     Ok(output)
 }
 
+
+/// Execute write_file tool
+///
+/// Note: Permission check via pre_file_write hook happens in send.rs before this is called.
+pub fn execute_write_file(path: &str, content: &str) -> io::Result<String> {
+    let path = PathBuf::from(path);
+
+    // Create parent directories if needed
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    crate::safe_io::atomic_write_text(&path, content)?;
+
+    Ok(format!(
+        "File written successfully: {} ({} bytes)",
+        path.display(),
+        content.len()
+    ))
+}
+
+/// Execute patch_file tool (find and replace first occurrence)
+///
+/// Note: Permission check via pre_file_write hook happens in send.rs before this is called.
+pub fn execute_patch_file(path: &str, find: &str, replace: &str) -> io::Result<String> {
+    let path = PathBuf::from(path);
+
+    // Read existing content
+    let content = std::fs::read_to_string(&path)?;
+
+    // Check if find string exists
+    if !content.contains(find) {
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("Pattern not found in file: {:?}", find),
+        ));
+    }
+
+    // Replace first occurrence only
+    let new_content = content.replacen(find, replace, 1);
+
+    // Write atomically
+    crate::safe_io::atomic_write_text(&path, &new_content)?;
+
+    Ok(format!(
+        "File patched successfully: {} (replaced {} bytes with {} bytes)",
+        path.display(),
+        find.len(),
+        replace.len()
+    ))
+}
+
 /// Check if a tool name is a file tool
 pub fn is_file_tool(name: &str) -> bool {
     matches!(
@@ -484,6 +538,23 @@ pub fn execute_file_tool(
         FILE_LINES_TOOL_NAME => Some(execute_file_lines(app, context_name, args, config)),
         FILE_GREP_TOOL_NAME => Some(execute_file_grep(app, context_name, args, config)),
         CACHE_LIST_TOOL_NAME => Some(execute_cache_list(app, context_name)),
+        WRITE_FILE_TOOL_NAME => {
+            let path = require_str_param(args, "path");
+            let content = require_str_param(args, "content");
+            match (path, content) {
+                (Ok(p), Ok(c)) => Some(execute_write_file(&p, &c)),
+                (Err(e), _) | (_, Err(e)) => Some(Err(e)),
+            }
+        }
+        PATCH_FILE_TOOL_NAME => {
+            let path = require_str_param(args, "path");
+            let find = require_str_param(args, "find");
+            let replace = require_str_param(args, "replace");
+            match (path, find, replace) {
+                (Ok(p), Ok(f), Ok(r)) => Some(execute_patch_file(&p, &f, &r)),
+                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Some(Err(e)),
+            }
+        }
         _ => None,
     }
 }
@@ -670,5 +741,81 @@ mod tests {
             .as_array()
             .unwrap();
         assert!(required.is_empty());
+    }
+
+    #[test]
+    fn test_execute_write_file_success() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+
+        let result = super::execute_write_file(path.to_str().unwrap(), "hello world");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("written successfully"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn test_execute_write_file_creates_parent_dirs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("nested/dir/test.txt");
+
+        let result = super::execute_write_file(path.to_str().unwrap(), "content");
+        assert!(result.is_ok());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_execute_write_file_overwrites() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "old content").unwrap();
+
+        let result = super::execute_write_file(path.to_str().unwrap(), "new content");
+        assert!(result.is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
+    }
+
+    #[test]
+    fn test_execute_patch_file_success() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "hello world").unwrap();
+
+        let result = super::execute_patch_file(path.to_str().unwrap(), "world", "universe");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("patched successfully"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello universe");
+    }
+
+    #[test]
+    fn test_execute_patch_file_first_occurrence_only() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "foo bar foo bar").unwrap();
+
+        let result = super::execute_patch_file(path.to_str().unwrap(), "foo", "baz");
+        assert!(result.is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "baz bar foo bar");
+    }
+
+    #[test]
+    fn test_execute_patch_file_pattern_not_found() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "hello world").unwrap();
+
+        let result = super::execute_patch_file(path.to_str().unwrap(), "nonexistent", "replacement");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn test_execute_patch_file_file_not_found() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("nonexistent.txt");
+
+        let result = super::execute_patch_file(path.to_str().unwrap(), "find", "replace");
+        assert!(result.is_err());
     }
 }
