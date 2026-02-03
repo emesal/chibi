@@ -1,0 +1,61 @@
+[workspace]
+members = [
+    "crates/chibi-core",
+    "crates/chibi-cli",
+    # Vendored streamdown crates (used by chibi-cli)
+    "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-core",
+    "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-ansi",
+    "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-config",
+    "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-parser",
+    "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-syntax",
+    "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-render",
+    "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-plugin",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.6.0"
+edition = "2024"
+rust-version = "1.93"
+# Fields below are for vendored streamdown crates compatibility
+authors = ["Streamdown Contributors"]
+license = "MIT"
+repository = "https://github.com/emesal/streamdown-rs"
+keywords = ["markdown", "terminal", "streaming", "ansi", "cli"]
+categories = ["command-line-utilities", "text-processing"]
+
+[workspace.dependencies]
+# Shared dependencies
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4.5", features = ["derive"] }
+thiserror = "2.0"
+regex = "1.10"
+base64 = "0.22"
+reqwest = { version = "0.13.1", features = ["json", "stream"] }
+uuid = { version = "1.17", features = ["v4"] }
+
+# Streamdown dependencies (used by vendored crates)
+unicode-width = "0.2"
+syntect = "5.2"
+directories = "5.0"
+crossterm = "0.28"
+log = "0.4"
+env_logger = "0.11"
+atty = "0.2"
+nix = { version = "0.29", features = ["fs", "poll", "term", "signal", "process"] }
+
+# Streamdown crates (vendored)
+streamdown-core = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-core" }
+streamdown-ansi = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-ansi" }
+streamdown-config = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-config" }
+streamdown-parser = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-parser" }
+streamdown-syntax = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-syntax" }
+streamdown-render = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-render" }
+streamdown-plugin = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-plugin" }
+
+# Ratatoskr (LLM API client)
+ratatoskr = { git = "https://github.com/emesal/ratatoskr.git", branch = "main" }
+
+[workspace.lints.rust]
+dead_code = "deny"

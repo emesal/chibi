@@ -1,0 +1,179 @@
+# =============================================================================
+# Chibi Configuration
+# =============================================================================
+# Copy this file to ~/.chibi/config.toml and customize as needed.
+# See docs/configuration.md for full reference.
+
+# =============================================================================
+# Required Settings
+# =============================================================================
+
+# API key for your LLM provider
+# Currently chibi uses OpenRouter (https://openrouter.ai/settings/keys)
+api_key = "your-api-key-here"
+
+# Model to use (see https://openrouter.ai/models for available models)
+# Common choices:
+# - anthropic/claude-sonnet-4
+# - anthropic/claude-3.5-haiku
+# - openai/gpt-4o
+# - openai/gpt-4o-mini
+# - meta-llama/llama-3.3-70b-instruct:free
+#
+# See models.example.toml for free model options with context window sizes
+model = "arcee-ai/trinity-large-preview:free"
+
+# Context window limit (tokens)
+# Used for calculating when to warn about approaching limits
+# If using models.toml, the context_window from there takes precedence
+context_window_limit = 200000
+
+# Warning threshold percentage (0.0-100.0)
+# When context usage exceeds this percentage, a warning is printed to stderr
+warn_threshold_percent = 80.0
+
+# =============================================================================
+# Optional Settings
+# =============================================================================
+
+# Default username shown to the LLM (default: "user")
+# Can be overridden per-context in local.toml or via -u/-U flags
+username = "user"
+
+# =============================================================================
+# Auto-Compaction
+# =============================================================================
+
+# Enable automatic context compaction (default: false)
+# When enabled, chibi will automatically compact the context when it reaches
+# the threshold percentage of the context window
+auto_compact = false
+
+# Threshold percentage to trigger auto-compaction (default: 80.0)
+auto_compact_threshold = 80.0
+
+# Target percentage of messages to archive during rolling compaction (default: 50.0)
+# During auto-compaction, the LLM decides which messages to archive based on
+# current goals/todos. This percentage is guidance for the LLM and fallback
+# if LLM decision fails.
+rolling_compact_drop_percentage = 50.0
+
+# =============================================================================
+# Reflection (Persistent Memory)
+# =============================================================================
+
+# Enable the reflection feature (default: true)
+# When enabled, the LLM has access to a persistent memory that spans all contexts.
+# The LLM can use the update_reflection tool to store notes, preferences, and insights.
+reflection_enabled = true
+
+# Maximum characters for reflection content (default: 10000)
+reflection_character_limit = 10000
+
+# =============================================================================
+# Safety Limits
+# =============================================================================
+
+# Maximum recursion depth for autonomous tool loops (default: 30)
+# Prevents runaway agent loops when using the recurse tool
+max_recursion_depth = 30
+
+# Context lock heartbeat interval in seconds (default: 30)
+# Used to detect stale locks from crashed sessions
+lock_heartbeat_seconds = 30
+
+# =============================================================================
+# Tool Output Caching
+# =============================================================================
+
+# Character threshold above which tool outputs are cached (default: 4000)
+# When exceeded, output is cached to disk and a truncated preview is sent to the LLM
+tool_output_cache_threshold = 4000
+
+# Maximum age for cached outputs before automatic cleanup (default: 7)
+# Note: Value is offset by 1 day, so:
+#   0 = delete after 1 day (24 hours)
+#   1 = delete after 2 days (48 hours)
+#   7 = delete after 8 days (default)
+tool_cache_max_age_days = 7
+
+# Automatically cleanup old cache entries on exit (default: true)
+auto_cleanup_cache = true
+
+# Number of preview characters to show in truncated message (default: 500)
+tool_cache_preview_chars = 500
+
+# =============================================================================
+# Built-in file operations
+# =============================================================================
+
+# Paths allowed for read-only file tools (default: empty = cache only)
+# When empty, file tools only work with cache_id. Add paths to allow file access.
+# file_tools_allowed_paths = ["~", "/tmp"]
+
+# =============================================================================
+# API Parameters
+# =============================================================================
+# These control how the LLM generates responses.
+# All parameters are optional - sensible defaults are used.
+
+[api]
+# Temperature for sampling (0.0 to 2.0)
+# Higher = more random/creative, lower = more focused/deterministic
+# temperature = 0.7
+
+# Maximum tokens to generate in response
+# max_tokens = 4096
+
+# Nucleus sampling parameter (0.0 to 1.0)
+# Lower values = more focused on likely tokens
+# top_p = 0.9
+
+# Stop sequences - generation stops when any of these are produced
+# stop = ["\n\n---\n\n"]
+
+# Frequency penalty (-2.0 to 2.0) - penalize tokens based on frequency
+# frequency_penalty = 0.0
+
+# Presence penalty (-2.0 to 2.0) - penalize tokens that have appeared
+# presence_penalty = 0.0
+
+# Random seed for reproducible output
+# seed = 12345
+
+# Enable parallel tool calls (default: true)
+# parallel_tool_calls = true
+
+# Tool choice mode: "auto" (default), "none", "required"
+# tool_choice = "auto"
+
+# Enable prompt caching (default: true)
+# Mainly benefits Anthropic models
+# prompt_caching = true
+
+# Response format: uncomment to force JSON output
+# [api.response_format]
+# type = "json_object"
+
+# -----------------------------------------------------------------------------
+# Reasoning Configuration
+# -----------------------------------------------------------------------------
+# For models with extended thinking (chain-of-thought reasoning).
+# Use EITHER effort OR max_tokens, not both.
+
+[api.reasoning]
+# Effort level for reasoning models
+# Values: "xhigh", "high", "medium" (default), "low", "minimal", "none"
+# Supported by: OpenAI o1/o3/GPT-5 series, Grok models
+effort = "medium"
+
+# OR use token budget instead of effort level:
+# Supported by: Anthropic Claude, Gemini thinking models, some Qwen models
+# Anthropic range: 1024 to 128000
+# max_tokens = 16000
+
+# Exclude reasoning from response (model still reasons internally)
+# exclude = false
+
+# Explicitly enable/disable reasoning
+# enabled = true

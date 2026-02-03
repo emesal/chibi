@@ -1,0 +1,821 @@
+//! File access tools for examining cached tool outputs and files.
+//!
+//! These tools provide surgical access to cached tool outputs, allowing the LLM
+//! to examine large outputs without overwhelming the context window.
+
+use super::builtin::{BuiltinToolDef, ToolPropertyDef};
+use crate::cache;
+use crate::config::ResolvedConfig;
+use crate::json_ext::JsonExt;
+use crate::state::{AppState, StatePaths};
+use std::io::{self, ErrorKind};
+use std::path::PathBuf;
+
+// === Tool Name Constants ===
+
+pub const FILE_HEAD_TOOL_NAME: &str = "file_head";
+pub const FILE_TAIL_TOOL_NAME: &str = "file_tail";
+pub const FILE_LINES_TOOL_NAME: &str = "file_lines";
+pub const FILE_GREP_TOOL_NAME: &str = "file_grep";
+pub const CACHE_LIST_TOOL_NAME: &str = "cache_list";
+pub const WRITE_FILE_TOOL_NAME: &str = "write_file";
+pub const PATCH_FILE_TOOL_NAME: &str = "patch_file";
+
+// === Tool Definition Registry ===
+
+/// All file tool definitions
+pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
+    BuiltinToolDef {
+        name: FILE_HEAD_TOOL_NAME,
+        description: "Read the first N lines from a cached tool output or file. Use this to examine the beginning of large outputs.",
+        properties: &[
+            ToolPropertyDef {
+                name: "cache_id",
+                prop_type: "string",
+                description: "ID of a cached tool output (from [Output cached: ID] messages)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to a file (if not using cache_id)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "lines",
+                prop_type: "integer",
+                description: "Number of lines to read (default: 50)",
+                default: Some(50),
+            },
+        ],
+        required: &[],
+    },
+    BuiltinToolDef {
+        name: FILE_TAIL_TOOL_NAME,
+        description: "Read the last N lines from a cached tool output or file. Use this to examine the end of large outputs.",
+        properties: &[
+            ToolPropertyDef {
+                name: "cache_id",
+                prop_type: "string",
+                description: "ID of a cached tool output (from [Output cached: ID] messages)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to a file (if not using cache_id)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "lines",
+                prop_type: "integer",
+                description: "Number of lines to read (default: 50)",
+                default: Some(50),
+            },
+        ],
+        required: &[],
+    },
+    BuiltinToolDef {
+        name: FILE_LINES_TOOL_NAME,
+        description: "Read a specific range of lines from a cached tool output or file. Lines are 1-indexed.",
+        properties: &[
+            ToolPropertyDef {
+                name: "cache_id",
+                prop_type: "string",
+                description: "ID of a cached tool output (from [Output cached: ID] messages)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to a file (if not using cache_id)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "start",
+                prop_type: "integer",
+                description: "First line number (1-indexed)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "end",
+                prop_type: "integer",
+                description: "Last line number (1-indexed, inclusive)",
+                default: None,
+            },
+        ],
+        required: &["start", "end"],
+    },
+    BuiltinToolDef {
+        name: FILE_GREP_TOOL_NAME,
+        description: "Search for a pattern in a cached tool output or file. Returns matching lines with optional context.",
+        properties: &[
+            ToolPropertyDef {
+                name: "cache_id",
+                prop_type: "string",
+                description: "ID of a cached tool output (from [Output cached: ID] messages)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to a file (if not using cache_id)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "pattern",
+                prop_type: "string",
+                description: "Regular expression pattern to search for",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "context_before",
+                prop_type: "integer",
+                description: "Number of lines to show before each match (default: 2)",
+                default: Some(2),
+            },
+            ToolPropertyDef {
+                name: "context_after",
+                prop_type: "integer",
+                description: "Number of lines to show after each match (default: 2)",
+                default: Some(2),
+            },
+        ],
+        required: &["pattern"],
+    },
+    BuiltinToolDef {
+        name: CACHE_LIST_TOOL_NAME,
+        description: "List all cached tool outputs for this context. Shows cache IDs, tool names, sizes, and timestamps.",
+        properties: &[],
+        required: &[],
+    },
+    BuiltinToolDef {
+        name: WRITE_FILE_TOOL_NAME,
+        description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Requires user permission.",
+        properties: &[
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Absolute or relative path to write to",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "content",
+                prop_type: "string",
+                description: "Content to write to the file",
+                default: None,
+            },
+        ],
+        required: &["path", "content"],
+    },
+    BuiltinToolDef {
+        name: PATCH_FILE_TOOL_NAME,
+        description: "Apply a find-and-replace patch to a file. Replaces the first occurrence of 'find' with 'replace'. Requires user permission.",
+        properties: &[
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to the file to patch",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "find",
+                prop_type: "string",
+                description: "Text to find (exact match)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "replace",
+                prop_type: "string",
+                description: "Text to replace with",
+                default: None,
+            },
+        ],
+        required: &["path", "find", "replace"],
+    },
+];
+
+/// Convert all file tools to API format
+pub fn all_file_tools_to_api_format() -> Vec<serde_json::Value> {
+    FILE_TOOL_DEFS
+        .iter()
+        .map(|def| def.to_api_format())
+        .collect()
+}
+
+/// Look up a specific file tool definition by name.
+/// Returns None if not found. Use this for testing or conditional tool access.
+pub fn get_file_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
+    FILE_TOOL_DEFS.iter().find(|d| d.name == name)
+}
+
+// === Path Resolution ===
+
+/// Resolve a file path from either cache_id or path argument
+fn resolve_file_path(
+    app: &AppState,
+    context_name: &str,
+    args: &serde_json::Value,
+    config: &ResolvedConfig,
+) -> io::Result<PathBuf> {
+    let cache_id = args.get_str("cache_id");
+    let path = args.get_str("path");
+
+    match (cache_id, path) {
+        (Some(id), None) => {
+            // Resolve from cache
+            let cache_dir = app.tool_cache_dir(context_name);
+            cache::resolve_cache_path(&cache_dir, id)
+        }
+        (None, Some(p)) => {
+            // Validate path against allowed paths
+            let resolved = resolve_and_validate_path(p, config)?;
+            Ok(resolved)
+        }
+        (Some(_), Some(_)) => Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Provide either cache_id or path, not both",
+        )),
+        (None, None) => Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Must provide either cache_id or path",
+        )),
+    }
+}
+
+/// Resolve and validate a file path against allowed paths
+fn resolve_and_validate_path(path: &str, config: &ResolvedConfig) -> io::Result<PathBuf> {
+    let resolved = if let Some(rest) = path.strip_prefix("~/") {
+        // Expand home directory with path suffix
+        let home = dirs_next::home_dir().ok_or_else(|| {
+            io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
+        })?;
+        home.join(rest)
+    } else if path == "~" {
+        // Bare ~ means home directory itself
+        dirs_next::home_dir().ok_or_else(|| {
+            io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
+        })?
+    } else {
+        PathBuf::from(path)
+    };
+
+    let canonical = resolved.canonicalize().map_err(|e| {
+        io::Error::new(
+            ErrorKind::NotFound,
+            format!("Could not resolve path '{}': {}", path, e),
+        )
+    })?;
+
+    // If file_tools_allowed_paths is empty, reject all file paths
+    // (only cache_id is allowed)
+    if config.file_tools_allowed_paths.is_empty() {
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "File path access is not allowed. Use cache_id to access cached tool outputs, or configure file_tools_allowed_paths.",
+        ));
+    }
+
+    // Check if path is under any allowed path
+    let allowed = config.file_tools_allowed_paths.iter().any(|allowed_path| {
+        let allowed_resolved = if let Some(rest) = allowed_path.strip_prefix("~/") {
+            dirs_next::home_dir().map(|home| home.join(rest))
+        } else if allowed_path == "~" {
+            dirs_next::home_dir()
+        } else {
+            Some(PathBuf::from(allowed_path))
+        };
+
+        allowed_resolved
+            .and_then(|p| p.canonicalize().ok())
+            .is_some_and(|allowed_canonical| canonical.starts_with(&allowed_canonical))
+    });
+
+    if !allowed {
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            format!(
+                "Path '{}' is not under any allowed path. Allowed: {:?}",
+                path, config.file_tools_allowed_paths
+            ),
+        ));
+    }
+
+    Ok(canonical)
+}
+
+// === Tool Execution ===
+
+// --- Helpers for parameter extraction ---
+
+/// Extract a required string parameter, returning a helpful error if missing.
+/// Use this pattern for required params in future file tools.
+fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String> {
+    args.get_str(name).map(String::from).ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Missing '{}' parameter", name),
+        )
+    })
+}
+
+/// Extract a required u64 parameter, returning a helpful error if missing.
+/// Use this pattern for required numeric params in future file tools.
+fn require_u64_param(args: &serde_json::Value, name: &str) -> io::Result<u64> {
+    args.get_u64(name).ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Missing '{}' parameter", name),
+        )
+    })
+}
+
+// --- Head/Tail shared implementation ---
+
+/// Direction for head/tail reading
+enum ReadDirection {
+    Head,
+    Tail,
+}
+
+/// Shared implementation for file_head and file_tail.
+/// When adding similar "read N lines from start/end" tools, follow this pattern.
+fn execute_file_head_or_tail(
+    app: &AppState,
+    context_name: &str,
+    args: &serde_json::Value,
+    config: &ResolvedConfig,
+    direction: ReadDirection,
+) -> io::Result<String> {
+    let path = resolve_file_path(app, context_name, args, config)?;
+    let lines = args.get_u64_or("lines", 50) as usize;
+
+    match direction {
+        ReadDirection::Head => cache::read_cache_head(&path, lines),
+        ReadDirection::Tail => cache::read_cache_tail(&path, lines),
+    }
+}
+
+/// Execute file_head tool
+pub fn execute_file_head(
+    app: &AppState,
+    context_name: &str,
+    args: &serde_json::Value,
+    config: &ResolvedConfig,
+) -> io::Result<String> {
+    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Head)
+}
+
+/// Execute file_tail tool
+pub fn execute_file_tail(
+    app: &AppState,
+    context_name: &str,
+    args: &serde_json::Value,
+    config: &ResolvedConfig,
+) -> io::Result<String> {
+    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Tail)
+}
+
+/// Execute file_lines tool
+pub fn execute_file_lines(
+    app: &AppState,
+    context_name: &str,
+    args: &serde_json::Value,
+    config: &ResolvedConfig,
+) -> io::Result<String> {
+    let path = resolve_file_path(app, context_name, args, config)?;
+    let start = require_u64_param(args, "start")? as usize;
+    let end = require_u64_param(args, "end")? as usize;
+
+    // Validation specific to line ranges
+    if start == 0 {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Line numbers are 1-indexed, start must be >= 1",
+        ));
+    }
+    if end < start {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "End line must be >= start line",
+        ));
+    }
+
+    cache::read_cache_lines(&path, start, end)
+}
+
+/// Execute file_grep tool
+pub fn execute_file_grep(
+    app: &AppState,
+    context_name: &str,
+    args: &serde_json::Value,
+    config: &ResolvedConfig,
+) -> io::Result<String> {
+    let path = resolve_file_path(app, context_name, args, config)?;
+    let pattern = require_str_param(args, "pattern")?;
+    let context_before = args.get_u64_or("context_before", 2) as usize;
+    let context_after = args.get_u64_or("context_after", 2) as usize;
+
+    let result = cache::read_cache_grep(&path, &pattern, context_before, context_after)?;
+
+    if result.is_empty() {
+        Ok(format!("No matches found for pattern: {}", pattern))
+    } else {
+        Ok(result)
+    }
+}
+
+/// Execute cache_list tool
+pub fn execute_cache_list(app: &AppState, context_name: &str) -> io::Result<String> {
+    let cache_dir = app.tool_cache_dir(context_name);
+    let entries = cache::list_cache_entries(&cache_dir)?;
+
+    if entries.is_empty() {
+        return Ok("No cached outputs found.".to_string());
+    }
+
+    let mut output = String::from("Cached tool outputs:\n");
+    for entry in entries {
+        // Format timestamp
+        let timestamp = chrono::DateTime::from_timestamp(entry.timestamp as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        output.push_str(&format!(
+            "\n  {} ({}):\n    Tool: {}\n    Size: {} chars (~{} tokens), {} lines\n    Cached: {}\n",
+            entry.id,
+            entry.tool_name,
+            entry.tool_name,
+            entry.char_count,
+            entry.token_estimate,
+            entry.line_count,
+            timestamp
+        ));
+    }
+
+    Ok(output)
+}
+
+/// Execute write_file tool
+///
+/// Note: Permission check via pre_file_write hook happens in send.rs before this is called.
+pub fn execute_write_file(path: &str, content: &str) -> io::Result<String> {
+    let path = PathBuf::from(path);
+
+    // Create parent directories if needed
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    crate::safe_io::atomic_write_text(&path, content)?;
+
+    Ok(format!(
+        "File written successfully: {} ({} bytes)",
+        path.display(),
+        content.len()
+    ))
+}
+
+/// Execute patch_file tool (find and replace first occurrence)
+///
+/// Note: Permission check via pre_file_write hook happens in send.rs before this is called.
+pub fn execute_patch_file(path: &str, find: &str, replace: &str) -> io::Result<String> {
+    let path = PathBuf::from(path);
+
+    // Read existing content
+    let content = std::fs::read_to_string(&path)?;
+
+    // Check if find string exists
+    if !content.contains(find) {
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("Pattern not found in file: {:?}", find),
+        ));
+    }
+
+    // Replace first occurrence only
+    let new_content = content.replacen(find, replace, 1);
+
+    // Write atomically
+    crate::safe_io::atomic_write_text(&path, &new_content)?;
+
+    Ok(format!(
+        "File patched successfully: {} (replaced {} bytes with {} bytes)",
+        path.display(),
+        find.len(),
+        replace.len()
+    ))
+}
+
+/// Check if a tool name is a file tool
+pub fn is_file_tool(name: &str) -> bool {
+    matches!(
+        name,
+        FILE_HEAD_TOOL_NAME
+            | FILE_TAIL_TOOL_NAME
+            | FILE_LINES_TOOL_NAME
+            | FILE_GREP_TOOL_NAME
+            | CACHE_LIST_TOOL_NAME
+            | WRITE_FILE_TOOL_NAME
+            | PATCH_FILE_TOOL_NAME
+    )
+}
+
+/// Execute a file tool by name
+pub fn execute_file_tool(
+    app: &AppState,
+    context_name: &str,
+    tool_name: &str,
+    args: &serde_json::Value,
+    config: &ResolvedConfig,
+) -> Option<io::Result<String>> {
+    match tool_name {
+        FILE_HEAD_TOOL_NAME => Some(execute_file_head(app, context_name, args, config)),
+        FILE_TAIL_TOOL_NAME => Some(execute_file_tail(app, context_name, args, config)),
+        FILE_LINES_TOOL_NAME => Some(execute_file_lines(app, context_name, args, config)),
+        FILE_GREP_TOOL_NAME => Some(execute_file_grep(app, context_name, args, config)),
+        CACHE_LIST_TOOL_NAME => Some(execute_cache_list(app, context_name)),
+        WRITE_FILE_TOOL_NAME => {
+            let path = require_str_param(args, "path");
+            let content = require_str_param(args, "content");
+            match (path, content) {
+                (Ok(p), Ok(c)) => Some(execute_write_file(&p, &c)),
+                (Err(e), _) | (_, Err(e)) => Some(Err(e)),
+            }
+        }
+        PATCH_FILE_TOOL_NAME => {
+            let path = require_str_param(args, "path");
+            let find = require_str_param(args, "find");
+            let replace = require_str_param(args, "replace");
+            match (path, find, replace) {
+                (Ok(p), Ok(f), Ok(r)) => Some(execute_patch_file(&p, &f, &r)),
+                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Some(Err(e)),
+            }
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // === Helper for tests: get API format for a specific tool ===
+    fn get_tool_api(name: &str) -> serde_json::Value {
+        get_file_tool_def(name)
+            .expect("tool should exist in registry")
+            .to_api_format()
+    }
+
+    // === Individual Tool Tests (using registry lookup) ===
+
+    #[test]
+    fn test_file_head_tool_api_format() {
+        let tool = get_tool_api(FILE_HEAD_TOOL_NAME);
+        assert_eq!(tool["type"], "function");
+        assert_eq!(tool["function"]["name"], FILE_HEAD_TOOL_NAME);
+    }
+
+    #[test]
+    fn test_file_tail_tool_api_format() {
+        let tool = get_tool_api(FILE_TAIL_TOOL_NAME);
+        assert_eq!(tool["function"]["name"], FILE_TAIL_TOOL_NAME);
+    }
+
+    #[test]
+    fn test_file_lines_tool_api_format() {
+        let tool = get_tool_api(FILE_LINES_TOOL_NAME);
+        assert_eq!(tool["function"]["name"], FILE_LINES_TOOL_NAME);
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.contains(&serde_json::json!("start")));
+        assert!(required.contains(&serde_json::json!("end")));
+    }
+
+    #[test]
+    fn test_file_grep_tool_api_format() {
+        let tool = get_tool_api(FILE_GREP_TOOL_NAME);
+        assert_eq!(tool["function"]["name"], FILE_GREP_TOOL_NAME);
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.contains(&serde_json::json!("pattern")));
+    }
+
+    #[test]
+    fn test_cache_list_tool_api_format() {
+        let tool = get_tool_api(CACHE_LIST_TOOL_NAME);
+        assert_eq!(tool["function"]["name"], CACHE_LIST_TOOL_NAME);
+    }
+
+    #[test]
+    fn test_is_file_tool() {
+        assert!(is_file_tool(FILE_HEAD_TOOL_NAME));
+        assert!(is_file_tool(FILE_TAIL_TOOL_NAME));
+        assert!(is_file_tool(FILE_LINES_TOOL_NAME));
+        assert!(is_file_tool(FILE_GREP_TOOL_NAME));
+        assert!(is_file_tool(CACHE_LIST_TOOL_NAME));
+        assert!(is_file_tool(WRITE_FILE_TOOL_NAME));
+        assert!(is_file_tool(PATCH_FILE_TOOL_NAME));
+        assert!(!is_file_tool("other_tool"));
+    }
+
+    #[test]
+    fn test_tool_constants() {
+        assert_eq!(FILE_HEAD_TOOL_NAME, "file_head");
+        assert_eq!(FILE_TAIL_TOOL_NAME, "file_tail");
+        assert_eq!(FILE_LINES_TOOL_NAME, "file_lines");
+        assert_eq!(FILE_GREP_TOOL_NAME, "file_grep");
+        assert_eq!(CACHE_LIST_TOOL_NAME, "cache_list");
+        assert_eq!(WRITE_FILE_TOOL_NAME, "write_file");
+        assert_eq!(PATCH_FILE_TOOL_NAME, "patch_file");
+    }
+
+    // === Registry Tests ===
+
+    #[test]
+    fn test_file_tool_registry_contains_all_tools() {
+        assert_eq!(FILE_TOOL_DEFS.len(), 7);
+        let names: Vec<_> = FILE_TOOL_DEFS.iter().map(|d| d.name).collect();
+        assert!(names.contains(&FILE_HEAD_TOOL_NAME));
+        assert!(names.contains(&FILE_TAIL_TOOL_NAME));
+        assert!(names.contains(&FILE_LINES_TOOL_NAME));
+        assert!(names.contains(&FILE_GREP_TOOL_NAME));
+        assert!(names.contains(&CACHE_LIST_TOOL_NAME));
+        assert!(names.contains(&WRITE_FILE_TOOL_NAME));
+        assert!(names.contains(&PATCH_FILE_TOOL_NAME));
+    }
+
+    #[test]
+    fn test_get_file_tool_def() {
+        assert!(get_file_tool_def(FILE_HEAD_TOOL_NAME).is_some());
+        assert!(get_file_tool_def("nonexistent_tool").is_none());
+    }
+
+    #[test]
+    fn test_all_file_tools_to_api_format() {
+        let tools = all_file_tools_to_api_format();
+        assert_eq!(tools.len(), 7);
+        for tool in &tools {
+            assert_eq!(tool["type"], "function");
+            assert!(tool["function"]["name"].is_string());
+        }
+    }
+
+    #[test]
+    fn test_write_file_tool_api_format() {
+        let tool = get_tool_api(WRITE_FILE_TOOL_NAME);
+        assert_eq!(tool["function"]["name"], WRITE_FILE_TOOL_NAME);
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.contains(&serde_json::json!("path")));
+        assert!(required.contains(&serde_json::json!("content")));
+    }
+
+    #[test]
+    fn test_patch_file_tool_api_format() {
+        let tool = get_tool_api(PATCH_FILE_TOOL_NAME);
+        assert_eq!(tool["function"]["name"], PATCH_FILE_TOOL_NAME);
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.contains(&serde_json::json!("path")));
+        assert!(required.contains(&serde_json::json!("find")));
+        assert!(required.contains(&serde_json::json!("replace")));
+    }
+
+    #[test]
+    fn test_file_tool_defaults() {
+        // file_head/file_tail have lines default: 50
+        let head = get_tool_api(FILE_HEAD_TOOL_NAME);
+        assert_eq!(
+            head["function"]["parameters"]["properties"]["lines"]["default"],
+            50
+        );
+
+        let tail = get_tool_api(FILE_TAIL_TOOL_NAME);
+        assert_eq!(
+            tail["function"]["parameters"]["properties"]["lines"]["default"],
+            50
+        );
+
+        // file_grep has context defaults: 2
+        let grep = get_tool_api(FILE_GREP_TOOL_NAME);
+        assert_eq!(
+            grep["function"]["parameters"]["properties"]["context_before"]["default"],
+            2
+        );
+        assert_eq!(
+            grep["function"]["parameters"]["properties"]["context_after"]["default"],
+            2
+        );
+    }
+
+    #[test]
+    fn test_file_tool_required_fields() {
+        // file_lines requires start and end
+        let lines = get_tool_api(FILE_LINES_TOOL_NAME);
+        let required = lines["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert_eq!(required.len(), 2);
+        assert!(required.contains(&serde_json::json!("start")));
+        assert!(required.contains(&serde_json::json!("end")));
+
+        // file_grep requires pattern
+        let grep = get_tool_api(FILE_GREP_TOOL_NAME);
+        let required = grep["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert_eq!(required.len(), 1);
+        assert!(required.contains(&serde_json::json!("pattern")));
+
+        // cache_list has no required
+        let cache = get_tool_api(CACHE_LIST_TOOL_NAME);
+        let required = cache["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.is_empty());
+    }
+
+    #[test]
+    fn test_execute_write_file_success() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+
+        let result = super::execute_write_file(path.to_str().unwrap(), "hello world");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("written successfully"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn test_execute_write_file_creates_parent_dirs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("nested/dir/test.txt");
+
+        let result = super::execute_write_file(path.to_str().unwrap(), "content");
+        assert!(result.is_ok());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_execute_write_file_overwrites() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "old content").unwrap();
+
+        let result = super::execute_write_file(path.to_str().unwrap(), "new content");
+        assert!(result.is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
+    }
+
+    #[test]
+    fn test_execute_patch_file_success() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "hello world").unwrap();
+
+        let result = super::execute_patch_file(path.to_str().unwrap(), "world", "universe");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("patched successfully"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello universe");
+    }
+
+    #[test]
+    fn test_execute_patch_file_first_occurrence_only() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "foo bar foo bar").unwrap();
+
+        let result = super::execute_patch_file(path.to_str().unwrap(), "foo", "baz");
+        assert!(result.is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "baz bar foo bar");
+    }
+
+    #[test]
+    fn test_execute_patch_file_pattern_not_found() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+        std::fs::write(&path, "hello world").unwrap();
+
+        let result =
+            super::execute_patch_file(path.to_str().unwrap(), "nonexistent", "replacement");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn test_execute_patch_file_file_not_found() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("nonexistent.txt");
+
+        let result = super::execute_patch_file(path.to_str().unwrap(), "find", "replace");
+        assert!(result.is_err());
+    }
+}

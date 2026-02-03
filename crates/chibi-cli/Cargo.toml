@@ -1,0 +1,40 @@
+[package]
+name = "chibi-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "chibi"
+path = "src/main.rs"
+
+[dependencies]
+chibi-core = { path = "../chibi-core" }
+chrono = "0.4"
+clap = { version = "4.5", features = ["derive"] }
+schemars = "0.8"
+streamdown-parser.workspace = true
+streamdown-render.workspace = true
+image = "0.24"
+imgcatr = "0.1.4"
+futures-util = { version = "0.3.31", features = ["std"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+shlex = "1.3"
+toml = "0.8"
+tokio = { version = "1.49.0", features = ["full"] }
+base64.workspace = true
+sha2 = "0.10"
+uuid.workspace = true
+reqwest.workspace = true
+
+[build-dependencies]
+vergen-gitcl = { version = "1.0", default-features = false }
+
+[lints.rust]
+dead_code = "deny"
+
+[dev-dependencies]
+tempfile = "3.19"
+regex = "1.10"
+serde_json = "1.0"

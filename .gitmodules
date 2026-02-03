@@ -1,0 +1,6 @@
+[submodule "plugins"]
+	path = plugins
+	url = https://github.com/emesal/chibi-plugins.git
+[submodule "crates/chibi-cli/vendor/streamdown-rs"]
+	path = crates/chibi-cli/vendor/streamdown-rs
+	url = https://github.com/emesal/streamdown-rs.git
