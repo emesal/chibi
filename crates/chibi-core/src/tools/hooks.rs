@@ -36,6 +36,7 @@ pub enum HookPoint {
     PreApiRequest,    // Before API request is sent (can modify full request body)
     PreAgenticLoop,   // Before entering the tool loop (can override fallback)
     PostToolBatch,    // After processing a batch of tool calls (can override fallback)
+    PreFileWrite,     // Before file write/patch (can approve/deny/modify operation)
 }
 
 /// Execute a hook on all tools that registered for it
@@ -119,6 +120,7 @@ mod tests {
         ("pre_api_request", HookPoint::PreApiRequest),
         ("pre_agentic_loop", HookPoint::PreAgenticLoop),
         ("post_tool_batch", HookPoint::PostToolBatch),
+        ("pre_file_write", HookPoint::PreFileWrite),
     ];
 
     #[test]

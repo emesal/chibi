@@ -18,6 +18,8 @@ pub const FILE_TAIL_TOOL_NAME: &str = "file_tail";
 pub const FILE_LINES_TOOL_NAME: &str = "file_lines";
 pub const FILE_GREP_TOOL_NAME: &str = "file_grep";
 pub const CACHE_LIST_TOOL_NAME: &str = "cache_list";
+pub const WRITE_FILE_TOOL_NAME: &str = "write_file";
+pub const PATCH_FILE_TOOL_NAME: &str = "patch_file";
 
 // === Tool Definition Registry ===
 
@@ -146,6 +148,50 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
         description: "List all cached tool outputs for this context. Shows cache IDs, tool names, sizes, and timestamps.",
         properties: &[],
         required: &[],
+    },
+    BuiltinToolDef {
+        name: WRITE_FILE_TOOL_NAME,
+        description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Requires user permission.",
+        properties: &[
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Absolute or relative path to write to",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "content",
+                prop_type: "string",
+                description: "Content to write to the file",
+                default: None,
+            },
+        ],
+        required: &["path", "content"],
+    },
+    BuiltinToolDef {
+        name: PATCH_FILE_TOOL_NAME,
+        description: "Apply a find-and-replace patch to a file. Replaces the first occurrence of 'find' with 'replace'. Requires user permission.",
+        properties: &[
+            ToolPropertyDef {
+                name: "path",
+                prop_type: "string",
+                description: "Path to the file to patch",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "find",
+                prop_type: "string",
+                description: "Text to find (exact match)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "replace",
+                prop_type: "string",
+                description: "Text to replace with",
+                default: None,
+            },
+        ],
+        required: &["path", "find", "replace"],
     },
 ];
 
@@ -419,6 +465,8 @@ pub fn is_file_tool(name: &str) -> bool {
             | FILE_LINES_TOOL_NAME
             | FILE_GREP_TOOL_NAME
             | CACHE_LIST_TOOL_NAME
+            | WRITE_FILE_TOOL_NAME
+            | PATCH_FILE_TOOL_NAME
     )
 }
 
@@ -500,6 +548,8 @@ mod tests {
         assert!(is_file_tool(FILE_LINES_TOOL_NAME));
         assert!(is_file_tool(FILE_GREP_TOOL_NAME));
         assert!(is_file_tool(CACHE_LIST_TOOL_NAME));
+        assert!(is_file_tool(WRITE_FILE_TOOL_NAME));
+        assert!(is_file_tool(PATCH_FILE_TOOL_NAME));
         assert!(!is_file_tool("other_tool"));
     }
 
@@ -510,19 +560,23 @@ mod tests {
         assert_eq!(FILE_LINES_TOOL_NAME, "file_lines");
         assert_eq!(FILE_GREP_TOOL_NAME, "file_grep");
         assert_eq!(CACHE_LIST_TOOL_NAME, "cache_list");
+        assert_eq!(WRITE_FILE_TOOL_NAME, "write_file");
+        assert_eq!(PATCH_FILE_TOOL_NAME, "patch_file");
     }
 
     // === Registry Tests ===
 
     #[test]
     fn test_file_tool_registry_contains_all_tools() {
-        assert_eq!(FILE_TOOL_DEFS.len(), 5);
+        assert_eq!(FILE_TOOL_DEFS.len(), 7);
         let names: Vec<_> = FILE_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&FILE_HEAD_TOOL_NAME));
         assert!(names.contains(&FILE_TAIL_TOOL_NAME));
         assert!(names.contains(&FILE_LINES_TOOL_NAME));
         assert!(names.contains(&FILE_GREP_TOOL_NAME));
         assert!(names.contains(&CACHE_LIST_TOOL_NAME));
+        assert!(names.contains(&WRITE_FILE_TOOL_NAME));
+        assert!(names.contains(&PATCH_FILE_TOOL_NAME));
     }
 
     #[test]
@@ -534,11 +588,34 @@ mod tests {
     #[test]
     fn test_all_file_tools_to_api_format() {
         let tools = all_file_tools_to_api_format();
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 7);
         for tool in &tools {
             assert_eq!(tool["type"], "function");
             assert!(tool["function"]["name"].is_string());
         }
+    }
+
+    #[test]
+    fn test_write_file_tool_api_format() {
+        let tool = get_tool_api(WRITE_FILE_TOOL_NAME);
+        assert_eq!(tool["function"]["name"], WRITE_FILE_TOOL_NAME);
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.contains(&serde_json::json!("path")));
+        assert!(required.contains(&serde_json::json!("content")));
+    }
+
+    #[test]
+    fn test_patch_file_tool_api_format() {
+        let tool = get_tool_api(PATCH_FILE_TOOL_NAME);
+        assert_eq!(tool["function"]["name"], PATCH_FILE_TOOL_NAME);
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.contains(&serde_json::json!("path")));
+        assert!(required.contains(&serde_json::json!("find")));
+        assert!(required.contains(&serde_json::json!("replace")));
     }
 
     #[test]
