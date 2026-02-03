@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["default_hsv","default_list_indent","default_margin","default_syntax","default_true"],"struct":["HsvMultiplier","StyleConfig"]};

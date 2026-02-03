@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["builtin_plugin_info","builtin_plugins","create_plugin","discover_plugins","load_builtin_plugins"],"struct":["PluginFilter","PluginInfo"]};

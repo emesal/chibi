@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["BOLD","DIM","ITALIC","LINK","REVERSE","STRIKEOUT","UNDERLINE"],"struct":["Style","StyledText"],"type":["StylePair"]};

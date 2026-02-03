@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_CLIPBOARD_SIZE","MAX_SAVEBRACE_SIZE"],"fn":["copy_to_clipboard","is_tty","savebrace","savebrace_clear","savebrace_last","savebrace_path","savebrace_read","terminal_size","terminal_width"],"struct":["RenderFeatures"]};

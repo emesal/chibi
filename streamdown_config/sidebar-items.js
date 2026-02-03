@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_TOML"],"mod":["computed","features","style"],"struct":["ComputedStyle","Config","FeaturesConfig","HsvMultiplier","StyleConfig"]};

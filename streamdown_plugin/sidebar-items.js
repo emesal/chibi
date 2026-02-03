@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ProcessResult"],"mod":["builtin","latex"],"struct":["PluginManager"],"trait":["Plugin"]};

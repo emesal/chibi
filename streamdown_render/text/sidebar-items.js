@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["simple_wrap","split_text","text_wrap","truncate_to_visible"],"struct":["WrappedText"]};

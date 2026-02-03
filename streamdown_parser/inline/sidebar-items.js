@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["InlineElement"],"fn":["format_line","number_to_superscript"],"struct":["FormatState","InlineParser"]};

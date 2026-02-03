@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["ansi2hex","apply_multipliers","bg_from_hsv","fg_from_hsv","hex2rgb","hsv_to_rgb","rgb_to_hsv"],"struct":["HsvMultiplier"]};

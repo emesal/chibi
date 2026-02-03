@@ -1,0 +1,45 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="JSON input parsing for `--json-config` mode."><title>chibi::json_input - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="chibi" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0 (254b59607 2026-01-19)" data-channel="1.93.0" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module json_input</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../chibi/index.html">chibi</a><span class="version">0.6.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module json_<wbr>input</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#json-format" title="JSON Format">JSON Format</a><ul><li><a href="#commands" title="Commands">Commands</a></li><li><a href="#context-selection" title="Context Selection">Context Selection</a></li><li><a href="#username-override" title="Username Override">Username Override</a></li></ul></li></ul><h3><a href="#functions">Module Items</a></h3><ul class="block"><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate chibi</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">chibi</a></div><h1>Module <span>json_<wbr>input</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/chibi/json_input.rs.html#1-578">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>JSON input parsing for <code>--json-config</code> mode.</p>
+<p>This module handles parsing JSON input from stdin and converting it
+to the unified <code>ChibiInput</code> format.</p>
+<h3 id="json-format"><a class="doc-anchor" href="#json-format">§</a>JSON Format</h3>
+<p>The JSON format mirrors the <code>ChibiInput</code> structure directly:</p>
+<div class="example-wrap"><pre class="language-json"><code>{
+  &quot;command&quot;: &quot;list_contexts&quot;
+}</code></pre></div><div class="example-wrap"><pre class="language-json"><code>{
+  &quot;command&quot;: { &quot;send_prompt&quot;: { &quot;prompt&quot;: &quot;hello world&quot; } },
+  &quot;context&quot;: { &quot;switch&quot;: { &quot;name&quot;: &quot;coding&quot; } },
+  &quot;flags&quot;: { &quot;verbose&quot;: true }
+}</code></pre></div><h4 id="commands"><a class="doc-anchor" href="#commands">§</a>Commands</h4>
+<p>Simple commands (no arguments):</p>
+<ul>
+<li><code>"list_contexts"</code></li>
+<li><code>"list_current_context"</code></li>
+<li><code>"show_help"</code></li>
+<li><code>"show_version"</code></li>
+<li><code>"no_op"</code></li>
+</ul>
+<p>Commands with arguments:</p>
+<ul>
+<li><code>{ "send_prompt": { "prompt": "..." } }</code></li>
+<li><code>{ "destroy_context": { "name": "..." } }</code> (name is optional, null = current)</li>
+<li><code>{ "archive_history": { "name": "..." } }</code> (name is optional)</li>
+<li><code>{ "compact_context": { "name": "..." } }</code> (name is optional)</li>
+<li><code>{ "rename_context": { "old": "...", "new": "..." } }</code> (old is optional)</li>
+<li><code>{ "show_log": { "context": "...", "count": 10 } }</code> (context is optional)</li>
+<li><code>{ "inspect": { "context": "...", "thing": "todos" } }</code> (context is optional)</li>
+<li><code>{ "set_system_prompt": { "context": "...", "prompt": "..." } }</code> (context is optional)</li>
+<li><code>{ "run_plugin": { "name": "...", "args": [...] } }</code></li>
+<li><code>{ "call_tool": { "name": "...", "args": [...] } }</code></li>
+</ul>
+<h4 id="context-selection"><a class="doc-anchor" href="#context-selection">§</a>Context Selection</h4>
+<ul>
+<li><code>"current"</code> (default)</li>
+<li><code>{ "switch": { "name": "..." } }</code> (persistent is true by default)</li>
+<li><code>{ "ephemeral": { "name": "..." } }</code></li>
+</ul>
+<h4 id="username-override"><a class="doc-anchor" href="#username-override">§</a>Username Override</h4>
+<ul>
+<li><code>{ "persistent": "username" }</code></li>
+<li><code>{ "ephemeral": "username" }</code></li>
+</ul>
+</div></details><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.from_str.html" title="fn chibi::json_input::from_str">from_<wbr>str</a></dt><dd>Parse JSON input string to ChibiInput</dd></dl></section></div></main></body></html>

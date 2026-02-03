@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Token"],"fn":["cjk_count","find_code_regions","is_cjk","not_text"],"static":["CODE_SPAN_RE","FOOTNOTE_RE","IMAGE_RE","INLINE_TOKEN_RE","LINK_RE"],"struct":["Tokenizer"]};

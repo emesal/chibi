@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["RESET"],"fn":["aliases_for","all_aliases","language_alias","override_theme_background"],"mod":["languages"],"static":["LANGUAGE_ALIASES"],"struct":["HighlightState","Highlighter"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MIN_COL_WIDTH"],"fn":["render_table_row","render_table_separator"],"struct":["TableState"]};

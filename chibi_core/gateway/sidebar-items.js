@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_gateway","chat","from_ratatoskr_message","json_tool_to_definition","to_chat_options","to_ratatoskr_message","to_tool_definition"]};

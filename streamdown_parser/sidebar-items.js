@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ListBullet","ParseEvent","TableState"],"mod":["entities","inline","tokenizer"],"static":["BLOCK_RE","CODE_FENCE_END_RE","CODE_FENCE_RE","HEADING_RE","HR_RE","LIST_ITEM_RE","SPACE_CODE_RE","TABLE_ROW_RE","TABLE_SEP_RE"],"struct":["Parser"]};

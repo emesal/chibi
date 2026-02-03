@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["bg_color","fg_color"],"mod":["code","features","heading","list","table","text"],"struct":["RenderStyle","Renderer"]};

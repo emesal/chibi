@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["cleanup","convert_commands","convert_fractions","convert_inline_math","convert_subscripts","convert_superscripts","latex_to_unicode","to_subscript","to_superscript"],"static":["GREEK_LETTERS","OPERATORS","RELATIONS","SUBSCRIPT_DIGITS","SUPERSCRIPT_CHARS","SYMBOLS"],"struct":["LatexPlugin"]};

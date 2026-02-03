@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["chibi_core",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;<a class=\"struct\" href=\"chibi_core/config/struct.ReasoningConfig.html\" title=\"struct chibi_core::config::ReasoningConfig\">ReasoningConfig</a>&gt; for <a class=\"struct\" href=\"chibi_core/config/struct.ReasoningConfigRaw.html\" title=\"struct chibi_core::config::ReasoningConfigRaw\">ReasoningConfigRaw</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;<a class=\"struct\" href=\"chibi_core/config/struct.ReasoningConfigRaw.html\" title=\"struct chibi_core::config::ReasoningConfigRaw\">ReasoningConfigRaw</a>&gt; for <a class=\"struct\" href=\"chibi_core/config/struct.ReasoningConfig.html\" title=\"struct chibi_core::config::ReasoningConfig\">ReasoningConfig</a>"]]],["streamdown_core",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;<a class=\"struct\" href=\"https://doc.rust-lang.org/1.93.0/std/io/error/struct.Error.html\" title=\"struct std::io::error::Error\">Error</a>&gt; for <a class=\"enum\" href=\"streamdown_core/error/enum.StreamdownError.html\" title=\"enum streamdown_core::error::StreamdownError\">StreamdownError</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[936,469]}

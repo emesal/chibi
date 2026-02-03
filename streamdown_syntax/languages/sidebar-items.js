@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["aliases_for","all_aliases","language_alias"],"static":["LANGUAGE_ALIASES"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["is_safe_url","sanitize_extension","sanitize_for_terminal","sanitize_preserving_ansi","sanitize_url"]};
