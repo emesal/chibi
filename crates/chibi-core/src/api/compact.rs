@@ -5,13 +5,11 @@
 //! - Full compaction: summarizes all messages and starts fresh
 //! - By-name compaction: compact a specific context without LLM
 
-use super::request::{build_request_body, extract_choice_content};
 use crate::config::ResolvedConfig;
 use crate::context::{Context, Message, now_timestamp};
+use crate::gateway;
 use crate::state::AppState;
 use crate::tools;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
-use reqwest::{Client, StatusCode};
 use serde_json::json;
 use std::io;
 
@@ -112,45 +110,29 @@ No explanation, just the JSON array."#,
         target_drop_count,
     );
 
-    let client = Client::new();
-
     // First LLM call: decide what to drop
     let decision_messages = vec![json!({
         "role": "user",
         "content": decision_prompt,
     })];
-    let decision_request = build_request_body(resolved_config, &decision_messages, None, false);
 
-    let ids_to_drop: Vec<String> = match client
-        .post(&resolved_config.base_url)
-        .header(AUTHORIZATION, format!("Bearer {}", resolved_config.api_key))
-        .header(CONTENT_TYPE, "application/json")
-        .body(decision_request.to_string())
-        .send()
-        .await
-    {
-        Ok(response) if response.status() == StatusCode::OK => {
-            match response.json::<serde_json::Value>().await {
-                Ok(json) => {
-                    let content = extract_choice_content(&json).unwrap_or("[]");
-                    // Try to parse as JSON array
-                    serde_json::from_str(content).unwrap_or_else(|_| {
-                        // Try to extract JSON array from response if wrapped in other text
-                        if let Some(start) = content.find('[') {
-                            if let Some(end) = content.rfind(']') {
-                                serde_json::from_str(&content[start..=end]).unwrap_or_default()
-                            } else {
-                                Vec::new()
-                            }
-                        } else {
-                            Vec::new()
-                        }
-                    })
+    let ids_to_drop: Vec<String> = match gateway::chat(resolved_config, &decision_messages).await {
+        Ok(content) => {
+            // Try to parse as JSON array
+            serde_json::from_str(&content).unwrap_or_else(|_| {
+                // Try to extract JSON array from response if wrapped in other text
+                if let Some(start) = content.find('[') {
+                    if let Some(end) = content.rfind(']') {
+                        serde_json::from_str(&content[start..=end]).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
                 }
-                Err(_) => Vec::new(),
-            }
+            })
         }
-        _ => Vec::new(),
+        Err(_) => Vec::new(),
     };
 
     // Determine which messages to actually drop
@@ -238,34 +220,8 @@ Output ONLY the updated summary, no preamble."#,
         "role": "user",
         "content": update_prompt,
     })];
-    let summary_request = build_request_body(resolved_config, &summary_messages, None, false);
 
-    let response = client
-        .post(&resolved_config.base_url)
-        .header(AUTHORIZATION, format!("Bearer {}", resolved_config.api_key))
-        .header(CONTENT_TYPE, "application/json")
-        .body(summary_request.to_string())
-        .send()
-        .await
-        .map_err(|e| io::Error::other(format!("Rolling compact request failed: {}", e)))?;
-
-    if response.status() != StatusCode::OK {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(io::Error::other(format!(
-            "Rolling compact API error ({}): {}",
-            status, body
-        )));
-    }
-
-    let json: serde_json::Value = response.json().await.map_err(|e| {
-        io::Error::other(format!("Failed to parse rolling compact response: {}", e))
-    })?;
-
-    let new_summary = extract_choice_content(&json).unwrap_or("").to_string();
+    let new_summary = gateway::chat(resolved_config, &summary_messages).await?;
 
     if new_summary.is_empty() {
         if verbose {
@@ -440,8 +396,6 @@ async fn compact_context_with_llm_internal(
         );
     }
 
-    let client = Client::new();
-
     // Load compaction prompt
     let compaction_prompt = app.load_prompt("compaction")?;
     let default_compaction_prompt = "Please summarize the following conversation into a concise summary. Capture the key points, decisions, and context.";
@@ -477,51 +431,9 @@ async fn compact_context_with_llm_internal(
         }),
     ];
 
-    let request_body = build_request_body(resolved_config, &compaction_messages, None, false);
-
-    let response = client
-        .post(&resolved_config.base_url)
-        .header(AUTHORIZATION, format!("Bearer {}", resolved_config.api_key))
-        .header(CONTENT_TYPE, "application/json")
-        .body(request_body.to_string())
-        .send()
-        .await
-        .map_err(|e| io::Error::other(format!("Failed to send request: {}", e)))?;
-
-    if response.status() != StatusCode::OK {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(io::Error::other(format!(
-            "API error ({}): {}",
-            status, body
-        )));
-    }
-
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| io::Error::other(format!("Failed to parse response: {}", e)))?;
-
-    let summary = extract_choice_content(&json)
-        .or_else(|| {
-            // Fallback: try alternative response structure
-            json.get("choices")?.get(0)?.get("content")?.as_str()
-        })
-        .unwrap_or_else(|| {
-            if verbose {
-                eprintln!("[DEBUG] Response structure: {}", json);
-            }
-            ""
-        })
-        .to_string();
+    let summary = gateway::chat(resolved_config, &compaction_messages).await?;
 
     if summary.is_empty() {
-        if verbose {
-            eprintln!("[DEBUG] Full response: {}", json);
-        }
         return Err(io::Error::other(
             "Empty summary received from LLM. This can happen with free-tier models. Try again or use a different model.",
         ));
@@ -572,35 +484,7 @@ async fn compact_context_with_llm_internal(
         }),
     ];
 
-    let request_body = build_request_body(resolved_config, &ack_messages, None, false);
-
-    let response = client
-        .post(&resolved_config.base_url)
-        .header(AUTHORIZATION, format!("Bearer {}", resolved_config.api_key))
-        .header(CONTENT_TYPE, "application/json")
-        .body(request_body.to_string())
-        .send()
-        .await
-        .map_err(|e| io::Error::other(format!("Failed to send request: {}", e)))?;
-
-    if response.status() != StatusCode::OK {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(io::Error::other(format!(
-            "API error ({}): {}",
-            status, body
-        )));
-    }
-
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| io::Error::other(format!("Failed to parse response: {}", e)))?;
-
-    let acknowledgment = extract_choice_content(&json).unwrap_or("").to_string();
+    let acknowledgment = gateway::chat(resolved_config, &ack_messages).await?;
 
     new_context
         .messages

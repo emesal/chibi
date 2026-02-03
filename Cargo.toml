@@ -54,5 +54,8 @@ streamdown-syntax = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/strea
 streamdown-render = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-render" }
 streamdown-plugin = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-plugin" }
 
+# Ratatoskr (LLM API client)
+ratatoskr = { path = "../../../ratatoskr/dev" }
+
 [workspace.lints.rust]
 dead_code = "deny"

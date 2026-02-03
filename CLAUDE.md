@@ -33,9 +33,12 @@ Cargo workspace with two crates:
 - `chibi.rs` — Main `Chibi` struct, tool execution
 - `context.rs`, `state/` — Context management, file I/O
 - `api/` — Request building, streaming, tool execution loop
+- `gateway.rs` — Type conversions between chibi and ratatoskr
 - `tools/` — Plugins, hooks, built-in tools
 - `partition.rs` — Partitioned transcript storage with bloom filters
 - `config.rs` — Core configuration types
+
+**LLM Communication:** Delegated to the [ratatoskr](https://github.com/emesal/ratatoskr) crate, which handles HTTP requests, SSE streaming, and response parsing. Chibi's `gateway.rs` converts between internal types and ratatoskr's `ModelGateway` interface. This abstraction keeps HTTP/networking concerns out of chibi's core logic.
 
 **`crates/chibi-cli/`** — Binary crate (CLI-specific)
 - `main.rs` — Entry point, command dispatch

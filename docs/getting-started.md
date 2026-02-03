@@ -20,10 +20,11 @@ cargo build --release
 Create a configuration file at `~/.chibi/config.toml`:
 
 ```toml
-# OpenRouter API key (get one at https://openrouter.ai/settings/keys)
-api_key = "your-openrouter-api-key-here"
+# API key for your LLM provider
+# Currently chibi uses OpenRouter (https://openrouter.ai/settings/keys)
+api_key = "your-api-key-here"
 
-# Model to use
+# Model to use (see https://openrouter.ai/models)
 model = "anthropic/claude-sonnet-4"
 
 # Context window limit (tokens)

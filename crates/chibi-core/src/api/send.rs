@@ -11,6 +11,9 @@ use super::sink::{ResponseEvent, ResponseSink};
 use crate::cache;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
+use crate::gateway::{
+    build_gateway, json_tool_to_definition, to_chat_options, to_ratatoskr_message,
+};
 use crate::json_ext::JsonExt;
 use crate::llm;
 use crate::state::{
@@ -19,6 +22,8 @@ use crate::state::{
 };
 use crate::tools::{self, Tool};
 use futures_util::stream::StreamExt;
+// ModelGateway trait must be in scope to call chat_stream() on EmbeddedGateway
+use ratatoskr::{ChatEvent, ModelGateway};
 use serde_json::json;
 use std::io::{self, ErrorKind};
 use uuid::Uuid;
@@ -496,131 +501,119 @@ struct StreamingResponse {
     response_meta: Option<serde_json::Value>,
 }
 
-/// Collect a streaming response from the LLM API.
+/// Collect a streaming response from the LLM API via ratatoskr.
 ///
 /// Handles: SSE parsing, content accumulation, tool call reconstruction.
 /// Pure I/O - no hooks or side effects beyond streaming to sink.
 async fn collect_streaming_response<S: ResponseSink>(
     resolved_config: &ResolvedConfig,
-    request_body: serde_json::Value,
+    messages: &[serde_json::Value],
+    all_tools: &[serde_json::Value],
     verbose: bool,
     sink: &mut S,
 ) -> io::Result<StreamingResponse> {
-    let response = llm::send_streaming_request(resolved_config, request_body).await?;
+    let gateway = build_gateway(resolved_config)?;
 
-    let mut stream = response.bytes_stream();
+    // Convert messages
+    let ratatoskr_messages: Vec<_> = messages
+        .iter()
+        .map(to_ratatoskr_message)
+        .collect::<io::Result<Vec<_>>>()?;
+
+    // Convert tools
+    let tool_defs: Vec<_> = all_tools
+        .iter()
+        .filter_map(|t| json_tool_to_definition(t).ok())
+        .collect();
+    let tools_opt = if tool_defs.is_empty() {
+        None
+    } else {
+        Some(tool_defs.as_slice())
+    };
+
+    // Build options
+    let options = to_chat_options(resolved_config);
+
+    // Get streaming response
+    let mut stream = gateway
+        .chat_stream(&ratatoskr_messages, tools_opt, &options)
+        .await
+        .map_err(|e| io::Error::other(format!("Gateway error: {}", e)))?;
+
     let mut full_response = String::new();
+    let mut tool_calls: Vec<llm::ToolCallAccumulator> = Vec::new();
+    let mut has_tool_calls = false;
+    let mut response_meta: Option<serde_json::Value> = None;
     let mut is_first_content = true;
     let json_mode = sink.is_json_mode();
 
-    // Tool call accumulation
-    let mut tool_calls: Vec<llm::ToolCallAccumulator> = Vec::new();
-    let mut has_tool_calls = false;
+    while let Some(event_result) = stream.next().await {
+        let event = event_result.map_err(|e| io::Error::other(format!("Stream error: {}", e)))?;
 
-    // Response metadata accumulation (usage stats, model info)
-    let mut response_meta: Option<serde_json::Value> = None;
+        match event {
+            ChatEvent::Content(chunk) => {
+                // Handle first chunk newline stripping (matches old behavior)
+                let text = if is_first_content {
+                    is_first_content = false;
+                    if let Some(remaining) = chunk.strip_prefix('\n') {
+                        if remaining.is_empty() {
+                            continue;
+                        }
+                        remaining.to_string()
+                    } else {
+                        chunk
+                    }
+                } else {
+                    chunk
+                };
 
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| io::Error::other(format!("Stream error: {}", e)))?;
-        let chunk_str = std::str::from_utf8(&chunk)
-            .map_err(|e| io::Error::other(format!("UTF-8 error: {}", e)))?;
+                full_response.push_str(&text);
+                if !json_mode {
+                    sink.handle(ResponseEvent::TextChunk(&text))?;
+                }
+            }
+            ChatEvent::Reasoning(chunk) => {
+                // Reasoning content - could log in verbose mode or ignore
+                if verbose {
+                    eprintln!("[Reasoning] {}", chunk);
+                }
+            }
+            ChatEvent::ToolCallStart { index, id, name } => {
+                has_tool_calls = true;
 
-        // Parse Server-Sent Events format
-        for line in chunk_str.lines() {
-            if let Some(data) = line.strip_prefix("data: ") {
-                if data == "[DONE]" {
+                // Prevent memory exhaustion
+                if index >= MAX_TOOL_CALLS {
+                    if verbose {
+                        eprintln!(
+                            "[WARN] Tool call index {} exceeds limit {}, skipping",
+                            index, MAX_TOOL_CALLS
+                        );
+                    }
                     continue;
                 }
 
-                let json: serde_json::Value = serde_json::from_str(data)
-                    .map_err(|e| io::Error::other(format!("JSON parse error: {}", e)))?;
-
-                // Capture response metadata (usage stats, model, id)
-                if json.get("usage").is_some()
-                    || json.get("model").is_some()
-                    || json.get("id").is_some()
-                {
-                    let mut meta = response_meta.take().unwrap_or(json!({}));
-                    if let Some(usage) = json.get("usage") {
-                        meta["usage"] = usage.clone();
-                    }
-                    if let Some(model) = json.get("model") {
-                        meta["model"] = model.clone();
-                    }
-                    if let Some(id) = json.get("id") {
-                        meta["id"] = id.clone();
-                    }
-                    response_meta = Some(meta);
+                while tool_calls.len() <= index {
+                    tool_calls.push(llm::ToolCallAccumulator::default());
                 }
 
-                if let Some(choices) = json["choices"].as_array()
-                    && let Some(choice) = choices.first()
-                {
-                    // Some providers use "delta" for streaming chunks, others use "message"
-                    // for the final response. We check both to handle all providers.
-                    let content_obj = choice.get("delta").or_else(|| choice.get("message"));
-
-                    if let Some(obj) = content_obj {
-                        // Handle regular content
-                        if let Some(content) = obj["content"].as_str() {
-                            if is_first_content {
-                                is_first_content = false;
-                                if let Some(remaining) = content.strip_prefix('\n') {
-                                    if !remaining.is_empty() {
-                                        full_response.push_str(remaining);
-                                        // Only stream in normal mode
-                                        if !json_mode {
-                                            sink.handle(ResponseEvent::TextChunk(remaining))?;
-                                        }
-                                    }
-                                    continue;
-                                }
-                            }
-
-                            full_response.push_str(content);
-                            // Only stream in normal mode
-                            if !json_mode {
-                                sink.handle(ResponseEvent::TextChunk(content))?;
-                            }
-                        }
-
-                        // Handle tool calls (both incremental delta and complete message formats)
-                        if let Some(tc_array) = obj["tool_calls"].as_array() {
-                            has_tool_calls = true;
-                            for tc in tc_array {
-                                let index = tc["index"].as_u64().unwrap_or(0) as usize;
-
-                                // Prevent memory exhaustion from malicious API responses
-                                if index >= MAX_TOOL_CALLS {
-                                    if verbose {
-                                        eprintln!(
-                                            "[WARN] Tool call index {} exceeds limit {}, skipping",
-                                            index, MAX_TOOL_CALLS
-                                        );
-                                    }
-                                    continue;
-                                }
-
-                                while tool_calls.len() <= index {
-                                    tool_calls.push(llm::ToolCallAccumulator::default());
-                                }
-
-                                if let Some(id) = tc["id"].as_str() {
-                                    tool_calls[index].id = id.to_string();
-                                }
-                                if let Some(func) = tc.get("function") {
-                                    if let Some(name) = func["name"].as_str() {
-                                        tool_calls[index].name = name.to_string();
-                                    }
-                                    if let Some(args) = func["arguments"].as_str() {
-                                        tool_calls[index].arguments.push_str(args);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                tool_calls[index].id = id;
+                tool_calls[index].name = name;
+            }
+            ChatEvent::ToolCallDelta { index, arguments } => {
+                if index < tool_calls.len() {
+                    tool_calls[index].arguments.push_str(&arguments);
                 }
             }
+            ChatEvent::Usage(usage) => {
+                response_meta = Some(json!({
+                    "usage": {
+                        "prompt_tokens": usage.prompt_tokens,
+                        "completion_tokens": usage.completion_tokens,
+                        "total_tokens": usage.total_tokens
+                    }
+                }));
+            }
+            ChatEvent::Done => break,
         }
     }
 
@@ -1430,7 +1423,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         log_request_if_enabled(app, context_name, debug, &request_body);
 
         let response =
-            collect_streaming_response(resolved_config, request_body.clone(), verbose, sink)
+            collect_streaming_response(resolved_config, &messages, &all_tools, verbose, sink)
                 .await?;
 
         // Log response metadata
@@ -1459,6 +1452,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 sink,
             )?;
 
+            // Keep request_body in sync for logging
             request_body["messages"] = serde_json::json!(messages);
             consecutive_empty_responses = 0;
             continue;

@@ -1,5 +1,13 @@
 # chibi upgrade notes
 
+## 0.5.1 -> 0.6.0
+
+- **ratatoskr integration**: LLM communication now uses the [ratatoskr](https://github.com/emesal/ratatoskr) crate instead of direct HTTP calls
+  - HTTP/SSE streaming is now handled by ratatoskr's `ModelGateway`
+  - chibi's `gateway.rs` provides type conversions between internal types and ratatoskr
+  - some API parameters not yet passed through — see [#109](https://github.com/emesal/chibi/issues/109)
+- **removed `base_url`**: custom API endpoints are not currently supported
+
 ## 0.5.0 -> 0.5.1
 
 - transcript.jsonl will be automatically migrated to a partitioned system

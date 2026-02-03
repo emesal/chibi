@@ -21,6 +21,7 @@ toml = "0.9.11"
 uuid.workspace = true
 fs2 = "0.4"
 base64 = "0.22"
+ratatoskr.workspace = true
 
 [lints.rust]
 dead_code = "deny"

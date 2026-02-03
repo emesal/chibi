@@ -309,9 +309,6 @@ impl ResolvedConfig {
     pub fn warn_threshold_percent(&self) -> f32 {
         self.core.warn_threshold_percent
     }
-    pub fn base_url(&self) -> &str {
-        &self.core.base_url
-    }
     pub fn auto_compact(&self) -> bool {
         self.core.auto_compact
     }
