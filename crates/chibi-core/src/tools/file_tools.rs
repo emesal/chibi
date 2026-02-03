@@ -456,7 +456,6 @@ pub fn execute_cache_list(app: &AppState, context_name: &str) -> io::Result<Stri
     Ok(output)
 }
 
-
 /// Execute write_file tool
 ///
 /// Note: Permission check via pre_file_write hook happens in send.rs before this is called.
@@ -804,7 +803,8 @@ mod tests {
         let path = temp_dir.path().join("test.txt");
         std::fs::write(&path, "hello world").unwrap();
 
-        let result = super::execute_patch_file(path.to_str().unwrap(), "nonexistent", "replacement");
+        let result =
+            super::execute_patch_file(path.to_str().unwrap(), "nonexistent", "replacement");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);

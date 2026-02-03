@@ -1670,7 +1670,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_context_name_injected_in_system_prompt() {
         // This is a unit test concept - the actual integration happens in build_full_system_prompt
@@ -1679,7 +1678,6 @@ mod tests {
         let expected = format!("\n\nCurrent context: {}", context_name);
         assert!(expected.contains("Current context: my-context"));
     }
-
 
     #[test]
     fn test_datetime_prefix_format() {
