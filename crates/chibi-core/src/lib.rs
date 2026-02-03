@@ -58,3 +58,8 @@ pub use input::{Command, Flags, Inspectable};
 pub use partition::StorageConfig;
 pub use state::{AppState, StatePaths};
 pub use tools::{HookPoint, Tool};
+
+/// Returns ratatoskr's package version.
+pub fn ratatoskr_version() -> &'static str {
+    ratatoskr::PKG_VERSION
+}

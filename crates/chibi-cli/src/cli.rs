@@ -728,6 +728,7 @@ pub fn parse() -> io::Result<ChibiInput> {
             env!("CARGO_PKG_VERSION"),
             option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown")
         );
+        println!("ratatoskr {}", chibi_core::ratatoskr_version());
         std::process::exit(0);
     }
 
