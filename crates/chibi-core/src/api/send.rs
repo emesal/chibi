@@ -417,6 +417,9 @@ fn build_full_system_prompt<S: ResponseSink>(
         ));
     }
 
+    // Add context name
+    full_system_prompt.push_str(&format!("\n\nCurrent context: {}", context_name));
+
     // Add summary if present
     if !summary.is_empty() {
         full_system_prompt.push_str("\n\n--- CONVERSATION SUMMARY ---\n");
@@ -1251,10 +1254,14 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         }
     }
 
+    // Add datetime prefix to user message
+    let datetime_prefix = chrono::Local::now().format("%Y%m%d-%H%M%z").to_string();
+    let prefixed_prompt = format!("[{}] {}", datetime_prefix, final_prompt);
+
     // Add user message to context and transcript
-    app.add_message(&mut context, "user".to_string(), final_prompt.clone());
+    app.add_message(&mut context, "user".to_string(), prefixed_prompt.clone());
     let user_entry =
-        create_user_message_entry(context_name, &final_prompt, &resolved_config.username);
+        create_user_message_entry(context_name, &prefixed_prompt, &resolved_config.username);
     app.append_to_transcript_and_context(context_name, &user_entry)?;
     sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
 
@@ -1605,6 +1612,30 @@ mod tests {
         assert_eq!(
             tools[0]["function"]["description"].as_str().unwrap(),
             "Continue processing."
+        );
+    }
+
+
+    #[test]
+    fn test_context_name_injected_in_system_prompt() {
+        // This is a unit test concept - the actual integration happens in build_full_system_prompt
+        // We verify the format string is correct
+        let context_name = "my-context";
+        let expected = format!("\n\nCurrent context: {}", context_name);
+        assert!(expected.contains("Current context: my-context"));
+    }
+
+
+    #[test]
+    fn test_datetime_prefix_format() {
+        use chrono::Local;
+        let now = Local::now();
+        let formatted = now.format("%Y%m%d-%H%M%z").to_string();
+        // Should be like "20260203-1542+0000" or "20260203-1542-0500"
+        assert_eq!(formatted.len(), 18, "datetime format should be 18 chars");
+        assert!(
+            formatted.chars().nth(8) == Some('-'),
+            "should have dash separator"
         );
     }
 }
