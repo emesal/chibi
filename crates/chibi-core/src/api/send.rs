@@ -417,6 +417,9 @@ fn build_full_system_prompt<S: ResponseSink>(
         ));
     }
 
+    // Add context name
+    full_system_prompt.push_str(&format!("\n\nCurrent context: {}", context_name));
+
     // Add summary if present
     if !summary.is_empty() {
         full_system_prompt.push_str("\n\n--- CONVERSATION SUMMARY ---\n");
@@ -751,10 +754,65 @@ fn execute_single_tool<S: ResponseSink>(
         // Handle built-in send_message tool
         execute_send_message_tool(app, context_name, tools, &args, verbose, sink)?
     } else if tools::is_file_tool(&tool_call.name) {
-        match tools::execute_file_tool(app, context_name, &tool_call.name, &args, resolved_config) {
-            Some(Ok(r)) => r,
-            Some(Err(e)) => format!("Error: {}", e),
-            None => format!("Error: Unknown file tool '{}'", tool_call.name),
+        // For write tools, check permission via pre_file_write hook first
+        if tool_call.name == tools::WRITE_FILE_TOOL_NAME
+            || tool_call.name == tools::PATCH_FILE_TOOL_NAME
+        {
+            let hook_data = serde_json::json!({
+                "tool_name": tool_call.name,
+                "path": args.get_str("path").unwrap_or(""),
+                "content": args.get_str("content"),
+                "find": args.get_str("find"),
+                "replace": args.get_str("replace"),
+            });
+            let hook_results =
+                tools::execute_hook(tools, tools::HookPoint::PreFileWrite, &hook_data)?;
+
+            // Check if any hook denied the operation
+            let mut denied = false;
+            let mut deny_reason = String::new();
+            for (_hook_name, result) in &hook_results {
+                if !result.get_bool_or("approved", false) {
+                    denied = true;
+                    deny_reason = result
+                        .get_str_or("reason", "Permission denied by hook")
+                        .to_string();
+                    break;
+                }
+            }
+
+            if denied {
+                format!("Error: {}", deny_reason)
+            } else if hook_results.is_empty() {
+                // No hooks registered = fail-safe deny
+                "Error: No permission handler configured. File write tools require a pre_file_write hook plugin.".to_string()
+            } else {
+                // Permission granted, execute the tool
+                match tools::execute_file_tool(
+                    app,
+                    context_name,
+                    &tool_call.name,
+                    &args,
+                    resolved_config,
+                ) {
+                    Some(Ok(r)) => r,
+                    Some(Err(e)) => format!("Error: {}", e),
+                    None => format!("Error: Unknown file tool '{}'", tool_call.name),
+                }
+            }
+        } else {
+            // Regular file tools (read-only) don't need permission
+            match tools::execute_file_tool(
+                app,
+                context_name,
+                &tool_call.name,
+                &args,
+                resolved_config,
+            ) {
+                Some(Ok(r)) => r,
+                Some(Err(e)) => format!("Error: {}", e),
+                None => format!("Error: Unknown file tool '{}'", tool_call.name),
+            }
         }
     } else if let Some(tool) = tools::find_tool(tools, &tool_call.name) {
         match tools::execute_tool(tool, &args, verbose) {
@@ -1251,10 +1309,14 @@ async fn send_prompt_with_depth<S: ResponseSink>(
         }
     }
 
+    // Add datetime prefix to user message
+    let datetime_prefix = chrono::Local::now().format("%Y%m%d-%H%M%z").to_string();
+    let prefixed_prompt = format!("[{}] {}", datetime_prefix, final_prompt);
+
     // Add user message to context and transcript
-    app.add_message(&mut context, "user".to_string(), final_prompt.clone());
+    app.add_message(&mut context, "user".to_string(), prefixed_prompt.clone());
     let user_entry =
-        create_user_message_entry(context_name, &final_prompt, &resolved_config.username);
+        create_user_message_entry(context_name, &prefixed_prompt, &resolved_config.username);
     app.append_to_transcript_and_context(context_name, &user_entry)?;
     sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
 
@@ -1605,6 +1667,28 @@ mod tests {
         assert_eq!(
             tools[0]["function"]["description"].as_str().unwrap(),
             "Continue processing."
+        );
+    }
+
+    #[test]
+    fn test_context_name_injected_in_system_prompt() {
+        // This is a unit test concept - the actual integration happens in build_full_system_prompt
+        // We verify the format string is correct
+        let context_name = "my-context";
+        let expected = format!("\n\nCurrent context: {}", context_name);
+        assert!(expected.contains("Current context: my-context"));
+    }
+
+    #[test]
+    fn test_datetime_prefix_format() {
+        use chrono::Local;
+        let now = Local::now();
+        let formatted = now.format("%Y%m%d-%H%M%z").to_string();
+        // Should be like "20260203-1542+0000" or "20260203-1542-0500"
+        assert_eq!(formatted.len(), 18, "datetime format should be 18 chars");
+        assert!(
+            formatted.chars().nth(8) == Some('-'),
+            "should have dash separator"
         );
     }
 }

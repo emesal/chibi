@@ -46,6 +46,9 @@ pub use file_tools::{all_file_tools_to_api_format, get_file_tool_def};
 // Re-export file tool execution and utilities
 pub use file_tools::{execute_file_tool, is_file_tool};
 
+// Re-export file write tool names for permission gating
+pub use file_tools::{PATCH_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME};
+
 /// Metadata for tool behavior in the agentic loop
 #[derive(Debug, Clone, Default)]
 pub struct ToolMetadata {

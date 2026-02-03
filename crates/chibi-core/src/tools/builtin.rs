@@ -142,7 +142,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
     },
     BuiltinToolDef {
         name: CALL_AGENT_TOOL_NAME,
-        description: "Continue processing.",
+        description: "recurse to do more work before handing control back to the user. Use this to continue processing when you have more steps to complete.",
         properties: &[ToolPropertyDef {
             name: "prompt",
             prop_type: "string",
@@ -448,7 +448,7 @@ mod tests {
             tool["function"]["description"]
                 .as_str()
                 .unwrap()
-                .contains("processing")
+                .contains("recurse")
         );
         assert!(
             tool["function"]["parameters"]["required"]
