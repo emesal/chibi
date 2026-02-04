@@ -15,7 +15,6 @@ use crate::gateway::{
     build_gateway, json_tool_to_definition, to_chat_options, to_ratatoskr_message,
 };
 use crate::json_ext::JsonExt;
-use crate::llm;
 use crate::state::{
     AppState, StatePaths, create_assistant_message_entry, create_tool_call_entry,
     create_tool_result_entry, create_user_message_entry,
@@ -494,7 +493,7 @@ struct StreamingResponse {
     /// The full text response accumulated from chunks.
     full_response: String,
     /// Tool calls extracted from the response.
-    tool_calls: Vec<llm::ToolCallAccumulator>,
+    tool_calls: Vec<ratatoskr::ToolCall>,
     /// Whether any tool calls were present.
     has_tool_calls: bool,
     /// Response metadata (usage stats, model info).
@@ -541,7 +540,7 @@ async fn collect_streaming_response<S: ResponseSink>(
         .map_err(|e| io::Error::other(format!("Gateway error: {}", e)))?;
 
     let mut full_response = String::new();
-    let mut tool_calls: Vec<llm::ToolCallAccumulator> = Vec::new();
+    let mut tool_calls: Vec<ratatoskr::ToolCall> = Vec::new();
     let mut has_tool_calls = false;
     let mut response_meta: Option<serde_json::Value> = None;
     let mut is_first_content = true;
@@ -593,7 +592,7 @@ async fn collect_streaming_response<S: ResponseSink>(
                 }
 
                 while tool_calls.len() <= index {
-                    tool_calls.push(llm::ToolCallAccumulator::default());
+                    tool_calls.push(ratatoskr::ToolCall::default());
                 }
 
                 tool_calls[index].id = id;
@@ -643,7 +642,7 @@ struct ToolExecutionResult {
 fn execute_single_tool<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
-    tool_call: &llm::ToolCallAccumulator,
+    tool_call: &ratatoskr::ToolCall,
     tools: &[Tool],
     handoff: &mut tools::Handoff,
     use_reflection: bool,
@@ -1011,7 +1010,7 @@ fn execute_send_message_tool<S: ResponseSink>(
 fn process_tool_calls<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
-    tool_calls: &[llm::ToolCallAccumulator],
+    tool_calls: &[ratatoskr::ToolCall],
     messages: &mut Vec<serde_json::Value>,
     tools: &[Tool],
     handoff: &mut tools::Handoff,

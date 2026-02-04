@@ -1,12 +1,12 @@
 //! Plugin loading and execution.
 //!
 //! Plugins are executable scripts in the plugins directory that provide tools for the LLM.
-//! They output JSON schema when called with --schema and receive arguments via CHIBI_TOOL_ARGS.
+//! They output JSON schema when called with --schema and receive arguments via stdin (JSON).
 
 use super::hooks::HookPoint;
 use super::{Tool, ToolMetadata};
 use std::fs;
-use std::io::{self, ErrorKind};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -239,7 +239,7 @@ pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
 
 /// Execute a tool with the given arguments (as JSON)
 ///
-/// Tools receive arguments via CHIBI_TOOL_ARGS env var, leaving stdin free for user interaction.
+/// Tools receive arguments via stdin (JSON), leaving stdout for results.
 /// Tools also receive CHIBI_VERBOSE=1 env var when verbose mode is enabled.
 pub fn execute_tool(
     tool: &Tool,
@@ -247,14 +247,9 @@ pub fn execute_tool(
     verbose: bool,
 ) -> io::Result<String> {
     let mut cmd = Command::new(&tool.path);
-    cmd.stdin(Stdio::inherit()) // Let tool read from user's terminal
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit()); // Let tool's stderr go directly to terminal (for prompts)
-
-    // Pass arguments via environment variable (frees stdin for user interaction)
-    let json_str = serde_json::to_string(arguments)
-        .map_err(|e| io::Error::other(format!("Failed to serialize arguments: {}", e)))?;
-    cmd.env("CHIBI_TOOL_ARGS", json_str);
+        .stderr(Stdio::inherit()); // Let tool's stderr go directly to terminal
 
     // Pass tool name for multi-tool plugins
     cmd.env("CHIBI_TOOL_NAME", &tool.name);
@@ -264,8 +259,21 @@ pub fn execute_tool(
         cmd.env("CHIBI_VERBOSE", "1");
     }
 
-    let output = cmd
-        .output()
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| io::Error::other(format!("Failed to spawn tool: {}", e)))?;
+
+    // Write arguments to stdin
+    let json_str = serde_json::to_string(arguments)
+        .map_err(|e| io::Error::other(format!("Failed to serialize arguments: {}", e)))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(json_str.as_bytes())?;
+        // stdin is dropped here, closing the pipe and signaling EOF
+    }
+
+    let output = child
+        .wait_with_output()
         .map_err(|e| io::Error::other(format!("Failed to execute tool: {}", e)))?;
 
     if !output.status.success() {
@@ -375,6 +383,159 @@ mod tests {
         assert!(meta.parallel);
         assert!(!meta.flow_control);
         assert!(!meta.ends_turn);
+    }
+
+    /// Helper to create a test script and make it executable.
+    /// Uses sync_all and retries on ETXTBSY to handle race conditions.
+    #[cfg(unix)]
+    fn create_test_script(dir: &std::path::Path, name: &str, content: &[u8]) -> PathBuf {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt;
+
+        let script_path = dir.join(name);
+
+        {
+            let mut file = std::fs::File::create(&script_path).unwrap();
+            file.write_all(content).unwrap();
+            file.sync_all().unwrap();
+        }
+
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+
+        script_path
+    }
+
+    /// Execute a tool with retry on ETXTBSY (text file busy).
+    /// This can happen when the kernel hasn't finished loading the script.
+    fn execute_tool_with_retry(
+        tool: &Tool,
+        arguments: &serde_json::Value,
+        verbose: bool,
+    ) -> io::Result<String> {
+        for attempt in 0..5 {
+            match execute_tool(tool, arguments, verbose) {
+                Ok(result) => return Ok(result),
+                Err(e) if e.to_string().contains("Text file busy") && attempt < 4 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1) as u64));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!()
+    }
+
+    #[test]
+    fn test_execute_tool_receives_stdin_params() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = create_test_script(dir.path(), "echo.sh", b"#!/bin/bash\ncat\n");
+
+        let tool = Tool {
+            name: "echo_tool".to_string(),
+            description: "Echoes params".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+            path: script_path,
+            hooks: vec![],
+            metadata: ToolMetadata::new(),
+        };
+
+        let params = serde_json::json!({"key": "value", "num": 42});
+        let result = execute_tool_with_retry(&tool, &params, false).unwrap();
+
+        // Result should be the JSON params we sent
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["key"], "value");
+        assert_eq!(parsed["num"], 42);
+    }
+
+    #[test]
+    fn test_execute_tool_env_vars() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = create_test_script(
+            dir.path(),
+            "env_check.sh",
+            b"#!/bin/bash\ncat > /dev/null\necho \"name=$CHIBI_TOOL_NAME,verbose=$CHIBI_VERBOSE\"\n",
+        );
+
+        let tool = Tool {
+            name: "env_checker".to_string(),
+            description: "Checks env vars".to_string(),
+            parameters: serde_json::json!({}),
+            path: script_path,
+            hooks: vec![],
+            metadata: ToolMetadata::new(),
+        };
+
+        // Test without verbose
+        let result = execute_tool_with_retry(&tool, &serde_json::json!({}), false).unwrap();
+        assert!(result.contains("name=env_checker"));
+        assert!(result.contains("verbose="));
+        assert!(!result.contains("verbose=1"));
+
+        // Test with verbose
+        let result = execute_tool_with_retry(&tool, &serde_json::json!({}), true).unwrap();
+        assert!(result.contains("verbose=1"));
+    }
+
+    #[test]
+    fn test_execute_tool_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = create_test_script(dir.path(), "fail.sh", b"#!/bin/bash\nexit 1\n");
+
+        let tool = Tool {
+            name: "failing_tool".to_string(),
+            description: "Always fails".to_string(),
+            parameters: serde_json::json!({}),
+            path: script_path,
+            hooks: vec![],
+            metadata: ToolMetadata::new(),
+        };
+
+        // Note: can't use execute_tool_with_retry here since failure is expected
+        // and we don't want to retry ETXTBSY separately from the expected error
+        for attempt in 0..5 {
+            match execute_tool(&tool, &serde_json::json!({}), false) {
+                Err(e) if e.to_string().contains("Text file busy") && attempt < 4 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1) as u64));
+                    continue;
+                }
+                result => {
+                    assert!(result.is_err());
+                    break;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_execute_tool_no_chibi_tool_args_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = create_test_script(
+            dir.path(),
+            "verify_no_args.sh",
+            br#"#!/bin/bash
+cat > /dev/null
+if [ -n "$CHIBI_TOOL_ARGS" ]; then
+  echo 'ERROR: CHIBI_TOOL_ARGS should not be set'
+  exit 1
+fi
+echo 'OK'
+"#,
+        );
+
+        let tool = Tool {
+            name: "env_verify".to_string(),
+            description: "Verifies env".to_string(),
+            parameters: serde_json::json!({}),
+            path: script_path,
+            hooks: vec![],
+            metadata: ToolMetadata::new(),
+        };
+
+        let result = execute_tool_with_retry(&tool, &serde_json::json!({}), false).unwrap();
+        assert_eq!(result.trim(), "OK");
     }
 
     #[test]

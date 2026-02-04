@@ -4,9 +4,8 @@
 //! and ratatoskr's ModelGateway types.
 
 use crate::config::ResolvedConfig;
-use crate::tools::Tool;
 use ratatoskr::{
-    ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr, Role, ToolCall, ToolDefinition,
+    ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr, ToolCall, ToolDefinition,
 };
 use std::io;
 
@@ -55,63 +54,6 @@ pub fn to_ratatoskr_message(json: &serde_json::Value) -> io::Result<Message> {
         }
         other => Err(io::Error::other(format!("unknown role: {}", other))),
     }
-}
-
-/// Convert ratatoskr Message back to chibi's JSON format.
-///
-/// Currently unused — will be needed when chibi's internals migrate from JSON to ratatoskr types.
-#[allow(dead_code)]
-pub fn from_ratatoskr_message(msg: &Message) -> serde_json::Value {
-    use serde_json::json;
-
-    let content = msg.content.as_text().unwrap_or("");
-
-    match &msg.role {
-        Role::System => json!({
-            "role": "system",
-            "content": content
-        }),
-        Role::User => json!({
-            "role": "user",
-            "content": content
-        }),
-        Role::Assistant => {
-            let mut obj = json!({
-                "role": "assistant",
-                "content": content
-            });
-            if let Some(tool_calls) = &msg.tool_calls {
-                let tc_json: Vec<serde_json::Value> = tool_calls
-                    .iter()
-                    .map(|tc| {
-                        json!({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": tc.arguments
-                            }
-                        })
-                    })
-                    .collect();
-                obj["tool_calls"] = json!(tc_json);
-            }
-            obj
-        }
-        Role::Tool { tool_call_id } => json!({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": content
-        }),
-    }
-}
-
-/// Convert chibi Tool to ratatoskr ToolDefinition.
-///
-/// Currently unused — will be needed when chibi's internals migrate from JSON to ratatoskr types.
-#[allow(dead_code)]
-pub fn to_tool_definition(tool: &Tool) -> ToolDefinition {
-    ToolDefinition::new(&tool.name, &tool.description, tool.parameters.clone())
 }
 
 /// Convert OpenAI-format tool JSON to ratatoskr ToolDefinition.
@@ -179,6 +121,7 @@ pub async fn chat(config: &ResolvedConfig, messages: &[serde_json::Value]) -> io
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatoskr::Role;
     use serde_json::json;
 
     #[test]
@@ -243,17 +186,5 @@ mod tests {
         let tool_calls = msg.tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].name, "get_weather");
-    }
-
-    #[test]
-    fn test_from_ratatoskr_message_roundtrip() {
-        let original = json!({
-            "role": "user",
-            "content": "Test message"
-        });
-        let msg = to_ratatoskr_message(&original).unwrap();
-        let back = from_ratatoskr_message(&msg);
-        assert_eq!(back["role"], "user");
-        assert_eq!(back["content"], "Test message");
     }
 }

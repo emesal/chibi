@@ -91,10 +91,10 @@ Plugins register for hooks via their `--schema` JSON output:
 
 ## Hook Execution
 
-When a hook fires, registered plugins are called with environment variables:
+When a hook fires, registered plugins are called with:
 
-- `CHIBI_HOOK` - Hook point name (e.g., "pre_message")
-- `CHIBI_HOOK_DATA` - JSON data about the event
+- `CHIBI_HOOK` env var - Hook point name (e.g., "pre_message")
+- stdin - JSON data about the event
 
 ## Hook Data by Type
 
@@ -474,8 +474,9 @@ fi
 
 # Handle hook call
 if [[ -n "$CHIBI_HOOK" ]]; then
+  data=$(cat)  # Read JSON from stdin
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $CHIBI_HOOK" >> ~/.chibi/hook.log
-  echo "$CHIBI_HOOK_DATA" | jq '.' >> ~/.chibi/hook.log
+  echo "$data" | jq '.' >> ~/.chibi/hook.log
   echo "{}"  # Return empty JSON (no modifications)
   exit 0
 fi
@@ -507,7 +508,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
 
 hook = os.environ.get("CHIBI_HOOK", "")
 if hook == "pre_message":
-    data = json.loads(os.environ.get("CHIBI_HOOK_DATA", "{}"))
+    data = json.load(sys.stdin)
     prompt = data.get("prompt", "")
 
     # Add timestamp to every prompt
@@ -541,11 +542,12 @@ EOF
 fi
 
 if [[ "$CHIBI_HOOK" == "pre_tool" ]]; then
-  tool_name=$(echo "$CHIBI_HOOK_DATA" | jq -r '.tool_name')
+  data=$(cat)  # Read JSON from stdin
+  tool_name=$(echo "$data" | jq -r '.tool_name')
 
   # Block run_command for certain patterns
   if [[ "$tool_name" == "run_command" ]]; then
-    command=$(echo "$CHIBI_HOOK_DATA" | jq -r '.arguments.command // ""')
+    command=$(echo "$data" | jq -r '.arguments.command // ""')
     if [[ "$command" == *"rm -rf"* ]]; then
       echo '{"block": true, "message": "Blocked: rm -rf commands are not allowed"}'
       exit 0
@@ -580,7 +582,8 @@ EOF
 fi
 
 if [[ "$CHIBI_HOOK" == "pre_api_tools" ]]; then
-  context=$(echo "$CHIBI_HOOK_DATA" | jq -r '.context_name')
+  data=$(cat)  # Read JSON from stdin
+  context=$(echo "$data" | jq -r '.context_name')
 
   # Restrict tools in "safe" context
   if [[ "$context" == "safe" ]]; then
@@ -619,7 +622,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
 
 hook = os.environ.get("CHIBI_HOOK", "")
 if hook == "pre_api_request":
-    data = json.loads(os.environ.get("CHIBI_HOOK_DATA", "{}"))
+    data = json.load(sys.stdin)
     context = data.get("context_name", "")
 
     # Use low temperature for "coding" context
@@ -658,7 +661,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
 
 hook = os.environ.get("CHIBI_HOOK", "")
 if hook == "post_tool_batch":
-    data = json.loads(os.environ.get("CHIBI_HOOK_DATA", "{}"))
+    data = json.load(sys.stdin)
     tool_calls = data.get("tool_calls", [])
 
     # List of tools that should require user confirmation

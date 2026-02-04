@@ -37,7 +37,6 @@ mod inbox;
 pub mod input;
 pub mod json_ext;
 pub mod jsonl;
-pub mod llm;
 pub mod lock;
 pub mod partition;
 pub mod safe_io;
