@@ -1,12 +1,12 @@
 //! Plugin loading and execution.
 //!
 //! Plugins are executable scripts in the plugins directory that provide tools for the LLM.
-//! They output JSON schema when called with --schema and receive arguments via CHIBI_TOOL_ARGS.
+//! They output JSON schema when called with --schema and receive arguments via stdin (JSON).
 
 use super::hooks::HookPoint;
 use super::{Tool, ToolMetadata};
 use std::fs;
-use std::io::{self, ErrorKind};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -239,7 +239,7 @@ pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
 
 /// Execute a tool with the given arguments (as JSON)
 ///
-/// Tools receive arguments via CHIBI_TOOL_ARGS env var, leaving stdin free for user interaction.
+/// Tools receive arguments via stdin (JSON), leaving stdout for results.
 /// Tools also receive CHIBI_VERBOSE=1 env var when verbose mode is enabled.
 pub fn execute_tool(
     tool: &Tool,
@@ -247,14 +247,9 @@ pub fn execute_tool(
     verbose: bool,
 ) -> io::Result<String> {
     let mut cmd = Command::new(&tool.path);
-    cmd.stdin(Stdio::inherit()) // Let tool read from user's terminal
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit()); // Let tool's stderr go directly to terminal (for prompts)
-
-    // Pass arguments via environment variable (frees stdin for user interaction)
-    let json_str = serde_json::to_string(arguments)
-        .map_err(|e| io::Error::other(format!("Failed to serialize arguments: {}", e)))?;
-    cmd.env("CHIBI_TOOL_ARGS", json_str);
+        .stderr(Stdio::inherit()); // Let tool's stderr go directly to terminal
 
     // Pass tool name for multi-tool plugins
     cmd.env("CHIBI_TOOL_NAME", &tool.name);
@@ -264,8 +259,21 @@ pub fn execute_tool(
         cmd.env("CHIBI_VERBOSE", "1");
     }
 
-    let output = cmd
-        .output()
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| io::Error::other(format!("Failed to spawn tool: {}", e)))?;
+
+    // Write arguments to stdin
+    let json_str = serde_json::to_string(arguments)
+        .map_err(|e| io::Error::other(format!("Failed to serialize arguments: {}", e)))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(json_str.as_bytes())?;
+        // stdin is dropped here, closing the pipe and signaling EOF
+    }
+
+    let output = child
+        .wait_with_output()
         .map_err(|e| io::Error::other(format!("Failed to execute tool: {}", e)))?;
 
     if !output.status.success() {
