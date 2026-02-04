@@ -4,7 +4,7 @@
 //! such as before/after messages, tool calls, context switches, and compaction.
 
 use super::Tool;
-use std::io;
+use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use strum::{AsRefStr, EnumString};
 
@@ -41,33 +41,50 @@ pub enum HookPoint {
 
 /// Execute a hook on all tools that registered for it
 /// Returns a vector of (tool_name, result) for tools that returned non-empty output
+///
+/// Hook data is passed via stdin (JSON). The CHIBI_HOOK env var identifies which hook is firing.
 pub fn execute_hook(
     tools: &[Tool],
     hook: HookPoint,
     data: &serde_json::Value,
 ) -> io::Result<Vec<(String, serde_json::Value)>> {
     let mut results = Vec::new();
+    let data_str = data.to_string();
 
     for tool in tools {
         if !tool.hooks.contains(&hook) {
             continue;
         }
 
-        let output = Command::new(&tool.path)
+        let mut child = Command::new(&tool.path)
             .env("CHIBI_HOOK", hook.as_ref())
-            .env("CHIBI_HOOK_DATA", data.to_string())
-            .env_remove("CHIBI_TOOL_ARGS") // Clear tool args to avoid confusion
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .output()
+            .spawn()
             .map_err(|e| {
                 io::Error::other(format!(
-                    "Failed to execute hook {} on {}: {}",
+                    "Failed to spawn hook {} on {}: {}",
                     hook.as_ref(),
                     tool.name,
                     e
                 ))
             })?;
+
+        // Write hook data to stdin
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(data_str.as_bytes())?;
+            // stdin is dropped here, closing the pipe and signaling EOF
+        }
+
+        let output = child.wait_with_output().map_err(|e| {
+            io::Error::other(format!(
+                "Failed to execute hook {} on {}: {}",
+                hook.as_ref(),
+                tool.name,
+                e
+            ))
+        })?;
 
         if !output.status.success() {
             continue;
