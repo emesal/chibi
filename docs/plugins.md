@@ -8,7 +8,7 @@ A plugin is any executable in `~/.chibi/plugins/`. When called with `--schema`, 
 
 ```python
 #!/usr/bin/env python3
-import json, os, sys
+import json, sys
 
 if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     print(json.dumps({
@@ -24,7 +24,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     }))
     sys.exit(0)
 
-params = json.loads(os.environ["CHIBI_TOOL_ARGS"])
+params = json.load(sys.stdin)
 print(f"Hello, {params['name']}!")
 ```
 
@@ -63,16 +63,20 @@ Parameters follow [JSON Schema](https://json-schema.org/) format:
 }
 ```
 
+## Communication
+
+**Tool calls:** Parameters are passed as JSON via stdin. Read with `json.load(sys.stdin)` (Python) or `jq` (bash).
+
+**Hooks:** Hook data is also passed via stdin as JSON. The `CHIBI_HOOK` env var identifies which hook is firing.
+
 ## Environment Variables
 
 When your plugin runs, chibi sets:
 
 | Variable | When | Contents |
 |----------|------|----------|
-| `CHIBI_TOOL_ARGS` | Tool call | JSON object with parameters |
 | `CHIBI_TOOL_NAME` | Tool call | Tool name (for multi-tool plugins) |
 | `CHIBI_HOOK` | Hook execution | Hook name (e.g., `on_start`) |
-| `CHIBI_HOOK_DATA` | Hook execution | JSON object with hook-specific data |
 | `CHIBI_VERBOSE` | Always (if `-v`) | Set to `1` when verbose mode is on |
 
 ## Hooks
@@ -139,7 +143,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
 
 hook = os.environ.get("CHIBI_HOOK", "")
 if hook == "on_context_switch":
-    data = json.loads(os.environ["CHIBI_HOOK_DATA"])
+    data = json.load(sys.stdin)
     with open("/tmp/context_log.txt", "a") as f:
         f.write(f"{data['from_context']} -> {data['to_context']}\n")
     print("{}")
@@ -171,10 +175,10 @@ chibi -p myplugin "list --all" -v    # -v works as verbose flag
 chibi -P send '{}' -C ephemeral      # -C works for context
 ```
 
-The args are passed as `{"args": ["arg1", "arg2"]}` in `CHIBI_TOOL_ARGS`. Design your plugin to handle both LLM calls (structured parameters) and direct calls (args array) if needed:
+The args are passed as `{"args": ["arg1", "arg2"]}` via stdin. Design your plugin to handle both LLM calls (structured parameters) and direct calls (args array) if needed:
 
 ```python
-params = json.loads(os.environ["CHIBI_TOOL_ARGS"])
+params = json.load(sys.stdin)
 
 if "args" in params:
     # Direct invocation: chibi -p myplugin "list --all"
@@ -187,19 +191,9 @@ else:
 
 ## I/O Conventions
 
+- **stdin**: JSON parameters (tool calls) or hook data
 - **stdout**: Tool output returned to LLM (or printed for `-P`)
 - **stderr**: Diagnostics, prompts, progress (goes to terminal)
-- **stdin**: Available for user interaction (confirmations, input)
-
-Example with user confirmation:
-
-```python
-print("Are you sure? [y/N] ", end="", file=sys.stderr)
-response = input()
-if response.lower() != "y":
-    print("Cancelled")
-    sys.exit(0)
-```
 
 ## Python with uv
 
@@ -244,8 +238,8 @@ EOF
     exit 0
 fi
 
-# Parse JSON args (requires jq)
-path=$(echo "$CHIBI_TOOL_ARGS" | jq -r '.path // "."')
+# Parse JSON args from stdin (requires jq)
+path=$(jq -r '.path // "."')
 du -sh "$path"
 ```
 
@@ -258,12 +252,12 @@ Test schema output:
 
 Test tool execution:
 ```bash
-CHIBI_TOOL_ARGS='{"name": "world"}' ./my_plugin
+echo '{"name": "world"}' | ./my_plugin
 ```
 
 Test hooks:
 ```bash
-CHIBI_HOOK="on_start" CHIBI_HOOK_DATA='{"implied_context": "default", "working_context": "default", "verbose": true}' ./my_plugin
+echo '{}' | CHIBI_HOOK="on_start" ./my_plugin
 ```
 
 ## Built-in Tools
