@@ -171,4 +171,211 @@ mod tests {
             assert_eq!(hook.as_ref(), *s);
         }
     }
+
+
+    use super::super::{ToolMetadata};
+    use std::path::PathBuf;
+
+    /// Helper to create a test script and make it executable.
+    #[cfg(unix)]
+    fn create_test_script(dir: &std::path::Path, name: &str, content: &[u8]) -> PathBuf {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt;
+
+        let script_path = dir.join(name);
+
+        {
+            let mut file = std::fs::File::create(&script_path).unwrap();
+            file.write_all(content).unwrap();
+            file.sync_all().unwrap();
+        }
+
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+
+        script_path
+    }
+
+    /// Execute a hook with retry on ETXTBSY (text file busy).
+    fn execute_hook_with_retry(
+        tools: &[Tool],
+        hook: HookPoint,
+        data: &serde_json::Value,
+    ) -> io::Result<Vec<(String, serde_json::Value)>> {
+        for attempt in 0..5 {
+            match execute_hook(tools, hook, data) {
+                Ok(result) => return Ok(result),
+                Err(e) if e.to_string().contains("Text file busy") && attempt < 4 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1) as u64));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!()
+    }
+
+    #[test]
+    fn test_execute_hook_receives_stdin_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = create_test_script(
+            dir.path(),
+            "hook.sh",
+            b"#!/bin/bash\ncat\n", // Echo stdin to stdout
+        );
+
+        let tools = vec![Tool {
+            name: "hook_tool".to_string(),
+            description: "Hook tester".to_string(),
+            parameters: serde_json::json!({}),
+            path: script_path,
+            hooks: vec![HookPoint::OnStart],
+            metadata: ToolMetadata::new(),
+        }];
+
+        let data = serde_json::json!({"event": "start", "context": "test"});
+        let results = execute_hook_with_retry(&tools, HookPoint::OnStart, &data).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "hook_tool");
+        assert_eq!(results[0].1["event"], "start");
+        assert_eq!(results[0].1["context"], "test");
+    }
+
+    #[test]
+    fn test_execute_hook_env_var() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = create_test_script(
+            dir.path(),
+            "hook_env.sh",
+            b"#!/bin/bash\ncat > /dev/null\necho \"hook=$CHIBI_HOOK\"\n",
+        );
+
+        let tools = vec![Tool {
+            name: "env_hook".to_string(),
+            description: "Env checker".to_string(),
+            parameters: serde_json::json!({}),
+            path: script_path,
+            hooks: vec![HookPoint::PreMessage],
+            metadata: ToolMetadata::new(),
+        }];
+
+        let results =
+            execute_hook_with_retry(&tools, HookPoint::PreMessage, &serde_json::json!({})).unwrap();
+
+        assert_eq!(results.len(), 1);
+        // Result is string since it's not valid JSON
+        let output = results[0].1.as_str().unwrap();
+        assert!(output.contains("hook=pre_message"));
+    }
+
+    #[test]
+    fn test_execute_hook_no_hook_data_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = create_test_script(
+            dir.path(),
+            "verify_env.sh",
+            br#"#!/bin/bash
+cat > /dev/null
+if [ -n "$CHIBI_HOOK_DATA" ]; then
+  echo 'ERROR: CHIBI_HOOK_DATA should not be set'
+  exit 1
+fi
+echo 'OK'
+"#,
+        );
+
+        let tools = vec![Tool {
+            name: "verify_hook".to_string(),
+            description: "Env verifier".to_string(),
+            parameters: serde_json::json!({}),
+            path: script_path,
+            hooks: vec![HookPoint::OnEnd],
+            metadata: ToolMetadata::new(),
+        }];
+
+        let results =
+            execute_hook_with_retry(&tools, HookPoint::OnEnd, &serde_json::json!({})).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.as_str().unwrap(), "OK");
+    }
+
+    #[test]
+    fn test_execute_hook_skips_non_registered() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = create_test_script(dir.path(), "skip.sh", b"#!/bin/bash\necho 'CALLED'\n");
+
+        let tools = vec![Tool {
+            name: "skip_tool".to_string(),
+            description: "Should be skipped".to_string(),
+            parameters: serde_json::json!({}),
+            path: script_path,
+            hooks: vec![HookPoint::OnStart], // Registered for OnStart only
+            metadata: ToolMetadata::new(),
+        }];
+
+        // Call with OnEnd - should not execute the tool
+        let results =
+            execute_hook_with_retry(&tools, HookPoint::OnEnd, &serde_json::json!({})).unwrap();
+
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_execute_hook_skips_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = create_test_script(dir.path(), "fail.sh", b"#!/bin/bash\nexit 1\n");
+
+        let tools = vec![Tool {
+            name: "fail_hook".to_string(),
+            description: "Always fails".to_string(),
+            parameters: serde_json::json!({}),
+            path: script_path,
+            hooks: vec![HookPoint::OnStart],
+            metadata: ToolMetadata::new(),
+        }];
+
+        // Failed hooks should be skipped (not error)
+        let results =
+            execute_hook_with_retry(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_execute_hook_multiple_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let script1 = create_test_script(dir.path(), "hook1.sh", b"#!/bin/bash\ncat > /dev/null\necho 'first'\n");
+        let script2 = create_test_script(dir.path(), "hook2.sh", b"#!/bin/bash\ncat > /dev/null\necho 'second'\n");
+
+        let tools = vec![
+            Tool {
+                name: "first_hook".to_string(),
+                description: "First".to_string(),
+                parameters: serde_json::json!({}),
+                path: script1,
+                hooks: vec![HookPoint::OnStart],
+                metadata: ToolMetadata::new(),
+            },
+            Tool {
+                name: "second_hook".to_string(),
+                description: "Second".to_string(),
+                parameters: serde_json::json!({}),
+                path: script2,
+                hooks: vec![HookPoint::OnStart],
+                metadata: ToolMetadata::new(),
+            },
+        ];
+
+        let results =
+            execute_hook_with_retry(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "first_hook");
+        assert_eq!(results[0].1.as_str().unwrap(), "first");
+        assert_eq!(results[1].0, "second_hook");
+        assert_eq!(results[1].1.as_str().unwrap(), "second");
+    }
 }
