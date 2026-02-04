@@ -912,7 +912,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chibi-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64",
  "chibi-core",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "chibi-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64",
  "chrono",
@@ -3652,7 +3652,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "streamdown-ansi"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "crossterm",
  "regex",
@@ -3661,7 +3661,7 @@ dependencies = [
 
 [[package]]
 name = "streamdown-config"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "crossterm",
  "directories",
@@ -3673,7 +3673,7 @@ dependencies = [
 
 [[package]]
 name = "streamdown-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "regex",
  "serde",
@@ -3682,7 +3682,7 @@ dependencies = [
 
 [[package]]
 name = "streamdown-parser"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "regex",
  "streamdown-ansi",
@@ -3692,7 +3692,7 @@ dependencies = [
 
 [[package]]
 name = "streamdown-plugin"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "regex",
  "streamdown-config",
@@ -3701,7 +3701,7 @@ dependencies = [
 
 [[package]]
 name = "streamdown-render"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64",
  "crossterm",
@@ -3716,7 +3716,7 @@ dependencies = [
 
 [[package]]
 name = "streamdown-syntax"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "streamdown-core",
  "syntect",
