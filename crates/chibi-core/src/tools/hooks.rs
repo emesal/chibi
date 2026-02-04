@@ -172,8 +172,7 @@ mod tests {
         }
     }
 
-
-    use super::super::{ToolMetadata};
+    use super::super::ToolMetadata;
     use std::path::PathBuf;
 
     /// Helper to create a test script and make it executable.
@@ -305,7 +304,8 @@ echo 'OK'
     #[test]
     fn test_execute_hook_skips_non_registered() {
         let dir = tempfile::tempdir().unwrap();
-        let script_path = create_test_script(dir.path(), "skip.sh", b"#!/bin/bash\necho 'CALLED'\n");
+        let script_path =
+            create_test_script(dir.path(), "skip.sh", b"#!/bin/bash\necho 'CALLED'\n");
 
         let tools = vec![Tool {
             name: "skip_tool".to_string(),
@@ -347,8 +347,16 @@ echo 'OK'
     #[test]
     fn test_execute_hook_multiple_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let script1 = create_test_script(dir.path(), "hook1.sh", b"#!/bin/bash\ncat > /dev/null\necho 'first'\n");
-        let script2 = create_test_script(dir.path(), "hook2.sh", b"#!/bin/bash\ncat > /dev/null\necho 'second'\n");
+        let script1 = create_test_script(
+            dir.path(),
+            "hook1.sh",
+            b"#!/bin/bash\ncat > /dev/null\necho 'first'\n",
+        );
+        let script2 = create_test_script(
+            dir.path(),
+            "hook2.sh",
+            b"#!/bin/bash\ncat > /dev/null\necho 'second'\n",
+        );
 
         let tools = vec![
             Tool {

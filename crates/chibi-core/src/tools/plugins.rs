@@ -427,7 +427,6 @@ mod tests {
         unreachable!()
     }
 
-
     #[test]
     fn test_execute_tool_receives_stdin_params() {
         let dir = tempfile::tempdir().unwrap();
