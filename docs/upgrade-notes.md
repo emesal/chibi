@@ -1,5 +1,16 @@
 # chibi upgrade notes
 
+this file only documents breaking changes that require user action.
+
+## 0.6.0 -> 0.7.0
+
+- **plugin communication changed**: plugins now receive parameters via stdin instead of environment variables
+  - tools: read JSON params from stdin (was `CHIBI_TOOL_ARGS` env var)
+  - hooks: read JSON data from stdin (was `CHIBI_HOOK_DATA` env var)
+  - `CHIBI_HOOK`, `CHIBI_TOOL_NAME`, and `CHIBI_VERBOSE` env vars unchanged
+  - **migration**: replace `json.loads(os.environ["CHIBI_TOOL_ARGS"])` with `json.load(sys.stdin)`
+  - **migration**: replace `json.loads(os.environ["CHIBI_HOOK_DATA"])` with `json.load(sys.stdin)`
+
 ## 0.5.1 -> 0.6.0
 
 - **ratatoskr integration**: LLM communication now uses the [ratatoskr](https://github.com/emesal/ratatoskr) crate instead of direct HTTP calls
