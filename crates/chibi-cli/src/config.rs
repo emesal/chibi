@@ -220,16 +220,40 @@ pub struct ImageConfigOverride {
 /// Markdown rendering color scheme (re-exported from streamdown-render).
 pub type MarkdownStyle = streamdown_render::RenderStyle;
 
-/// Commodore 128 inspired color scheme (VICE palette)
+/// Colodore-inspired color scheme (Commodore 64/128 palette by Pepto).
+///
+/// Colors can be specified as hex values (e.g., "#edf171") or as
+/// Colodore preset names (e.g., "yellow", "cyan", "light_green").
 pub fn default_markdown_style() -> MarkdownStyle {
     MarkdownStyle {
-        bright: "#FFFF54".to_string(), // Light Yellow - for emphasis
-        head: "#54FF54".to_string(),   // Light Green - for h3 headers
-        symbol: "#7ABFC7".to_string(), // Cyan - for bullets, language labels
-        grey: "#808080".to_string(),   // Grey - for borders, muted text
-        dark: "#000000".to_string(),   // Black - code block background
-        mid: "#3E31A2".to_string(),    // Blue - table headers
-        light: "#352879".to_string(),  // Dark Blue - alternate backgrounds
+        // Headings
+        h1: "white".to_string(),
+        h2: "yellow".to_string(),
+        h3: "light_green".to_string(),
+        h4: "cyan".to_string(),
+        h5: "light_grey".to_string(),
+        h6: "grey".to_string(),
+
+        // Code
+        code_bg: "black".to_string(),
+        code_label: "cyan".to_string(),
+
+        // Lists
+        bullet: "cyan".to_string(),
+
+        // Tables
+        table_header_bg: "blue".to_string(),
+        table_border: "grey".to_string(),
+
+        // Borders/decorations
+        blockquote_border: "grey".to_string(),
+        think_border: "grey".to_string(),
+        hr: "dark_grey".to_string(),
+
+        // Links & references
+        link_url: "grey".to_string(),
+        image_marker: "cyan".to_string(),
+        footnote: "cyan".to_string(),
     }
 }
 
@@ -354,13 +378,34 @@ impl ResolvedConfig {
 /// Per-context markdown style overrides (all fields optional).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MarkdownStyleOverride {
-    pub bright: Option<String>,
-    pub head: Option<String>,
-    pub symbol: Option<String>,
-    pub grey: Option<String>,
-    pub dark: Option<String>,
-    pub mid: Option<String>,
-    pub light: Option<String>,
+    // Headings
+    pub h1: Option<String>,
+    pub h2: Option<String>,
+    pub h3: Option<String>,
+    pub h4: Option<String>,
+    pub h5: Option<String>,
+    pub h6: Option<String>,
+
+    // Code
+    pub code_bg: Option<String>,
+    pub code_label: Option<String>,
+
+    // Lists
+    pub bullet: Option<String>,
+
+    // Tables
+    pub table_header_bg: Option<String>,
+    pub table_border: Option<String>,
+
+    // Borders/decorations
+    pub blockquote_border: Option<String>,
+    pub think_border: Option<String>,
+    pub hr: Option<String>,
+
+    // Links & references
+    pub link_url: Option<String>,
+    pub image_marker: Option<String>,
+    pub footnote: Option<String>,
 }
 
 /// Raw CLI config as parsed from ~/.chibi/cli.toml
@@ -417,22 +462,64 @@ pub struct CliConfigOverride {
 /// Merge a MarkdownStyle with optional overrides.
 fn merge_markdown_style(base: &MarkdownStyle, overrides: &MarkdownStyleOverride) -> MarkdownStyle {
     MarkdownStyle {
-        bright: overrides
-            .bright
+        // Headings
+        h1: overrides.h1.clone().unwrap_or_else(|| base.h1.clone()),
+        h2: overrides.h2.clone().unwrap_or_else(|| base.h2.clone()),
+        h3: overrides.h3.clone().unwrap_or_else(|| base.h3.clone()),
+        h4: overrides.h4.clone().unwrap_or_else(|| base.h4.clone()),
+        h5: overrides.h5.clone().unwrap_or_else(|| base.h5.clone()),
+        h6: overrides.h6.clone().unwrap_or_else(|| base.h6.clone()),
+
+        // Code
+        code_bg: overrides
+            .code_bg
             .clone()
-            .unwrap_or_else(|| base.bright.clone()),
-        head: overrides.head.clone().unwrap_or_else(|| base.head.clone()),
-        symbol: overrides
-            .symbol
+            .unwrap_or_else(|| base.code_bg.clone()),
+        code_label: overrides
+            .code_label
             .clone()
-            .unwrap_or_else(|| base.symbol.clone()),
-        grey: overrides.grey.clone().unwrap_or_else(|| base.grey.clone()),
-        dark: overrides.dark.clone().unwrap_or_else(|| base.dark.clone()),
-        mid: overrides.mid.clone().unwrap_or_else(|| base.mid.clone()),
-        light: overrides
-            .light
+            .unwrap_or_else(|| base.code_label.clone()),
+
+        // Lists
+        bullet: overrides
+            .bullet
             .clone()
-            .unwrap_or_else(|| base.light.clone()),
+            .unwrap_or_else(|| base.bullet.clone()),
+
+        // Tables
+        table_header_bg: overrides
+            .table_header_bg
+            .clone()
+            .unwrap_or_else(|| base.table_header_bg.clone()),
+        table_border: overrides
+            .table_border
+            .clone()
+            .unwrap_or_else(|| base.table_border.clone()),
+
+        // Borders/decorations
+        blockquote_border: overrides
+            .blockquote_border
+            .clone()
+            .unwrap_or_else(|| base.blockquote_border.clone()),
+        think_border: overrides
+            .think_border
+            .clone()
+            .unwrap_or_else(|| base.think_border.clone()),
+        hr: overrides.hr.clone().unwrap_or_else(|| base.hr.clone()),
+
+        // Links & references
+        link_url: overrides
+            .link_url
+            .clone()
+            .unwrap_or_else(|| base.link_url.clone()),
+        image_marker: overrides
+            .image_marker
+            .clone()
+            .unwrap_or_else(|| base.image_marker.clone()),
+        footnote: overrides
+            .footnote
+            .clone()
+            .unwrap_or_else(|| base.footnote.clone()),
     }
 }
 
@@ -496,7 +583,7 @@ mod tests {
         assert!(config.render_markdown);
         assert!(config.image.render_images);
         assert_eq!(config.image.max_height_lines, 25);
-        assert_eq!(config.markdown_style.bright, "#FFFF54");
+        assert_eq!(config.markdown_style.h2, "yellow");
     }
 
     #[test]
@@ -510,7 +597,7 @@ max_height_lines = 50
 alignment = "left"
 
 [markdown_style]
-bright = "#FF0000"
+h2 = "#FF0000"
 "##;
         std::fs::write(temp.path().join("cli.toml"), cli_toml).unwrap();
 
@@ -519,10 +606,10 @@ bright = "#FF0000"
         assert!(!config.render_markdown);
         assert_eq!(config.image.max_height_lines, 50);
         assert_eq!(config.image.alignment, ImageAlignment::Left);
-        assert_eq!(config.markdown_style.bright, "#FF0000");
+        assert_eq!(config.markdown_style.h2, "#FF0000");
         // Defaults preserved for unspecified fields
         assert!(config.image.render_images);
-        assert_eq!(config.markdown_style.head, "#54FF54");
+        assert_eq!(config.markdown_style.h3, "light_green");
     }
 
     #[test]
@@ -605,7 +692,7 @@ max_height_lines = 10
                 ..Default::default()
             },
             markdown_style: MarkdownStyleOverride {
-                bright: Some("#00FF00".to_string()),
+                h2: Some("#00FF00".to_string()),
                 ..Default::default()
             },
         };
@@ -614,30 +701,30 @@ max_height_lines = 10
 
         assert!(!merged.render_markdown);
         assert_eq!(merged.image.max_height_lines, 50);
-        assert_eq!(merged.markdown_style.bright, "#00FF00");
+        assert_eq!(merged.markdown_style.h2, "#00FF00");
         // Unoverridden fields preserved
         assert!(merged.image.render_images);
-        assert_eq!(merged.markdown_style.head, "#54FF54");
+        assert_eq!(merged.markdown_style.h3, "light_green");
     }
 
     #[test]
     fn test_markdown_style_override_partial() {
         let base = default_markdown_style();
         let overrides = MarkdownStyleOverride {
-            bright: Some("#AABBCC".to_string()),
-            dark: Some("#112233".to_string()),
+            h2: Some("#AABBCC".to_string()),
+            code_bg: Some("#112233".to_string()),
             ..Default::default()
         };
 
         let merged = merge_markdown_style(&base, &overrides);
 
-        assert_eq!(merged.bright, "#AABBCC");
-        assert_eq!(merged.dark, "#112233");
+        assert_eq!(merged.h2, "#AABBCC");
+        assert_eq!(merged.code_bg, "#112233");
         // Rest unchanged
-        assert_eq!(merged.head, base.head);
-        assert_eq!(merged.symbol, base.symbol);
-        assert_eq!(merged.grey, base.grey);
-        assert_eq!(merged.mid, base.mid);
-        assert_eq!(merged.light, base.light);
+        assert_eq!(merged.h3, base.h3);
+        assert_eq!(merged.bullet, base.bullet);
+        assert_eq!(merged.table_border, base.table_border);
+        assert_eq!(merged.link_url, base.link_url);
+        assert_eq!(merged.hr, base.hr);
     }
 }
