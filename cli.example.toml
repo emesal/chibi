@@ -68,27 +68,38 @@ cache_max_age_days = 30
 # =============================================================================
 # Markdown Color Scheme
 # =============================================================================
-# Commodore 128 inspired color scheme (VICE palette)
-# All values are CSS-style hex colors
+# Colodore-inspired color scheme (Commodore 64/128 palette by Pepto)
+# Values can be hex colors (e.g., "#edf171") or Colodore preset names:
+#   black, dark_grey, grey, light_grey, white,
+#   dark_red, red, brown, orange, yellow,
+#   light_green, green, cyan, light_blue, blue, purple
 
 [markdown_style]
-# Light Yellow - for emphasis, h2 headers
-bright = "#FFFF54"
+# Headings
+h1 = "white"
+h2 = "yellow"
+h3 = "light_green"
+h4 = "cyan"
+h5 = "light_grey"
+h6 = "grey"
 
-# Light Green - for h3 headers
-head = "#54FF54"
+# Code blocks
+code_bg = "black"
+code_label = "cyan"
 
-# Cyan - for bullets, language labels
-symbol = "#7ABFC7"
+# List markers
+bullet = "cyan"
 
-# Grey - for borders, muted text, h6
-grey = "#808080"
+# Tables
+table_header_bg = "blue"
+table_border = "grey"
 
-# Black - code block background
-dark = "#000000"
+# Borders/decorations
+blockquote_border = "grey"
+think_border = "grey"
+hr = "dark_grey"
 
-# Blue - table headers
-mid = "#3E31A2"
-
-# Dark Blue - alternate backgrounds
-light = "#352879"
+# Links & references
+link_url = "grey"
+image_marker = "cyan"
+footnote = "cyan"
