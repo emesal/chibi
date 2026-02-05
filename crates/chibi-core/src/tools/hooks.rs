@@ -71,9 +71,13 @@ pub fn execute_hook(
                 ))
             })?;
 
-        // Write hook data to stdin
+        // Write hook data to stdin (ignore BrokenPipe — child may exit before reading)
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(data_str.as_bytes())?;
+            match stdin.write_all(data_str.as_bytes()) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
+                Err(e) => return Err(e),
+            }
             // stdin is dropped here, closing the pipe and signaling EOF
         }
 
