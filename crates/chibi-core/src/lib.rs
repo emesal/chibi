@@ -38,6 +38,7 @@ pub mod input;
 pub mod json_ext;
 pub mod jsonl;
 pub mod lock;
+pub mod model_info;
 pub mod partition;
 pub mod safe_io;
 pub mod state;
