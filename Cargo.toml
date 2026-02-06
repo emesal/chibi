@@ -55,7 +55,7 @@ streamdown-render = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/strea
 streamdown-plugin = { path = "crates/chibi-cli/vendor/streamdown-rs/crates/streamdown-plugin" }
 
 # Ratatoskr (LLM API client)
-ratatoskr = { git = "https://github.com/emesal/ratatoskr.git", branch = "dev" }
+ratatoskr = { git = "https://github.com/emesal/ratatoskr.git", branch = "main" }
 
 [workspace.lints.rust]
 dead_code = "deny"

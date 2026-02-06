@@ -619,6 +619,9 @@ async fn collect_streaming_response<S: ResponseSink>(
                     }
                 }));
             }
+            ChatEvent::ToolCallEnd { .. } => {
+                // Tool call argument streaming complete; nothing to do
+            }
             ChatEvent::Done => break,
         }
     }
