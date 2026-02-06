@@ -57,7 +57,7 @@ pub use context::{Context, ContextEntry, Message, TranscriptEntry};
 pub use input::{Command, Flags, Inspectable};
 pub use partition::StorageConfig;
 pub use state::{AppState, StatePaths};
-pub use tools::{HookPoint, Tool};
+pub use tools::{HookPoint, SpawnOptions, Tool, spawn_agent};
 
 /// Returns ratatoskr's package version.
 pub fn ratatoskr_version() -> &'static str {

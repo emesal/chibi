@@ -17,6 +17,8 @@ The LLM always has access to these tools (no setup required):
 | `file_lines` | Read a specific line range from a cached output or file |
 | `file_grep` | Search for a pattern in a cached output or file |
 | `cache_list` | List all cached tool outputs for the current context |
+| `spawn_agent` | Spawn a sub-agent with a custom system prompt to process input |
+| `retrieve_content` | Read a file/URL and process content through a sub-agent |
 
 ## External Plugins
 
@@ -181,6 +183,32 @@ The `pre_send_message` hook can intercept delivery for custom routing:
 See [hooks.md](hooks.md#pre_send_message) for details.
 
 ## Sub-Agents
+
+### Built-in Agent Tools
+
+Chibi provides two built-in tools for spawning sub-agents — separate LLM calls with their own system prompts that return results as tool output.
+
+**`spawn_agent`** — General-purpose sub-agent spawning:
+```json
+{
+  "system_prompt": "You are a code reviewer. Be concise.",
+  "input": "Review this function:\ndef add(a, b): return a + b",
+  "model": "anthropic/claude-haiku",
+  "temperature": 0.3
+}
+```
+
+**`retrieve_content`** — Read a file or fetch a URL, then process through a sub-agent:
+```json
+{
+  "source": "https://example.com/api-docs",
+  "instructions": "Summarize the authentication section"
+}
+```
+
+Both tools accept optional `model`, `temperature`, and `max_tokens` overrides. Without overrides, the parent's model and settings are used.
+
+Sub-agent calls are non-streaming (results returned as tool output). Plugins can intercept or replace sub-agent calls via `pre_spawn_agent` / `post_spawn_agent` hooks — see [hooks.md](hooks.md#pre_spawn_agent).
 
 ### Ephemeral Context Flag
 

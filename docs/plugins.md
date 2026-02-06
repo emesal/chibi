@@ -113,6 +113,8 @@ Plugins can register for lifecycle hooks by including a `hooks` array in the sch
 | `post_system_prompt` | After system prompt built | `{context_name, summary, todos, goals}` |
 | `pre_send_message` | Before inter-context message | `{from, to, content, context_name}` |
 | `post_send_message` | After inter-context message | `{from, to, content, context_name, delivery_result}` |
+| `pre_spawn_agent` | Before sub-agent LLM call | `{system_prompt, input, model, temperature, max_tokens}` |
+| `post_spawn_agent` | After sub-agent LLM call | `{system_prompt, input, model, response}` |
 
 ### Hook Output
 
@@ -123,6 +125,7 @@ Hooks can return JSON to stdout. For most hooks, this is informational. Some hoo
 - `pre_tool`: Return `{"arguments": {...}}` to modify tool arguments before execution
 - `pre_system_prompt` / `post_system_prompt`: Return `{"inject": "text"}` to add content to the system prompt
 - `pre_send_message`: Return `{"delivered": true, "via": "..."}` to intercept message delivery
+- `pre_spawn_agent`: Return `{"response": "..."}` to replace the LLM call, or `{"block": true, "message": "..."}` to block it
 
 Return empty output or `{}` if you have nothing to contribute.
 
@@ -277,4 +280,8 @@ Chibi provides several built-in tools that don't require plugins:
 - `file_grep` - Search for patterns
 - `cache_list` - List cached outputs
 
-These are always available to the LLM. See [agentic.md](agentic.md) for details on tool output caching.
+**Agent tools** (for spawning sub-agents):
+- `spawn_agent` - Spawn a sub-agent with a custom system prompt
+- `retrieve_content` - Read a file/URL and process it through a sub-agent
+
+These are always available to the LLM. See [agentic.md](agentic.md) for details on sub-agents and tool output caching.
