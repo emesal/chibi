@@ -3,9 +3,10 @@
 //! This module provides type conversions between chibi's internal types
 //! and ratatoskr's ModelGateway types.
 
-use crate::config::ResolvedConfig;
+use crate::config::{self, ResolvedConfig};
 use ratatoskr::{
-    ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr, ToolCall, ToolDefinition,
+    ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr, ToolCall,
+    ToolChoice as RatatoskrToolChoice, ToolDefinition,
 };
 use std::io;
 
@@ -85,8 +86,28 @@ pub fn to_chat_options(config: &ResolvedConfig) -> ChatOptions {
     if let Some(seed) = api.seed {
         opts = opts.seed(seed);
     }
+    if let Some(parallel) = api.parallel_tool_calls {
+        opts = opts.parallel_tool_calls(parallel);
+    }
+    if let Some(ref tool_choice) = api.tool_choice {
+        opts = opts.tool_choice(to_ratatoskr_tool_choice(tool_choice));
+    }
 
     opts
+}
+
+/// Convert chibi's ToolChoice to ratatoskr's ToolChoice.
+fn to_ratatoskr_tool_choice(choice: &config::ToolChoice) -> RatatoskrToolChoice {
+    match choice {
+        config::ToolChoice::Mode(mode) => match mode {
+            config::ToolChoiceMode::Auto => RatatoskrToolChoice::Auto,
+            config::ToolChoiceMode::None => RatatoskrToolChoice::None,
+            config::ToolChoiceMode::Required => RatatoskrToolChoice::Required,
+        },
+        config::ToolChoice::Function { function, .. } => RatatoskrToolChoice::Function {
+            name: function.name.clone(),
+        },
+    }
 }
 
 /// Build a gateway from ResolvedConfig.
@@ -121,6 +142,7 @@ pub async fn chat(config: &ResolvedConfig, messages: &[serde_json::Value]) -> io
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ResolvedConfig;
     use ratatoskr::Role;
     use serde_json::json;
 
@@ -165,6 +187,101 @@ mod tests {
         });
         let msg = to_ratatoskr_message(&json).unwrap();
         assert!(matches!(msg.role, Role::Tool { tool_call_id } if tool_call_id == "call_123"));
+    }
+
+    #[test]
+    fn test_to_chat_options_includes_parallel_tool_calls() {
+        let config = test_config(|api| {
+            api.parallel_tool_calls = Some(true);
+        });
+        let opts = to_chat_options(&config);
+        assert_eq!(opts.parallel_tool_calls, Some(true));
+    }
+
+    #[test]
+    fn test_to_chat_options_omits_parallel_tool_calls_when_none() {
+        let config = test_config(|_| {});
+        let opts = to_chat_options(&config);
+        assert_eq!(opts.parallel_tool_calls, None);
+    }
+
+    #[test]
+    fn test_to_chat_options_includes_tool_choice() {
+        let config = test_config(|api| {
+            api.tool_choice = Some(config::ToolChoice::Mode(config::ToolChoiceMode::Required));
+        });
+        let opts = to_chat_options(&config);
+        assert!(matches!(
+            opts.tool_choice,
+            Some(RatatoskrToolChoice::Required)
+        ));
+    }
+
+    #[test]
+    fn test_tool_choice_conversion_auto() {
+        let choice = config::ToolChoice::Mode(config::ToolChoiceMode::Auto);
+        assert!(matches!(
+            to_ratatoskr_tool_choice(&choice),
+            RatatoskrToolChoice::Auto
+        ));
+    }
+
+    #[test]
+    fn test_tool_choice_conversion_none() {
+        let choice = config::ToolChoice::Mode(config::ToolChoiceMode::None);
+        assert!(matches!(
+            to_ratatoskr_tool_choice(&choice),
+            RatatoskrToolChoice::None
+        ));
+    }
+
+    #[test]
+    fn test_tool_choice_conversion_required() {
+        let choice = config::ToolChoice::Mode(config::ToolChoiceMode::Required);
+        assert!(matches!(
+            to_ratatoskr_tool_choice(&choice),
+            RatatoskrToolChoice::Required
+        ));
+    }
+
+    #[test]
+    fn test_tool_choice_conversion_function() {
+        let choice = config::ToolChoice::Function {
+            type_: "function".to_string(),
+            function: config::ToolChoiceFunction {
+                name: "my_tool".to_string(),
+            },
+        };
+        match to_ratatoskr_tool_choice(&choice) {
+            RatatoskrToolChoice::Function { name } => assert_eq!(name, "my_tool"),
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    /// Helper to build a minimal ResolvedConfig for gateway tests.
+    fn test_config(api_modifier: impl FnOnce(&mut config::ApiParams)) -> ResolvedConfig {
+        let mut api = config::ApiParams::default();
+        api_modifier(&mut api);
+        ResolvedConfig {
+            api_key: String::new(),
+            model: "test-model".to_string(),
+            context_window_limit: 4096,
+            warn_threshold_percent: 80.0,
+            auto_compact: false,
+            auto_compact_threshold: 0.9,
+            max_recursion_depth: 10,
+            max_empty_responses: 3,
+            username: "test".to_string(),
+            reflection_enabled: false,
+            tool_output_cache_threshold: 10000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: false,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api,
+            tools: config::ToolsConfig::default(),
+            fallback_tool: "call_user".to_string(),
+        }
     }
 
     #[test]

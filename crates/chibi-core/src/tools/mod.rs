@@ -63,7 +63,8 @@ pub use agent_tools::{RETRIEVE_CONTENT_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SpawnOp
 #[derive(Debug, Clone, Default)]
 pub struct ToolMetadata {
     /// Can this tool run in parallel with others? (default: true)
-    /// NOTE: Parallel execution not yet implemented - see #101
+    /// Tools with parallel=true are executed concurrently via join_all.
+    /// Flow control tools are always sequential regardless of this flag.
     pub parallel: bool,
 
     /// Is this a flow control tool? (default: false)
