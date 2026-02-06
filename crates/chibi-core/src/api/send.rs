@@ -639,41 +639,35 @@ struct ToolExecutionResult {
     original_result: String,
     /// Whether the result was cached.
     was_cached: bool,
+    /// Verbose diagnostic messages collected during execution.
+    diagnostics: Vec<String>,
 }
 
-/// Execute a single tool call with all hooks.
+/// Sink-free execution core for a single tool call.
 ///
-/// Handles: pre_tool hooks, tool dispatch (handoff/builtin/file/plugin),
-/// caching, pre/post tool_output hooks.
+/// Performs all tool execution logic (hooks, dispatch, caching, output hooks)
+/// without touching the sink or handoff state. Collects verbose diagnostics
+/// into `ToolExecutionResult::diagnostics` for the caller to emit.
+///
+/// This enables concurrent execution via `join_all` since it doesn't require
+/// `&mut` access to shared state.
 #[allow(clippy::too_many_arguments)]
-async fn execute_single_tool<S: ResponseSink>(
+async fn execute_tool_pure(
     app: &AppState,
     context_name: &str,
     tool_call: &ratatoskr::ToolCall,
     tools: &[Tool],
-    handoff: &mut tools::Handoff,
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
     verbose: bool,
-    sink: &mut S,
 ) -> io::Result<ToolExecutionResult> {
     let mut args: serde_json::Value =
         serde_json::from_str(&tool_call.arguments).unwrap_or(serde_json::json!({}));
+    let mut diagnostics = Vec::new();
 
-    // Check for control flow tools using metadata
+    // Check for control flow tools using metadata — we compute the result message
+    // but leave handoff mutation to the caller
     let tool_metadata = tools::get_tool_metadata(tools, &tool_call.name);
-    let is_handoff_tool = if tool_metadata.flow_control {
-        if tool_metadata.ends_turn {
-            let message = args.get_str_or("message", "").to_string();
-            handoff.set_user(message);
-        } else {
-            let prompt = args.get_str_or("prompt", "").to_string();
-            handoff.set_agent(prompt);
-        }
-        true
-    } else {
-        false
-    };
 
     // Execute pre_tool hooks (can modify arguments OR block execution)
     let pre_hook_data = serde_json::json!({
@@ -693,13 +687,10 @@ async fn execute_single_tool<S: ResponseSink>(
                 .get_str_or("message", "Tool call blocked by hook")
                 .to_string();
             if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook pre_tool: {} blocked {} - {}]",
-                        hook_tool_name, tool_call.name, block_message
-                    ),
-                    verbose_only: true,
-                })?;
+                diagnostics.push(format!(
+                    "[Hook pre_tool: {} blocked {} - {}]",
+                    hook_tool_name, tool_call.name, block_message
+                ));
             }
             break;
         }
@@ -707,13 +698,10 @@ async fn execute_single_tool<S: ResponseSink>(
         // Check for argument modification
         if let Some(modified_args) = result.get("arguments") {
             if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook pre_tool: {} modified arguments for {}]",
-                        hook_tool_name, tool_call.name
-                    ),
-                    verbose_only: true,
-                })?;
+                diagnostics.push(format!(
+                    "[Hook pre_tool: {} modified arguments for {}]",
+                    hook_tool_name, tool_call.name
+                ));
             }
             args = modified_args.clone();
         }
@@ -722,9 +710,9 @@ async fn execute_single_tool<S: ResponseSink>(
     // If blocked, skip execution and use block message as result
     let tool_result = if blocked {
         block_message
-    } else if is_handoff_tool {
-        // Handoff tools don't execute - they just set the handoff target
-        // Use metadata to determine the result message
+    } else if tool_metadata.flow_control {
+        // Handoff tools don't execute — they just produce a result message.
+        // The caller applies the actual handoff mutation.
         if tool_metadata.ends_turn {
             let message = args.get_str_or("message", "");
             if message.is_empty() {
@@ -750,8 +738,7 @@ async fn execute_single_tool<S: ResponseSink>(
             Err(e) => format!("Error: {}", e),
         }
     } else if tool_call.name == tools::SEND_MESSAGE_TOOL_NAME {
-        // Handle built-in send_message tool
-        execute_send_message_tool(app, context_name, tools, &args, verbose, sink)?
+        execute_send_message_pure(app, context_name, tools, &args, verbose, &mut diagnostics)?
     } else if tools::is_file_tool(&tool_call.name) {
         // For write tools, check permission via pre_file_write hook first
         if tool_call.name == tools::WRITE_FILE_TOOL_NAME
@@ -846,13 +833,10 @@ async fn execute_single_tool<S: ResponseSink>(
                 .get_str_or("message", "Output blocked by hook")
                 .to_string();
             if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook pre_tool_output: {} blocked output from {}]",
-                        hook_tool_name, tool_call.name
-                    ),
-                    verbose_only: true,
-                })?;
+                diagnostics.push(format!(
+                    "[Hook pre_tool_output: {} blocked output from {}]",
+                    hook_tool_name, tool_call.name
+                ));
             }
             tool_result = replacement;
             break;
@@ -860,13 +844,10 @@ async fn execute_single_tool<S: ResponseSink>(
 
         if let Some(modified_output) = result.get_str("output") {
             if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook pre_tool_output: {} modified output from {}]",
-                        hook_tool_name, tool_call.name
-                    ),
-                    verbose_only: true,
-                })?;
+                diagnostics.push(format!(
+                    "[Hook pre_tool_output: {} modified output from {}]",
+                    hook_tool_name, tool_call.name
+                ));
             }
             tool_result = modified_output.to_string();
         }
@@ -885,15 +866,12 @@ async fn execute_single_tool<S: ResponseSink>(
                 ) {
                     Ok(truncated) => {
                         if verbose {
-                            sink.handle(ResponseEvent::Diagnostic {
-                                message: format!(
-                                    "[Cached {} chars from {} as {}]",
-                                    tool_result.len(),
-                                    tool_call.name,
-                                    entry.metadata.id
-                                ),
-                                verbose_only: true,
-                            })?;
+                            diagnostics.push(format!(
+                                "[Cached {} chars from {} as {}]",
+                                tool_result.len(),
+                                tool_call.name,
+                                entry.metadata.id
+                            ));
                         }
                         (truncated, true)
                     }
@@ -902,10 +880,7 @@ async fn execute_single_tool<S: ResponseSink>(
             }
             Err(e) => {
                 if verbose {
-                    sink.handle(ResponseEvent::Diagnostic {
-                        message: format!("[Failed to cache output: {}]", e),
-                        verbose_only: true,
-                    })?;
+                    diagnostics.push(format!("[Failed to cache output: {}]", e));
                 }
                 (tool_result.clone(), false)
             }
@@ -932,18 +907,69 @@ async fn execute_single_tool<S: ResponseSink>(
         final_result,
         original_result: tool_result,
         was_cached,
+        diagnostics,
     })
 }
 
-/// Execute the send_message built-in tool.
+/// Execute a single tool call with all hooks (sequential path).
+///
+/// Thin wrapper over `execute_tool_pure` that also handles handoff mutation
+/// and emits diagnostics to the sink.
 #[allow(clippy::too_many_arguments)]
-fn execute_send_message_tool<S: ResponseSink>(
+async fn execute_single_tool<S: ResponseSink>(
+    app: &AppState,
+    context_name: &str,
+    tool_call: &ratatoskr::ToolCall,
+    tools: &[Tool],
+    handoff: &mut tools::Handoff,
+    use_reflection: bool,
+    resolved_config: &ResolvedConfig,
+    verbose: bool,
+    sink: &mut S,
+) -> io::Result<ToolExecutionResult> {
+    // Apply handoff if this is a flow control tool
+    let args: serde_json::Value =
+        serde_json::from_str(&tool_call.arguments).unwrap_or(serde_json::json!({}));
+    let tool_metadata = tools::get_tool_metadata(tools, &tool_call.name);
+    if tool_metadata.flow_control {
+        if tool_metadata.ends_turn {
+            handoff.set_user(args.get_str_or("message", "").to_string());
+        } else {
+            handoff.set_agent(args.get_str_or("prompt", "").to_string());
+        }
+    }
+
+    let result = execute_tool_pure(
+        app,
+        context_name,
+        tool_call,
+        tools,
+        use_reflection,
+        resolved_config,
+        verbose,
+    )
+    .await?;
+
+    // Emit collected diagnostics to sink
+    for diag in &result.diagnostics {
+        sink.handle(ResponseEvent::Diagnostic {
+            message: diag.clone(),
+            verbose_only: true,
+        })?;
+    }
+
+    Ok(result)
+}
+
+/// Sink-free send_message execution. Collects diagnostics into the provided vec.
+#[allow(clippy::too_many_arguments)]
+fn execute_send_message_pure(
     app: &AppState,
     context_name: &str,
     tools: &[Tool],
     args: &serde_json::Value,
     verbose: bool,
-    sink: &mut S,
+    diagnostics: &mut Vec<String>,
 ) -> io::Result<String> {
     let to = args.get_str_or("to", "");
     let content = args.get_str_or("content", "");
@@ -973,13 +999,10 @@ fn execute_send_message_tool<S: ResponseSink>(
             let via = hook_result.get_str_or("via", hook_tool_name);
             delivered_via = Some(via.to_string());
             if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook pre_send_message: {} intercepted delivery]",
-                        hook_tool_name
-                    ),
-                    verbose_only: true,
-                })?;
+                diagnostics.push(format!(
+                    "[Hook pre_send_message: {} intercepted delivery]",
+                    hook_tool_name
+                ));
             }
             break;
         }
@@ -1016,8 +1039,10 @@ fn execute_send_message_tool<S: ResponseSink>(
 
 /// Process all tool calls from a response.
 ///
-/// Handles: Tool call JSON conversion, loop over execute_single_tool,
-/// transcript entries, post_tool_batch hook.
+/// Parallel-safe tools (ToolMetadata::parallel == true) run concurrently via
+/// `join_all`. Sequential tools (flow_control, parallel == false) run after
+/// the parallel batch completes. Results are emitted to the sink and transcript
+/// in the original tool_call order regardless of execution order.
 #[allow(clippy::too_many_arguments)]
 async fn process_tool_calls<S: ResponseSink>(
     app: &AppState,
@@ -1052,19 +1077,52 @@ async fn process_tool_calls<S: ResponseSink>(
         "tool_calls": tool_calls_json,
     }));
 
-    // Execute each tool and add results
-    for tc in tool_calls {
-        if verbose {
-            sink.handle(ResponseEvent::Diagnostic {
-                message: format!("[Tool: {}]", tc.name),
-                verbose_only: true,
-            })?;
+    // Partition tool calls into parallel-safe and sequential batches.
+    // We store (original_index, tool_call) to preserve ordering in results.
+    let mut parallel_batch: Vec<(usize, &ratatoskr::ToolCall)> = Vec::new();
+    let mut sequential_batch: Vec<(usize, &ratatoskr::ToolCall)> = Vec::new();
+
+    for (i, tc) in tool_calls.iter().enumerate() {
+        let metadata = tools::get_tool_metadata(tools, &tc.name);
+        if metadata.parallel && !metadata.flow_control {
+            parallel_batch.push((i, tc));
+        } else {
+            sequential_batch.push((i, tc));
         }
+    }
 
-        sink.handle(ResponseEvent::ToolStart {
-            name: tc.name.clone(),
-        })?;
+    // Results indexed by original position
+    let mut results: Vec<Option<ToolExecutionResult>> =
+        (0..tool_calls.len()).map(|_| None).collect();
 
+    // Execute parallel batch concurrently via join_all.
+    // These futures run on the current task (no spawn), interleaving at .await
+    // points — safe with !Send types like AppState's RefCell.
+    if !parallel_batch.is_empty() {
+        let parallel_futures: Vec<_> = parallel_batch
+            .iter()
+            .map(|(_idx, tc)| {
+                execute_tool_pure(
+                    app,
+                    context_name,
+                    tc,
+                    tools,
+                    use_reflection,
+                    resolved_config,
+                    verbose,
+                )
+            })
+            .collect();
+
+        let parallel_results = futures_util::future::join_all(parallel_futures).await;
+
+        for ((idx, _tc), result) in parallel_batch.iter().zip(parallel_results) {
+            results[*idx] = Some(result?);
+        }
+    }
+
+    // Execute sequential batch one at a time (these may mutate handoff)
+    for (idx, tc) in &sequential_batch {
         let result = execute_single_tool(
             app,
             context_name,
@@ -1077,8 +1135,35 @@ async fn process_tool_calls<S: ResponseSink>(
             sink,
         )
         .await?;
+        results[*idx] = Some(result);
+    }
 
-        // Log tool call and result
+    // Emit results in original tool_call order
+    for (i, tc) in tool_calls.iter().enumerate() {
+        let result = results[i]
+            .take()
+            .expect("all tool results should be populated");
+
+        if verbose {
+            sink.handle(ResponseEvent::Diagnostic {
+                message: format!("[Tool: {}]", tc.name),
+                verbose_only: true,
+            })?;
+        }
+
+        // Emit diagnostics collected during parallel execution
+        for diag in &result.diagnostics {
+            sink.handle(ResponseEvent::Diagnostic {
+                message: diag.clone(),
+                verbose_only: true,
+            })?;
+        }
+
+        sink.handle(ResponseEvent::ToolStart {
+            name: tc.name.clone(),
+        })?;
+
+        // Log tool call and result to transcript
         let tool_call_entry = create_tool_call_entry(context_name, &tc.name, &tc.arguments);
         app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
@@ -1109,6 +1194,19 @@ async fn process_tool_calls<S: ResponseSink>(
         });
         let _ = tools::execute_hook(tools, tools::HookPoint::PostTool, &post_hook_data);
 
+        // Apply handoff for parallel-executed flow control tools
+        // (sequential ones already applied via execute_single_tool)
+        let metadata = tools::get_tool_metadata(tools, &tc.name);
+        if metadata.flow_control && metadata.parallel {
+            // This shouldn't happen (flow_control tools are always sequential),
+            // but handle it defensively
+            if metadata.ends_turn {
+                handoff.set_user(args.get_str_or("message", "").to_string());
+            } else {
+                handoff.set_agent(args.get_str_or("prompt", "").to_string());
+            }
+        }
+
         messages.push(serde_json::json!({
             "role": "tool",
             "tool_call_id": tc.id,
@@ -1116,7 +1214,7 @@ async fn process_tool_calls<S: ResponseSink>(
         }));
     }
 
-    // Execute post_tool_batch hook - allows plugins to override fallback after seeing tool results
+    // Execute post_tool_batch hook — allows plugins to override fallback after seeing tool results
     let tool_batch_info: Vec<serde_json::Value> = tool_calls
         .iter()
         .map(|tc| {
