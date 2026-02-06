@@ -37,6 +37,8 @@ pub enum HookPoint {
     PreAgenticLoop,   // Before entering the tool loop (can override fallback)
     PostToolBatch,    // After processing a batch of tool calls (can override fallback)
     PreFileWrite,     // Before file write/patch (can approve/deny/modify operation)
+    PreSpawnAgent, // Before sub-agent call (can intercept/replace with {"response": "..."} or block)
+    PostSpawnAgent, // After sub-agent call (observe only)
 }
 
 /// Execute a hook on all tools that registered for it
@@ -115,7 +117,7 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
-    // All 24 hook points for testing
+    // All 26 hook points for testing
     const ALL_HOOKS: &[(&str, HookPoint)] = &[
         ("pre_message", HookPoint::PreMessage),
         ("post_message", HookPoint::PostMessage),
@@ -142,6 +144,8 @@ mod tests {
         ("pre_agentic_loop", HookPoint::PreAgenticLoop),
         ("post_tool_batch", HookPoint::PostToolBatch),
         ("pre_file_write", HookPoint::PreFileWrite),
+        ("pre_spawn_agent", HookPoint::PreSpawnAgent),
+        ("post_spawn_agent", HookPoint::PostSpawnAgent),
     ];
 
     #[test]

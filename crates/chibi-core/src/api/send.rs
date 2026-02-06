@@ -35,6 +35,7 @@ const MAX_TOOL_CALLS: usize = 100;
 enum ToolType {
     Builtin,
     File,
+    Agent,
     Plugin,
 }
 
@@ -43,6 +44,7 @@ impl ToolType {
         match self {
             ToolType::Builtin => "builtin",
             ToolType::File => "file",
+            ToolType::Agent => "agent",
             ToolType::Plugin => "plugin",
         }
     }
@@ -65,12 +67,17 @@ const FILE_TOOL_NAMES: &[&str] = &[
     "cache_list",
 ];
 
+/// Agent tool names (spawn_agent, retrieve_content)
+const AGENT_TOOL_NAMES: &[&str] = &["spawn_agent", "retrieve_content"];
+
 /// Classify a tool's type based on its name
 fn classify_tool_type(name: &str, plugin_names: &[&str]) -> ToolType {
     if BUILTIN_TOOL_NAMES.contains(&name) {
         ToolType::Builtin
     } else if FILE_TOOL_NAMES.contains(&name) {
         ToolType::File
+    } else if AGENT_TOOL_NAMES.contains(&name) {
+        ToolType::Agent
     } else if plugin_names.contains(&name) {
         ToolType::Plugin
     } else {
@@ -639,7 +646,7 @@ struct ToolExecutionResult {
 /// Handles: pre_tool hooks, tool dispatch (handoff/builtin/file/plugin),
 /// caching, pre/post tool_output hooks.
 #[allow(clippy::too_many_arguments)]
-fn execute_single_tool<S: ResponseSink>(
+async fn execute_single_tool<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
     tool_call: &ratatoskr::ToolCall,
@@ -805,6 +812,11 @@ fn execute_single_tool<S: ResponseSink>(
                 Some(Err(e)) => format!("Error: {}", e),
                 None => format!("Error: Unknown file tool '{}'", tool_call.name),
             }
+        }
+    } else if tools::is_agent_tool(&tool_call.name) {
+        match tools::execute_agent_tool(resolved_config, &tool_call.name, &args, tools).await {
+            Ok(r) => r,
+            Err(e) => format!("Error: {}", e),
         }
     } else if let Some(tool) = tools::find_tool(tools, &tool_call.name) {
         match tools::execute_tool(tool, &args, verbose) {
@@ -1007,7 +1019,7 @@ fn execute_send_message_tool<S: ResponseSink>(
 /// Handles: Tool call JSON conversion, loop over execute_single_tool,
 /// transcript entries, post_tool_batch hook.
 #[allow(clippy::too_many_arguments)]
-fn process_tool_calls<S: ResponseSink>(
+async fn process_tool_calls<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
     tool_calls: &[ratatoskr::ToolCall],
@@ -1063,7 +1075,8 @@ fn process_tool_calls<S: ResponseSink>(
             resolved_config,
             verbose,
             sink,
-        )?;
+        )
+        .await?;
 
         // Log tool call and result
         let tool_call_entry = create_tool_call_entry(context_name, &tc.name, &tc.arguments);
@@ -1365,6 +1378,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     let mut all_tools = tools::tools_to_api_format(tools);
     all_tools.extend(tools::builtin_tools_to_api_format(use_reflection));
     all_tools.extend(tools::all_file_tools_to_api_format());
+    all_tools.extend(tools::all_agent_tools_to_api_format());
     annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
     all_tools = filter_tools_by_config(all_tools, &resolved_config.tools);
 
@@ -1449,7 +1463,8 @@ async fn send_prompt_with_depth<S: ResponseSink>(
                 recursion_depth,
                 verbose,
                 sink,
-            )?;
+            )
+            .await?;
 
             // Keep request_body in sync for logging
             request_body["messages"] = serde_json::json!(messages);
@@ -1540,6 +1555,19 @@ mod tests {
         assert_eq!(
             classify_tool_type("cache_list", &plugin_names),
             ToolType::File
+        );
+    }
+
+    #[test]
+    fn test_classify_tool_type_agent() {
+        let plugin_names: Vec<&str> = vec!["my_plugin"];
+        assert_eq!(
+            classify_tool_type("spawn_agent", &plugin_names),
+            ToolType::Agent
+        );
+        assert_eq!(
+            classify_tool_type("retrieve_content", &plugin_names),
+            ToolType::Agent
         );
     }
 

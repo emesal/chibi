@@ -48,6 +48,13 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 | `pre_agentic_loop` | Before entering the tool loop | Yes (fallback target) |
 | `post_tool_batch` | After processing a batch of tool calls | Yes (fallback target) |
 
+### Sub-Agent Lifecycle
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_spawn_agent` | Before a sub-agent LLM call | Yes (can provide response or block) |
+| `post_spawn_agent` | After sub-agent returns | No |
+
 ### Tool Output Caching
 
 | Hook | When | Can Modify |
@@ -170,6 +177,7 @@ Called before tools are sent to the API. Allows dynamic filtering of which tools
 Tool types are:
 - `builtin`: update_todos, update_goals, update_reflection, send_message
 - `file`: file_head, file_tail, file_lines, file_grep, cache_list
+- `agent`: spawn_agent, retrieve_content
 - `plugin`: Tools loaded from the plugins directory
 
 **Can return (to filter tools):**
@@ -408,6 +416,46 @@ Notification after output has been cached.
   "content": "message content",
   "context_name": "default",
   "delivery_result": "Message delivered to 'research' via local inbox"
+}
+```
+
+### pre_spawn_agent
+
+Called before a sub-agent LLM call (from `spawn_agent` or `retrieve_content` tools). Can intercept and replace the call entirely, or block it.
+
+```json
+{
+  "system_prompt": "You are a summarizer...",
+  "input": "Content to process...",
+  "model": "anthropic/claude-sonnet-4",
+  "temperature": 0.7,
+  "max_tokens": 4096
+}
+```
+
+**Can return (to replace the LLM call):**
+```json
+{
+  "response": "Pre-computed or cached response"
+}
+```
+
+Or to block:
+```json
+{
+  "block": true,
+  "message": "Sub-agent calls are not allowed in this context"
+}
+```
+
+### post_spawn_agent
+
+```json
+{
+  "system_prompt": "You are a summarizer...",
+  "input": "Content to process...",
+  "model": "anthropic/claude-sonnet-4",
+  "response": "The sub-agent's response..."
 }
 ```
 
