@@ -126,9 +126,7 @@ fn write_parameter_comments(out: &mut String, metadata: &ModelMetadata) {
                 match (range_str, default_str) {
                     (Some(r), Some(d)) => writeln!(out, "# {}: {} ({})", name, r, d).unwrap(),
                     (Some(r), None) => writeln!(out, "# {}: {}", name, r).unwrap(),
-                    (None, Some(d)) => {
-                        writeln!(out, "# {}: supported ({})", name, d).unwrap()
-                    }
+                    (None, Some(d)) => writeln!(out, "# {}: supported ({})", name, d).unwrap(),
                     (None, None) => writeln!(out, "# {}: supported", name).unwrap(),
                 }
             }
