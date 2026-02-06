@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-05
 **Issues:** #87, #88
-**Status:** Ready for implementation
+**Status:** Implemented (637a742)
 
 ## Overview
 
@@ -63,15 +63,16 @@ pub enum Command {
 ### Execution Flow
 
 1. `cli.rs` parses `-m`/`-M` flag, sets `Command::ModelMetadata`
-2. `main.rs` matches command, builds gateway via `build_gateway()`
-3. Calls `gateway.model_metadata(&model)` (from `ModelGateway` trait)
+2. `main.rs` matches command, calls `model_info::lookup_and_format()`
+3. Uses `ModelRegistry::with_embedded_seed()` directly (no gateway/API key needed)
 4. If `None`: print error to stderr, exit 1
 5. If `Some`: format as TOML, print to stdout
+
+**Implementation note:** The original design called for `build_gateway()` + `gateway.model_metadata()`, but since metadata is a local-only registry lookup, we use `ModelRegistry::with_embedded_seed()` directly via a `lookup_and_format()` wrapper in `model_info.rs`. No API key or network required.
 
 ### Error Handling
 
 - Model not in registry: `"model 'X' not found in registry"` to stderr, exit 1
-- Gateway build failure: existing error handling
 
 ## Files to Change
 
@@ -89,4 +90,9 @@ pub enum Command {
 
 ## Dependencies
 
-- ratatoskr v0.1.1+ with `ModelGateway::model_metadata()` and `ModelRegistry::with_embedded_seed()`
+- ratatoskr v0.1.1+ (159a46f) with `ModelRegistry::with_embedded_seed()`
+
+## Test Coverage
+
+- 7 unit tests in `model_info.rs` (TOML formatting, edge cases)
+- 6 CLI parsing tests in `cli.rs` (short/long flags, attached args, force_call_user)

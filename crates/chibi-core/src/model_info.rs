@@ -37,8 +37,8 @@ pub fn format_model_toml(metadata: &ModelMetadata, full: bool) -> String {
     }
 
     // [models."<id>".api]
-    let has_api_fields = metadata.max_output_tokens.is_some()
-        || (full && has_parameter_comments(metadata));
+    let has_api_fields =
+        metadata.max_output_tokens.is_some() || (full && has_parameter_comments(metadata));
 
     if has_api_fields {
         writeln!(out).unwrap();
@@ -74,11 +74,11 @@ fn write_header_comments(out: &mut String, metadata: &ModelMetadata) {
     if let Some(ref pricing) = metadata.pricing {
         let prompt = pricing
             .prompt_cost_per_mtok
-            .map(|c| format_cost(c))
+            .map(format_cost)
             .unwrap_or_else(|| "?".to_string());
         let completion = pricing
             .completion_cost_per_mtok
-            .map(|c| format_cost(c))
+            .map(format_cost)
             .unwrap_or_else(|| "?".to_string());
         writeln!(
             out,
@@ -113,23 +113,22 @@ fn write_parameter_comments(out: &mut String, metadata: &ModelMetadata) {
 
         match avail {
             ParameterAvailability::Mutable { range } => {
-                let range_str = if let (Some(min), Some(max)) = (range.min, range.max) {
-                    Some(format!("{} - {}", format_num(min), format_num(max)))
-                } else if let Some(min) = range.min {
-                    Some(format!("min {}", format_num(min)))
-                } else if let Some(max) = range.max {
-                    Some(format!("max {}", format_num(max)))
-                } else {
-                    None
+                let range_str = match (range.min, range.max) {
+                    (Some(min), Some(max)) => {
+                        Some(format!("{} - {}", format_num(min), format_num(max)))
+                    }
+                    (Some(min), None) => Some(format!("min {}", format_num(min))),
+                    (None, Some(max)) => Some(format!("max {}", format_num(max))),
+                    (None, None) => None,
                 };
-                let default_str = range
-                    .default
-                    .map(|d| format!("default: {}", format_num(d)));
+                let default_str = range.default.map(|d| format!("default: {}", format_num(d)));
 
                 match (range_str, default_str) {
                     (Some(r), Some(d)) => writeln!(out, "# {}: {} ({})", name, r, d).unwrap(),
                     (Some(r), None) => writeln!(out, "# {}: {}", name, r).unwrap(),
-                    (None, Some(d)) => writeln!(out, "# {}: {} ({})", name, "supported", d).unwrap(),
+                    (None, Some(d)) => {
+                        writeln!(out, "# {}: supported ({})", name, d).unwrap()
+                    }
                     (None, None) => writeln!(out, "# {}: supported", name).unwrap(),
                 }
             }
@@ -210,10 +209,7 @@ mod tests {
                 range: ParameterRange::new().min(1.0),
             },
         )
-        .with_parameter(
-            ParameterName::Reasoning,
-            ParameterAvailability::Opaque,
-        )
+        .with_parameter(ParameterName::Reasoning, ParameterAvailability::Opaque)
     }
 
     #[test]
@@ -267,13 +263,12 @@ mod tests {
 
     #[test]
     fn read_only_parameter_shown_in_full() {
-        let md = ModelMetadata::from_info(ModelInfo::new("test/model", "test"))
-            .with_parameter(
-                ParameterName::Temperature,
-                ParameterAvailability::ReadOnly {
-                    value: serde_json::json!(0.7),
-                },
-            );
+        let md = ModelMetadata::from_info(ModelInfo::new("test/model", "test")).with_parameter(
+            ParameterName::Temperature,
+            ParameterAvailability::ReadOnly {
+                value: serde_json::json!(0.7),
+            },
+        );
         let out = format_model_toml(&md, true);
 
         assert!(out.contains("# temperature: 0.7 (read-only)"));
