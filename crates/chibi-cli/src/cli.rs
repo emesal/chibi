@@ -245,6 +245,25 @@ pub struct Cli {
     #[arg(short = 'P', long = "call-tool", value_names = ["TOOL", "JSON"], num_args = 2, allow_hyphen_values = true)]
     pub call_tool: Option<Vec<String>>,
 
+    // === Model metadata ===
+    /// Show model metadata in TOML format (settable fields only)
+    #[arg(
+        short = 'm',
+        long = "model-metadata",
+        value_name = "MODEL",
+        allow_hyphen_values = true
+    )]
+    pub model_metadata: Option<String>,
+
+    /// Show full model metadata in TOML format (with pricing, capabilities, parameter ranges)
+    #[arg(
+        short = 'M',
+        long = "model-metadata-full",
+        value_name = "MODEL",
+        allow_hyphen_values = true
+    )]
+    pub model_metadata_full: Option<String>,
+
     // === Control flags ===
     /// Show extra info (tools loaded, etc.)
     #[arg(short = 'v', long = "verbose")]
@@ -320,7 +339,7 @@ FLAG BEHAVIOR:
   Some flags imply --no-chibi (operations that produce output or
   operate on other contexts). Use -X to override and invoke LLM after.
 
-  Implied --no-chibi: -l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -p, -P
+  Implied --no-chibi: -l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -p, -P, -m, -M
   Combinable with prompt: -c, -C, -a, -z, -r, -y, -u, -U, -v
 
 PROMPT INPUT:
@@ -477,7 +496,9 @@ impl Cli {
             || set_system_prompt.is_some()
             || plugin.is_some()
             || call_tool.is_some()
-            || debug_implies_force_call_user;
+            || debug_implies_force_call_user
+            || self.model_metadata.is_some()
+            || self.model_metadata_full.is_some();
 
         let mut force_call_user = self.force_call_user || implies_force_call_user;
         if self.force_call_agent {
@@ -592,6 +613,16 @@ impl Cli {
                 name: invocation.name.clone(),
                 args: invocation.args.clone(),
             }
+        } else if let Some(ref model) = self.model_metadata {
+            Command::ModelMetadata {
+                model: model.clone(),
+                full: false,
+            }
+        } else if let Some(ref model) = self.model_metadata_full {
+            Command::ModelMetadata {
+                model: model.clone(),
+                full: true,
+            }
         } else if self.check_all_inboxes {
             Command::CheckAllInboxes
         } else if let Some(ref ctx) = self.check_inbox_for {
@@ -631,7 +662,9 @@ impl Cli {
 /// This preserves backward compatibility with the old hand-rolled parser
 fn expand_attached_args(args: &[String]) -> Vec<String> {
     // Flags that take a value and can have it attached
-    const ATTACHED_FLAGS: &[char] = &['c', 'C', 'D', 'A', 'Z', 'r', 'g', 'n', 'y', 'u', 'U'];
+    const ATTACHED_FLAGS: &[char] = &[
+        'c', 'C', 'D', 'A', 'Z', 'r', 'g', 'n', 'y', 'u', 'U', 'm', 'M',
+    ];
 
     let mut result = Vec::new();
 
@@ -1640,6 +1673,58 @@ mod tests {
                 .debug
                 .iter()
                 .any(|k| matches!(k, DebugKey::RequestLog))
+        );
+    }
+
+    // === Model metadata tests ===
+
+    #[test]
+    fn test_model_metadata_short() {
+        let input = parse_input("-m anthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::ModelMetadata { ref model, full: false } if model == "anthropic/claude-sonnet-4")
+        );
+        assert!(input.flags.force_call_user);
+    }
+
+    #[test]
+    fn test_model_metadata_full_short() {
+        let input = parse_input("-M anthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::ModelMetadata { ref model, full: true } if model == "anthropic/claude-sonnet-4")
+        );
+        assert!(input.flags.force_call_user);
+    }
+
+    #[test]
+    fn test_model_metadata_long() {
+        let input = parse_input("--model-metadata anthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::ModelMetadata { ref model, full: false } if model == "anthropic/claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn test_model_metadata_full_long() {
+        let input = parse_input("--model-metadata-full anthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::ModelMetadata { ref model, full: true } if model == "anthropic/claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn test_model_metadata_attached() {
+        let input = parse_input("-manthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::ModelMetadata { ref model, full: false } if model == "anthropic/claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn test_model_metadata_full_attached() {
+        let input = parse_input("-Manthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::ModelMetadata { ref model, full: true } if model == "anthropic/claude-sonnet-4")
         );
     }
 

@@ -71,6 +71,8 @@ pub enum Command {
     CheckInbox { context: String },
     /// Check all context inboxes and process any messages (-b)
     CheckAllInboxes,
+    /// Show model metadata from registry (-m/-M)
+    ModelMetadata { model: String, full: bool },
     /// Show help
     ShowHelp,
     /// Show version

@@ -898,6 +898,18 @@ async fn execute_from_input(
             }
             did_action = true;
         }
+        Command::ModelMetadata { model, full } => {
+            match chibi_core::model_info::lookup_and_format(model, *full) {
+                Some(toml) => print!("{}", toml),
+                None => {
+                    return Err(io::Error::new(
+                        ErrorKind::NotFound,
+                        format!("model '{}' not found in registry", model),
+                    ));
+                }
+            }
+            did_action = true;
+        }
         Command::NoOp => {
             // No operation - just context switch, already handled above
         }
