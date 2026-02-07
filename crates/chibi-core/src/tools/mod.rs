@@ -24,7 +24,7 @@ pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
 
 // Re-export built-in tool constants (used by api module)
 pub use builtin::{CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME};
-pub use builtin::{REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
+pub use builtin::{MODEL_INFO_TOOL_NAME, REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
 
 // Re-export handoff types for control flow
 pub use builtin::{Handoff, HandoffTarget};
@@ -180,6 +180,7 @@ mod tests {
 
         // Should include tools from all three registries
         assert!(names.contains(&"update_reflection")); // core builtin
+        assert!(names.contains(&"model_info")); // core builtin
         assert!(names.contains(&"file_head")); // file tool
         assert!(names.contains(&"spawn_agent")); // agent tool
 

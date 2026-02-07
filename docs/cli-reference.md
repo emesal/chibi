@@ -92,7 +92,7 @@ chibi -c -            # current='work', previous='personal'
 | `-m, --model-metadata <MODEL>` | Show model metadata in TOML format (settable fields only) |
 | `-M, --model-metadata-full <MODEL>` | Show full model metadata (with pricing, capabilities, parameter ranges) |
 
-Model metadata is fetched from the OpenRouter API. The `-m` flag shows only fields you can set in `models.toml`, while `-M` includes everything (pricing, capabilities, parameter ranges).
+Model metadata is fetched via ratatoskr's gateway (embedded registry → cache → OpenRouter API on miss). The `-m` flag shows only fields you can set in `models.toml`, while `-M` includes everything (pricing, capabilities, parameter ranges).
 
 ```bash
 chibi -m anthropic/claude-sonnet-4       # Settable fields only

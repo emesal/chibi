@@ -742,6 +742,21 @@ async fn execute_tool_pure(
         }
     } else if tool_call.name == tools::SEND_MESSAGE_TOOL_NAME {
         execute_send_message_pure(app, context_name, tools, &args, verbose, &mut diagnostics)?
+    } else if tool_call.name == tools::MODEL_INFO_TOOL_NAME {
+        match args.get_str("model") {
+            Some(model) => {
+                let gateway = build_gateway(resolved_config)?;
+                match crate::model_info::fetch_metadata(&gateway, model).await {
+                    Ok(metadata) => {
+                        let json = crate::model_info::format_model_json(&metadata);
+                        serde_json::to_string_pretty(&json)
+                            .unwrap_or_else(|e| format!("Error serialising metadata: {}", e))
+                    }
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+            None => "Error: missing required 'model' parameter".to_string(),
+        }
     } else if tools::is_file_tool(&tool_call.name) {
         // For write tools, check permission via pre_file_write hook first
         if tool_call.name == tools::WRITE_FILE_TOOL_NAME

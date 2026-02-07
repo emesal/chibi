@@ -912,15 +912,13 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::ModelMetadata { model, full } => {
-            match chibi_core::model_info::lookup_and_format(model, *full) {
-                Some(toml) => print!("{}", toml),
-                None => {
-                    return Err(io::Error::new(
-                        ErrorKind::NotFound,
-                        format!("model '{}' not found in registry", model),
-                    ));
-                }
-            }
+            let resolved = chibi.resolve_config(&working_context, None)?;
+            let gateway = chibi_core::gateway::build_gateway(&resolved)?;
+            let metadata = chibi_core::model_info::fetch_metadata(&gateway, model).await?;
+            print!(
+                "{}",
+                chibi_core::model_info::format_model_toml(&metadata, *full)
+            );
             did_action = true;
         }
         Command::NoOp => {
