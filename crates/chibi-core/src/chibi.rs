@@ -128,7 +128,9 @@ impl Chibi {
     /// ```
     pub fn load_with_options(options: LoadOptions) -> io::Result<Self> {
         let app = AppState::load(options.home)?;
-        let tools = tools::load_tools(&app.plugins_dir, options.verbose)?;
+        // CLI flag overrides config setting
+        let verbose = options.verbose || app.config.verbose;
+        let tools = tools::load_tools(&app.plugins_dir, verbose)?;
         Ok(Self { app, tools })
     }
 

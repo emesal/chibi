@@ -537,6 +537,7 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 128000,
             warn_threshold_percent: 0.8,
+            verbose: false,
             auto_compact: false,
             auto_compact_threshold: 0.9,
             max_recursion_depth: 5,

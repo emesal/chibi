@@ -316,6 +316,7 @@ pub struct ConfigDefaults;
 
 impl ConfigDefaults {
     // Boolean defaults
+    pub const VERBOSE: bool = false;
     pub const AUTO_COMPACT: bool = false;
     pub const REFLECTION_ENABLED: bool = true;
     pub const AUTO_CLEANUP_CACHE: bool = true;
@@ -337,6 +338,9 @@ impl ConfigDefaults {
 }
 
 // Thin wrappers for serde's #[serde(default = "...")] requirement
+fn default_verbose() -> bool {
+    ConfigDefaults::VERBOSE
+}
 fn default_auto_compact() -> bool {
     ConfigDefaults::AUTO_COMPACT
 }
@@ -393,6 +397,9 @@ pub struct Config {
     pub model: String,
     pub context_window_limit: usize,
     pub warn_threshold_percent: f32,
+    /// Enable verbose output (equivalent to -v flag)
+    #[serde(default = "default_verbose")]
+    pub verbose: bool,
     #[serde(default = "default_auto_compact")]
     pub auto_compact: bool,
     #[serde(default = "default_auto_compact_threshold")]
@@ -446,6 +453,8 @@ pub struct LocalConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub username: Option<String>,
+    /// Per-context verbose override
+    pub verbose: Option<bool>,
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
     pub max_recursion_depth: Option<usize>,
@@ -502,6 +511,8 @@ pub struct ResolvedConfig {
     pub model: String,
     pub context_window_limit: usize,
     pub warn_threshold_percent: f32,
+    /// Verbose output (from config, may be overridden by CLI flag)
+    pub verbose: bool,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
     pub max_recursion_depth: usize,
@@ -534,6 +545,7 @@ impl ResolvedConfig {
     pub fn get_field(&self, path: &str) -> Option<String> {
         match path {
             // Top-level fields (excluding api_key for security)
+            "verbose" => Some(self.verbose.to_string()),
             "model" => Some(self.model.clone()),
             "username" => Some(self.username.clone()),
             "context_window_limit" => Some(self.context_window_limit.to_string()),
@@ -581,6 +593,7 @@ impl ResolvedConfig {
     pub fn list_fields() -> &'static [&'static str] {
         &[
             // Top-level fields
+            "verbose",
             "model",
             "username",
             "context_window_limit",
@@ -687,6 +700,7 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,
+            verbose: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
             max_recursion_depth: 30,

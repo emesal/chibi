@@ -1032,6 +1032,8 @@ async fn main() -> io::Result<()> {
             verbose: input.flags.verbose,
             home: home_override,
         })?;
+        // CLI flag overrides config setting
+        input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
         let mut session = Session::load(chibi.home_dir())?;
 
         output.diagnostic(
@@ -1043,7 +1045,7 @@ async fn main() -> io::Result<()> {
     }
 
     // CLI mode: parse to ChibiInput and use unified execution
-    let input = cli::parse()?;
+    let mut input = cli::parse()?;
 
     // Handle --debug md=<FILENAME> early (renders markdown and quits, implies -x)
     if let Some(path) = input.flags.debug.iter().find_map(|k| match k {
@@ -1074,11 +1076,13 @@ async fn main() -> io::Result<()> {
         .iter()
         .any(|k| matches!(k, DebugKey::ForceMarkdown));
 
-    let verbose = input.flags.verbose;
     let mut chibi = Chibi::load_with_options(LoadOptions {
-        verbose,
+        verbose: input.flags.verbose,
         home: home_override,
     })?;
+    // CLI flag overrides config setting
+    let verbose = input.flags.verbose || chibi.app.config.verbose;
+    input.flags.verbose = verbose;
     let mut session = Session::load(chibi.home_dir())?;
 
     // Print tool lists if verbose
