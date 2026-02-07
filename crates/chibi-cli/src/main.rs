@@ -1049,8 +1049,7 @@ async fn main() -> io::Result<()> {
         input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
         input.flags.hide_tool_calls =
             input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
-        input.flags.no_tool_calls =
-            input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
+        input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
         let mut session = Session::load(chibi.home_dir())?;
 
         output.diagnostic(

@@ -802,7 +802,10 @@ fn test_resolve_config_supports_tool_calls_overrides_user_config() {
     app.save_local_config("default", &local).unwrap();
 
     let resolved = app.resolve_config("default", None).unwrap();
-    assert!(resolved.no_tool_calls, "model capability constraint must override user config");
+    assert!(
+        resolved.no_tool_calls,
+        "model capability constraint must override user config"
+    );
 }
 
 #[test]
@@ -848,7 +851,10 @@ fn test_resolve_config_supports_tool_calls_none_preserves_default() {
     );
 
     let resolved = app.resolve_config("default", None).unwrap();
-    assert!(!resolved.no_tool_calls, "None should not disable tool calls");
+    assert!(
+        !resolved.no_tool_calls,
+        "None should not disable tool calls"
+    );
 }
 
 // Note: Image config tests removed - image presentation is handled by CLI layer
