@@ -1081,18 +1081,20 @@ async fn main() -> io::Result<()> {
     })?;
     let mut session = Session::load(chibi.home_dir())?;
 
-    // Print tool list if verbose
-    if verbose && !chibi.tools.is_empty() {
-        eprintln!(
-            "[Loaded {} tool(s): {}]",
-            chibi.tool_count(),
-            chibi
-                .tools
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+    // Print tool lists if verbose
+    if verbose {
+        let builtin_names = chibi_core::tools::builtin_tool_names();
+        eprintln!("[Built-in ({}): {}]", builtin_names.len(), builtin_names.join(", "));
+
+        if chibi.tools.is_empty() {
+            eprintln!("[No plugins loaded]");
+        } else {
+            eprintln!(
+                "[Plugins ({}): {}]",
+                chibi.tool_count(),
+                chibi.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
+            );
+        }
     }
 
     let output = OutputHandler::new(input.flags.json_output);

@@ -98,6 +98,19 @@ pub struct Tool {
     pub metadata: ToolMetadata,
 }
 
+/// Collect names of all built-in tools (core, file, agent).
+///
+/// Returns a flat list of tool names from all internal registries.
+/// New tool categories should be added here when introduced.
+pub fn builtin_tool_names() -> Vec<&'static str> {
+    builtin::BUILTIN_TOOL_DEFS
+        .iter()
+        .chain(file_tools::FILE_TOOL_DEFS.iter())
+        .chain(agent_tools::AGENT_TOOL_DEFS.iter())
+        .map(|def| def.name)
+        .collect()
+}
+
 /// Get metadata for any tool (plugin or builtin)
 ///
 /// Checks plugins first, then falls back to builtin_tool_metadata for known builtins.
@@ -159,5 +172,30 @@ mod tests {
         assert!(meta.parallel);
         assert!(!meta.flow_control);
         assert!(!meta.ends_turn);
+    }
+
+    #[test]
+    fn test_builtin_tool_names_includes_all_registries() {
+        let names = builtin_tool_names();
+
+        // Should include tools from all three registries
+        assert!(names.contains(&"update_reflection")); // core builtin
+        assert!(names.contains(&"file_head"));          // file tool
+        assert!(names.contains(&"spawn_agent"));        // agent tool
+
+        // Should be the sum of all registries
+        let expected_count = builtin::BUILTIN_TOOL_DEFS.len()
+            + file_tools::FILE_TOOL_DEFS.len()
+            + agent_tools::AGENT_TOOL_DEFS.len();
+        assert_eq!(names.len(), expected_count);
+    }
+
+    #[test]
+    fn test_builtin_tool_names_no_duplicates() {
+        let names = builtin_tool_names();
+        let mut seen = std::collections::HashSet::new();
+        for name in &names {
+            assert!(seen.insert(name), "duplicate built-in tool name: {}", name);
+        }
     }
 }
