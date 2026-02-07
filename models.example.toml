@@ -7,6 +7,7 @@
 # Keys should match the model names you use in config.toml or local.toml.
 # When you use a model, chibi checks for a matching entry and applies:
 # - context_window: Overrides context_window_limit from config.toml
+# - supports_tool_calls: Set to false for models that can't use tools (auto-disables tool calls)
 # - api.*: Model-specific API parameters (merged with global settings)
 
 # =============================================================================
@@ -74,6 +75,7 @@ max_tokens = 16000
 
 [models."google/gemma-3-27b-it:free"]
 context_window = 131072
+supports_tool_calls = false
 
 # =============================================================================
 # Meta Llama Models

@@ -509,6 +509,11 @@ pub struct LocalConfig {
 pub struct ModelMetadata {
     #[serde(default)]
     pub context_window: Option<usize>,
+    /// Whether this model supports tool/function calling.
+    /// When `false`, `no_tool_calls` is automatically set to `true` during
+    /// config resolution — this is a hard capability constraint, not a preference.
+    #[serde(default)]
+    pub supports_tool_calls: Option<bool>,
     /// API parameters for this specific model
     #[serde(default)]
     pub api: ApiParams,
