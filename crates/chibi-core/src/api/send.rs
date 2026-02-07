@@ -1494,7 +1494,12 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     all_tools = filter_tools_from_hook_results(all_tools, &hook_results, verbose, sink)?;
 
     // === Build Request ===
-    let mut request_body = build_request_body(resolved_config, &messages, Some(&all_tools), true);
+    let tools_for_request = if resolved_config.no_tool_calls {
+        None
+    } else {
+        Some(all_tools.as_slice())
+    };
+    let mut request_body = build_request_body(resolved_config, &messages, tools_for_request, true);
 
     // Execute pre_api_request hook
     let hook_data = json!({

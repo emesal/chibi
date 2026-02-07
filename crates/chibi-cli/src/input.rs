@@ -201,6 +201,7 @@ mod tests {
             flags: Flags {
                 verbose: true,
                 hide_tool_calls: false,
+                no_tool_calls: false,
                 json_output: true,
                 force_call_user: true,
                 force_call_agent: false,

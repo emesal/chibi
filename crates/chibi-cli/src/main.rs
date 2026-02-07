@@ -631,6 +631,9 @@ async fn execute_from_input(
                 if input.flags.raw {
                     resolved.render_markdown = false;
                 }
+                if input.flags.no_tool_calls {
+                    resolved.core.no_tool_calls = true;
+                }
                 let use_reflection = chibi.app.config.reflection_enabled;
 
                 let context_dir = chibi.app.context_dir(&working_context);
@@ -710,6 +713,9 @@ async fn execute_from_input(
             if input.flags.raw {
                 resolved.render_markdown = false;
             }
+            if input.flags.no_tool_calls {
+                resolved.core.no_tool_calls = true;
+            }
             let use_reflection = chibi.app.config.reflection_enabled;
 
             // Acquire context lock
@@ -781,6 +787,9 @@ async fn execute_from_input(
                 if input.flags.raw {
                     resolved.render_markdown = false;
                 }
+                if input.flags.no_tool_calls {
+                    resolved.core.no_tool_calls = true;
+                }
                 let use_reflection = chibi.app.config.reflection_enabled;
 
                 // Acquire context lock
@@ -846,6 +855,9 @@ async fn execute_from_input(
                 let mut resolved = resolve_cli_config(chibi, &ctx_name, None)?;
                 if input.flags.raw {
                     resolved.render_markdown = false;
+                }
+                if input.flags.no_tool_calls {
+                    resolved.core.no_tool_calls = true;
                 }
                 let use_reflection = chibi.app.config.reflection_enabled;
 
@@ -1037,6 +1049,8 @@ async fn main() -> io::Result<()> {
         input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
         input.flags.hide_tool_calls =
             input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
+        input.flags.no_tool_calls =
+            input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
         let mut session = Session::load(chibi.home_dir())?;
 
         output.diagnostic(
@@ -1087,12 +1101,17 @@ async fn main() -> io::Result<()> {
     let verbose = input.flags.verbose || chibi.app.config.verbose;
     input.flags.verbose = verbose;
     input.flags.hide_tool_calls = input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
+    input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
     let mut session = Session::load(chibi.home_dir())?;
 
     // Print tool lists if verbose
     if verbose {
         let builtin_names = chibi_core::tools::builtin_tool_names();
-        eprintln!("[Built-in ({}): {}]", builtin_names.len(), builtin_names.join(", "));
+        eprintln!(
+            "[Built-in ({}): {}]",
+            builtin_names.len(),
+            builtin_names.join(", ")
+        );
 
         if chibi.tools.is_empty() {
             eprintln!("[No plugins loaded]");
@@ -1100,7 +1119,12 @@ async fn main() -> io::Result<()> {
             eprintln!(
                 "[Plugins ({}): {}]",
                 chibi.tool_count(),
-                chibi.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
+                chibi
+                    .tools
+                    .iter()
+                    .map(|t| t.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
     }

@@ -269,6 +269,7 @@ mod tests {
             warn_threshold_percent: 80.0,
             verbose: false,
             hide_tool_calls: false,
+            no_tool_calls: false,
             auto_compact: false,
             auto_compact_threshold: 0.9,
             max_recursion_depth: 10,

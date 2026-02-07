@@ -76,6 +76,7 @@ impl AppState {
             warn_threshold_percent: self.config.warn_threshold_percent,
             verbose: self.config.verbose,
             hide_tool_calls: self.config.hide_tool_calls,
+            no_tool_calls: self.config.no_tool_calls,
             auto_compact: self.config.auto_compact,
             auto_compact_threshold: self.config.auto_compact_threshold,
             max_recursion_depth: self.config.max_recursion_depth,
@@ -110,6 +111,9 @@ impl AppState {
         }
         if let Some(hide_tool_calls) = local.hide_tool_calls {
             resolved.hide_tool_calls = hide_tool_calls;
+        }
+        if let Some(no_tool_calls) = local.no_tool_calls {
+            resolved.no_tool_calls = no_tool_calls;
         }
         if let Some(auto_compact) = local.auto_compact {
             resolved.auto_compact = auto_compact;
