@@ -332,6 +332,7 @@ async fn execute_from_input(
     force_markdown: bool,
 ) -> io::Result<()> {
     let verbose = input.flags.verbose;
+    let show_tool_calls = !input.flags.hide_tool_calls || verbose;
     let json_output = input.flags.json_output;
 
     // Initialize session (executes OnStart hooks)
@@ -660,7 +661,7 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
                 chibi
                     .send_prompt_streaming(
                         &working_context,
@@ -737,7 +738,7 @@ async fn execute_from_input(
                 None
             };
 
-            let mut sink = CliResponseSink::new(output, md_config, verbose);
+            let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
             chibi
                 .send_prompt_streaming(
                     &working_context,
@@ -808,7 +809,7 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
@@ -874,7 +875,7 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
@@ -1032,8 +1033,10 @@ async fn main() -> io::Result<()> {
             verbose: input.flags.verbose,
             home: home_override,
         })?;
-        // CLI flag overrides config setting
+        // CLI flags override config settings
         input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
+        input.flags.hide_tool_calls =
+            input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
         let mut session = Session::load(chibi.home_dir())?;
 
         output.diagnostic(
@@ -1080,9 +1083,10 @@ async fn main() -> io::Result<()> {
         verbose: input.flags.verbose,
         home: home_override,
     })?;
-    // CLI flag overrides config setting
+    // CLI flags override config settings
     let verbose = input.flags.verbose || chibi.app.config.verbose;
     input.flags.verbose = verbose;
+    input.flags.hide_tool_calls = input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
     let mut session = Session::load(chibi.home_dir())?;
 
     // Print tool lists if verbose

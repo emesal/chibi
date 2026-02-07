@@ -158,6 +158,9 @@ pub struct Flags {
     /// Force handoff to agent (-X)
     #[serde(default)]
     pub force_call_agent: bool,
+    /// Hide tool call display (--hide-tool-calls, verbose overrides)
+    #[serde(default)]
+    pub hide_tool_calls: bool,
     /// Disable markdown rendering (--raw)
     #[serde(default)]
     pub raw: bool,
@@ -190,6 +193,7 @@ mod tests {
     fn test_flags_serialization() {
         let flags = Flags {
             verbose: true,
+            hide_tool_calls: false,
             json_output: true,
             force_call_user: false,
             force_call_agent: false,

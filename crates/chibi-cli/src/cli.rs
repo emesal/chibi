@@ -269,6 +269,10 @@ pub struct Cli {
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 
+    /// Hide tool call display (verbose overrides this)
+    #[arg(long = "hide-tool-calls")]
+    pub hide_tool_calls: bool,
+
     /// Force handoff to user (-x)
     #[arg(short = 'x', long = "force-call-user")]
     pub force_call_user: bool,
@@ -635,6 +639,7 @@ impl Cli {
 
         let flags = Flags {
             verbose: self.verbose,
+            hide_tool_calls: self.hide_tool_calls,
             json_output: self.json_output,
             force_call_user,
             force_call_agent: self.force_call_agent,
