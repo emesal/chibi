@@ -48,6 +48,12 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 | `pre_agentic_loop` | Before entering the tool loop | Yes (fallback target) |
 | `post_tool_batch` | After processing a batch of tool calls | Yes (fallback target) |
 
+### File Write Permission
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_file_write` | Before `write_file`/`patch_file` execution | Yes (approve/deny, fail-safe deny if no hook registered) |
+
 ### Sub-Agent Lifecycle
 
 | Hook | When | Can Modify |
@@ -416,6 +422,37 @@ Notification after output has been cached.
   "content": "message content",
   "context_name": "default",
   "delivery_result": "Message delivered to 'research' via local inbox"
+}
+```
+
+### pre_file_write
+
+Called before `write_file` or `patch_file` execution. File write tools require at least one `pre_file_write` hook to be registered — if no hook is registered, the operation is denied (fail-safe).
+
+```json
+{
+  "tool_name": "write_file",
+  "path": "/home/user/project/file.txt",
+  "content": "file content here",
+  "find": null,
+  "replace": null
+}
+```
+
+For `patch_file`, `content` is null and `find`/`replace` are populated instead.
+
+**Must return (to approve):**
+```json
+{
+  "approved": true
+}
+```
+
+**To deny:**
+```json
+{
+  "approved": false,
+  "reason": "Path not allowed"
 }
 ```
 

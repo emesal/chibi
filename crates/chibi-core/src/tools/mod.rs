@@ -180,8 +180,8 @@ mod tests {
 
         // Should include tools from all three registries
         assert!(names.contains(&"update_reflection")); // core builtin
-        assert!(names.contains(&"file_head"));          // file tool
-        assert!(names.contains(&"spawn_agent"));        // agent tool
+        assert!(names.contains(&"file_head")); // file tool
+        assert!(names.contains(&"spawn_agent")); // agent tool
 
         // Should be the sum of all registries
         let expected_count = builtin::BUILTIN_TOOL_DEFS.len()

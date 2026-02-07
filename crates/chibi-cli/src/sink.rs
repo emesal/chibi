@@ -87,8 +87,10 @@ impl ResponseSink for CliResponseSink<'_> {
             }
             ResponseEvent::ToolResult { name, cached, .. } => {
                 if cached {
-                    self.output
-                        .diagnostic(&format!("\n[Tool {} (cached)]\n", name), self.show_tool_calls);
+                    self.output.diagnostic(
+                        &format!("\n[Tool {} (cached)]\n", name),
+                        self.show_tool_calls,
+                    );
                 }
             }
             ResponseEvent::StartResponse => {
