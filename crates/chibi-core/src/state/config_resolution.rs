@@ -74,6 +74,9 @@ impl AppState {
             model: self.config.model.clone(),
             context_window_limit: self.config.context_window_limit,
             warn_threshold_percent: self.config.warn_threshold_percent,
+            verbose: self.config.verbose,
+            hide_tool_calls: self.config.hide_tool_calls,
+            no_tool_calls: self.config.no_tool_calls,
             auto_compact: self.config.auto_compact,
             auto_compact_threshold: self.config.auto_compact_threshold,
             max_recursion_depth: self.config.max_recursion_depth,
@@ -102,6 +105,15 @@ impl AppState {
         }
         if let Some(warn_threshold_percent) = local.warn_threshold_percent {
             resolved.warn_threshold_percent = warn_threshold_percent;
+        }
+        if let Some(verbose) = local.verbose {
+            resolved.verbose = verbose;
+        }
+        if let Some(hide_tool_calls) = local.hide_tool_calls {
+            resolved.hide_tool_calls = hide_tool_calls;
+        }
+        if let Some(no_tool_calls) = local.no_tool_calls {
+            resolved.no_tool_calls = no_tool_calls;
         }
         if let Some(auto_compact) = local.auto_compact {
             resolved.auto_compact = auto_compact;
@@ -172,6 +184,12 @@ impl AppState {
 
             if let Some(context_window) = model_meta.context_window {
                 resolved.context_window_limit = context_window;
+            }
+
+            // Model capability constraint: if the model doesn't support tool calls,
+            // unconditionally disable them regardless of user config
+            if model_meta.supports_tool_calls == Some(false) {
+                resolved.no_tool_calls = true;
             }
         }
 

@@ -332,6 +332,7 @@ async fn execute_from_input(
     force_markdown: bool,
 ) -> io::Result<()> {
     let verbose = input.flags.verbose;
+    let show_tool_calls = !input.flags.hide_tool_calls || verbose;
     let json_output = input.flags.json_output;
 
     // Initialize session (executes OnStart hooks)
@@ -630,6 +631,9 @@ async fn execute_from_input(
                 if input.flags.raw {
                     resolved.render_markdown = false;
                 }
+                if input.flags.no_tool_calls {
+                    resolved.core.no_tool_calls = true;
+                }
                 let use_reflection = chibi.app.config.reflection_enabled;
 
                 let context_dir = chibi.app.context_dir(&working_context);
@@ -660,7 +664,7 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
                 chibi
                     .send_prompt_streaming(
                         &working_context,
@@ -709,6 +713,9 @@ async fn execute_from_input(
             if input.flags.raw {
                 resolved.render_markdown = false;
             }
+            if input.flags.no_tool_calls {
+                resolved.core.no_tool_calls = true;
+            }
             let use_reflection = chibi.app.config.reflection_enabled;
 
             // Acquire context lock
@@ -737,7 +744,7 @@ async fn execute_from_input(
                 None
             };
 
-            let mut sink = CliResponseSink::new(output, md_config, verbose);
+            let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
             chibi
                 .send_prompt_streaming(
                     &working_context,
@@ -780,6 +787,9 @@ async fn execute_from_input(
                 if input.flags.raw {
                     resolved.render_markdown = false;
                 }
+                if input.flags.no_tool_calls {
+                    resolved.core.no_tool_calls = true;
+                }
                 let use_reflection = chibi.app.config.reflection_enabled;
 
                 // Acquire context lock
@@ -808,7 +818,7 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
@@ -846,6 +856,9 @@ async fn execute_from_input(
                 if input.flags.raw {
                     resolved.render_markdown = false;
                 }
+                if input.flags.no_tool_calls {
+                    resolved.core.no_tool_calls = true;
+                }
                 let use_reflection = chibi.app.config.reflection_enabled;
 
                 // Acquire context lock
@@ -874,7 +887,7 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
@@ -899,15 +912,13 @@ async fn execute_from_input(
             did_action = true;
         }
         Command::ModelMetadata { model, full } => {
-            match chibi_core::model_info::lookup_and_format(model, *full) {
-                Some(toml) => print!("{}", toml),
-                None => {
-                    return Err(io::Error::new(
-                        ErrorKind::NotFound,
-                        format!("model '{}' not found in registry", model),
-                    ));
-                }
-            }
+            let resolved = chibi.resolve_config(&working_context, None)?;
+            let gateway = chibi_core::gateway::build_gateway(&resolved)?;
+            let metadata = chibi_core::model_info::fetch_metadata(&gateway, model).await?;
+            print!(
+                "{}",
+                chibi_core::model_info::format_model_toml(&metadata, *full)
+            );
             did_action = true;
         }
         Command::NoOp => {
@@ -1032,6 +1043,11 @@ async fn main() -> io::Result<()> {
             verbose: input.flags.verbose,
             home: home_override,
         })?;
+        // CLI flags override config settings
+        input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
+        input.flags.hide_tool_calls =
+            input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
+        input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
         let mut session = Session::load(chibi.home_dir())?;
 
         output.diagnostic(
@@ -1043,7 +1059,7 @@ async fn main() -> io::Result<()> {
     }
 
     // CLI mode: parse to ChibiInput and use unified execution
-    let input = cli::parse()?;
+    let mut input = cli::parse()?;
 
     // Handle --debug md=<FILENAME> early (renders markdown and quits, implies -x)
     if let Some(path) = input.flags.debug.iter().find_map(|k| match k {
@@ -1074,25 +1090,40 @@ async fn main() -> io::Result<()> {
         .iter()
         .any(|k| matches!(k, DebugKey::ForceMarkdown));
 
-    let verbose = input.flags.verbose;
     let mut chibi = Chibi::load_with_options(LoadOptions {
-        verbose,
+        verbose: input.flags.verbose,
         home: home_override,
     })?;
+    // CLI flags override config settings
+    let verbose = input.flags.verbose || chibi.app.config.verbose;
+    input.flags.verbose = verbose;
+    input.flags.hide_tool_calls = input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
+    input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
     let mut session = Session::load(chibi.home_dir())?;
 
-    // Print tool list if verbose
-    if verbose && !chibi.tools.is_empty() {
+    // Print tool lists if verbose
+    if verbose {
+        let builtin_names = chibi_core::tools::builtin_tool_names();
         eprintln!(
-            "[Loaded {} tool(s): {}]",
-            chibi.tool_count(),
-            chibi
-                .tools
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "[Built-in ({}): {}]",
+            builtin_names.len(),
+            builtin_names.join(", ")
         );
+
+        if chibi.tools.is_empty() {
+            eprintln!("[No plugins loaded]");
+        } else {
+            eprintln!(
+                "[Plugins ({}): {}]",
+                chibi.tool_count(),
+                chibi
+                    .tools
+                    .iter()
+                    .map(|t| t.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
     }
 
     let output = OutputHandler::new(input.flags.json_output);

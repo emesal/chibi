@@ -34,6 +34,7 @@ Cargo workspace with two crates:
 - `context.rs`, `state/` — Context management, file I/O
 - `api/` — Request building, streaming, tool execution loop
 - `gateway.rs` — Type conversions between chibi and ratatoskr
+- `model_info.rs` — Model metadata retrieval and formatting
 - `tools/` — Plugins, hooks, built-in tools
 - `partition.rs` — Partitioned transcript storage with bloom filters
 - `config.rs` — Core configuration types

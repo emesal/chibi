@@ -1,20 +1,32 @@
-//! Model metadata formatting for CLI output.
+//! Model metadata retrieval and formatting.
 //!
-//! Formats [`ModelMetadata`] from ratatoskr's registry as TOML suitable for
-//! copy-pasting into `models.toml`. Two modes:
+//! Two output formats:
+//! - **TOML** ([`format_model_toml`]): For `models.toml` copy-paste (CLI `-m`/`-M`).
+//! - **JSON** ([`format_model_json`]): Structured output for the `model_info` tool.
 //!
-//! - **Minimal**: Only settable fields (`context_window`, `max_tokens`).
-//! - **Full**: Adds comments for provider, capabilities, pricing, and parameter ranges.
+//! Metadata is fetched via [`fetch_metadata`], which delegates to ratatoskr's
+//! `ModelGateway::fetch_model_metadata()` (registry → cache → network).
 
-use ratatoskr::{ModelMetadata, ModelRegistry, ParameterAvailability, ParameterName};
+use ratatoskr::{
+    EmbeddedGateway, ModelGateway, ModelMetadata, ParameterAvailability, ParameterName,
+};
 use std::fmt::Write;
+use std::io;
 
-/// Look up a model in the embedded registry and format as TOML.
+/// Fetch model metadata through the gateway (registry → cache → network).
+pub async fn fetch_metadata(gateway: &EmbeddedGateway, model: &str) -> io::Result<ModelMetadata> {
+    gateway
+        .fetch_model_metadata(model)
+        .await
+        .map_err(|e| io::Error::other(format!("failed to fetch metadata for '{}': {}", model, e)))
+}
+
+/// Format model metadata as a JSON value for tool output.
 ///
-/// Returns `None` if the model is not found.
-pub fn lookup_and_format(model: &str, full: bool) -> Option<String> {
-    let registry = ModelRegistry::with_embedded_seed();
-    registry.get(model).map(|md| format_model_toml(md, full))
+/// Uses serde serialisation since `ModelMetadata` derives `Serialize`.
+/// Thin wrapper to allow future customisation of the tool response shape.
+pub fn format_model_json(metadata: &ModelMetadata) -> serde_json::Value {
+    serde_json::to_value(metadata).expect("ModelMetadata serialisation should not fail")
 }
 
 /// Format model metadata as TOML for `models.toml`.
@@ -283,5 +295,39 @@ mod tests {
     fn format_num_floats() {
         assert_eq!(format_num(0.5), "0.5");
         assert_eq!(format_num(1.23), "1.23");
+    }
+
+    #[test]
+    fn test_format_model_json() {
+        let md = test_metadata();
+        let json = format_model_json(&md);
+
+        // Top-level structure
+        assert!(json.is_object());
+        assert!(json.get("info").is_some());
+        assert!(json.get("parameters").is_some());
+        assert!(json.get("pricing").is_some());
+
+        // Model identity
+        assert_eq!(json["info"]["id"], "anthropic/claude-sonnet-4");
+        assert_eq!(json["info"]["provider"], "openrouter");
+        assert_eq!(json["info"]["context_window"], 200000);
+
+        // Max output tokens
+        assert_eq!(json["max_output_tokens"], 16384);
+
+        // Pricing
+        assert_eq!(json["pricing"]["prompt_cost_per_mtok"], 3.0);
+        assert_eq!(json["pricing"]["completion_cost_per_mtok"], 15.0);
+    }
+
+    #[test]
+    fn test_format_model_json_minimal() {
+        let md = ModelMetadata::from_info(ModelInfo::new("test/model", "test"));
+        let json = format_model_json(&md);
+
+        assert_eq!(json["info"]["id"], "test/model");
+        assert!(json["max_output_tokens"].is_null());
+        assert!(json["pricing"].is_null());
     }
 }

@@ -316,6 +316,9 @@ pub struct ConfigDefaults;
 
 impl ConfigDefaults {
     // Boolean defaults
+    pub const VERBOSE: bool = false;
+    pub const HIDE_TOOL_CALLS: bool = false;
+    pub const NO_TOOL_CALLS: bool = false;
     pub const AUTO_COMPACT: bool = false;
     pub const REFLECTION_ENABLED: bool = true;
     pub const AUTO_CLEANUP_CACHE: bool = true;
@@ -337,6 +340,15 @@ impl ConfigDefaults {
 }
 
 // Thin wrappers for serde's #[serde(default = "...")] requirement
+fn default_verbose() -> bool {
+    ConfigDefaults::VERBOSE
+}
+fn default_hide_tool_calls() -> bool {
+    ConfigDefaults::HIDE_TOOL_CALLS
+}
+fn default_no_tool_calls() -> bool {
+    ConfigDefaults::NO_TOOL_CALLS
+}
 fn default_auto_compact() -> bool {
     ConfigDefaults::AUTO_COMPACT
 }
@@ -393,6 +405,15 @@ pub struct Config {
     pub model: String,
     pub context_window_limit: usize,
     pub warn_threshold_percent: f32,
+    /// Enable verbose output (equivalent to -v flag)
+    #[serde(default = "default_verbose")]
+    pub verbose: bool,
+    /// Hide tool call display by default (verbose overrides)
+    #[serde(default = "default_hide_tool_calls")]
+    pub hide_tool_calls: bool,
+    /// Omit tools from API requests entirely (pure text mode)
+    #[serde(default = "default_no_tool_calls")]
+    pub no_tool_calls: bool,
     #[serde(default = "default_auto_compact")]
     pub auto_compact: bool,
     #[serde(default = "default_auto_compact_threshold")]
@@ -446,6 +467,12 @@ pub struct LocalConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub username: Option<String>,
+    /// Per-context verbose override
+    pub verbose: Option<bool>,
+    /// Per-context hide tool calls override
+    pub hide_tool_calls: Option<bool>,
+    /// Per-context no tool calls override
+    pub no_tool_calls: Option<bool>,
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
     pub max_recursion_depth: Option<usize>,
@@ -482,6 +509,11 @@ pub struct LocalConfig {
 pub struct ModelMetadata {
     #[serde(default)]
     pub context_window: Option<usize>,
+    /// Whether this model supports tool/function calling.
+    /// When `false`, `no_tool_calls` is automatically set to `true` during
+    /// config resolution — this is a hard capability constraint, not a preference.
+    #[serde(default)]
+    pub supports_tool_calls: Option<bool>,
     /// API parameters for this specific model
     #[serde(default)]
     pub api: ApiParams,
@@ -502,6 +534,12 @@ pub struct ResolvedConfig {
     pub model: String,
     pub context_window_limit: usize,
     pub warn_threshold_percent: f32,
+    /// Verbose output (from config, may be overridden by CLI flag)
+    pub verbose: bool,
+    /// Hide tool call display (from config, may be overridden by CLI flag)
+    pub hide_tool_calls: bool,
+    /// Omit tools from API requests (pure text mode, from config/flag)
+    pub no_tool_calls: bool,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
     pub max_recursion_depth: usize,
@@ -534,6 +572,9 @@ impl ResolvedConfig {
     pub fn get_field(&self, path: &str) -> Option<String> {
         match path {
             // Top-level fields (excluding api_key for security)
+            "verbose" => Some(self.verbose.to_string()),
+            "hide_tool_calls" => Some(self.hide_tool_calls.to_string()),
+            "no_tool_calls" => Some(self.no_tool_calls.to_string()),
             "model" => Some(self.model.clone()),
             "username" => Some(self.username.clone()),
             "context_window_limit" => Some(self.context_window_limit.to_string()),
@@ -581,6 +622,9 @@ impl ResolvedConfig {
     pub fn list_fields() -> &'static [&'static str] {
         &[
             // Top-level fields
+            "verbose",
+            "hide_tool_calls",
+            "no_tool_calls",
             "model",
             "username",
             "context_window_limit",
@@ -687,6 +731,9 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,
+            verbose: false,
+            hide_tool_calls: false,
+            no_tool_calls: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
             max_recursion_depth: 30,
