@@ -72,13 +72,16 @@ const FILE_TOOL_NAMES: &[&str] = &[
 /// Agent tool names (spawn_agent, retrieve_content)
 const AGENT_TOOL_NAMES: &[&str] = &["spawn_agent", "retrieve_content"];
 
-/// Coding tool names (shell_exec, dir_list, glob_files, grep_files, file_edit)
+/// Coding tool names (shell_exec, dir_list, glob_files, grep_files, file_edit, index_*)
 const CODING_TOOL_NAMES: &[&str] = &[
     "shell_exec",
     "dir_list",
     "glob_files",
     "grep_files",
     "file_edit",
+    "index_update",
+    "index_query",
+    "index_status",
 ];
 
 /// Classify a tool's type based on its name
@@ -869,7 +872,8 @@ async fn execute_tool_pure(
                 let project_root = std::env::var("CHIBI_PROJECT_ROOT")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                match tools::execute_coding_tool(&tool_call.name, &args, &project_root).await {
+                match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await
+                {
                     Some(Ok(r)) => r,
                     Some(Err(e)) => format!("Error: {}", e),
                     None => format!("Error: Unknown coding tool '{}'", tool_call.name),
@@ -906,7 +910,8 @@ async fn execute_tool_pure(
                 let project_root = std::env::var("CHIBI_PROJECT_ROOT")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                match tools::execute_coding_tool(&tool_call.name, &args, &project_root).await {
+                match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await
+                {
                     Some(Ok(r)) => r,
                     Some(Err(e)) => format!("Error: {}", e),
                     None => format!("Error: Unknown coding tool '{}'", tool_call.name),
@@ -917,7 +922,7 @@ async fn execute_tool_pure(
             let project_root = std::env::var("CHIBI_PROJECT_ROOT")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-            match tools::execute_coding_tool(&tool_call.name, &args, &project_root).await {
+            match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await {
                 Some(Ok(r)) => r,
                 Some(Err(e)) => format!("Error: {}", e),
                 None => format!("Error: Unknown coding tool '{}'", tool_call.name),

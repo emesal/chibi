@@ -170,7 +170,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
     },
     BuiltinToolDef {
         name: PATCH_FILE_TOOL_NAME,
-        description: "Apply a find-and-replace patch to a file. Replaces the first occurrence of 'find' with 'replace'. Requires user permission.",
+        description: "DEPRECATED: use file_edit with operation='replace_string' instead. Apply a find-and-replace patch to a file. Replaces the first occurrence of 'find' with 'replace'. Requires user permission.",
         properties: &[
             ToolPropertyDef {
                 name: "path",
@@ -686,6 +686,16 @@ mod tests {
         assert!(required.contains(&serde_json::json!("path")));
         assert!(required.contains(&serde_json::json!("find")));
         assert!(required.contains(&serde_json::json!("replace")));
+    }
+
+    #[test]
+    fn test_patch_file_description_deprecated() {
+        let tool = get_tool_api(PATCH_FILE_TOOL_NAME);
+        let desc = tool["function"]["description"].as_str().unwrap();
+        assert!(
+            desc.starts_with("DEPRECATED"),
+            "patch_file description should start with DEPRECATED"
+        );
     }
 
     #[test]

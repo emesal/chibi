@@ -363,7 +363,6 @@ impl Chibi {
     }
 }
 
-
 /// Resolve project root: explicit path > `CHIBI_PROJECT_ROOT` env > current working directory.
 fn resolve_project_root(explicit: Option<PathBuf>) -> io::Result<PathBuf> {
     if let Some(root) = explicit {

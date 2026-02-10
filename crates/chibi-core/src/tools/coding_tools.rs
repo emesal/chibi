@@ -1,8 +1,8 @@
-//! Coding tools for shell execution, file system navigation, and file editing.
+//! Coding tools for shell execution, file system navigation, file editing, and codebase indexing.
 //!
 //! These tools equip an LLM with the core primitives it needs to do software
 //! development work: run commands, explore directory trees, search by glob or
-//! regex, and edit files in a structured way.
+//! regex, edit files in a structured way, and query a codebase index.
 //!
 //! All path parameters are resolved relative to `project_root`, which is
 //! supplied to the executor from the `CHIBI_PROJECT_ROOT` environment variable.
@@ -20,6 +20,9 @@ pub const DIR_LIST_TOOL_NAME: &str = "dir_list";
 pub const GLOB_FILES_TOOL_NAME: &str = "glob_files";
 pub const GREP_FILES_TOOL_NAME: &str = "grep_files";
 pub const FILE_EDIT_TOOL_NAME: &str = "file_edit";
+pub const INDEX_UPDATE_TOOL_NAME: &str = "index_update";
+pub const INDEX_QUERY_TOOL_NAME: &str = "index_query";
+pub const INDEX_STATUS_TOOL_NAME: &str = "index_status";
 
 // === Tool Definition Registry ===
 
@@ -180,6 +183,60 @@ pub static CODING_TOOL_DEFS: &[BuiltinToolDef] = &[
         ],
         required: &["path", "operation"],
     },
+    BuiltinToolDef {
+        name: INDEX_UPDATE_TOOL_NAME,
+        description: "Trigger a codebase index update. Walks the project tree, detects changed files, and dispatches to language plugins for symbol extraction. Returns a summary of what was indexed.",
+        properties: &[ToolPropertyDef {
+            name: "force",
+            prop_type: "string",
+            description: "Force re-index of all files, ignoring change detection (\"true\"/\"false\", default: \"false\")",
+            default: None,
+        }],
+        required: &[],
+    },
+    BuiltinToolDef {
+        name: INDEX_QUERY_TOOL_NAME,
+        description: "Search the codebase index for symbols or references. Use `name`/`kind`/`file` to query symbols, or `refs_to` to find references to a name. Returns formatted results.",
+        properties: &[
+            ToolPropertyDef {
+                name: "name",
+                prop_type: "string",
+                description: "Filter symbols by name (substring match, case-insensitive)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "kind",
+                prop_type: "string",
+                description: "Filter symbols by kind (exact match, e.g. \"function\", \"struct\")",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "file",
+                prop_type: "string",
+                description: "Filter symbols by file path (substring match)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "refs_to",
+                prop_type: "string",
+                description: "Find references to this name (substring match). When set, name/kind/file are ignored.",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "limit",
+                prop_type: "integer",
+                description: "Maximum number of results to return (default: 50)",
+                default: Some(50),
+            },
+        ],
+        required: &[],
+    },
+    BuiltinToolDef {
+        name: INDEX_STATUS_TOOL_NAME,
+        description: "Show a summary of the codebase index: file counts, language breakdown, symbol and reference totals.",
+        properties: &[],
+        required: &[],
+    },
 ];
 
 // === Registry Helpers ===
@@ -201,6 +258,9 @@ pub fn is_coding_tool(name: &str) -> bool {
             | GLOB_FILES_TOOL_NAME
             | GREP_FILES_TOOL_NAME
             | FILE_EDIT_TOOL_NAME
+            | INDEX_UPDATE_TOOL_NAME
+            | INDEX_QUERY_TOOL_NAME
+            | INDEX_STATUS_TOOL_NAME
     )
 }
 
@@ -236,10 +296,13 @@ fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String>
 ///
 /// Returns `Some(result)` when the tool name is recognised, `None` otherwise.
 /// The `project_root` is used to resolve relative paths in all tools.
+/// The `tools` slice is forwarded to `index_update` for language plugin dispatch;
+/// pass `&[]` when the plugin list is unavailable.
 pub async fn execute_coding_tool(
     tool_name: &str,
     args: &serde_json::Value,
     project_root: &Path,
+    tools: &[super::Tool],
 ) -> Option<io::Result<String>> {
     match tool_name {
         SHELL_EXEC_TOOL_NAME => Some(execute_shell_exec(args).await),
@@ -247,6 +310,9 @@ pub async fn execute_coding_tool(
         GLOB_FILES_TOOL_NAME => Some(execute_glob_files(args, project_root)),
         GREP_FILES_TOOL_NAME => Some(execute_grep_files(args, project_root)),
         FILE_EDIT_TOOL_NAME => Some(execute_file_edit(args, project_root)),
+        INDEX_UPDATE_TOOL_NAME => Some(execute_index_update(args, project_root, tools)),
+        INDEX_QUERY_TOOL_NAME => Some(execute_index_query(args, project_root)),
+        INDEX_STATUS_TOOL_NAME => Some(execute_index_status(project_root)),
         _ => None,
     }
 }
@@ -270,16 +336,10 @@ async fn execute_shell_exec(args: &serde_json::Value) -> io::Result<String> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| {
-            io::Error::new(e.kind(), format!("Failed to spawn command: {}", e))
-        })?;
+        .map_err(|e| io::Error::new(e.kind(), format!("Failed to spawn command: {}", e)))?;
 
     // wait_with_output takes ownership — timeout wrapping handles the cancel
-    let result = timeout(
-        Duration::from_secs(timeout_secs),
-        child.wait_with_output(),
-    )
-    .await;
+    let result = timeout(Duration::from_secs(timeout_secs), child.wait_with_output()).await;
 
     let (stdout, stderr, exit_code, timed_out) = match result {
         Ok(Ok(output)) => {
@@ -289,7 +349,10 @@ async fn execute_shell_exec(args: &serde_json::Value) -> io::Result<String> {
             (stdout, stderr, exit_code, false)
         }
         Ok(Err(e)) => {
-            return Err(io::Error::new(e.kind(), format!("Command wait failed: {}", e)));
+            return Err(io::Error::new(
+                e.kind(),
+                format!("Command wait failed: {}", e),
+            ));
         }
         Err(_elapsed) => {
             // Timeout expired. The future was dropped, which drops the child process,
@@ -423,8 +486,8 @@ fn format_size(bytes: u64) -> String {
 
 /// Execute glob_files: walk the directory tree respecting .gitignore and match a glob.
 fn execute_glob_files(args: &serde_json::Value, project_root: &Path) -> io::Result<String> {
-    use ignore::overrides::OverrideBuilder;
     use ignore::WalkBuilder;
+    use ignore::overrides::OverrideBuilder;
 
     let pattern = require_str_param(args, "pattern")?;
     let path_str = args.get_str_or("path", ".");
@@ -454,9 +517,7 @@ fn execute_glob_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
         )
     })?;
 
-    let walker = WalkBuilder::new(&root)
-        .overrides(overrides)
-        .build();
+    let walker = WalkBuilder::new(&root).overrides(overrides).build();
 
     let mut matches = Vec::new();
     for entry in walker {
@@ -488,8 +549,8 @@ fn execute_glob_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
 
 /// Execute grep_files: regex-search files under a directory with optional context.
 fn execute_grep_files(args: &serde_json::Value, project_root: &Path) -> io::Result<String> {
-    use ignore::overrides::OverrideBuilder;
     use ignore::WalkBuilder;
+    use ignore::overrides::OverrideBuilder;
     use regex::Regex;
 
     let pattern = require_str_param(args, "pattern")?;
@@ -558,10 +619,7 @@ fn execute_grep_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
             Err(_) => continue,
         };
         let reader = std::io::BufReader::new(file);
-        let lines: Vec<String> = reader
-            .lines()
-            .map(|l| l.unwrap_or_default())
-            .collect();
+        let lines: Vec<String> = reader.lines().map(|l| l.unwrap_or_default()).collect();
 
         // Collect 0-based indices of matching lines
         let match_indices: Vec<usize> = lines
@@ -589,8 +647,7 @@ fn execute_grep_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
             ranges.push((start, end));
         }
 
-        let match_set: std::collections::HashSet<usize> =
-            match_indices.into_iter().collect();
+        let match_set: std::collections::HashSet<usize> = match_indices.into_iter().collect();
 
         for (start, end) in ranges {
             #[allow(clippy::needless_range_loop)]
@@ -626,11 +683,27 @@ fn execute_grep_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
 
 /// Edit operation variants
 enum EditOperation {
-    ReplaceLines { start: usize, end: usize, content: String },
-    InsertBefore { line: usize, content: String },
-    InsertAfter { line: usize, content: String },
-    DeleteLines { start: usize, end: usize },
-    ReplaceString { find: String, replace: String },
+    ReplaceLines {
+        start: usize,
+        end: usize,
+        content: String,
+    },
+    InsertBefore {
+        line: usize,
+        content: String,
+    },
+    InsertAfter {
+        line: usize,
+        content: String,
+    },
+    DeleteLines {
+        start: usize,
+        end: usize,
+    },
+    ReplaceString {
+        find: String,
+        replace: String,
+    },
 }
 
 /// Execute file_edit: apply a structured edit to a file atomically.
@@ -644,7 +717,10 @@ fn execute_file_edit(args: &serde_json::Value, project_root: &Path) -> io::Resul
 
     // Read current content
     let content = std::fs::read_to_string(&file_path).map_err(|e| {
-        io::Error::new(e.kind(), format!("Failed to read '{}': {}", file_path.display(), e))
+        io::Error::new(
+            e.kind(),
+            format!("Failed to read '{}': {}", file_path.display(), e),
+        )
     })?;
     let mut lines: Vec<String> = content.lines().map(String::from).collect();
 
@@ -652,13 +728,20 @@ fn execute_file_edit(args: &serde_json::Value, project_root: &Path) -> io::Resul
     let had_trailing_newline = content.ends_with('\n');
 
     match op {
-        EditOperation::ReplaceLines { start, end, content: new_content } => {
+        EditOperation::ReplaceLines {
+            start,
+            end,
+            content: new_content,
+        } => {
             validate_line_range(start, end, lines.len())?;
             // splice is exclusive on the right; end is 1-indexed inclusive → index end
             let new_lines: Vec<String> = new_content.lines().map(String::from).collect();
             lines.splice((start - 1)..end, new_lines);
         }
-        EditOperation::InsertBefore { line, content: new_content } => {
+        EditOperation::InsertBefore {
+            line,
+            content: new_content,
+        } => {
             validate_line_number(line, lines.len())?;
             let new_lines: Vec<String> = new_content.lines().map(String::from).collect();
             let insert_at = line - 1;
@@ -666,7 +749,10 @@ fn execute_file_edit(args: &serde_json::Value, project_root: &Path) -> io::Resul
                 lines.insert(insert_at + i, l);
             }
         }
-        EditOperation::InsertAfter { line, content: new_content } => {
+        EditOperation::InsertAfter {
+            line,
+            content: new_content,
+        } => {
             validate_line_number(line, lines.len())?;
             let new_lines: Vec<String> = new_content.lines().map(String::from).collect();
             // After line N (1-indexed) means index N (0-based insert position)
@@ -705,7 +791,11 @@ fn execute_file_edit(args: &serde_json::Value, project_root: &Path) -> io::Resul
     }
     crate::safe_io::atomic_write_text(&file_path, &new_content)?;
 
-    Ok(format!("Edited {} ({} lines)", file_path.display(), lines.len()))
+    Ok(format!(
+        "Edited {} ({} lines)",
+        file_path.display(),
+        lines.len()
+    ))
 }
 
 /// Parse the operation string and required parameters into an `EditOperation`.
@@ -715,7 +805,11 @@ fn parse_edit_operation(op: &str, args: &serde_json::Value) -> io::Result<EditOp
             let start = require_line_param(args, "line_start")?;
             let end = require_line_param(args, "line_end")?;
             let content = require_str_param(args, "content")?;
-            Ok(EditOperation::ReplaceLines { start, end, content })
+            Ok(EditOperation::ReplaceLines {
+                start,
+                end,
+                content,
+            })
         }
         "insert_before" => {
             let line = require_line_param(args, "line_start")?;
@@ -795,6 +889,96 @@ fn validate_line_range(start: usize, end: usize, total: usize) -> io::Result<()>
     Ok(())
 }
 
+// --- index_update ---
+
+/// Execute index_update: walk the project, detect changes, dispatch to language plugins.
+fn execute_index_update(
+    args: &serde_json::Value,
+    project_root: &Path,
+    tools: &[super::Tool],
+) -> io::Result<String> {
+    use crate::index::{self, IndexOptions, open_db};
+
+    let force = args.get_str_or("force", "false") == "true";
+    let db_path = crate::project_index_db_path(project_root);
+
+    // Ensure .chibi directory exists
+    crate::project_chibi_dir(project_root)?;
+
+    let conn = open_db(&db_path)
+        .map_err(|e| io::Error::other(format!("Failed to open index database: {}", e)))?;
+
+    let options = IndexOptions {
+        force,
+        verbose: false,
+    };
+
+    let stats = index::update_index(&conn, project_root, &options, tools)?;
+    Ok(stats.to_string())
+}
+
+// --- index_query ---
+
+/// Execute index_query: search for symbols or references in the codebase index.
+fn execute_index_query(args: &serde_json::Value, project_root: &Path) -> io::Result<String> {
+    use crate::index::{SymbolQuery, open_db, query_refs, query_symbols};
+
+    let db_path = crate::project_index_db_path(project_root);
+    if !db_path.exists() {
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            "No codebase index found. Run index_update first.",
+        ));
+    }
+
+    let conn = open_db(&db_path)
+        .map_err(|e| io::Error::other(format!("Failed to open index database: {}", e)))?;
+
+    let limit = args.get_u64_or("limit", 50) as u32;
+
+    // If refs_to is set, query references instead of symbols
+    if let Some(refs_to) = args.get_str("refs_to") {
+        let rows = query_refs(&conn, refs_to, limit);
+        if rows.is_empty() {
+            return Ok(format!("No references found matching: {}", refs_to));
+        }
+        let formatted: Vec<String> = rows.iter().map(|r| r.to_string()).collect();
+        return Ok(formatted.join("\n"));
+    }
+
+    // Otherwise, query symbols
+    let opts = SymbolQuery {
+        name: args.get_str("name").map(String::from),
+        kind: args.get_str("kind").map(String::from),
+        file: args.get_str("file").map(String::from),
+        limit,
+    };
+
+    let rows = query_symbols(&conn, &opts);
+    if rows.is_empty() {
+        return Ok("No symbols found matching query.".to_string());
+    }
+    let formatted: Vec<String> = rows.iter().map(|r| r.to_string()).collect();
+    Ok(formatted.join("\n"))
+}
+
+// --- index_status ---
+
+/// Execute index_status: return a human-readable summary of the codebase index.
+fn execute_index_status(project_root: &Path) -> io::Result<String> {
+    use crate::index::{index_status, open_db};
+
+    let db_path = crate::project_index_db_path(project_root);
+    if !db_path.exists() {
+        return Ok("No codebase index found. Run index_update to create one.".to_string());
+    }
+
+    let conn = open_db(&db_path)
+        .map_err(|e| io::Error::other(format!("Failed to open index database: {}", e)))?;
+
+    Ok(index_status(&conn, project_root))
+}
+
 // === Tests ===
 
 #[cfg(test)]
@@ -839,19 +1023,25 @@ mod tests {
         assert!(is_coding_tool(GLOB_FILES_TOOL_NAME));
         assert!(is_coding_tool(GREP_FILES_TOOL_NAME));
         assert!(is_coding_tool(FILE_EDIT_TOOL_NAME));
+        assert!(is_coding_tool(INDEX_UPDATE_TOOL_NAME));
+        assert!(is_coding_tool(INDEX_QUERY_TOOL_NAME));
+        assert!(is_coding_tool(INDEX_STATUS_TOOL_NAME));
         assert!(!is_coding_tool("file_head"));
         assert!(!is_coding_tool("unknown_tool"));
     }
 
     #[test]
     fn test_coding_tool_registry_contains_all_tools() {
-        assert_eq!(CODING_TOOL_DEFS.len(), 5);
+        assert_eq!(CODING_TOOL_DEFS.len(), 8);
         let names: Vec<_> = CODING_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&SHELL_EXEC_TOOL_NAME));
         assert!(names.contains(&DIR_LIST_TOOL_NAME));
         assert!(names.contains(&GLOB_FILES_TOOL_NAME));
         assert!(names.contains(&GREP_FILES_TOOL_NAME));
         assert!(names.contains(&FILE_EDIT_TOOL_NAME));
+        assert!(names.contains(&INDEX_UPDATE_TOOL_NAME));
+        assert!(names.contains(&INDEX_QUERY_TOOL_NAME));
+        assert!(names.contains(&INDEX_STATUS_TOOL_NAME));
     }
 
     // --- Path Resolution ---
@@ -1019,11 +1209,7 @@ mod tests {
     #[test]
     fn test_grep_files_context_lines() {
         let dir = tempfile::tempdir().unwrap();
-        make_temp_file(
-            &dir,
-            "code.rs",
-            "line1\nline2\nMATCH\nline4\nline5\n",
-        );
+        make_temp_file(&dir, "code.rs", "line1\nline2\nMATCH\nline4\nline5\n");
 
         let a = args(&[
             ("pattern", serde_json::json!("MATCH")),
@@ -1189,5 +1375,109 @@ mod tests {
         let result = execute_shell_exec(&a).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["stderr"].as_str().unwrap().trim(), "error");
+    }
+
+    // --- index tools ---
+
+    #[test]
+    fn test_index_status_no_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = execute_index_status(dir.path()).unwrap();
+        assert!(result.contains("No codebase index found"));
+    }
+
+    #[test]
+    fn test_index_query_no_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = args(&[("name", serde_json::json!("foo"))]);
+        let result = execute_index_query(&a, dir.path());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No codebase index")
+        );
+    }
+
+    #[test]
+    fn test_index_update_creates_db_and_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+        fs::write(dir.path().join("lib.py"), "def hello(): pass\n").unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("sub").join("util.rs"), "pub fn util() {}\n").unwrap();
+
+        let a = args(&[]);
+        let result = execute_index_update(&a, dir.path(), &[]).unwrap();
+
+        // Should report scan results
+        assert!(result.contains("scanned:"));
+
+        // DB should now exist
+        let db_path = crate::project_index_db_path(dir.path());
+        assert!(db_path.exists());
+    }
+
+    #[test]
+    fn test_index_update_then_status() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+        // Update index
+        let a = args(&[]);
+        execute_index_update(&a, dir.path(), &[]).unwrap();
+
+        // Now status should show indexed files
+        let result = execute_index_status(dir.path()).unwrap();
+        assert!(result.contains("file"));
+    }
+
+    #[test]
+    fn test_index_update_then_query_no_symbols() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+        // Update index (no language plugins, so no symbols extracted)
+        let a = args(&[]);
+        execute_index_update(&a, dir.path(), &[]).unwrap();
+
+        // Query symbols — should find nothing since no plugins extracted symbols
+        let q = args(&[("name", serde_json::json!("main"))]);
+        let result = execute_index_query(&q, dir.path()).unwrap();
+        assert!(result.contains("No symbols found"));
+    }
+
+    #[test]
+    fn test_index_query_refs_no_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+        let a = args(&[]);
+        execute_index_update(&a, dir.path(), &[]).unwrap();
+
+        let q = args(&[("refs_to", serde_json::json!("nonexistent"))]);
+        let result = execute_index_query(&q, dir.path()).unwrap();
+        assert!(result.contains("No references found"));
+    }
+
+    #[test]
+    fn test_index_update_force_reindex() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+        // First index
+        let a = args(&[]);
+        execute_index_update(&a, dir.path(), &[]).unwrap();
+
+        // Second index without force should skip unchanged files
+        let result = execute_index_update(&a, dir.path(), &[]).unwrap();
+        // "skipped (unchanged): N" where N > 0
+        assert!(result.contains("skipped (unchanged): 1"));
+
+        // Force re-index should re-process all files
+        let a_force = args(&[("force", serde_json::json!("true"))]);
+        let result = execute_index_update(&a_force, dir.path(), &[]).unwrap();
+        assert!(result.contains("indexed: 1"));
     }
 }

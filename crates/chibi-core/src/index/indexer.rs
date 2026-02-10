@@ -4,7 +4,7 @@
 //! dispatches to language plugins for symbol extraction, and writes everything to the database.
 //! Core handles all DB writes — plugins never touch sqlite directly.
 
-use crate::tools::{execute_tool, Tool};
+use crate::tools::{HookPoint, Tool, execute_hook, execute_tool};
 use ignore::WalkBuilder;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -175,9 +175,7 @@ pub fn update_index(
             continue;
         }
 
-        let lang = detect_language(abs_path)
-            .unwrap_or("unknown")
-            .to_string();
+        let lang = detect_language(abs_path).unwrap_or("unknown").to_string();
 
         files_by_lang
             .entry(lang)
@@ -215,11 +213,9 @@ pub fn update_index(
             .map_err(|e| io::Error::other(format!("failed to upsert file: {}", e)))?;
 
             let file_id: i64 = conn
-                .query_row(
-                    "SELECT id FROM files WHERE path = ?1",
-                    [rel_path],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT id FROM files WHERE path = ?1", [rel_path], |row| {
+                    row.get(0)
+                })
                 .map_err(|e| io::Error::other(format!("failed to get file id: {}", e)))?;
 
             // Clear old symbols and refs for this file (cascade would handle it,
@@ -239,10 +235,8 @@ pub fn update_index(
                 match execute_tool(plugin, &input, false) {
                     Ok(output) => {
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&output) {
-                            stats.symbols_added +=
-                                insert_symbols(conn, file_id, &parsed);
-                            stats.refs_added +=
-                                insert_refs(conn, file_id, &parsed);
+                            stats.symbols_added += insert_symbols(conn, file_id, &parsed);
+                            stats.refs_added += insert_refs(conn, file_id, &parsed);
                         }
                         // Malformed output → graceful fallback (file indexed without symbols).
                     }
@@ -253,6 +247,15 @@ pub fn update_index(
             }
 
             stats.files_indexed += 1;
+
+            // Fire PostIndexFile hook (observe only — errors are non-fatal).
+            let hook_data = serde_json::json!({
+                "path": rel_path,
+                "lang": lang,
+                "symbol_count": stats.symbols_added,
+                "ref_count": stats.refs_added,
+            });
+            let _ = execute_hook(tools, HookPoint::PostIndexFile, &hook_data);
         }
     }
 
@@ -289,7 +292,9 @@ fn insert_symbols(conn: &Connection, file_id: i64, output: &serde_json::Value) -
         let result = conn.execute(
             "INSERT INTO symbols (file_id, name, kind, line_start, line_end, signature, visibility)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![file_id, name, kind, line_start, line_end, signature, visibility],
+            rusqlite::params![
+                file_id, name, kind, line_start, line_end, signature, visibility
+            ],
         );
 
         if result.is_ok() {
@@ -502,9 +507,11 @@ mod tests {
         assert_eq!(count, 2);
 
         let sym_count: u32 = conn
-            .query_row("SELECT COUNT(*) FROM symbols WHERE file_id = 1", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM symbols WHERE file_id = 1",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(sym_count, 2);
     }
@@ -554,7 +561,12 @@ mod tests {
     #[test]
     fn language_detection_maps_correctly() {
         // Spot-check a few mappings.
-        for (ext, expected) in &[("rs", "rust"), ("py", "python"), ("go", "go"), ("zig", "zig")] {
+        for (ext, expected) in &[
+            ("rs", "rust"),
+            ("py", "python"),
+            ("go", "go"),
+            ("zig", "zig"),
+        ] {
             let path = format!("file.{}", ext);
             assert_eq!(detect_language(Path::new(&path)), Some(*expected));
         }

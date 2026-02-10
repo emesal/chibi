@@ -8,6 +8,6 @@ pub mod indexer;
 pub mod query;
 pub mod schema;
 
-pub use indexer::{update_index, IndexOptions, IndexStats};
-pub use query::{index_status, query_refs, query_symbols, RefRow, SymbolQuery, SymbolRow};
+pub use indexer::{IndexOptions, IndexStats, update_index};
+pub use query::{RefRow, SymbolQuery, SymbolRow, index_status, query_refs, query_symbols};
 pub use schema::open_db;

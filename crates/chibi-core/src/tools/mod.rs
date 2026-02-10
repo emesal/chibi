@@ -44,11 +44,11 @@ pub use builtin::builtin_tool_metadata;
 
 // Re-export coding tool registry functions and execution
 pub use coding_tools::{
-    all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool, CODING_TOOL_DEFS,
+    CODING_TOOL_DEFS, all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool,
 };
 pub use coding_tools::{
     DIR_LIST_TOOL_NAME, FILE_EDIT_TOOL_NAME, GLOB_FILES_TOOL_NAME, GREP_FILES_TOOL_NAME,
-    SHELL_EXEC_TOOL_NAME,
+    INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_UPDATE_TOOL_NAME, SHELL_EXEC_TOOL_NAME,
 };
 
 // Re-export file tool registry functions

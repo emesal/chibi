@@ -138,17 +138,14 @@ pub fn query_refs(conn: &Connection, to_name: &str, limit: u32) -> Vec<RefRow> {
         Err(_) => return Vec::new(),
     };
 
-    let rows = match stmt.query_map(
-        rusqlite::params![format!("%{}%", to_name), limit],
-        |row| {
-            Ok(RefRow {
-                file_path: row.get(0)?,
-                from_line: row.get(1)?,
-                to_name: row.get(2)?,
-                kind: row.get(3)?,
-            })
-        },
-    ) {
+    let rows = match stmt.query_map(rusqlite::params![format!("%{}%", to_name), limit], |row| {
+        Ok(RefRow {
+            file_path: row.get(0)?,
+            from_line: row.get(1)?,
+            to_name: row.get(2)?,
+            kind: row.get(3)?,
+        })
+    }) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
@@ -191,7 +188,10 @@ pub fn index_status(conn: &Connection, project_root: &Path) -> String {
 
     if !lang_stats.is_empty() {
         out.push_str("\n  languages: ");
-        let parts: Vec<String> = lang_stats.iter().map(|(l, c)| format!("{} ({})", l, c)).collect();
+        let parts: Vec<String> = lang_stats
+            .iter()
+            .map(|(l, c)| format!("{} ({})", l, c))
+            .collect();
         out.push_str(&parts.join(", "));
     }
 

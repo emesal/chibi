@@ -89,10 +89,7 @@ fn apply_migrations(conn: &Connection) -> SqlResult<()> {
     for m in MIGRATIONS {
         if m.version > max_applied {
             conn.execute_batch(m.sql)?;
-            conn.execute(
-                "INSERT INTO schema_meta (version) VALUES (?1)",
-                [m.version],
-            )?;
+            conn.execute("INSERT INTO schema_meta (version) VALUES (?1)", [m.version])?;
         }
     }
     Ok(())
@@ -198,7 +195,15 @@ mod tests {
         conn.execute(
             "INSERT INTO symbols (file_id, name, kind, line_start, line_end, signature, visibility)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            (1i64, "parse", "function", 10i64, 25i64, "fn parse(input: &str) -> Result<Ast>", "public"),
+            (
+                1i64,
+                "parse",
+                "function",
+                10i64,
+                25i64,
+                "fn parse(input: &str) -> Result<Ast>",
+                "public",
+            ),
         )
         .unwrap();
 
@@ -226,9 +231,11 @@ mod tests {
         .unwrap();
 
         let to_name: String = conn
-            .query_row("SELECT to_name FROM refs WHERE from_file_id = 1", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT to_name FROM refs WHERE from_file_id = 1",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(to_name, "TokenStream::new");
     }

@@ -40,6 +40,7 @@ pub enum HookPoint {
     PreShellExec,     // Before shell command execution (can approve/deny, fail-safe deny)
     PreSpawnAgent, // Before sub-agent call (can intercept/replace with {"response": "..."} or block)
     PostSpawnAgent, // After sub-agent call (observe only)
+    PostIndexFile, // After a file is indexed (observe: path, lang, symbol_count, ref_count)
 }
 
 /// Execute a hook on all tools that registered for it
@@ -145,8 +146,10 @@ mod tests {
         ("pre_agentic_loop", HookPoint::PreAgenticLoop),
         ("post_tool_batch", HookPoint::PostToolBatch),
         ("pre_file_write", HookPoint::PreFileWrite),
+        ("pre_shell_exec", HookPoint::PreShellExec),
         ("pre_spawn_agent", HookPoint::PreSpawnAgent),
         ("post_spawn_agent", HookPoint::PostSpawnAgent),
+        ("post_index_file", HookPoint::PostIndexFile),
     ];
 
     #[test]
