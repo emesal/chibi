@@ -58,7 +58,7 @@ pub use file_tools::{all_file_tools_to_api_format, get_file_tool_def};
 pub use file_tools::{execute_file_tool, is_file_tool};
 
 // Re-export file write tool names for permission gating
-pub use file_tools::{PATCH_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME};
+pub use file_tools::WRITE_FILE_TOOL_NAME;
 
 // Re-export agent tool registry functions
 pub use agent_tools::{all_agent_tools_to_api_format, get_agent_tool_def};

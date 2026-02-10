@@ -482,7 +482,7 @@ include = ["update_todos", "update_goals", "update_reflection"]
 
 **Tool Types:**
 - `builtin`: update_todos, update_goals, update_reflection, send_message, call_user, call_agent
-- `file`: file_head, file_tail, file_lines, file_grep, cache_list, write_file, patch_file
+- `file`: file_head, file_tail, file_lines, file_grep, cache_list, write_file
 - `agent`: spawn_agent, retrieve_content
 - `plugin`: Tools loaded from the plugins directory
 

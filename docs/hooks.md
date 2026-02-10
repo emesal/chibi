@@ -52,7 +52,7 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_file_write` | Before `write_file`/`patch_file` execution | Yes (approve/deny, fail-safe deny if no hook registered) |
+| `pre_file_write` | Before `write_file`/`file_edit` execution | Yes (approve/deny, fail-safe deny if no hook registered) |
 
 ### Sub-Agent Lifecycle
 
@@ -427,19 +427,15 @@ Notification after output has been cached.
 
 ### pre_file_write
 
-Called before `write_file` or `patch_file` execution. File write tools require at least one `pre_file_write` hook to be registered — if no hook is registered, the operation is denied (fail-safe).
+Called before `write_file` or `file_edit` execution. File write tools require at least one `pre_file_write` hook to be registered — if no hook is registered, the operation is denied (fail-safe).
 
 ```json
 {
   "tool_name": "write_file",
   "path": "/home/user/project/file.txt",
   "content": "file content here",
-  "find": null,
-  "replace": null
 }
 ```
-
-For `patch_file`, `content` is null and `find`/`replace` are populated instead.
 
 **Must return (to approve):**
 ```json

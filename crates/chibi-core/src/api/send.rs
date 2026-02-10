@@ -775,15 +775,11 @@ async fn execute_tool_pure(
         }
     } else if tools::is_file_tool(&tool_call.name) {
         // For write tools, check permission via pre_file_write hook first
-        if tool_call.name == tools::WRITE_FILE_TOOL_NAME
-            || tool_call.name == tools::PATCH_FILE_TOOL_NAME
-        {
+        if tool_call.name == tools::WRITE_FILE_TOOL_NAME {
             let hook_data = serde_json::json!({
                 "tool_name": tool_call.name,
                 "path": args.get_str("path").unwrap_or(""),
                 "content": args.get_str("content"),
-                "find": args.get_str("find"),
-                "replace": args.get_str("replace"),
             });
             let hook_results =
                 tools::execute_hook(tools, tools::HookPoint::PreFileWrite, &hook_data)?;
