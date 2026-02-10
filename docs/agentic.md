@@ -20,7 +20,6 @@ The LLM always has access to these tools (no setup required):
 | `file_grep` | Search for a pattern in a cached output or file |
 | `cache_list` | List all cached tool outputs for the current context |
 | `write_file` | Write content to a file (requires `file_tools_allowed_paths`, gated by `pre_file_write` hook) |
-| `patch_file` | Find-and-replace in a file (requires `file_tools_allowed_paths`, gated by `pre_file_write` hook) |
 | `spawn_agent` | Spawn a sub-agent with a custom system prompt to process input |
 | `retrieve_content` | Read a file/URL and process content through a sub-agent |
 | `model_info` | Look up model metadata (context window, pricing, capabilities, parameters) |

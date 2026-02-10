@@ -996,6 +996,20 @@ fn extract_home_override(args: &[String]) -> Option<PathBuf> {
     None
 }
 
+/// Extract --project-root flag value from args (before full CLI parsing)
+fn extract_project_root_override(args: &[String]) -> Option<PathBuf> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--project-root" {
+            return iter.next().map(PathBuf::from);
+        }
+        if let Some(path) = arg.strip_prefix("--project-root=") {
+            return Some(PathBuf::from(path));
+        }
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     // Check for early flags (before full CLI parsing)
@@ -1011,6 +1025,7 @@ async fn main() -> io::Result<()> {
     let is_json_config = args.iter().any(|a| a == "--json-config");
     let cli_json_output = args.iter().any(|a| a == "--json-output");
     let home_override = extract_home_override(&args);
+    let project_root_override = extract_project_root_override(&args);
 
     if is_json_config {
         // JSON mode: read from stdin and parse directly to ChibiInput
@@ -1042,6 +1057,7 @@ async fn main() -> io::Result<()> {
         let mut chibi = Chibi::load_with_options(LoadOptions {
             verbose: input.flags.verbose,
             home: home_override,
+            project_root: project_root_override.clone(),
         })?;
         // CLI flags override config settings
         input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
@@ -1093,6 +1109,7 @@ async fn main() -> io::Result<()> {
     let mut chibi = Chibi::load_with_options(LoadOptions {
         verbose: input.flags.verbose,
         home: home_override,
+        project_root: project_root_override,
     })?;
     // CLI flags override config settings
     let verbose = input.flags.verbose || chibi.app.config.verbose;

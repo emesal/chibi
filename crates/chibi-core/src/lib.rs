@@ -34,6 +34,7 @@ pub mod config;
 pub mod context;
 pub mod gateway;
 mod inbox;
+pub mod index;
 pub mod input;
 pub mod json_ext;
 pub mod jsonl;
@@ -48,7 +49,7 @@ pub mod tools;
 pub const INBOX_CHECK_PROMPT: &str = "[System: You have received new message(s) above. Review and take appropriate action now — you may not be reactivated soon, so handle anything urgent immediately.]";
 
 // Re-export the facade
-pub use chibi::{Chibi, LoadOptions};
+pub use chibi::{Chibi, LoadOptions, project_chibi_dir, project_index_db_path};
 
 // Re-export commonly used types
 pub use api::{CollectingSink, PromptOptions, ResponseEvent, ResponseSink};

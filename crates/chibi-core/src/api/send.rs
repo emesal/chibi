@@ -36,6 +36,7 @@ enum ToolType {
     Builtin,
     File,
     Agent,
+    Coding,
     Plugin,
 }
 
@@ -45,6 +46,7 @@ impl ToolType {
             ToolType::Builtin => "builtin",
             ToolType::File => "file",
             ToolType::Agent => "agent",
+            ToolType::Coding => "coding",
             ToolType::Plugin => "plugin",
         }
     }
@@ -70,6 +72,18 @@ const FILE_TOOL_NAMES: &[&str] = &[
 /// Agent tool names (spawn_agent, retrieve_content)
 const AGENT_TOOL_NAMES: &[&str] = &["spawn_agent", "retrieve_content"];
 
+/// Coding tool names (shell_exec, dir_list, glob_files, grep_files, file_edit, index_*)
+const CODING_TOOL_NAMES: &[&str] = &[
+    "shell_exec",
+    "dir_list",
+    "glob_files",
+    "grep_files",
+    "file_edit",
+    "index_update",
+    "index_query",
+    "index_status",
+];
+
 /// Classify a tool's type based on its name
 fn classify_tool_type(name: &str, plugin_names: &[&str]) -> ToolType {
     if BUILTIN_TOOL_NAMES.contains(&name) {
@@ -78,6 +92,8 @@ fn classify_tool_type(name: &str, plugin_names: &[&str]) -> ToolType {
         ToolType::File
     } else if AGENT_TOOL_NAMES.contains(&name) {
         ToolType::Agent
+    } else if CODING_TOOL_NAMES.contains(&name) {
+        ToolType::Coding
     } else if plugin_names.contains(&name) {
         ToolType::Plugin
     } else {
@@ -759,15 +775,11 @@ async fn execute_tool_pure(
         }
     } else if tools::is_file_tool(&tool_call.name) {
         // For write tools, check permission via pre_file_write hook first
-        if tool_call.name == tools::WRITE_FILE_TOOL_NAME
-            || tool_call.name == tools::PATCH_FILE_TOOL_NAME
-        {
+        if tool_call.name == tools::WRITE_FILE_TOOL_NAME {
             let hook_data = serde_json::json!({
                 "tool_name": tool_call.name,
                 "path": args.get_str("path").unwrap_or(""),
                 "content": args.get_str("content"),
-                "find": args.get_str("find"),
-                "replace": args.get_str("replace"),
             });
             let hook_results =
                 tools::execute_hook(tools, tools::HookPoint::PreFileWrite, &hook_data)?;
@@ -822,6 +834,95 @@ async fn execute_tool_pure(
         match tools::execute_agent_tool(resolved_config, &tool_call.name, &args, tools).await {
             Ok(r) => r,
             Err(e) => format!("Error: {}", e),
+        }
+    } else if tools::is_coding_tool(&tool_call.name) {
+        // Coding tools that modify state need permission hooks
+        if tool_call.name == tools::SHELL_EXEC_TOOL_NAME {
+            // shell_exec: check PreShellExec hook, fail-safe deny
+            let hook_data = serde_json::json!({
+                "tool_name": tool_call.name,
+                "command": args.get_str("command").unwrap_or(""),
+            });
+            let hook_results =
+                tools::execute_hook(tools, tools::HookPoint::PreShellExec, &hook_data)?;
+
+            let mut denied = false;
+            let mut deny_reason = String::new();
+            for (_hook_name, result) in &hook_results {
+                if !result.get_bool_or("approved", false) {
+                    denied = true;
+                    deny_reason = result
+                        .get_str_or("reason", "Permission denied by hook")
+                        .to_string();
+                    break;
+                }
+            }
+
+            if denied {
+                format!("Error: {}", deny_reason)
+            } else if hook_results.is_empty() {
+                // No hooks registered = fail-safe deny
+                "Error: No permission handler configured. shell_exec requires a pre_shell_exec hook plugin.".to_string()
+            } else {
+                // Permission granted
+                let project_root = std::env::var("CHIBI_PROJECT_ROOT")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+                match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await
+                {
+                    Some(Ok(r)) => r,
+                    Some(Err(e)) => format!("Error: {}", e),
+                    None => format!("Error: Unknown coding tool '{}'", tool_call.name),
+                }
+            }
+        } else if tool_call.name == tools::FILE_EDIT_TOOL_NAME {
+            // file_edit: reuse PreFileWrite hook
+            let hook_data = serde_json::json!({
+                "tool_name": tool_call.name,
+                "path": args.get_str("path").unwrap_or(""),
+                "operation": args.get_str("operation").unwrap_or(""),
+                "content": args.get_str("content"),
+            });
+            let hook_results =
+                tools::execute_hook(tools, tools::HookPoint::PreFileWrite, &hook_data)?;
+
+            let mut denied = false;
+            let mut deny_reason = String::new();
+            for (_hook_name, result) in &hook_results {
+                if !result.get_bool_or("approved", false) {
+                    denied = true;
+                    deny_reason = result
+                        .get_str_or("reason", "Permission denied by hook")
+                        .to_string();
+                    break;
+                }
+            }
+
+            if denied {
+                format!("Error: {}", deny_reason)
+            } else if hook_results.is_empty() {
+                "Error: No permission handler configured. file_edit requires a pre_file_write hook plugin.".to_string()
+            } else {
+                let project_root = std::env::var("CHIBI_PROJECT_ROOT")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+                match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await
+                {
+                    Some(Ok(r)) => r,
+                    Some(Err(e)) => format!("Error: {}", e),
+                    None => format!("Error: Unknown coding tool '{}'", tool_call.name),
+                }
+            }
+        } else {
+            // Read-only coding tools (dir_list, glob_files, grep_files) don't need permission
+            let project_root = std::env::var("CHIBI_PROJECT_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+            match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await {
+                Some(Ok(r)) => r,
+                Some(Err(e)) => format!("Error: {}", e),
+                None => format!("Error: Unknown coding tool '{}'", tool_call.name),
+            }
         }
     } else if let Some(tool) = tools::find_tool(tools, &tool_call.name) {
         match tools::execute_tool(tool, &args, verbose) {
@@ -1495,6 +1596,7 @@ async fn send_prompt_with_depth<S: ResponseSink>(
     all_tools.extend(tools::builtin_tools_to_api_format(use_reflection));
     all_tools.extend(tools::all_file_tools_to_api_format());
     all_tools.extend(tools::all_agent_tools_to_api_format());
+    all_tools.extend(tools::all_coding_tools_to_api_format());
     annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
     all_tools = filter_tools_by_config(all_tools, &resolved_config.tools);
 

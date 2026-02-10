@@ -97,11 +97,39 @@ print("result")
 
 ## Hooks
 
-27 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
+29 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
 
-`on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `post_tool`, `pre_tool_output`, `post_tool_output`, `pre_system_prompt`, `post_system_prompt`, `pre_send_message`, `post_send_message`, `pre_clear`, `post_clear`, `pre_compact`, `post_compact`, `pre_rolling_compact`, `post_rolling_compact`, `pre_cache_output`, `post_cache_output`, `pre_api_tools`, `pre_api_request`, `pre_agentic_loop`, `post_tool_batch`, `pre_file_write`, `pre_spawn_agent`, `post_spawn_agent`
+`on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `post_tool`, `pre_tool_output`, `post_tool_output`, `pre_system_prompt`, `post_system_prompt`, `pre_send_message`, `post_send_message`, `pre_clear`, `post_clear`, `pre_compact`, `post_compact`, `pre_rolling_compact`, `post_rolling_compact`, `pre_cache_output`, `post_cache_output`, `pre_api_tools`, `pre_api_request`, `pre_agentic_loop`, `post_tool_batch`, `pre_file_write`, `pre_shell_exec`, `pre_spawn_agent`, `post_spawn_agent`, `post_index_file`
 
 Hook data: `CHIBI_HOOK` env var + stdin (JSON).
+
+## Language Plugins
+
+Language plugins provide symbol extraction for the codebase index. Core handles all database writes.
+
+**Convention:** plugins named `lang_<language>` (e.g. `lang_rust`, `lang_python`).
+
+**Input** (stdin, JSON):
+```json
+{"files": [{"path": "src/foo.rs", "content": "..."}]}
+```
+
+**Output** (stdout, JSON):
+```json
+{
+  "symbols": [
+    {"name": "parse", "kind": "function", "parent": "Parser",
+     "line_start": 42, "line_end": 67, "signature": "fn parse(&self) -> Result<AST>", "visibility": "public"}
+  ],
+  "refs": [
+    {"from_line": 55, "to_name": "TokenStream::new", "kind": "call"}
+  ]
+}
+```
+
+Fields: `name` (required), `kind` (required), `line_start`/`line_end` (optional), `parent` (optional, for nesting), `signature`/`visibility` (optional). Refs: `from_line`, `to_name`, `kind` (all optional but recommended).
+
+The `post_index_file` hook fires after each file is indexed with `{"path", "lang", "symbol_count", "ref_count"}`.
 
 ## CLI Conventions
 
