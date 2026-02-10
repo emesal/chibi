@@ -308,6 +308,10 @@ pub struct Cli {
     #[arg(long = "home", value_name = "PATH")]
     pub home: Option<String>,
 
+    /// Override project root directory (default: cwd, or CHIBI_PROJECT_ROOT env var)
+    #[arg(long = "project-root", value_name = "PATH")]
+    pub project_root: Option<String>,
+
     // === Help and version ===
     /// Show help
     #[arg(short = 'h', long = "help")]

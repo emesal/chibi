@@ -97,9 +97,9 @@ print("result")
 
 ## Hooks
 
-27 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
+28 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
 
-`on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `post_tool`, `pre_tool_output`, `post_tool_output`, `pre_system_prompt`, `post_system_prompt`, `pre_send_message`, `post_send_message`, `pre_clear`, `post_clear`, `pre_compact`, `post_compact`, `pre_rolling_compact`, `post_rolling_compact`, `pre_cache_output`, `post_cache_output`, `pre_api_tools`, `pre_api_request`, `pre_agentic_loop`, `post_tool_batch`, `pre_file_write`, `pre_spawn_agent`, `post_spawn_agent`
+`on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `post_tool`, `pre_tool_output`, `post_tool_output`, `pre_system_prompt`, `post_system_prompt`, `pre_send_message`, `post_send_message`, `pre_clear`, `post_clear`, `pre_compact`, `post_compact`, `pre_rolling_compact`, `post_rolling_compact`, `pre_cache_output`, `post_cache_output`, `pre_api_tools`, `pre_api_request`, `pre_agentic_loop`, `post_tool_batch`, `pre_file_write`, `pre_shell_exec`, `pre_spawn_agent`, `post_spawn_agent`
 
 Hook data: `CHIBI_HOOK` env var + stdin (JSON).
 

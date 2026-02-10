@@ -37,6 +37,7 @@ pub enum HookPoint {
     PreAgenticLoop,   // Before entering the tool loop (can override fallback)
     PostToolBatch,    // After processing a batch of tool calls (can override fallback)
     PreFileWrite,     // Before file write/patch (can approve/deny/modify operation)
+    PreShellExec,     // Before shell command execution (can approve/deny, fail-safe deny)
     PreSpawnAgent, // Before sub-agent call (can intercept/replace with {"response": "..."} or block)
     PostSpawnAgent, // After sub-agent call (observe only)
 }

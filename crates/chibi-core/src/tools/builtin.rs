@@ -217,6 +217,11 @@ pub fn builtin_tool_metadata(name: &str) -> ToolMetadata {
             flow_control: true,
             ends_turn: true,
         },
+        "shell_exec" => ToolMetadata {
+            parallel: false,
+            flow_control: false,
+            ends_turn: false,
+        },
         _ => ToolMetadata::new(),
     }
 }

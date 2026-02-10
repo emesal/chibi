@@ -8,6 +8,7 @@
 
 pub mod agent_tools;
 mod builtin;
+pub mod coding_tools;
 pub mod file_tools;
 mod hooks;
 mod plugins;
@@ -40,6 +41,15 @@ pub use builtin::execute_builtin_tool;
 
 // Re-export tool metadata functions
 pub use builtin::builtin_tool_metadata;
+
+// Re-export coding tool registry functions and execution
+pub use coding_tools::{
+    all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool, CODING_TOOL_DEFS,
+};
+pub use coding_tools::{
+    DIR_LIST_TOOL_NAME, FILE_EDIT_TOOL_NAME, GLOB_FILES_TOOL_NAME, GREP_FILES_TOOL_NAME,
+    SHELL_EXEC_TOOL_NAME,
+};
 
 // Re-export file tool registry functions
 pub use file_tools::{all_file_tools_to_api_format, get_file_tool_def};
@@ -107,6 +117,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         .iter()
         .chain(file_tools::FILE_TOOL_DEFS.iter())
         .chain(agent_tools::AGENT_TOOL_DEFS.iter())
+        .chain(coding_tools::CODING_TOOL_DEFS.iter())
         .map(|def| def.name)
         .collect()
 }
@@ -178,16 +189,19 @@ mod tests {
     fn test_builtin_tool_names_includes_all_registries() {
         let names = builtin_tool_names();
 
-        // Should include tools from all three registries
+        // Should include tools from all four registries
         assert!(names.contains(&"update_reflection")); // core builtin
         assert!(names.contains(&"model_info")); // core builtin
         assert!(names.contains(&"file_head")); // file tool
         assert!(names.contains(&"spawn_agent")); // agent tool
+        assert!(names.contains(&"shell_exec")); // coding tool
+        assert!(names.contains(&"file_edit")); // coding tool
 
         // Should be the sum of all registries
         let expected_count = builtin::BUILTIN_TOOL_DEFS.len()
             + file_tools::FILE_TOOL_DEFS.len()
-            + agent_tools::AGENT_TOOL_DEFS.len();
+            + agent_tools::AGENT_TOOL_DEFS.len()
+            + coding_tools::CODING_TOOL_DEFS.len();
         assert_eq!(names.len(), expected_count);
     }
 
