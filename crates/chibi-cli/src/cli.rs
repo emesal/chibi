@@ -273,6 +273,10 @@ pub struct Cli {
     #[arg(long = "hide-tool-calls")]
     pub hide_tool_calls: bool,
 
+    /// Show thinking/reasoning content (verbose overrides this)
+    #[arg(long = "show-thinking")]
+    pub show_thinking: bool,
+
     /// Omit tools from API requests (pure text mode)
     #[arg(long = "no-tool-calls")]
     pub no_tool_calls: bool,
@@ -648,6 +652,7 @@ impl Cli {
         let flags = Flags {
             verbose: self.verbose,
             hide_tool_calls: self.hide_tool_calls,
+            show_thinking: self.show_thinking,
             no_tool_calls: self.no_tool_calls,
             json_output: self.json_output,
             force_call_user,

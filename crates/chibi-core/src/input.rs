@@ -164,6 +164,9 @@ pub struct Flags {
     /// Omit tools from API requests entirely (--no-tool-calls)
     #[serde(default)]
     pub no_tool_calls: bool,
+    /// Show thinking/reasoning content (--show-thinking, verbose overrides)
+    #[serde(default)]
+    pub show_thinking: bool,
     /// Disable markdown rendering (--raw)
     #[serde(default)]
     pub raw: bool,
@@ -197,6 +200,7 @@ mod tests {
         let flags = Flags {
             verbose: true,
             hide_tool_calls: false,
+            show_thinking: false,
             no_tool_calls: false,
             json_output: true,
             force_call_user: false,

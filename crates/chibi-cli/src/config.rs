@@ -265,6 +265,8 @@ pub struct ResolvedConfig {
     pub core: CoreResolvedConfig,
     /// Render LLM output as formatted markdown in the terminal
     pub render_markdown: bool,
+    /// Show thinking/reasoning content (default: false, verbose overrides)
+    pub show_thinking: bool,
     /// Image rendering, fetching, and caching configuration
     pub image: ImageConfig,
     /// Markdown rendering color scheme
@@ -277,6 +279,7 @@ impl ResolvedConfig {
     pub fn get_field(&self, path: &str) -> Option<String> {
         match path {
             "render_markdown" => Some(self.render_markdown.to_string()),
+            "show_thinking" => Some(self.show_thinking.to_string()),
             "image.render_images" => Some(self.image.render_images.to_string()),
             "image.max_download_bytes" => Some(self.image.max_download_bytes.to_string()),
             "image.fetch_timeout_seconds" => Some(self.image.fetch_timeout_seconds.to_string()),
@@ -299,6 +302,7 @@ impl ResolvedConfig {
     pub fn list_fields() -> Vec<&'static str> {
         let mut fields = vec![
             "render_markdown",
+            "show_thinking",
             "image.render_images",
             "image.max_download_bytes",
             "image.fetch_timeout_seconds",
@@ -414,6 +418,9 @@ pub struct MarkdownStyleOverride {
 struct RawCliConfig {
     #[serde(default = "default_true_val")]
     pub render_markdown: bool,
+    /// Show thinking/reasoning content (default: false, verbose overrides)
+    #[serde(default)]
+    pub show_thinking: bool,
     #[serde(default)]
     pub image: ImageConfig,
     #[serde(default)]
@@ -424,6 +431,8 @@ struct RawCliConfig {
 #[derive(Debug, Clone)]
 pub struct CliConfig {
     pub render_markdown: bool,
+    /// Show thinking/reasoning content (default: false, verbose overrides)
+    pub show_thinking: bool,
     pub image: ImageConfig,
     pub markdown_style: MarkdownStyle,
 }
@@ -432,6 +441,7 @@ impl Default for CliConfig {
     fn default() -> Self {
         Self {
             render_markdown: true,
+            show_thinking: false,
             image: ImageConfig::default(),
             markdown_style: default_markdown_style(),
         }
@@ -443,6 +453,7 @@ impl CliConfig {
     pub fn merge_with(&self, overrides: &CliConfigOverride) -> Self {
         Self {
             render_markdown: overrides.render_markdown.unwrap_or(self.render_markdown),
+            show_thinking: overrides.show_thinking.unwrap_or(self.show_thinking),
             image: self.image.merge_with(&overrides.image),
             markdown_style: merge_markdown_style(&self.markdown_style, &overrides.markdown_style),
         }
@@ -453,6 +464,7 @@ impl CliConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CliConfigOverride {
     pub render_markdown: Option<bool>,
+    pub show_thinking: Option<bool>,
     #[serde(default)]
     pub image: ImageConfigOverride,
     #[serde(default)]
@@ -542,6 +554,7 @@ pub fn load_cli_config(home: &Path, context_name: Option<&str>) -> io::Result<Cl
         // Convert raw config to resolved config by merging with defaults
         CliConfig {
             render_markdown: raw.render_markdown,
+            show_thinking: raw.show_thinking,
             image: raw.image,
             markdown_style: merge_markdown_style(&default_markdown_style(), &raw.markdown_style),
         }
@@ -678,6 +691,7 @@ max_height_lines = 10
     fn test_cli_config_merge_with() {
         let base = CliConfig {
             render_markdown: true,
+            show_thinking: false,
             image: ImageConfig {
                 max_height_lines: 25,
                 ..Default::default()
@@ -687,6 +701,7 @@ max_height_lines = 10
 
         let overrides = CliConfigOverride {
             render_markdown: Some(false),
+            show_thinking: None,
             image: ImageConfigOverride {
                 max_height_lines: Some(50),
                 ..Default::default()
