@@ -595,9 +595,9 @@ async fn collect_streaming_response<S: ResponseSink>(
                 }
             }
             ChatEvent::Reasoning(chunk) => {
-                // Reasoning content - could log in verbose mode or ignore
-                if verbose {
-                    eprintln!("[Reasoning] {}", chunk);
+                // Reasoning is ephemeral thinking, not part of the assistant's reply content
+                if !json_mode {
+                    sink.handle(ResponseEvent::Reasoning(&chunk))?;
                 }
             }
             ChatEvent::ToolCallStart { index, id, name } => {

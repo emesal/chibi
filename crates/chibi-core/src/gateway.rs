@@ -5,8 +5,9 @@
 
 use crate::config::{self, ResolvedConfig};
 use ratatoskr::{
-    ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr, ToolCall,
-    ToolChoice as RatatoskrToolChoice, ToolDefinition,
+    ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr,
+    ReasoningConfig as RatatoskrReasoningConfig, ReasoningEffort as RatatoskrReasoningEffort,
+    ToolCall, ToolChoice as RatatoskrToolChoice, ToolDefinition,
 };
 use std::io;
 
@@ -93,6 +94,10 @@ pub fn to_chat_options(config: &ResolvedConfig) -> ChatOptions {
         opts = opts.tool_choice(to_ratatoskr_tool_choice(tool_choice));
     }
 
+    if !api.reasoning.is_empty() {
+        opts = opts.reasoning(to_ratatoskr_reasoning(&api.reasoning));
+    }
+
     opts
 }
 
@@ -107,6 +112,22 @@ fn to_ratatoskr_tool_choice(choice: &config::ToolChoice) -> RatatoskrToolChoice 
         config::ToolChoice::Function { function, .. } => RatatoskrToolChoice::Function {
             name: function.name.clone(),
         },
+    }
+}
+
+/// Convert chibi's ReasoningConfig to ratatoskr's ReasoningConfig.
+fn to_ratatoskr_reasoning(reasoning: &config::ReasoningConfig) -> RatatoskrReasoningConfig {
+    RatatoskrReasoningConfig {
+        effort: reasoning.effort.map(|e| match e {
+            config::ReasoningEffort::XHigh => RatatoskrReasoningEffort::XHigh,
+            config::ReasoningEffort::High => RatatoskrReasoningEffort::High,
+            config::ReasoningEffort::Medium => RatatoskrReasoningEffort::Medium,
+            config::ReasoningEffort::Low => RatatoskrReasoningEffort::Low,
+            config::ReasoningEffort::Minimal => RatatoskrReasoningEffort::Minimal,
+            config::ReasoningEffort::None => RatatoskrReasoningEffort::None,
+        }),
+        max_tokens: reasoning.max_tokens,
+        exclude_from_output: reasoning.exclude,
     }
 }
 

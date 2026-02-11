@@ -23,6 +23,8 @@ pub struct CliResponseSink<'a> {
     verbose: bool,
     /// Whether to display tool call diagnostics (independent of verbose)
     show_tool_calls: bool,
+    /// Whether we're currently inside a reasoning/thinking block
+    in_reasoning: bool,
 }
 
 impl<'a> CliResponseSink<'a> {
@@ -48,7 +50,19 @@ impl<'a> CliResponseSink<'a> {
             markdown_config,
             verbose,
             show_tool_calls,
+            in_reasoning: false,
         }
+    }
+}
+
+impl CliResponseSink<'_> {
+    /// Close an open reasoning/thinking block by emitting the closing tag.
+    fn close_reasoning(&mut self) -> io::Result<()> {
+        if let Some(md) = &mut self.markdown {
+            md.write_chunk("\n</think>\n")?;
+        }
+        self.in_reasoning = false;
+        Ok(())
     }
 }
 
@@ -56,7 +70,19 @@ impl ResponseSink for CliResponseSink<'_> {
     fn handle(&mut self, event: ResponseEvent<'_>) -> io::Result<()> {
         match event {
             ResponseEvent::TextChunk(chunk) => {
+                if self.in_reasoning {
+                    self.close_reasoning()?;
+                }
                 if let Some(md) = &mut self.markdown {
+                    md.write_chunk(chunk)?;
+                }
+            }
+            ResponseEvent::Reasoning(chunk) => {
+                if let Some(md) = &mut self.markdown {
+                    if !self.in_reasoning {
+                        md.write_chunk("<think>\n")?;
+                        self.in_reasoning = true;
+                    }
                     md.write_chunk(chunk)?;
                 }
             }
@@ -74,6 +100,9 @@ impl ResponseSink for CliResponseSink<'_> {
                 self.output.emit(&entry)?;
             }
             ResponseEvent::Finished => {
+                if self.in_reasoning {
+                    self.close_reasoning()?;
+                }
                 if let Some(mut md) = self.markdown.take() {
                     md.finish()?;
                 }
@@ -99,6 +128,7 @@ impl ResponseSink for CliResponseSink<'_> {
                     .markdown_config
                     .as_ref()
                     .map(|cfg| MarkdownStream::new(cfg.clone()));
+                self.in_reasoning = false;
             }
         }
         Ok(())
