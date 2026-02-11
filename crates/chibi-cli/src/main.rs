@@ -141,6 +141,7 @@ fn resolve_cli_config(
     Ok(ResolvedConfig {
         core,
         render_markdown: cli.render_markdown,
+        show_thinking: cli.show_thinking,
         image: cli.image,
         markdown_style: cli.markdown_style,
     })
@@ -333,6 +334,7 @@ async fn execute_from_input(
 ) -> io::Result<()> {
     let verbose = input.flags.verbose;
     let show_tool_calls = !input.flags.hide_tool_calls || verbose;
+    let show_thinking_flag = input.flags.show_thinking || verbose;
     let json_output = input.flags.json_output;
 
     // Initialize session (executes OnStart hooks)
@@ -664,7 +666,13 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
+                let mut sink = CliResponseSink::new(
+                    output,
+                    md_config,
+                    verbose,
+                    show_tool_calls,
+                    show_thinking_flag || resolved.show_thinking,
+                );
                 chibi
                     .send_prompt_streaming(
                         &working_context,
@@ -744,7 +752,13 @@ async fn execute_from_input(
                 None
             };
 
-            let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
+            let mut sink = CliResponseSink::new(
+                output,
+                md_config,
+                verbose,
+                show_tool_calls,
+                show_thinking_flag || resolved.show_thinking,
+            );
             chibi
                 .send_prompt_streaming(
                     &working_context,
@@ -818,7 +832,13 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
+                let mut sink = CliResponseSink::new(
+                    output,
+                    md_config,
+                    verbose,
+                    show_tool_calls,
+                    show_thinking_flag || resolved.show_thinking,
+                );
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
@@ -887,7 +907,13 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls);
+                let mut sink = CliResponseSink::new(
+                    output,
+                    md_config,
+                    verbose,
+                    show_tool_calls,
+                    show_thinking_flag || resolved.show_thinking,
+                );
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
