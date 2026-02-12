@@ -277,13 +277,11 @@ release version:
   cargo clippy --all-targets --locked -- -D warnings || (echo "❌ Clippy errors found." && exit 1)
   cargo nextest run --all-targets --locked || (echo "❌ Tests failed." && exit 1)
 
-  # Squash merge dev into main
+  # Create release commit on main with dev's tree (no merge conflicts, no history leak)
   git checkout main
   git pull
-  git merge --squash dev
-
-  # Commit with release message
-  git commit -m "Release v{{version}}"
+  RELEASE_COMMIT=$(git commit-tree dev^{tree} -p HEAD -m "Release v{{version}}")
+  git reset --hard "$RELEASE_COMMIT"
 
   # Tag the release
   git tag -a "v{{version}}" -m "Release v{{version}}"
@@ -300,12 +298,10 @@ push-release version:
   git push origin main
   git push origin "v{{version}}"
 
-  # Sync dev forward
+  # Return to dev
   git checkout dev
-  git merge main
-  git push origin dev
 
-  echo "✓ Released v{{version}} and synced dev"
+  echo "✓ Released v{{version}}"
 
 # Update dependencies after release
 update-deps:
