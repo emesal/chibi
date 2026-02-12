@@ -37,12 +37,14 @@ pub fn create_tool_call_entry(
     context_name: &str,
     tool_name: &str,
     arguments: &str,
+    tool_call_id: &str,
 ) -> TranscriptEntry {
     TranscriptEntry::builder()
         .from(context_name)
         .to(tool_name)
         .content(arguments)
         .entry_type(ENTRY_TYPE_TOOL_CALL)
+        .tool_call_id(tool_call_id)
         .build()
 }
 
@@ -51,12 +53,14 @@ pub fn create_tool_result_entry(
     context_name: &str,
     tool_name: &str,
     result: &str,
+    tool_call_id: &str,
 ) -> TranscriptEntry {
     TranscriptEntry::builder()
         .from(tool_name)
         .to(context_name)
         .content(result)
         .entry_type(ENTRY_TYPE_TOOL_RESULT)
+        .tool_call_id(tool_call_id)
         .build()
 }
 

@@ -1283,7 +1283,25 @@ async fn process_tool_calls<S: ResponseSink>(
         results[*idx] = Some(result);
     }
 
-    // Emit results in original tool_call order
+    // Write all tool_call entries to transcript first (matches API message order:
+    // one assistant message with tool_calls[], then individual tool result messages)
+    for (i, tc) in tool_calls.iter().enumerate() {
+        let tool_call_entry = create_tool_call_entry(context_name, &tc.name, &tc.arguments, &tc.id);
+        app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
+        sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
+
+        // Pre-log verbose diagnostic while we're iterating
+        if verbose && let Some(result) = &results[i] {
+            for diag in &result.diagnostics {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: diag.clone(),
+                    verbose_only: true,
+                })?;
+            }
+        }
+    }
+
+    // Emit sink events and write tool_result entries in original order
     for (i, tc) in tool_calls.iter().enumerate() {
         let result = results[i]
             .take()
@@ -1296,29 +1314,28 @@ async fn process_tool_calls<S: ResponseSink>(
             })?;
         }
 
-        // Emit diagnostics collected during parallel execution
-        for diag in &result.diagnostics {
-            sink.handle(ResponseEvent::Diagnostic {
-                message: diag.clone(),
-                verbose_only: true,
-            })?;
+        // Emit diagnostics collected during parallel execution (if not already emitted)
+        if !verbose {
+            for diag in &result.diagnostics {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: diag.clone(),
+                    verbose_only: true,
+                })?;
+            }
         }
 
         sink.handle(ResponseEvent::ToolStart {
             name: tc.name.clone(),
         })?;
 
-        // Log tool call and result to transcript
-        let tool_call_entry = create_tool_call_entry(context_name, &tc.name, &tc.arguments);
-        app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
-        sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
-
+        // Log tool result to transcript
         let logged_result = if result.was_cached {
             &result.final_result
         } else {
             &result.original_result
         };
-        let tool_result_entry = create_tool_result_entry(context_name, &tc.name, logged_result);
+        let tool_result_entry =
+            create_tool_result_entry(context_name, &tc.name, logged_result, &tc.id);
         app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(tool_result_entry))?;
 
@@ -1572,15 +1589,17 @@ async fn send_prompt_loop<S: ResponseSink>(
             Vec::new()
         };
 
-        // Add conversation messages (skip system messages)
+        // Add conversation messages (skip system messages, strip internal _id field)
         for m in &context.messages {
-            if m.role == "system" {
+            let role = m["role"].as_str().unwrap_or("");
+            if role == "system" {
                 continue;
             }
-            messages.push(serde_json::json!({
-                "role": m.role,
-                "content": m.content,
-            }));
+            let mut msg = m.clone();
+            if let Some(obj) = msg.as_object_mut() {
+                obj.remove("_id");
+            }
+            messages.push(msg);
         }
 
         // === Prepare Tools ===

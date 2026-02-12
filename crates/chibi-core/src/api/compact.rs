@@ -6,7 +6,7 @@
 //! - By-name compaction: compact a specific context without LLM
 
 use crate::config::ResolvedConfig;
-use crate::context::{Context, Message, now_timestamp};
+use crate::context::{Context, now_timestamp};
 use crate::gateway;
 use crate::state::AppState;
 use crate::tools;
@@ -25,10 +25,10 @@ pub async fn rolling_compact(
     let mut context = app.get_or_create_context(context_name)?;
 
     // Skip system messages when counting
-    let non_system_messages: Vec<_> = context
+    let non_system_messages: Vec<&serde_json::Value> = context
         .messages
         .iter()
-        .filter(|m| m.role != "system")
+        .filter(|m| m["role"].as_str() != Some("system"))
         .collect();
 
     if non_system_messages.len() <= 4 {
@@ -50,18 +50,32 @@ pub async fn rolling_compact(
     let goals = app.load_goals(context_name)?;
     let todos = app.load_todos(context_name)?;
 
-    // Build message list in transcript format for LLM to analyze
+    // Build message list in transcript format for LLM to analyze.
+    // For tool messages, include a summary representation.
     let messages_for_llm: Vec<serde_json::Value> = non_system_messages
         .iter()
         .map(|m| {
-            serde_json::json!({
-                "id": m.id,
-                "role": m.role,
-                "content": if m.content.len() > 500 {
-                    format!("{}... [truncated]", &m.content[..500])
+            let id = m["_id"].as_str().unwrap_or("");
+            let role = m["role"].as_str().unwrap_or("");
+            let content_repr = if let Some(tool_calls) = m["tool_calls"].as_array() {
+                // Assistant message with tool calls
+                let names: Vec<&str> = tool_calls
+                    .iter()
+                    .filter_map(|tc| tc["function"]["name"].as_str())
+                    .collect();
+                format!("[tool calls: {}]", names.join(", "))
+            } else {
+                let content = m["content"].as_str().unwrap_or("");
+                if content.len() > 500 {
+                    format!("{}... [truncated]", &content[..500])
                 } else {
-                    m.content.clone()
+                    content.to_string()
                 }
+            };
+            serde_json::json!({
+                "id": id,
+                "role": role,
+                "content": content_repr,
             })
         })
         .collect();
@@ -88,6 +102,7 @@ Consider:
 2. Keep recent messages (they provide immediate context)
 3. Archive older messages that have been superseded or are less relevant
 4. Preserve messages containing important decisions or key information
+5. Tool call messages and their results should be archived together
 
 Return ONLY a JSON array of message IDs to archive, e.g.: ["id1", "id2", "id3"]
 No explanation, just the JSON array."#,
@@ -135,8 +150,10 @@ No explanation, just the JSON array."#,
         Err(_) => Vec::new(),
     };
 
-    // Determine which messages to actually drop
-    let messages_to_drop: Vec<&Message> = if ids_to_drop.is_empty() {
+    // Determine which messages to actually drop.
+    // Tool exchanges (assistant with tool_calls + subsequent tool results) are atomic:
+    // if the assistant message is dropped, drop associated tool results too.
+    let messages_to_drop: Vec<&serde_json::Value> = if ids_to_drop.is_empty() {
         // Fallback: drop oldest N messages based on percentage
         if verbose {
             eprintln!(
@@ -158,7 +175,10 @@ No explanation, just the JSON array."#,
         }
         non_system_messages
             .iter()
-            .filter(|m| ids_to_drop.contains(&m.id))
+            .filter(|m| {
+                let id = m["_id"].as_str().unwrap_or("");
+                ids_to_drop.iter().any(|drop_id| drop_id == id)
+            })
             .copied()
             .collect()
     };
@@ -173,11 +193,42 @@ No explanation, just the JSON array."#,
     // Build text of messages to summarize
     let mut stripped_text = String::new();
     for m in &messages_to_drop {
-        stripped_text.push_str(&format!("[{}]: {}\n\n", m.role.to_uppercase(), m.content));
+        let role = m["role"].as_str().unwrap_or("unknown").to_uppercase();
+        if let Some(tool_calls) = m["tool_calls"].as_array() {
+            let names: Vec<&str> = tool_calls
+                .iter()
+                .filter_map(|tc| tc["function"]["name"].as_str())
+                .collect();
+            stripped_text.push_str(&format!(
+                "[{}]: [called tools: {}]\n\n",
+                role,
+                names.join(", ")
+            ));
+        } else {
+            let content = m["content"].as_str().unwrap_or("");
+            stripped_text.push_str(&format!("[{}]: {}\n\n", role, content));
+        }
     }
 
     // Collect IDs of messages to drop for filtering
-    let drop_ids: std::collections::HashSet<_> = messages_to_drop.iter().map(|m| &m.id).collect();
+    let drop_ids: std::collections::HashSet<String> = messages_to_drop
+        .iter()
+        .filter_map(|m| m["_id"].as_str().map(|s| s.to_string()))
+        .collect();
+
+    // Also collect tool_call_ids from dropped assistant messages so we can
+    // atomically drop their tool results
+    let mut drop_tool_call_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for m in &messages_to_drop {
+        if let Some(tool_calls) = m["tool_calls"].as_array() {
+            for tc in tool_calls {
+                if let Some(id) = tc["id"].as_str() {
+                    drop_tool_call_ids.insert(id.to_string());
+                }
+            }
+        }
+    }
 
     // Second LLM call: update summary with dropped content
     let update_prompt = format!(
@@ -236,11 +287,29 @@ Output ONLY the updated summary, no preamble."#,
     // Drop the borrow by ending use of messages_to_drop
     drop(messages_to_drop);
 
-    // Filter out dropped messages, keeping system messages and non-dropped messages
-    let remaining_messages: Vec<Message> = context
+    // Filter out dropped messages, keeping system messages and non-dropped messages.
+    // Tool results whose tool_call_id matches a dropped assistant message are also dropped.
+    let remaining_messages: Vec<serde_json::Value> = context
         .messages
         .iter()
-        .filter(|m| m.role == "system" || !drop_ids.contains(&m.id))
+        .filter(|m| {
+            let role = m["role"].as_str().unwrap_or("");
+            if role == "system" {
+                return true;
+            }
+            let id = m["_id"].as_str().unwrap_or("");
+            if drop_ids.contains(id) {
+                return false;
+            }
+            // Atomic tool exchange: drop tool results whose call was dropped
+            if role == "tool"
+                && let Some(tc_id) = m["tool_call_id"].as_str()
+                && drop_tool_call_ids.contains(tc_id)
+            {
+                return false;
+            }
+            true
+        })
         .cloned()
         .collect();
 
@@ -410,13 +479,34 @@ async fn compact_context_with_llm_internal(
         &compaction_prompt
     };
 
-    // Build conversation text for summarization
+    // Build conversation text for summarization, including tool interactions
     let mut conversation_text = String::new();
     for m in &context.messages {
-        if m.role == "system" {
+        let role = m["role"].as_str().unwrap_or("unknown");
+        if role == "system" {
             continue;
         }
-        conversation_text.push_str(&format!("[{}]: {}\n\n", m.role.to_uppercase(), m.content));
+        if let Some(tool_calls) = m["tool_calls"].as_array() {
+            let names: Vec<&str> = tool_calls
+                .iter()
+                .filter_map(|tc| tc["function"]["name"].as_str())
+                .collect();
+            conversation_text.push_str(&format!(
+                "[ASSISTANT]: [called tools: {}]\n\n",
+                names.join(", ")
+            ));
+        } else if role == "tool" {
+            let content = m["content"].as_str().unwrap_or("");
+            let preview = if content.len() > 200 {
+                format!("{}... [truncated]", &content[..200])
+            } else {
+                content.to_string()
+            };
+            conversation_text.push_str(&format!("[TOOL RESULT]: {}\n\n", preview));
+        } else {
+            let content = m["content"].as_str().unwrap_or("");
+            conversation_text.push_str(&format!("[{}]: {}\n\n", role.to_uppercase(), content));
+        }
     }
 
     // Prepare messages for compaction request
@@ -461,16 +551,19 @@ async fn compact_context_with_llm_internal(
 
     // Add system prompt as first message
     if !system_prompt.is_empty() {
-        new_context
-            .messages
-            .push(Message::new("system", system_prompt.clone()));
+        new_context.messages.push(json!({
+            "_id": uuid::Uuid::new_v4().to_string(),
+            "role": "system",
+            "content": system_prompt,
+        }));
     }
 
     // Add continuation prompt + summary as user message
-    new_context.messages.push(Message::new(
-        "user",
-        format!("{}\n\n--- SUMMARY ---\n{}", continuation_prompt, summary),
-    ));
+    new_context.messages.push(json!({
+        "_id": uuid::Uuid::new_v4().to_string(),
+        "role": "user",
+        "content": format!("{}\n\n--- SUMMARY ---\n{}", continuation_prompt, summary),
+    }));
 
     // Add assistant acknowledgment
     let ack_messages = vec![
@@ -486,9 +579,11 @@ async fn compact_context_with_llm_internal(
 
     let acknowledgment = gateway::chat(resolved_config, &ack_messages).await?;
 
-    new_context
-        .messages
-        .push(Message::new("assistant", acknowledgment));
+    new_context.messages.push(json!({
+        "_id": uuid::Uuid::new_v4().to_string(),
+        "role": "assistant",
+        "content": acknowledgment,
+    }));
 
     // Finalize compaction: write anchor to transcript and mark dirty
     app.finalize_compaction(&new_context.name, &summary)?;

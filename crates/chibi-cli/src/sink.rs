@@ -196,6 +196,7 @@ mod tests {
             content: "Hello".to_string(),
             entry_type: "message".to_string(),
             metadata: None,
+            tool_call_id: None,
         };
 
         // Should not panic
