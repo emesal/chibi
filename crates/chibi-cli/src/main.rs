@@ -636,7 +636,7 @@ async fn execute_from_input(
                 if input.flags.no_tool_calls {
                     resolved.core.no_tool_calls = true;
                 }
-                let use_reflection = chibi.app.config.reflection_enabled;
+                let use_reflection = resolved.core.reflection_enabled;
 
                 let context_dir = chibi.app.context_dir(&working_context);
                 let _lock = chibi_core::lock::ContextLock::acquire(
@@ -724,7 +724,7 @@ async fn execute_from_input(
             if input.flags.no_tool_calls {
                 resolved.core.no_tool_calls = true;
             }
-            let use_reflection = chibi.app.config.reflection_enabled;
+            let use_reflection = resolved.core.reflection_enabled;
 
             // Acquire context lock
             let context_dir = chibi.app.context_dir(&ctx_name);
@@ -804,7 +804,7 @@ async fn execute_from_input(
                 if input.flags.no_tool_calls {
                     resolved.core.no_tool_calls = true;
                 }
-                let use_reflection = chibi.app.config.reflection_enabled;
+                let use_reflection = resolved.core.reflection_enabled;
 
                 // Acquire context lock
                 let context_dir = chibi.app.context_dir(&ctx_name);
@@ -879,7 +879,7 @@ async fn execute_from_input(
                 if input.flags.no_tool_calls {
                     resolved.core.no_tool_calls = true;
                 }
-                let use_reflection = chibi.app.config.reflection_enabled;
+                let use_reflection = resolved.core.reflection_enabled;
 
                 // Acquire context lock
                 let context_dir = chibi.app.context_dir(&ctx_name);
