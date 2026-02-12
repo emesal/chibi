@@ -68,7 +68,7 @@ pub fn json_tool_to_definition(json: &serde_json::Value) -> io::Result<ToolDefin
 
 /// Convert ResolvedConfig to ChatOptions.
 pub fn to_chat_options(config: &ResolvedConfig) -> ChatOptions {
-    let mut opts = ChatOptions::default().model(&config.model);
+    let mut opts = ChatOptions::new(&config.model);
 
     let api = &config.api;
 
