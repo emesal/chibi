@@ -17,13 +17,12 @@ Chibi is a minimal, composable building block for LLM interactions — not an ag
 ## Build
 
 ```bash
-git submodule update --init --recursive  # First time setup
 cargo build                              # Debug build
 cargo test                               # Run tests
 cargo install --path .                   # Install to ~/.cargo/bin
 ```
 
-Vendored dependency: `vendor/streamdown-rs/` (forked markdown renderer).
+Git dependencies: [ratatoskr](https://github.com/emesal/ratatoskr) (LLM API client), [streamdown-rs](https://github.com/emesal/streamdown-rs) (markdown renderer).
 
 ## Architecture
 

@@ -326,8 +326,8 @@ impl ConfigDefaults {
     // Numeric defaults
     pub const AUTO_COMPACT_THRESHOLD: f32 = 80.0;
     pub const REFLECTION_CHARACTER_LIMIT: usize = 10_000;
-    pub const MAX_RECURSION_DEPTH: usize = 30;
-    pub const MAX_EMPTY_RESPONSES: usize = 2;
+    pub const FUEL: usize = 30;
+    pub const FUEL_EMPTY_RESPONSE_COST: usize = 15;
     pub const LOCK_HEARTBEAT_SECONDS: u64 = 30;
     pub const ROLLING_COMPACT_DROP_PERCENTAGE: f32 = 50.0;
     pub const TOOL_OUTPUT_CACHE_THRESHOLD: usize = 4_000;
@@ -361,11 +361,11 @@ fn default_reflection_enabled() -> bool {
 fn default_reflection_character_limit() -> usize {
     ConfigDefaults::REFLECTION_CHARACTER_LIMIT
 }
-fn default_max_recursion_depth() -> usize {
-    ConfigDefaults::MAX_RECURSION_DEPTH
+fn default_fuel() -> usize {
+    ConfigDefaults::FUEL
 }
-fn default_max_empty_responses() -> usize {
-    ConfigDefaults::MAX_EMPTY_RESPONSES
+fn default_fuel_empty_response_cost() -> usize {
+    ConfigDefaults::FUEL_EMPTY_RESPONSE_COST
 }
 fn default_lock_heartbeat_seconds() -> u64 {
     ConfigDefaults::LOCK_HEARTBEAT_SECONDS
@@ -423,13 +423,16 @@ pub struct Config {
     /// Maximum characters for reflection tool output
     #[serde(default = "default_reflection_character_limit")]
     pub reflection_character_limit: usize,
-    #[serde(default = "default_max_recursion_depth")]
-    pub max_recursion_depth: usize,
-    /// Maximum consecutive empty responses before stopping the agentic loop
-    #[serde(default = "default_max_empty_responses")]
-    pub max_empty_responses: usize,
+    /// Total fuel budget for the agentic loop (tool rounds, continuations, empty responses)
+    #[serde(default = "default_fuel")]
+    pub fuel: usize,
+    /// Fuel cost of an empty response (high cost prevents infinite empty loops)
+    #[serde(default = "default_fuel_empty_response_cost")]
+    pub fuel_empty_response_cost: usize,
     #[serde(default = "default_username")]
     pub username: String,
+    /// Lock heartbeat interval in seconds. Intentionally global-only (not in ResolvedConfig)
+    /// since lock behaviour must be consistent regardless of active context.
     #[serde(default = "default_lock_heartbeat_seconds")]
     pub lock_heartbeat_seconds: u64,
     #[serde(default = "default_rolling_compact_drop_percentage")]
@@ -475,12 +478,15 @@ pub struct LocalConfig {
     pub no_tool_calls: Option<bool>,
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
-    pub max_recursion_depth: Option<usize>,
-    /// Maximum consecutive empty responses before stopping the agentic loop
-    pub max_empty_responses: Option<usize>,
+    /// Per-context fuel budget override
+    pub fuel: Option<usize>,
+    /// Per-context fuel cost for empty responses
+    pub fuel_empty_response_cost: Option<usize>,
     pub warn_threshold_percent: Option<f32>,
     pub context_window_limit: Option<usize>,
     pub reflection_enabled: Option<bool>,
+    pub reflection_character_limit: Option<usize>,
+    pub rolling_compact_drop_percentage: Option<f32>,
     /// Threshold (in chars) above which tool output is cached
     pub tool_output_cache_threshold: Option<usize>,
     /// Maximum age in days for cached tool outputs
@@ -542,11 +548,16 @@ pub struct ResolvedConfig {
     pub no_tool_calls: bool,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
-    pub max_recursion_depth: usize,
-    /// Maximum consecutive empty responses before stopping the agentic loop
-    pub max_empty_responses: usize,
+    /// Total fuel budget for the agentic loop
+    pub fuel: usize,
+    /// Fuel cost of an empty response
+    pub fuel_empty_response_cost: usize,
     pub username: String,
     pub reflection_enabled: bool,
+    /// Character limit for reflection output
+    pub reflection_character_limit: usize,
+    /// Percentage of messages to drop during rolling compaction
+    pub rolling_compact_drop_percentage: f32,
     /// Threshold (in chars) above which tool output is cached
     pub tool_output_cache_threshold: usize,
     /// Maximum age in days for cached tool outputs
@@ -563,6 +574,8 @@ pub struct ResolvedConfig {
     pub tools: ToolsConfig,
     /// Fallback tool (call_agent or call_user)
     pub fallback_tool: String,
+    /// Storage configuration for partitioned context storage
+    pub storage: StorageConfig,
 }
 
 impl ResolvedConfig {
@@ -581,9 +594,14 @@ impl ResolvedConfig {
             "warn_threshold_percent" => Some(format!("{}", self.warn_threshold_percent as i32)),
             "auto_compact" => Some(self.auto_compact.to_string()),
             "auto_compact_threshold" => Some(format!("{}", self.auto_compact_threshold as i32)),
-            "max_recursion_depth" => Some(self.max_recursion_depth.to_string()),
-            "max_empty_responses" => Some(self.max_empty_responses.to_string()),
+            "fuel" => Some(self.fuel.to_string()),
+            "fuel_empty_response_cost" => Some(self.fuel_empty_response_cost.to_string()),
             "reflection_enabled" => Some(self.reflection_enabled.to_string()),
+            "reflection_character_limit" => Some(self.reflection_character_limit.to_string()),
+            "rolling_compact_drop_percentage" => {
+                Some(format!("{}", self.rolling_compact_drop_percentage))
+            }
+            "fallback_tool" => Some(self.fallback_tool.clone()),
             "tool_output_cache_threshold" => Some(self.tool_output_cache_threshold.to_string()),
             "tool_cache_max_age_days" => Some(self.tool_cache_max_age_days.to_string()),
             "auto_cleanup_cache" => Some(self.auto_cleanup_cache.to_string()),
@@ -613,6 +631,22 @@ impl ResolvedConfig {
             "api.reasoning.exclude" => self.api.reasoning.exclude.map(|v| v.to_string()),
             "api.reasoning.enabled" => self.api.reasoning.enabled.map(|v| v.to_string()),
 
+            // Storage config (storage.*)
+            "storage.partition_max_entries" => {
+                self.storage.partition_max_entries.map(|v| v.to_string())
+            }
+            "storage.partition_max_age_seconds" => self
+                .storage
+                .partition_max_age_seconds
+                .map(|v| v.to_string()),
+            "storage.partition_max_tokens" => {
+                self.storage.partition_max_tokens.map(|v| v.to_string())
+            }
+            "storage.bytes_per_token" => self.storage.bytes_per_token.map(|v| v.to_string()),
+            "storage.enable_bloom_filters" => {
+                self.storage.enable_bloom_filters.map(|v| v.to_string())
+            }
+
             _ => None,
         }
     }
@@ -631,9 +665,12 @@ impl ResolvedConfig {
             "warn_threshold_percent",
             "auto_compact",
             "auto_compact_threshold",
-            "max_recursion_depth",
-            "max_empty_responses",
+            "fuel",
+            "fuel_empty_response_cost",
             "reflection_enabled",
+            "reflection_character_limit",
+            "rolling_compact_drop_percentage",
+            "fallback_tool",
             "tool_output_cache_threshold",
             "tool_cache_max_age_days",
             "auto_cleanup_cache",
@@ -654,6 +691,12 @@ impl ResolvedConfig {
             "api.reasoning.max_tokens",
             "api.reasoning.exclude",
             "api.reasoning.enabled",
+            // Storage
+            "storage.partition_max_entries",
+            "storage.partition_max_age_seconds",
+            "storage.partition_max_tokens",
+            "storage.bytes_per_token",
+            "storage.enable_bloom_filters",
         ]
     }
 }
@@ -736,10 +779,12 @@ mod tests {
             no_tool_calls: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
-            max_recursion_depth: 30,
-            max_empty_responses: 2,
+            fuel: 30,
+            fuel_empty_response_cost: 15,
             username: "testuser".to_string(),
             reflection_enabled: true,
+            reflection_character_limit: 10000,
+            rolling_compact_drop_percentage: 50.0,
             tool_output_cache_threshold: 4000,
             tool_cache_max_age_days: 7,
             auto_cleanup_cache: true,
@@ -748,6 +793,11 @@ mod tests {
             api: ApiParams::defaults(),
             tools: ToolsConfig::default(),
             fallback_tool: "call_user".to_string(),
+            storage: StorageConfig {
+                partition_max_entries: Some(500),
+                partition_max_tokens: Some(100_000),
+                ..Default::default()
+            },
         };
 
         assert_eq!(config.get_field("model"), Some("test-model".to_string()));
@@ -757,5 +807,17 @@ mod tests {
             config.get_field("file_tools_allowed_paths"),
             Some("/tmp".to_string())
         );
+
+        // Storage fields
+        assert_eq!(
+            config.get_field("storage.partition_max_entries"),
+            Some("500".to_string())
+        );
+        assert_eq!(
+            config.get_field("storage.partition_max_tokens"),
+            Some("100000".to_string())
+        );
+        assert_eq!(config.get_field("storage.bytes_per_token"), None); // Not set
+        assert_eq!(config.get_field("storage.enable_bloom_filters"), None); // Not set
     }
 }

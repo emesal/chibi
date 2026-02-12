@@ -172,6 +172,19 @@ impl StorageConfig {
     pub fn bloom_filters_enabled(&self) -> bool {
         self.enable_bloom_filters.unwrap_or(true)
     }
+
+    /// Merges another config, preferring `other`'s values when present.
+    pub fn merge(&self, other: &StorageConfig) -> StorageConfig {
+        StorageConfig {
+            partition_max_entries: other.partition_max_entries.or(self.partition_max_entries),
+            partition_max_age_seconds: other
+                .partition_max_age_seconds
+                .or(self.partition_max_age_seconds),
+            partition_max_tokens: other.partition_max_tokens.or(self.partition_max_tokens),
+            bytes_per_token: other.bytes_per_token.or(self.bytes_per_token),
+            enable_bloom_filters: other.enable_bloom_filters.or(self.enable_bloom_filters),
+        }
+    }
 }
 
 // ============================================================================
@@ -923,22 +936,6 @@ impl PartitionMeta {
     }
 }
 
-#[cfg(test)]
-impl StorageConfig {
-    /// Merges another config, preferring `other`'s values when present.
-    fn merge(&self, other: &StorageConfig) -> StorageConfig {
-        StorageConfig {
-            partition_max_entries: other.partition_max_entries.or(self.partition_max_entries),
-            partition_max_age_seconds: other
-                .partition_max_age_seconds
-                .or(self.partition_max_age_seconds),
-            partition_max_tokens: other.partition_max_tokens.or(self.partition_max_tokens),
-            bytes_per_token: other.bytes_per_token.or(self.bytes_per_token),
-            enable_bloom_filters: other.enable_bloom_filters.or(self.enable_bloom_filters),
-        }
-    }
-}
-
 // ============================================================================
 // Bloom Filter Implementation (using fastbloom by tomtomwombat)
 // ============================================================================
@@ -1007,6 +1004,7 @@ mod tests {
             content: content.to_string(),
             entry_type: "message".to_string(),
             metadata: None,
+            tool_call_id: None,
         }
     }
 
@@ -1019,6 +1017,7 @@ mod tests {
             content: content.to_string(),
             entry_type: "message".to_string(),
             metadata: None,
+            tool_call_id: None,
         }
     }
 

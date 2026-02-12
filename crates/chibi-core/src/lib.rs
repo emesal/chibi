@@ -54,7 +54,7 @@ pub use chibi::{Chibi, LoadOptions, project_chibi_dir, project_index_db_path};
 // Re-export commonly used types
 pub use api::{CollectingSink, PromptOptions, ResponseEvent, ResponseSink};
 pub use config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
-pub use context::{Context, ContextEntry, Message, TranscriptEntry};
+pub use context::{Context, ContextEntry, TranscriptEntry};
 pub use input::{Command, Flags, Inspectable};
 pub use partition::StorageConfig;
 pub use state::{AppState, StatePaths};

@@ -542,10 +542,12 @@ mod tests {
             no_tool_calls: false,
             auto_compact: false,
             auto_compact_threshold: 0.9,
-            max_recursion_depth: 5,
-            max_empty_responses: 3,
+            fuel: 5,
+            fuel_empty_response_cost: 15,
             username: "user".to_string(),
             reflection_enabled: false,
+            reflection_character_limit: 10000,
+            rolling_compact_drop_percentage: 50.0,
             tool_output_cache_threshold: 5000,
             tool_cache_max_age_days: 7,
             auto_cleanup_cache: false,
@@ -558,6 +560,7 @@ mod tests {
             },
             tools: ToolsConfig::default(),
             fallback_tool: "call_agent".to_string(),
+            storage: crate::partition::StorageConfig::default(),
         }
     }
 }

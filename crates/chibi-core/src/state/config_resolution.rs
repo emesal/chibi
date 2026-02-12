@@ -79,10 +79,12 @@ impl AppState {
             no_tool_calls: self.config.no_tool_calls,
             auto_compact: self.config.auto_compact,
             auto_compact_threshold: self.config.auto_compact_threshold,
-            max_recursion_depth: self.config.max_recursion_depth,
-            max_empty_responses: self.config.max_empty_responses,
+            fuel: self.config.fuel,
+            fuel_empty_response_cost: self.config.fuel_empty_response_cost,
             username: self.config.username.clone(),
             reflection_enabled: self.config.reflection_enabled,
+            reflection_character_limit: self.config.reflection_character_limit,
+            rolling_compact_drop_percentage: self.config.rolling_compact_drop_percentage,
             tool_output_cache_threshold: self.config.tool_output_cache_threshold,
             tool_cache_max_age_days: self.config.tool_cache_max_age_days,
             auto_cleanup_cache: self.config.auto_cleanup_cache,
@@ -91,6 +93,7 @@ impl AppState {
             api: api_params,
             tools: ToolsConfig::default(),
             fallback_tool: self.config.fallback_tool.clone(),
+            storage: self.config.storage.clone(),
         };
 
         // Apply local config overrides
@@ -121,17 +124,23 @@ impl AppState {
         if let Some(auto_compact_threshold) = local.auto_compact_threshold {
             resolved.auto_compact_threshold = auto_compact_threshold;
         }
-        if let Some(max_recursion_depth) = local.max_recursion_depth {
-            resolved.max_recursion_depth = max_recursion_depth;
+        if let Some(fuel) = local.fuel {
+            resolved.fuel = fuel;
         }
-        if let Some(max_empty_responses) = local.max_empty_responses {
-            resolved.max_empty_responses = max_empty_responses;
+        if let Some(fuel_empty_response_cost) = local.fuel_empty_response_cost {
+            resolved.fuel_empty_response_cost = fuel_empty_response_cost;
         }
         if let Some(ref username) = local.username {
             resolved.username = username.clone();
         }
         if let Some(reflection_enabled) = local.reflection_enabled {
             resolved.reflection_enabled = reflection_enabled;
+        }
+        if let Some(limit) = local.reflection_character_limit {
+            resolved.reflection_character_limit = limit;
+        }
+        if let Some(pct) = local.rolling_compact_drop_percentage {
+            resolved.rolling_compact_drop_percentage = pct;
         }
         if let Some(tool_output_cache_threshold) = local.tool_output_cache_threshold {
             resolved.tool_output_cache_threshold = tool_output_cache_threshold;
@@ -151,6 +160,9 @@ impl AppState {
         if let Some(ref fallback_tool) = local.fallback_tool {
             resolved.fallback_tool = fallback_tool.clone();
         }
+
+        // Apply context-level storage config overrides
+        resolved.storage = resolved.storage.merge(&local.storage);
 
         // Apply context-level API params (Layer 3)
         if let Some(ref local_api) = local.api {

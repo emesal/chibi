@@ -151,6 +151,9 @@ fn write_parameter_comments(out: &mut String, metadata: &ModelMetadata) {
             ParameterAvailability::Unsupported => {
                 // Skip unsupported parameters
             }
+            _ => {
+                writeln!(out, "# {}: supported", name).unwrap();
+            }
         }
     }
 }
@@ -164,6 +167,7 @@ fn format_capability(cap: &ratatoskr::ModelCapability) -> &'static str {
         ratatoskr::ModelCapability::Nli => "NLI",
         ratatoskr::ModelCapability::Classify => "Classify",
         ratatoskr::ModelCapability::Stance => "Stance",
+        _ => "Unknown",
     }
 }
 

@@ -2,7 +2,7 @@
 //!
 //! Methods for creating, loading, saving, clearing, destroying, renaming, and listing contexts.
 
-use crate::context::{Context, ContextEntry, Message, now_timestamp, validate_context_name};
+use crate::context::{Context, ContextEntry, now_timestamp, validate_context_name};
 use std::fs;
 use std::io::{self, ErrorKind};
 
@@ -51,7 +51,11 @@ impl AppState {
     }
 
     pub fn add_message(&self, context: &mut Context, role: String, content: String) {
-        context.messages.push(Message::new(role, content));
+        context.messages.push(serde_json::json!({
+            "_id": uuid::Uuid::new_v4().to_string(),
+            "role": role,
+            "content": content,
+        }));
         context.updated_at = now_timestamp();
     }
 

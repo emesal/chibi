@@ -95,16 +95,17 @@ reflection_enabled = true
 reflection_character_limit = 10000
 
 # =============================================================================
-# Safety Limits
+# Fuel Budget (Agentic Loop Limits)
 # =============================================================================
 
-# Maximum recursion depth for autonomous tool loops (default: 30)
-max_recursion_depth = 30
+# Total fuel budget for autonomous tool loops (default: 30)
+# Each tool-call round and agent continuation costs 1 fuel. First turn is free.
+fuel = 30
 
-# Maximum consecutive empty responses before stopping (default: 2)
-# When the LLM returns empty responses (no text and no tool calls) this many
-# times in a row, the agentic loop stops to prevent infinite loops.
-max_empty_responses = 2
+# Fuel cost of an empty LLM response (default: 15)
+# When the LLM returns an empty response (no text, no tool calls), this much
+# fuel is consumed. High cost prevents infinite empty-response loops.
+fuel_empty_response_cost = 15
 
 # Context lock heartbeat interval in seconds (default: 30)
 lock_heartbeat_seconds = 30
@@ -266,11 +267,11 @@ no_tool_calls = false
 auto_compact = true
 auto_compact_threshold = 85.0
 
-# Override recursion depth
-max_recursion_depth = 25
+# Override fuel budget
+fuel = 25
 
-# Override empty response limit
-max_empty_responses = 3
+# Override empty response fuel cost
+fuel_empty_response_cost = 20
 
 # Override reflection
 reflection_enabled = false

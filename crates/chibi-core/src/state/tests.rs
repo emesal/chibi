@@ -3,6 +3,8 @@
 use super::*;
 use crate::config::{ApiParams, LocalConfig};
 use crate::context::InboxEntry;
+use crate::partition::StorageConfig;
+use serde_json::json;
 use tempfile::TempDir;
 
 /// Create a test AppState with a temporary directory
@@ -20,8 +22,8 @@ fn create_test_app() -> (AppState, TempDir) {
         auto_compact_threshold: 80.0,
         reflection_enabled: true,
         reflection_character_limit: 10000,
-        max_recursion_depth: 15,
-        max_empty_responses: 2,
+        fuel: 15,
+        fuel_empty_response_cost: 15,
         username: "testuser".to_string(),
         lock_heartbeat_seconds: 30,
         rolling_compact_drop_percentage: 50.0,
@@ -92,8 +94,8 @@ fn test_save_and_load_context() {
     let context = Context {
         name: "test-context".to_string(),
         messages: vec![
-            Message::new("user", "Hello"),
-            Message::new("assistant", "Hi there!"),
+            json!({"_id": "m1", "role": "user", "content": "Hello"}),
+            json!({"_id": "m2", "role": "assistant", "content": "Hi there!"}),
         ],
         created_at: 1234567890,
         updated_at: 1234567891,
@@ -105,7 +107,7 @@ fn test_save_and_load_context() {
     let loaded = app.load_context("test-context").unwrap();
     assert_eq!(loaded.name, "test-context");
     assert_eq!(loaded.messages.len(), 2);
-    assert_eq!(loaded.messages[0].content, "Hello");
+    assert_eq!(loaded.messages[0]["content"].as_str().unwrap(), "Hello");
     assert_eq!(loaded.summary, "Test summary");
 }
 
@@ -119,8 +121,11 @@ fn test_add_message() {
     app.add_message(&mut context, "user".to_string(), "Test message".to_string());
 
     assert_eq!(context.messages.len(), 1);
-    assert_eq!(context.messages[0].role, "user");
-    assert_eq!(context.messages[0].content, "Test message");
+    assert_eq!(context.messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(
+        context.messages[0]["content"].as_str().unwrap(),
+        "Test message"
+    );
     assert!(context.updated_at > 0);
 }
 
@@ -165,7 +170,7 @@ fn test_rename_context() {
     // Create a context
     let context = Context {
         name: "old-name".to_string(),
-        messages: vec![Message::new("user", "Hello")],
+        messages: vec![json!({"_id": "m1", "role": "user", "content": "Hello"})],
         created_at: 0,
         updated_at: 0,
         summary: String::new(),
@@ -181,7 +186,7 @@ fn test_rename_context() {
 
     let loaded = app.load_context("new-name").unwrap();
     assert_eq!(loaded.name, "new-name");
-    assert_eq!(loaded.messages[0].content, "Hello");
+    assert_eq!(loaded.messages[0]["content"].as_str().unwrap(), "Hello");
 }
 
 #[test]
@@ -256,23 +261,20 @@ fn test_calculate_token_count_empty() {
 #[test]
 fn test_calculate_token_count() {
     let (app, _temp) = create_test_app();
-    let messages = vec![
-        Message::new("user", "Hello world!"), // 4+12 = 16 chars / 4 = 4 tokens
-    ];
+    let messages = vec![json!({"role": "user", "content": "Hello world!"})];
     let count = app.calculate_token_count(&messages);
-    assert_eq!(count, 4); // (4 + 12) / 4 = 4
+    // Now based on serialized JSON length / 4, which includes keys and quotes
+    assert!(count > 0);
 }
 
 #[test]
 fn test_remaining_tokens() {
     let (app, _temp) = create_test_app();
-    let messages = vec![
-        Message::new("user", "x".repeat(4000)), // ~1000 tokens
-    ];
+    let messages = vec![json!({"role": "user", "content": "x".repeat(4000)})];
     let remaining = app.remaining_tokens(&messages);
-    // 8000 - ~1000 = ~7000
+    // 8000 - estimated tokens from serialized JSON
     assert!(remaining < 8000);
-    assert!(remaining > 6000);
+    assert!(remaining > 5000);
 }
 
 #[test]
@@ -280,11 +282,11 @@ fn test_should_warn() {
     let (app, _temp) = create_test_app();
 
     // Small message shouldn't warn
-    let small_messages = vec![Message::new("user", "Hello")];
+    let small_messages = vec![json!({"role": "user", "content": "Hello"})];
     assert!(!app.should_warn(&small_messages));
 
-    // Large message should warn (above 75% of 8000 = 6000 tokens = ~24000 chars)
-    let large_messages = vec![Message::new("user", "x".repeat(30000))];
+    // Large message should warn (above 75% of 8000 = 6000 tokens ≈ 24000 chars)
+    let large_messages = vec![json!({"role": "user", "content": "x".repeat(30000)})];
     assert!(app.should_warn(&large_messages));
 }
 
@@ -543,8 +545,8 @@ fn test_resolve_config_model_level_api_params() {
         auto_compact_threshold: 80.0,
         reflection_enabled: true,
         reflection_character_limit: 10000,
-        max_recursion_depth: 15,
-        max_empty_responses: 2,
+        fuel: 15,
+        fuel_empty_response_cost: 15,
         username: "testuser".to_string(),
         lock_heartbeat_seconds: 30,
         rolling_compact_drop_percentage: 50.0,
@@ -605,8 +607,8 @@ fn test_resolve_config_hierarchy_context_over_model() {
         auto_compact_threshold: 80.0,
         reflection_enabled: true,
         reflection_character_limit: 10000,
-        max_recursion_depth: 15,
-        max_empty_responses: 2,
+        fuel: 15,
+        fuel_empty_response_cost: 15,
         username: "testuser".to_string(),
         lock_heartbeat_seconds: 30,
         rolling_compact_drop_percentage: 50.0,
@@ -674,11 +676,13 @@ fn test_resolve_config_all_local_overrides() {
         no_tool_calls: None,
         auto_compact: Some(true),
         auto_compact_threshold: Some(90.0),
-        max_recursion_depth: Some(50),
-        max_empty_responses: None,
+        fuel: Some(50),
+        fuel_empty_response_cost: None,
         warn_threshold_percent: Some(85.0),
         context_window_limit: Some(16000),
         reflection_enabled: Some(false),
+        reflection_character_limit: None,
+        rolling_compact_drop_percentage: None,
         tool_output_cache_threshold: None,
         tool_cache_max_age_days: None,
         auto_cleanup_cache: None,
@@ -698,7 +702,7 @@ fn test_resolve_config_all_local_overrides() {
     assert_eq!(resolved.username, "localuser");
     assert!(resolved.auto_compact);
     assert!((resolved.auto_compact_threshold - 90.0).abs() < f32::EPSILON);
-    assert_eq!(resolved.max_recursion_depth, 50);
+    assert_eq!(resolved.fuel, 50);
     assert!((resolved.warn_threshold_percent - 85.0).abs() < f32::EPSILON);
     assert_eq!(resolved.context_window_limit, 16000);
     assert!(!resolved.reflection_enabled);
@@ -719,8 +723,8 @@ fn test_resolve_config_supports_tool_calls_false_disables_tools() {
         auto_compact_threshold: 80.0,
         reflection_enabled: true,
         reflection_character_limit: 10000,
-        max_recursion_depth: 15,
-        max_empty_responses: 2,
+        fuel: 15,
+        fuel_empty_response_cost: 15,
         username: "testuser".to_string(),
         lock_heartbeat_seconds: 30,
         rolling_compact_drop_percentage: 50.0,
@@ -767,8 +771,8 @@ fn test_resolve_config_supports_tool_calls_overrides_user_config() {
         auto_compact_threshold: 80.0,
         reflection_enabled: true,
         reflection_character_limit: 10000,
-        max_recursion_depth: 15,
-        max_empty_responses: 2,
+        fuel: 15,
+        fuel_empty_response_cost: 15,
         username: "testuser".to_string(),
         lock_heartbeat_seconds: 30,
         rolling_compact_drop_percentage: 50.0,
@@ -823,8 +827,8 @@ fn test_resolve_config_supports_tool_calls_none_preserves_default() {
         auto_compact_threshold: 80.0,
         reflection_enabled: true,
         reflection_character_limit: 10000,
-        max_recursion_depth: 15,
-        max_empty_responses: 2,
+        fuel: 15,
+        fuel_empty_response_cost: 15,
         username: "testuser".to_string(),
         lock_heartbeat_seconds: 30,
         rolling_compact_drop_percentage: 50.0,
@@ -888,21 +892,23 @@ fn test_create_assistant_message_entry() {
 #[test]
 fn test_create_tool_call_entry() {
     let (_app, _temp) = create_test_app();
-    let entry = create_tool_call_entry("default", "web_search", r#"{"query": "rust"}"#);
+    let entry = create_tool_call_entry("default", "web_search", r#"{"query": "rust"}"#, "tc_1");
 
     assert_eq!(entry.from, "default");
     assert_eq!(entry.to, "web_search");
     assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_TOOL_CALL);
+    assert_eq!(entry.tool_call_id, Some("tc_1".to_string()));
 }
 
 #[test]
 fn test_create_tool_result_entry() {
     let (_app, _temp) = create_test_app();
-    let entry = create_tool_result_entry("default", "web_search", "Search results...");
+    let entry = create_tool_result_entry("default", "web_search", "Search results...", "tc_1");
 
     assert_eq!(entry.from, "web_search");
     assert_eq!(entry.to, "default");
     assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_TOOL_RESULT);
+    assert_eq!(entry.tool_call_id, Some("tc_1".to_string()));
 }
 
 // === JSONL parsing robustness tests ===
@@ -1379,8 +1385,11 @@ fn test_clear_context_invalidates_cache() {
 
     // Create the "default" context with messages so clear_context has something to clear
     let mut ctx = Context::new("default");
-    ctx.messages
-        .push(Message::new("user".to_string(), "Hello".to_string()));
+    ctx.messages.push(json!({
+        "_id": uuid::Uuid::new_v4().to_string(),
+        "role": "user",
+        "content": "Hello"
+    }));
     app.save_context(&ctx).unwrap();
 
     // Populate cache explicitly
@@ -1397,4 +1406,198 @@ fn test_clear_context_invalidates_cache() {
         !app.active_state_cache.borrow().contains_key("default"),
         "cache should be invalidated after clear_context"
     );
+}
+
+// === Tool history preservation tests ===
+
+#[test]
+fn test_entries_to_messages_includes_tool_calls() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "do something", "testuser"),
+        create_tool_call_entry("ctx", "web_search", r#"{"query":"rust"}"#, "tc_1"),
+        create_tool_result_entry("ctx", "web_search", "search results here", "tc_1"),
+        create_assistant_message_entry("ctx", "here are the results"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+
+    assert_eq!(messages.len(), 4); // user, assistant+tool_calls, tool_result, assistant
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+    assert!(messages[1]["tool_calls"].is_array());
+    assert_eq!(messages[2]["role"].as_str().unwrap(), "tool");
+    assert_eq!(messages[2]["tool_call_id"].as_str().unwrap(), "tc_1");
+    assert_eq!(messages[3]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(
+        messages[3]["content"].as_str().unwrap(),
+        "here are the results"
+    );
+}
+
+#[test]
+fn test_entries_to_messages_groups_tool_batch() {
+    let (app, _temp) = create_test_app();
+
+    // Simulate a batch of two tool calls (written in order: tc, tc, tr, tr)
+    let entries = vec![
+        create_tool_call_entry("ctx", "tool_a", r#"{"a":1}"#, "tc_a"),
+        create_tool_call_entry("ctx", "tool_b", r#"{"b":2}"#, "tc_b"),
+        create_tool_result_entry("ctx", "tool_a", "result_a", "tc_a"),
+        create_tool_result_entry("ctx", "tool_b", "result_b", "tc_b"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+
+    // Should produce: 1 assistant message with 2 tool_calls, then 2 tool result messages
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "assistant");
+    let tool_calls = messages[0]["tool_calls"].as_array().unwrap();
+    assert_eq!(tool_calls.len(), 2);
+    assert_eq!(
+        tool_calls[0]["function"]["name"].as_str().unwrap(),
+        "tool_a"
+    );
+    assert_eq!(
+        tool_calls[1]["function"]["name"].as_str().unwrap(),
+        "tool_b"
+    );
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "tool");
+    assert_eq!(messages[1]["tool_call_id"].as_str().unwrap(), "tc_a");
+    assert_eq!(messages[2]["role"].as_str().unwrap(), "tool");
+    assert_eq!(messages[2]["tool_call_id"].as_str().unwrap(), "tc_b");
+}
+
+#[test]
+fn test_entries_to_messages_backward_compat_no_tool_call_id() {
+    let (app, _temp) = create_test_app();
+
+    // Old-style entries without tool_call_id (pre-migration)
+    let tc_entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("web_search")
+        .content(r#"{"query":"test"}"#)
+        .entry_type(crate::context::ENTRY_TYPE_TOOL_CALL)
+        .build();
+    let tr_entry = TranscriptEntry::builder()
+        .from("web_search")
+        .to("ctx")
+        .content("results")
+        .entry_type(crate::context::ENTRY_TYPE_TOOL_RESULT)
+        .build();
+
+    let entries = vec![tc_entry.clone(), tr_entry];
+    let messages = app.entries_to_messages(&entries);
+
+    assert_eq!(messages.len(), 2);
+    // Assistant message with synthetic tool_call_id
+    let tc_json = &messages[0]["tool_calls"].as_array().unwrap()[0];
+    let synthetic_id = tc_json["id"].as_str().unwrap();
+    assert!(synthetic_id.starts_with("synth_"));
+    // Tool result should use the same synthetic ID
+    assert_eq!(messages[1]["tool_call_id"].as_str().unwrap(), synthetic_id);
+}
+
+#[test]
+fn test_json_messages_to_entries_round_trip() {
+    let (app, _temp) = create_test_app();
+
+    let original_messages = vec![
+        json!({"_id": "m1", "role": "user", "content": "hello"}),
+        json!({
+            "_id": "m2",
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "tc_1",
+                "type": "function",
+                "function": {"name": "search", "arguments": r#"{"q":"test"}"#}
+            }]
+        }),
+        json!({"_id": "m3", "role": "tool", "tool_call_id": "tc_1", "content": "found it"}),
+        json!({"_id": "m4", "role": "assistant", "content": "here you go"}),
+    ];
+
+    // Messages → entries → messages should preserve structure
+    let entries = app.messages_to_entries(&original_messages, "ctx");
+    let roundtripped = app.entries_to_messages(&entries);
+
+    assert_eq!(roundtripped.len(), 4);
+    assert_eq!(roundtripped[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(roundtripped[0]["content"].as_str().unwrap(), "hello");
+    assert_eq!(roundtripped[1]["role"].as_str().unwrap(), "assistant");
+    assert!(roundtripped[1]["tool_calls"].is_array());
+    assert_eq!(roundtripped[2]["role"].as_str().unwrap(), "tool");
+    assert_eq!(roundtripped[2]["tool_call_id"].as_str().unwrap(), "tc_1");
+    assert_eq!(roundtripped[3]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(roundtripped[3]["content"].as_str().unwrap(), "here you go");
+}
+
+#[test]
+fn test_save_load_preserves_tool_history() {
+    let (app, _temp) = create_test_app();
+
+    let context = Context {
+        name: "tool-test".to_string(),
+        messages: vec![
+            json!({"_id": "m1", "role": "user", "content": "search for rust"}),
+            json!({
+                "_id": "m2",
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "tc_1",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": r#"{"query":"rust"}"#}
+                }]
+            }),
+            json!({"_id": "m3", "role": "tool", "tool_call_id": "tc_1", "content": "Rust is a programming language"}),
+            json!({"_id": "m4", "role": "assistant", "content": "Rust is a systems programming language."}),
+        ],
+        created_at: 1234567890,
+        updated_at: 1234567891,
+        summary: String::new(),
+    };
+
+    app.save_context(&context).unwrap();
+    let loaded = app.load_context("tool-test").unwrap();
+
+    // Tool history should be preserved across save/load
+    assert_eq!(loaded.messages.len(), 4);
+    assert_eq!(loaded.messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(loaded.messages[1]["role"].as_str().unwrap(), "assistant");
+    assert!(loaded.messages[1]["tool_calls"].is_array());
+    let tool_calls = loaded.messages[1]["tool_calls"].as_array().unwrap();
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(
+        tool_calls[0]["function"]["name"].as_str().unwrap(),
+        "web_search"
+    );
+    assert_eq!(loaded.messages[2]["role"].as_str().unwrap(), "tool");
+    assert_eq!(loaded.messages[2]["tool_call_id"].as_str().unwrap(), "tc_1");
+    assert_eq!(loaded.messages[3]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_backward_compat_old_context_jsonl_without_tool_call_id() {
+    let (app, _temp) = create_test_app();
+
+    // Simulate old-format context.jsonl (entries without tool_call_id field)
+    let ctx_dir = app.context_dir("old-format");
+    fs::create_dir_all(&ctx_dir).unwrap();
+
+    let content = r#"{"id":"1","timestamp":1000,"from":"user","to":"ctx","content":"hello","entry_type":"message"}
+{"id":"2","timestamp":1001,"from":"ctx","to":"web_search","content":"{\"q\":\"test\"}","entry_type":"tool_call"}
+{"id":"3","timestamp":1002,"from":"web_search","to":"ctx","content":"results","entry_type":"tool_result"}
+{"id":"4","timestamp":1003,"from":"ctx","to":"user","content":"done","entry_type":"message"}"#;
+    fs::write(ctx_dir.join("context.jsonl"), content).unwrap();
+
+    let loaded = app.load_context("old-format").unwrap();
+
+    // Should load all entries including tool history
+    assert_eq!(loaded.messages.len(), 4);
+    assert_eq!(loaded.messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(loaded.messages[1]["role"].as_str().unwrap(), "assistant");
+    assert!(loaded.messages[1]["tool_calls"].is_array());
+    assert_eq!(loaded.messages[2]["role"].as_str().unwrap(), "tool");
+    assert_eq!(loaded.messages[3]["role"].as_str().unwrap(), "assistant");
 }

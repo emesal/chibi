@@ -290,7 +290,10 @@ pub struct Cli {
     pub force_call_agent: bool,
 
     // === JSON modes ===
-    /// Read input as JSON from stdin (exclusive with config flags)
+    /// Read input as JSON from stdin (exclusive with config flags).
+    /// Note: consumed via raw arg scanning before clap parsing (see main.rs),
+    /// so this field is never read from the struct. It exists here solely for
+    /// --help output and to prevent "unexpected argument" errors from clap.
     #[arg(long = "json-config")]
     pub json_config: bool,
 
