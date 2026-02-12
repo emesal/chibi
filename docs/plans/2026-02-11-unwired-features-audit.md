@@ -2,7 +2,7 @@
 
 **date:** 2026-02-11
 **branch:** `bugfix/unwired-features-2602`
-**status:** in progress (issues 2, 4, 5, 6 done)
+**status:** complete (all issues resolved)
 
 ## overview
 
@@ -14,16 +14,17 @@ systematic audit found features that aren't fully wired through the stack. this 
 
 ---
 
-## issue 1: `api.prompt_caching` is a dead config field
+## issue 1: `api.prompt_caching` is a dead config field ✓
 
 **severity:** critical (config has zero effect)
 **files:** `config.rs:207`, `gateway.rs:70-101`, `request.rs:48-155`
+**status:** done (wired through to ratatoskr's `cache_prompt` in `to_chat_options()`)
 
-`ApiParams.prompt_caching` is defined with default `Some(true)`, participates in merging, and is inspectable via `-n api.prompt_caching`. but it is never read by `build_request_body()` or `to_chat_options()`. the field has zero effect on actual API requests.
+`ApiParams.prompt_caching` is defined with default `Some(true)`, participates in merging, and is inspectable via `-n api.prompt_caching`. but it was never read by `build_request_body()` or `to_chat_options()`. the field had zero effect on actual API requests.
 
 ### fix
 
-decide: wire it through to ratatoskr (if ratatoskr supports a prompt caching option), or remove it entirely. if it's openrouter-specific and ratatoskr handles it internally, remove from chibi's config.
+wired `prompt_caching` through to ratatoskr's `ChatOptions::cache_prompt()` builder method in `to_chat_options()`.
 
 ---
 
@@ -46,16 +47,19 @@ decide: wire it through to ratatoskr (if ratatoskr supports a prompt caching opt
 
 ---
 
-## issue 3: `pre_cache_output` / `post_cache_output` hooks never fired
+## issue 3: `pre_cache_output` / `post_cache_output` hooks never fired ✓
 
 **severity:** critical (documented feature doesn't work)
-**files:** `hooks.rs:33-34`, `send.rs:976-1009`
+**files:** `hooks.rs:33-34`, `send.rs:998-1070`
+**status:** done
 
-these hook points are defined in the `HookPoint` enum, documented in AGENTS.md, but never invoked. the caching code calls `cache::cache_output()` directly without firing either hook.
+these hook points were defined in the `HookPoint` enum, documented in AGENTS.md, but never invoked.
 
 ### fix
 
-add `execute_hook(tools, HookPoint::PreCacheOutput, &hook_data)` and `PostCacheOutput` calls around the caching logic in `execute_tool_pure()`. pass tool name, result size, cache_id, and the truncated preview as hook data.
+added hook invocations around caching in `execute_tool_pure()`:
+- `PreCacheOutput` fires before `cache_output()` with `{tool_name, output_size, arguments}`. can block caching via `{"block": true}`.
+- `PostCacheOutput` fires after successful caching with `{tool_name, cache_id, output_size, preview_size}`. notification only.
 
 ---
 
@@ -215,81 +219,67 @@ this is a pre-alpha breaking change. `max_recursion_depth` in config.toml become
 
 ---
 
-## issue 7: `frequency_penalty`, `presence_penalty`, `response_format` missing from gateway
+## issue 7: `frequency_penalty`, `presence_penalty`, `response_format` missing from gateway ✓
 
 **severity:** medium (config options don't reach the actual API)
 **files:** `gateway.rs:70-101`
+**status:** done (wired all three through + `reasoning.enabled` handling)
 
-these are in `build_request_body()` (used only for logging/hooks) but NOT in `to_chat_options()` (the actual API path via ratatoskr). the actual API call may not include these parameters.
-
-also: `reasoning.enabled` is defined in `ReasoningConfig` but not forwarded through `to_ratatoskr_reasoning()`.
+these were in `build_request_body()` (used only for logging/hooks) but NOT in `to_chat_options()` (the actual API path via ratatoskr). the actual API call did not include these parameters.
 
 ### fix
 
-check what `ratatoskr::ChatOptions` supports. for each field:
-- if ratatoskr has a builder method: wire it through in `to_chat_options()`
-- if ratatoskr doesn't support it: either add support in ratatoskr or document as unsupported
-
-for `reasoning.enabled`: check if `RatatoskrReasoningConfig` has an `enabled` field. if not, the semantics should be: `enabled = true` without explicit effort implies `effort = Medium`.
+- wired `frequency_penalty`, `presence_penalty` through to matching ratatoskr builder methods
+- added `to_ratatoskr_response_format()` converter (chibi uses `json_schema: Option<Value>`, ratatoskr uses `schema: Value`)
+- updated `to_ratatoskr_reasoning()` to handle `enabled`: when `enabled = true` without explicit effort or max_tokens, defaults to medium effort
 
 ---
 
-## issue 8: config fields bypassing `ResolvedConfig`
+## issue 8: config fields bypassing `ResolvedConfig` ✓
 
 **severity:** low-medium (not per-context overridable, not inspectable)
-**files:** `config.rs`, various consumers
-
-these fields exist in `Config` but not in `ResolvedConfig`:
-
-| field | consumer | per-context useful? |
-|-------|----------|-------------------|
-| `reflection_character_limit` | `builtin.rs:343` | yes |
-| `rolling_compact_drop_percentage` | `compact.rs:70` | maybe |
-| `lock_heartbeat_seconds` | `main.rs`, `lock.rs` | no (global is fine) |
-| `storage` (StorageConfig) | `state/mod.rs:569-593` | yes (already in LocalConfig but never resolved) |
+**files:** `config.rs`, `config_resolution.rs`, `builtin.rs`, `compact.rs`
+**status:** done
 
 ### fix
 
-for fields where per-context overrides make sense (`reflection_character_limit`, `storage`): add to `ResolvedConfig` and wire through config resolution.
-
-for global-only fields (`lock_heartbeat_seconds`): leave as-is but document the design decision.
-
-add `fallback_tool` to `get_field()` / `list_fields()` (it's in ResolvedConfig but not inspectable).
+- added `reflection_character_limit` and `rolling_compact_drop_percentage` to `ResolvedConfig`, `LocalConfig`, and config resolution
+- updated `builtin.rs` to use resolved config for `reflection_character_limit` (added `resolved_config: Option<&ResolvedConfig>` param to `execute_builtin_tool`)
+- updated `compact.rs` to use `resolved_config.rolling_compact_drop_percentage` instead of `app.config`
+- added `fallback_tool`, `reflection_character_limit`, `rolling_compact_drop_percentage` to `get_field()` / `list_fields()`
+- documented `lock_heartbeat_seconds` as intentionally global-only in config.rs
+- `storage` (StorageConfig) deferred — requires more architectural work to resolve properly
 
 ---
 
-## issue 9: AGENTS.md says 29 hooks, actual count is 28
+## issue 9: AGENTS.md says 29 hooks, actual count is 28 ✓
 
 **severity:** low (documentation bug)
-**files:** `AGENTS.md`, `hooks.rs`
-
-### fix
-
-count the actual hooks and update AGENTS.md.
+**status:** no change needed — actual count is 29 and matches AGENTS.md. the plan miscounted.
 
 ---
 
-## issue 10: `on_start` / `on_end` hooks fire with empty `{}` data
+## issue 10: `on_start` / `on_end` hooks fire with empty `{}` data ✓
 
 **severity:** low (limits plugin utility)
-**files:** `chibi.rs:183-184,192-193`
+**files:** `chibi.rs:182-193`
+**status:** done
 
 ### fix
 
-populate hook data with useful context: context name (if available), project root, chibi home, tool count, etc.
+populated both hooks with `{chibi_home, project_root, tool_count}`.
 
 ---
 
-## issue 11: `json_config` field on `Cli` struct is dead code
+## issue 11: `json_config` field on `Cli` struct is dead code ✓
 
 **severity:** low (cosmetic)
 **files:** `cli.rs:293-295`
-
-the field is parsed by clap but never read from the struct. it's consumed via raw arg scanning before clap runs. the clap definition exists only for `--help` and to prevent "unexpected argument" errors.
+**status:** done
 
 ### fix
 
-add a comment explaining why the field exists but is never read. or restructure to not need it.
+added doc comment explaining that the field is consumed via raw arg scanning before clap, and exists solely for `--help` and preventing "unexpected argument" errors.
 
 ---
 
@@ -299,10 +289,10 @@ add a comment explaining why the field exists but is never read. or restructure 
 2. **issue 4** -- reasoning in JSON mode ✓ (91317bf)
 3. **issue 6** -- fuel model refactor ✓
 4. **issue 2** -- `entries_to_messages` reconstruction ✓ (516b8a0)
-5. **issue 1** -- dead `prompt_caching` field (decide and act)
-6. **issue 7** -- gateway param gaps (depends on ratatoskr audit)
-7. **issue 3** -- unfired cache hooks
-8. **issues 8-11** -- remaining cleanup
+5. **issue 1** -- dead `prompt_caching` field ✓ (wired to ratatoskr)
+6. **issue 7** -- gateway param gaps ✓ (wired all missing fields)
+7. **issue 3** -- unfired cache hooks ✓
+8. **issues 8-11** -- remaining cleanup ✓
 
 ## out of scope
 

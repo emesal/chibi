@@ -180,7 +180,11 @@ impl Chibi {
     /// # }
     /// ```
     pub fn init(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
-        let hook_data = serde_json::json!({});
+        let hook_data = serde_json::json!({
+            "chibi_home": self.app.chibi_dir.to_string_lossy(),
+            "project_root": self.project_root.to_string_lossy(),
+            "tool_count": self.tools.len(),
+        });
         tools::execute_hook(&self.tools, tools::HookPoint::OnStart, &hook_data)
     }
 
@@ -189,7 +193,11 @@ impl Chibi {
     /// Executes `OnEnd` hooks. Call this once at the end of a session,
     /// after all prompts are complete.
     pub fn shutdown(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
-        let hook_data = serde_json::json!({});
+        let hook_data = serde_json::json!({
+            "chibi_home": self.app.chibi_dir.to_string_lossy(),
+            "project_root": self.project_root.to_string_lossy(),
+            "tool_count": self.tools.len(),
+        });
         tools::execute_hook(&self.tools, tools::HookPoint::OnEnd, &hook_data)
     }
 
@@ -288,7 +296,9 @@ impl Chibi {
         args: serde_json::Value,
     ) -> io::Result<String> {
         // Try built-in tools first
-        if let Some(result) = tools::execute_builtin_tool(&self.app, context_name, name, &args) {
+        if let Some(result) =
+            tools::execute_builtin_tool(&self.app, context_name, name, &args, None)
+        {
             return result;
         }
 

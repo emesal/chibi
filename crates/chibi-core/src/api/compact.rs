@@ -81,7 +81,7 @@ pub async fn rolling_compact(
         .collect();
 
     // Calculate target drop count based on config percentage
-    let drop_percentage = app.config.rolling_compact_drop_percentage;
+    let drop_percentage = resolved_config.rolling_compact_drop_percentage;
     let target_drop_count =
         ((non_system_messages.len() as f32 * drop_percentage / 100.0).round() as usize).max(1);
 

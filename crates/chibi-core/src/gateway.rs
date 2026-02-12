@@ -7,7 +7,8 @@ use crate::config::{self, ResolvedConfig};
 use ratatoskr::{
     ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr,
     ReasoningConfig as RatatoskrReasoningConfig, ReasoningEffort as RatatoskrReasoningEffort,
-    ToolCall, ToolChoice as RatatoskrToolChoice, ToolDefinition,
+    ResponseFormat as RatatoskrResponseFormat, ToolCall, ToolChoice as RatatoskrToolChoice,
+    ToolDefinition,
 };
 use std::io;
 
@@ -87,11 +88,23 @@ pub fn to_chat_options(config: &ResolvedConfig) -> ChatOptions {
     if let Some(seed) = api.seed {
         opts = opts.seed(seed);
     }
+    if let Some(penalty) = api.frequency_penalty {
+        opts = opts.frequency_penalty(penalty);
+    }
+    if let Some(penalty) = api.presence_penalty {
+        opts = opts.presence_penalty(penalty);
+    }
     if let Some(parallel) = api.parallel_tool_calls {
         opts = opts.parallel_tool_calls(parallel);
     }
     if let Some(ref tool_choice) = api.tool_choice {
         opts = opts.tool_choice(to_ratatoskr_tool_choice(tool_choice));
+    }
+    if let Some(ref format) = api.response_format {
+        opts = opts.response_format(to_ratatoskr_response_format(format));
+    }
+    if let Some(cache) = api.prompt_caching {
+        opts = opts.cache_prompt(cache);
     }
 
     if !api.reasoning.is_empty() {
@@ -115,10 +128,26 @@ fn to_ratatoskr_tool_choice(choice: &config::ToolChoice) -> RatatoskrToolChoice 
     }
 }
 
+/// Convert chibi's ResponseFormat to ratatoskr's ResponseFormat.
+fn to_ratatoskr_response_format(format: &config::ResponseFormat) -> RatatoskrResponseFormat {
+    match format {
+        config::ResponseFormat::Text => RatatoskrResponseFormat::Text,
+        config::ResponseFormat::JsonObject => RatatoskrResponseFormat::JsonObject,
+        config::ResponseFormat::JsonSchema { json_schema } => RatatoskrResponseFormat::JsonSchema {
+            schema: json_schema
+                .clone()
+                .unwrap_or(serde_json::Value::Object(Default::default())),
+        },
+    }
+}
+
 /// Convert chibi's ReasoningConfig to ratatoskr's ReasoningConfig.
+///
+/// When `enabled = true` without explicit effort or max_tokens, defaults to medium effort.
 fn to_ratatoskr_reasoning(reasoning: &config::ReasoningConfig) -> RatatoskrReasoningConfig {
-    RatatoskrReasoningConfig {
-        effort: reasoning.effort.map(|e| match e {
+    let effort = match (reasoning.effort, reasoning.enabled) {
+        // Explicit effort always wins
+        (Some(e), _) => Some(match e {
             config::ReasoningEffort::XHigh => RatatoskrReasoningEffort::XHigh,
             config::ReasoningEffort::High => RatatoskrReasoningEffort::High,
             config::ReasoningEffort::Medium => RatatoskrReasoningEffort::Medium,
@@ -126,6 +155,15 @@ fn to_ratatoskr_reasoning(reasoning: &config::ReasoningConfig) -> RatatoskrReaso
             config::ReasoningEffort::Minimal => RatatoskrReasoningEffort::Minimal,
             config::ReasoningEffort::None => RatatoskrReasoningEffort::None,
         }),
+        // enabled=true without effort or max_tokens → default to medium
+        (None, Some(true)) if reasoning.max_tokens.is_none() => {
+            Some(RatatoskrReasoningEffort::Medium)
+        }
+        _ => None,
+    };
+
+    RatatoskrReasoningConfig {
+        effort,
         max_tokens: reasoning.max_tokens,
         exclude_from_output: reasoning.exclude,
     }
@@ -297,6 +335,8 @@ mod tests {
             fuel_empty_response_cost: 15,
             username: "test".to_string(),
             reflection_enabled: false,
+            reflection_character_limit: 10000,
+            rolling_compact_drop_percentage: 50.0,
             tool_output_cache_threshold: 10000,
             tool_cache_max_age_days: 7,
             auto_cleanup_cache: false,

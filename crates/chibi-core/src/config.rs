@@ -431,6 +431,8 @@ pub struct Config {
     pub fuel_empty_response_cost: usize,
     #[serde(default = "default_username")]
     pub username: String,
+    /// Lock heartbeat interval in seconds. Intentionally global-only (not in ResolvedConfig)
+    /// since lock behaviour must be consistent regardless of active context.
     #[serde(default = "default_lock_heartbeat_seconds")]
     pub lock_heartbeat_seconds: u64,
     #[serde(default = "default_rolling_compact_drop_percentage")]
@@ -483,6 +485,8 @@ pub struct LocalConfig {
     pub warn_threshold_percent: Option<f32>,
     pub context_window_limit: Option<usize>,
     pub reflection_enabled: Option<bool>,
+    pub reflection_character_limit: Option<usize>,
+    pub rolling_compact_drop_percentage: Option<f32>,
     /// Threshold (in chars) above which tool output is cached
     pub tool_output_cache_threshold: Option<usize>,
     /// Maximum age in days for cached tool outputs
@@ -550,6 +554,10 @@ pub struct ResolvedConfig {
     pub fuel_empty_response_cost: usize,
     pub username: String,
     pub reflection_enabled: bool,
+    /// Character limit for reflection output
+    pub reflection_character_limit: usize,
+    /// Percentage of messages to drop during rolling compaction
+    pub rolling_compact_drop_percentage: f32,
     /// Threshold (in chars) above which tool output is cached
     pub tool_output_cache_threshold: usize,
     /// Maximum age in days for cached tool outputs
@@ -587,6 +595,11 @@ impl ResolvedConfig {
             "fuel" => Some(self.fuel.to_string()),
             "fuel_empty_response_cost" => Some(self.fuel_empty_response_cost.to_string()),
             "reflection_enabled" => Some(self.reflection_enabled.to_string()),
+            "reflection_character_limit" => Some(self.reflection_character_limit.to_string()),
+            "rolling_compact_drop_percentage" => {
+                Some(format!("{}", self.rolling_compact_drop_percentage))
+            }
+            "fallback_tool" => Some(self.fallback_tool.clone()),
             "tool_output_cache_threshold" => Some(self.tool_output_cache_threshold.to_string()),
             "tool_cache_max_age_days" => Some(self.tool_cache_max_age_days.to_string()),
             "auto_cleanup_cache" => Some(self.auto_cleanup_cache.to_string()),
@@ -637,6 +650,9 @@ impl ResolvedConfig {
             "fuel",
             "fuel_empty_response_cost",
             "reflection_enabled",
+            "reflection_character_limit",
+            "rolling_compact_drop_percentage",
+            "fallback_tool",
             "tool_output_cache_threshold",
             "tool_cache_max_age_days",
             "auto_cleanup_cache",
@@ -743,6 +759,8 @@ mod tests {
             fuel_empty_response_cost: 15,
             username: "testuser".to_string(),
             reflection_enabled: true,
+            reflection_character_limit: 10000,
+            rolling_compact_drop_percentage: 50.0,
             tool_output_cache_threshold: 4000,
             tool_cache_max_age_days: 7,
             auto_cleanup_cache: true,

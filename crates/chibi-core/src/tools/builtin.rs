@@ -8,6 +8,7 @@
 //! - call_agent/call_user: Control flow handoff
 //! - model_info: Model metadata lookup (async, dispatched in api/send.rs)
 
+use crate::config::ResolvedConfig;
 use crate::state::AppState;
 use std::io::{self, ErrorKind};
 use std::path::Path;
@@ -321,6 +322,7 @@ pub fn execute_builtin_tool(
     context_name: &str,
     tool_name: &str,
     args: &serde_json::Value,
+    resolved_config: Option<&ResolvedConfig>,
 ) -> Option<io::Result<String>> {
     match tool_name {
         TODOS_TOOL_NAME => {
@@ -337,11 +339,12 @@ pub fn execute_builtin_tool(
                     .map(|_| format!("Goals updated ({} characters).", content.len())),
             )
         }
-        REFLECTION_TOOL_NAME => Some(execute_reflection_tool(
-            &app.prompts_dir,
-            args,
-            app.config.reflection_character_limit,
-        )),
+        REFLECTION_TOOL_NAME => {
+            let limit = resolved_config
+                .map(|c| c.reflection_character_limit)
+                .unwrap_or(app.config.reflection_character_limit);
+            Some(execute_reflection_tool(&app.prompts_dir, args, limit))
+        }
         SEND_MESSAGE_TOOL_NAME => {
             let to = args.get("to").and_then(|v| v.as_str())?;
             let content = args.get("content").and_then(|v| v.as_str())?;

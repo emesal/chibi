@@ -680,6 +680,8 @@ fn test_resolve_config_all_local_overrides() {
         warn_threshold_percent: Some(85.0),
         context_window_limit: Some(16000),
         reflection_enabled: Some(false),
+        reflection_character_limit: None,
+        rolling_compact_drop_percentage: None,
         tool_output_cache_threshold: None,
         tool_cache_max_age_days: None,
         auto_cleanup_cache: None,

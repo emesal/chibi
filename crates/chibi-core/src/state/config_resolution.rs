@@ -83,6 +83,8 @@ impl AppState {
             fuel_empty_response_cost: self.config.fuel_empty_response_cost,
             username: self.config.username.clone(),
             reflection_enabled: self.config.reflection_enabled,
+            reflection_character_limit: self.config.reflection_character_limit,
+            rolling_compact_drop_percentage: self.config.rolling_compact_drop_percentage,
             tool_output_cache_threshold: self.config.tool_output_cache_threshold,
             tool_cache_max_age_days: self.config.tool_cache_max_age_days,
             auto_cleanup_cache: self.config.auto_cleanup_cache,
@@ -132,6 +134,12 @@ impl AppState {
         }
         if let Some(reflection_enabled) = local.reflection_enabled {
             resolved.reflection_enabled = reflection_enabled;
+        }
+        if let Some(limit) = local.reflection_character_limit {
+            resolved.reflection_character_limit = limit;
+        }
+        if let Some(pct) = local.rolling_compact_drop_percentage {
+            resolved.rolling_compact_drop_percentage = pct;
         }
         if let Some(tool_output_cache_threshold) = local.tool_output_cache_threshold {
             resolved.tool_output_cache_threshold = tool_output_cache_threshold;

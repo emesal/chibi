@@ -774,9 +774,13 @@ async fn execute_tool_pure(
         }
     } else if tool_call.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
         "Error: Reflection tool is not enabled".to_string()
-    } else if let Some(builtin_result) =
-        tools::execute_builtin_tool(app, context_name, &tool_call.name, &args)
-    {
+    } else if let Some(builtin_result) = tools::execute_builtin_tool(
+        app,
+        context_name,
+        &tool_call.name,
+        &args,
+        Some(resolved_config),
+    ) {
         match builtin_result {
             Ok(r) => r,
             Err(e) => format!("Error: {}", e),
@@ -1001,32 +1005,68 @@ async fn execute_tool_pure(
     let (final_result, was_cached) = if !tool_result.starts_with("Error:")
         && cache::should_cache(&tool_result, resolved_config.tool_output_cache_threshold)
     {
-        let cache_dir = app.tool_cache_dir(context_name);
-        match cache::cache_output(&cache_dir, &tool_call.name, &tool_result, &args) {
-            Ok(entry) => {
-                match cache::generate_truncated_message(
-                    &entry,
-                    resolved_config.tool_cache_preview_chars,
-                ) {
-                    Ok(truncated) => {
-                        if verbose {
-                            diagnostics.push(format!(
-                                "[Cached {} chars from {} as {}]",
-                                tool_result.len(),
-                                tool_call.name,
-                                entry.metadata.id
-                            ));
-                        }
-                        (truncated, true)
-                    }
-                    Err(_) => (tool_result.clone(), false),
-                }
+        // Fire pre_cache_output hook (can block caching)
+        let pre_cache_data = serde_json::json!({
+            "tool_name": tool_call.name,
+            "output_size": tool_result.len(),
+            "arguments": args,
+        });
+        let pre_cache_results =
+            tools::execute_hook(tools, tools::HookPoint::PreCacheOutput, &pre_cache_data)?;
+        let cache_blocked = pre_cache_results
+            .iter()
+            .any(|(_, r)| r.get_bool_or("block", false));
+
+        if cache_blocked {
+            if verbose {
+                diagnostics.push(format!(
+                    "[Caching blocked by pre_cache_output hook for {}]",
+                    tool_call.name
+                ));
             }
-            Err(e) => {
-                if verbose {
-                    diagnostics.push(format!("[Failed to cache output: {}]", e));
+            (tool_result.clone(), false)
+        } else {
+            let cache_dir = app.tool_cache_dir(context_name);
+            match cache::cache_output(&cache_dir, &tool_call.name, &tool_result, &args) {
+                Ok(entry) => {
+                    match cache::generate_truncated_message(
+                        &entry,
+                        resolved_config.tool_cache_preview_chars,
+                    ) {
+                        Ok(truncated) => {
+                            if verbose {
+                                diagnostics.push(format!(
+                                    "[Cached {} chars from {} as {}]",
+                                    tool_result.len(),
+                                    tool_call.name,
+                                    entry.metadata.id
+                                ));
+                            }
+
+                            // Fire post_cache_output hook (notification only)
+                            let post_cache_data = serde_json::json!({
+                                "tool_name": tool_call.name,
+                                "cache_id": entry.metadata.id,
+                                "output_size": tool_result.len(),
+                                "preview_size": truncated.len(),
+                            });
+                            let _ = tools::execute_hook(
+                                tools,
+                                tools::HookPoint::PostCacheOutput,
+                                &post_cache_data,
+                            );
+
+                            (truncated, true)
+                        }
+                        Err(_) => (tool_result.clone(), false),
+                    }
                 }
-                (tool_result.clone(), false)
+                Err(e) => {
+                    if verbose {
+                        diagnostics.push(format!("[Failed to cache output: {}]", e));
+                    }
+                    (tool_result.clone(), false)
+                }
             }
         }
     } else {
