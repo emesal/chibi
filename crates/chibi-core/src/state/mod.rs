@@ -26,7 +26,7 @@ use crate::context::{
     Context, ContextEntry, ContextMeta, ContextState, TranscriptEntry, is_valid_context_name,
     now_timestamp,
 };
-use crate::partition::{ActiveState, PartitionManager, StorageConfig};
+use crate::partition::{ActiveState, PartitionManager};
 use dirs_next::home_dir;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -518,7 +518,7 @@ impl AppState {
     pub fn read_transcript_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
         self.migrate_transcript_if_needed(name)?;
         let transcript_dir = self.transcript_dir(name);
-        let storage_config = self.get_storage_config(name)?;
+        let storage_config = self.resolve_config(name, None)?.storage;
         let pm = PartitionManager::load_with_config(&transcript_dir, storage_config)?;
         pm.read_all_entries()
     }
@@ -566,33 +566,7 @@ impl AppState {
         })
     }
 
-    /// Get the resolved storage configuration for a context
-    fn get_storage_config(&self, name: &str) -> io::Result<StorageConfig> {
-        let local = self.load_local_config(name)?;
-        // Merge local overrides with global config
-        Ok(StorageConfig {
-            partition_max_entries: local
-                .storage
-                .partition_max_entries
-                .or(self.config.storage.partition_max_entries),
-            partition_max_age_seconds: local
-                .storage
-                .partition_max_age_seconds
-                .or(self.config.storage.partition_max_age_seconds),
-            partition_max_tokens: local
-                .storage
-                .partition_max_tokens
-                .or(self.config.storage.partition_max_tokens),
-            bytes_per_token: local
-                .storage
-                .bytes_per_token
-                .or(self.config.storage.bytes_per_token),
-            enable_bloom_filters: local
-                .storage
-                .enable_bloom_filters
-                .or(self.config.storage.enable_bloom_filters),
-        })
-    }
+
 
     /// Read entries from context.jsonl (the LLM's working memory)
     pub fn read_context_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
@@ -956,7 +930,7 @@ impl AppState {
         self.ensure_context_dir(context_name)?;
         self.migrate_transcript_if_needed(context_name)?;
         let transcript_dir = self.transcript_dir(context_name);
-        let storage_config = self.get_storage_config(context_name)?;
+        let storage_config = self.resolve_config(context_name, None)?.storage;
 
         // Get cached state if available
         let cached_state = self.active_state_cache.borrow().get(context_name).cloned();

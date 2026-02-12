@@ -574,6 +574,8 @@ pub struct ResolvedConfig {
     pub tools: ToolsConfig,
     /// Fallback tool (call_agent or call_user)
     pub fallback_tool: String,
+    /// Storage configuration for partitioned context storage
+    pub storage: StorageConfig,
 }
 
 impl ResolvedConfig {
@@ -629,6 +631,13 @@ impl ResolvedConfig {
             "api.reasoning.exclude" => self.api.reasoning.exclude.map(|v| v.to_string()),
             "api.reasoning.enabled" => self.api.reasoning.enabled.map(|v| v.to_string()),
 
+            // Storage config (storage.*)
+            "storage.partition_max_entries" => self.storage.partition_max_entries.map(|v| v.to_string()),
+            "storage.partition_max_age_seconds" => self.storage.partition_max_age_seconds.map(|v| v.to_string()),
+            "storage.partition_max_tokens" => self.storage.partition_max_tokens.map(|v| v.to_string()),
+            "storage.bytes_per_token" => self.storage.bytes_per_token.map(|v| v.to_string()),
+            "storage.enable_bloom_filters" => self.storage.enable_bloom_filters.map(|v| v.to_string()),
+
             _ => None,
         }
     }
@@ -673,6 +682,12 @@ impl ResolvedConfig {
             "api.reasoning.max_tokens",
             "api.reasoning.exclude",
             "api.reasoning.enabled",
+            // Storage
+            "storage.partition_max_entries",
+            "storage.partition_max_age_seconds",
+            "storage.partition_max_tokens",
+            "storage.bytes_per_token",
+            "storage.enable_bloom_filters",
         ]
     }
 }
@@ -769,6 +784,11 @@ mod tests {
             api: ApiParams::defaults(),
             tools: ToolsConfig::default(),
             fallback_tool: "call_user".to_string(),
+            storage: StorageConfig {
+                partition_max_entries: Some(500),
+                partition_max_tokens: Some(100_000),
+                ..Default::default()
+            },
         };
 
         assert_eq!(config.get_field("model"), Some("test-model".to_string()));
@@ -778,5 +798,17 @@ mod tests {
             config.get_field("file_tools_allowed_paths"),
             Some("/tmp".to_string())
         );
+
+        // Storage fields
+        assert_eq!(
+            config.get_field("storage.partition_max_entries"),
+            Some("500".to_string())
+        );
+        assert_eq!(
+            config.get_field("storage.partition_max_tokens"),
+            Some("100000".to_string())
+        );
+        assert_eq!(config.get_field("storage.bytes_per_token"), None); // Not set
+        assert_eq!(config.get_field("storage.enable_bloom_filters"), None); // Not set
     }
 }

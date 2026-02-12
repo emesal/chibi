@@ -93,6 +93,7 @@ impl AppState {
             api: api_params,
             tools: ToolsConfig::default(),
             fallback_tool: self.config.fallback_tool.clone(),
+            storage: self.config.storage.clone(),
         };
 
         // Apply local config overrides
@@ -159,6 +160,9 @@ impl AppState {
         if let Some(ref fallback_tool) = local.fallback_tool {
             resolved.fallback_tool = fallback_tool.clone();
         }
+
+        // Apply context-level storage config overrides
+        resolved.storage = resolved.storage.merge(&local.storage);
 
         // Apply context-level API params (Layer 3)
         if let Some(ref local_api) = local.api {
