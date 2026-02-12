@@ -595,10 +595,9 @@ async fn collect_streaming_response<S: ResponseSink>(
                 }
             }
             ChatEvent::Reasoning(chunk) => {
-                // Reasoning is ephemeral thinking, not part of the assistant's reply content
-                if !json_mode {
-                    sink.handle(ResponseEvent::Reasoning(&chunk))?;
-                }
+                // Reasoning is ephemeral thinking — always forward to sink so
+                // both streaming and JSON consumers can access it
+                sink.handle(ResponseEvent::Reasoning(&chunk))?;
             }
             ChatEvent::ToolCallStart { index, id, name } => {
                 has_tool_calls = true;
