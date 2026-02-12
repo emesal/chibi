@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::config::{ApiParams, LocalConfig};
-use crate::partition::StorageConfig;
 use crate::context::InboxEntry;
+use crate::partition::StorageConfig;
 use serde_json::json;
 use tempfile::TempDir;
 

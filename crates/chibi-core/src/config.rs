@@ -632,11 +632,20 @@ impl ResolvedConfig {
             "api.reasoning.enabled" => self.api.reasoning.enabled.map(|v| v.to_string()),
 
             // Storage config (storage.*)
-            "storage.partition_max_entries" => self.storage.partition_max_entries.map(|v| v.to_string()),
-            "storage.partition_max_age_seconds" => self.storage.partition_max_age_seconds.map(|v| v.to_string()),
-            "storage.partition_max_tokens" => self.storage.partition_max_tokens.map(|v| v.to_string()),
+            "storage.partition_max_entries" => {
+                self.storage.partition_max_entries.map(|v| v.to_string())
+            }
+            "storage.partition_max_age_seconds" => self
+                .storage
+                .partition_max_age_seconds
+                .map(|v| v.to_string()),
+            "storage.partition_max_tokens" => {
+                self.storage.partition_max_tokens.map(|v| v.to_string())
+            }
             "storage.bytes_per_token" => self.storage.bytes_per_token.map(|v| v.to_string()),
-            "storage.enable_bloom_filters" => self.storage.enable_bloom_filters.map(|v| v.to_string()),
+            "storage.enable_bloom_filters" => {
+                self.storage.enable_bloom_filters.map(|v| v.to_string())
+            }
 
             _ => None,
         }

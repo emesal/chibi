@@ -566,8 +566,6 @@ impl AppState {
         })
     }
 
-
-
     /// Read entries from context.jsonl (the LLM's working memory)
     pub fn read_context_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
         read_jsonl_file(&self.context_file(name))
