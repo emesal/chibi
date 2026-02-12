@@ -58,6 +58,19 @@ warn_threshold_percent = 80.0
 # Default username shown to the LLM (default: "user")
 username = "user"
 
+# Enable verbose output by default, equivalent to -v (default: false)
+verbose = false
+
+# Hide tool call display by default (default: false, verbose overrides)
+hide_tool_calls = false
+
+# Omit tools from API requests entirely for pure text mode (default: false)
+no_tool_calls = false
+
+# Fallback tool when LLM doesn't explicitly call call_agent/call_user
+# Options: "call_user" (return to user) or "call_agent" (continue loop)
+fallback_tool = "call_user"
+
 # =============================================================================
 # Auto-Compaction
 # =============================================================================
@@ -82,16 +95,17 @@ reflection_enabled = true
 reflection_character_limit = 10000
 
 # =============================================================================
-# Safety Limits
+# Fuel Budget (Agentic Loop Limits)
 # =============================================================================
 
-# Maximum recursion depth for autonomous tool loops (default: 30)
-max_recursion_depth = 30
+# Total fuel budget for autonomous tool loops (default: 30)
+# Each tool-call round and agent continuation costs 1 fuel. First turn is free.
+fuel = 30
 
-# Maximum consecutive empty responses before stopping (default: 2)
-# When the LLM returns empty responses (no text and no tool calls) this many
-# times in a row, the agentic loop stops to prevent infinite loops.
-max_empty_responses = 2
+# Fuel cost of an empty LLM response (default: 15)
+# When the LLM returns an empty response (no text, no tool calls), this much
+# fuel is consumed. High cost prevents infinite empty-response loops.
+fuel_empty_response_cost = 15
 
 # Context lock heartbeat interval in seconds (default: 30)
 lock_heartbeat_seconds = 30
@@ -244,15 +258,20 @@ context_window_limit = 128000
 # Override warning threshold
 warn_threshold_percent = 90.0
 
+# Override verbose, tool call display, or tool omission
+verbose = true
+hide_tool_calls = false
+no_tool_calls = false
+
 # Override auto-compact behavior
 auto_compact = true
 auto_compact_threshold = 85.0
 
-# Override recursion depth
-max_recursion_depth = 25
+# Override fuel budget
+fuel = 25
 
-# Override empty response limit
-max_empty_responses = 3
+# Override empty response fuel cost
+fuel_empty_response_cost = 20
 
 # Override reflection
 reflection_enabled = false
@@ -386,6 +405,14 @@ Chibi delegates LLM communication to the [ratatoskr](https://github.com/emesal/r
 | `stop` | array | - | Sequences that stop generation. |
 | `seed` | integer | - | Random seed for reproducibility. |
 
+### Additional Supported Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `parallel_tool_calls` | boolean | Allow multiple tool calls at once (default: true). |
+| `prompt_caching` | boolean | Enable prompt caching (default: true, mainly benefits Anthropic models). |
+| `reasoning.*` | various | Extended thinking configuration (see below). |
+
 ### Not Yet Passed Through
 
 The following parameters are parsed from config but not yet sent to the API ([#109](https://github.com/emesal/chibi/issues/109)):
@@ -395,14 +422,11 @@ The following parameters are parsed from config but not yet sent to the API ([#1
 | `frequency_penalty` | float | Penalize frequent tokens. |
 | `presence_penalty` | float | Penalize tokens that appeared. |
 | `tool_choice` | string | How the model uses tools (`auto`, `none`, `required`). |
-| `parallel_tool_calls` | boolean | Allow multiple tool calls at once. |
-| `prompt_caching` | boolean | Enable prompt caching. |
 | `response_format` | object | Force JSON output format. |
-| `reasoning.*` | various | Extended thinking configuration (see below). |
 
 ### Reasoning Configuration
 
-For models that support extended thinking (chain-of-thought reasoning). **Not yet passed through** — see [#109](https://github.com/emesal/chibi/issues/109).
+For models that support extended thinking (chain-of-thought reasoning).
 
 | Parameter | Type | Values | Description |
 |-----------|------|--------|-------------|
@@ -436,10 +460,11 @@ Chibi reads these environment variables for feature detection:
 - `TERM` - Checked for color capability level (`truecolor`, `256color`, `color`)
 
 Plugins receive these environment variables:
-- `CHIBI_TOOL_ARGS` - JSON arguments for tool calls
 - `CHIBI_VERBOSE=1` - Set when `-v` flag is used
 - `CHIBI_HOOK` - Hook point name (for hook calls)
-- `CHIBI_HOOK_DATA` - JSON data for hook calls
+- `CHIBI_TOOL_NAME` - Name of the tool being called
+
+Plugin input is passed via stdin as JSON (tool arguments for tool calls, hook data for hooks).
 
 ## Tool Filtering Configuration
 
@@ -457,8 +482,9 @@ include = ["update_todos", "update_goals", "update_reflection"]
 ```
 
 **Tool Types:**
-- `builtin`: update_todos, update_goals, update_reflection, send_message
-- `file`: file_head, file_tail, file_lines, file_grep, cache_list
+- `builtin`: update_todos, update_goals, update_reflection, send_message, call_user, call_agent
+- `file`: file_head, file_tail, file_lines, file_grep, cache_list, write_file
+- `agent`: spawn_agent, retrieve_content
 - `plugin`: Tools loaded from the plugins directory
 
 **Filter Precedence:**

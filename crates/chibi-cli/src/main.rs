@@ -141,6 +141,7 @@ fn resolve_cli_config(
     Ok(ResolvedConfig {
         core,
         render_markdown: cli.render_markdown,
+        show_thinking: cli.show_thinking,
         image: cli.image,
         markdown_style: cli.markdown_style,
     })
@@ -332,6 +333,8 @@ async fn execute_from_input(
     force_markdown: bool,
 ) -> io::Result<()> {
     let verbose = input.flags.verbose;
+    let show_tool_calls = !input.flags.hide_tool_calls || verbose;
+    let show_thinking_flag = input.flags.show_thinking || verbose;
     let json_output = input.flags.json_output;
 
     // Initialize session (executes OnStart hooks)
@@ -630,7 +633,10 @@ async fn execute_from_input(
                 if input.flags.raw {
                     resolved.render_markdown = false;
                 }
-                let use_reflection = chibi.app.config.reflection_enabled;
+                if input.flags.no_tool_calls {
+                    resolved.core.no_tool_calls = true;
+                }
+                let use_reflection = resolved.core.reflection_enabled;
 
                 let context_dir = chibi.app.context_dir(&working_context);
                 let _lock = chibi_core::lock::ContextLock::acquire(
@@ -660,7 +666,13 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                let mut sink = CliResponseSink::new(
+                    output,
+                    md_config,
+                    verbose,
+                    show_tool_calls,
+                    show_thinking_flag || resolved.show_thinking,
+                );
                 chibi
                     .send_prompt_streaming(
                         &working_context,
@@ -709,7 +721,10 @@ async fn execute_from_input(
             if input.flags.raw {
                 resolved.render_markdown = false;
             }
-            let use_reflection = chibi.app.config.reflection_enabled;
+            if input.flags.no_tool_calls {
+                resolved.core.no_tool_calls = true;
+            }
+            let use_reflection = resolved.core.reflection_enabled;
 
             // Acquire context lock
             let context_dir = chibi.app.context_dir(&ctx_name);
@@ -737,7 +752,13 @@ async fn execute_from_input(
                 None
             };
 
-            let mut sink = CliResponseSink::new(output, md_config, verbose);
+            let mut sink = CliResponseSink::new(
+                output,
+                md_config,
+                verbose,
+                show_tool_calls,
+                show_thinking_flag || resolved.show_thinking,
+            );
             chibi
                 .send_prompt_streaming(
                     &working_context,
@@ -780,7 +801,10 @@ async fn execute_from_input(
                 if input.flags.raw {
                     resolved.render_markdown = false;
                 }
-                let use_reflection = chibi.app.config.reflection_enabled;
+                if input.flags.no_tool_calls {
+                    resolved.core.no_tool_calls = true;
+                }
+                let use_reflection = resolved.core.reflection_enabled;
 
                 // Acquire context lock
                 let context_dir = chibi.app.context_dir(&ctx_name);
@@ -808,7 +832,13 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                let mut sink = CliResponseSink::new(
+                    output,
+                    md_config,
+                    verbose,
+                    show_tool_calls,
+                    show_thinking_flag || resolved.show_thinking,
+                );
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
@@ -846,7 +876,10 @@ async fn execute_from_input(
                 if input.flags.raw {
                     resolved.render_markdown = false;
                 }
-                let use_reflection = chibi.app.config.reflection_enabled;
+                if input.flags.no_tool_calls {
+                    resolved.core.no_tool_calls = true;
+                }
+                let use_reflection = resolved.core.reflection_enabled;
 
                 // Acquire context lock
                 let context_dir = chibi.app.context_dir(&ctx_name);
@@ -874,7 +907,13 @@ async fn execute_from_input(
                     None
                 };
 
-                let mut sink = CliResponseSink::new(output, md_config, verbose);
+                let mut sink = CliResponseSink::new(
+                    output,
+                    md_config,
+                    verbose,
+                    show_tool_calls,
+                    show_thinking_flag || resolved.show_thinking,
+                );
                 chibi
                     .send_prompt_streaming(
                         &ctx_name,
@@ -896,6 +935,16 @@ async fn execute_from_input(
                     verbose,
                 );
             }
+            did_action = true;
+        }
+        Command::ModelMetadata { model, full } => {
+            let resolved = chibi.resolve_config(&working_context, None)?;
+            let gateway = chibi_core::gateway::build_gateway(&resolved)?;
+            let metadata = chibi_core::model_info::fetch_metadata(&gateway, model).await?;
+            print!(
+                "{}",
+                chibi_core::model_info::format_model_toml(&metadata, *full)
+            );
             did_action = true;
         }
         Command::NoOp => {
@@ -973,6 +1022,20 @@ fn extract_home_override(args: &[String]) -> Option<PathBuf> {
     None
 }
 
+/// Extract --project-root flag value from args (before full CLI parsing)
+fn extract_project_root_override(args: &[String]) -> Option<PathBuf> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--project-root" {
+            return iter.next().map(PathBuf::from);
+        }
+        if let Some(path) = arg.strip_prefix("--project-root=") {
+            return Some(PathBuf::from(path));
+        }
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     // Check for early flags (before full CLI parsing)
@@ -988,6 +1051,7 @@ async fn main() -> io::Result<()> {
     let is_json_config = args.iter().any(|a| a == "--json-config");
     let cli_json_output = args.iter().any(|a| a == "--json-output");
     let home_override = extract_home_override(&args);
+    let project_root_override = extract_project_root_override(&args);
 
     if is_json_config {
         // JSON mode: read from stdin and parse directly to ChibiInput
@@ -1019,7 +1083,13 @@ async fn main() -> io::Result<()> {
         let mut chibi = Chibi::load_with_options(LoadOptions {
             verbose: input.flags.verbose,
             home: home_override,
+            project_root: project_root_override.clone(),
         })?;
+        // CLI flags override config settings
+        input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
+        input.flags.hide_tool_calls =
+            input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
+        input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
         let mut session = Session::load(chibi.home_dir())?;
 
         output.diagnostic(
@@ -1031,7 +1101,7 @@ async fn main() -> io::Result<()> {
     }
 
     // CLI mode: parse to ChibiInput and use unified execution
-    let input = cli::parse()?;
+    let mut input = cli::parse()?;
 
     // Handle --debug md=<FILENAME> early (renders markdown and quits, implies -x)
     if let Some(path) = input.flags.debug.iter().find_map(|k| match k {
@@ -1062,25 +1132,41 @@ async fn main() -> io::Result<()> {
         .iter()
         .any(|k| matches!(k, DebugKey::ForceMarkdown));
 
-    let verbose = input.flags.verbose;
     let mut chibi = Chibi::load_with_options(LoadOptions {
-        verbose,
+        verbose: input.flags.verbose,
         home: home_override,
+        project_root: project_root_override,
     })?;
+    // CLI flags override config settings
+    let verbose = input.flags.verbose || chibi.app.config.verbose;
+    input.flags.verbose = verbose;
+    input.flags.hide_tool_calls = input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
+    input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
     let mut session = Session::load(chibi.home_dir())?;
 
-    // Print tool list if verbose
-    if verbose && !chibi.tools.is_empty() {
+    // Print tool lists if verbose
+    if verbose {
+        let builtin_names = chibi_core::tools::builtin_tool_names();
         eprintln!(
-            "[Loaded {} tool(s): {}]",
-            chibi.tool_count(),
-            chibi
-                .tools
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "[Built-in ({}): {}]",
+            builtin_names.len(),
+            builtin_names.join(", ")
         );
+
+        if chibi.tools.is_empty() {
+            eprintln!("[No plugins loaded]");
+        } else {
+            eprintln!(
+                "[Plugins ({}): {}]",
+                chibi.tool_count(),
+                chibi
+                    .tools
+                    .iter()
+                    .map(|t| t.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
     }
 
     let output = OutputHandler::new(input.flags.json_output);

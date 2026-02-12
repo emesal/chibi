@@ -30,7 +30,10 @@ impl Message {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Context {
     pub name: String,
-    pub messages: Vec<Message>,
+    /// Conversation messages as JSON values. Each value has at minimum "role" and "content".
+    /// Tool interactions include "tool_calls" (assistant) or "tool_call_id" (tool results).
+    /// An internal "_id" field is injected for compaction tracking (stripped before API send).
+    pub messages: Vec<serde_json::Value>,
     pub created_at: u64,
     pub updated_at: u64,
     /// Summary of conversation history (loaded from separate file, not serialized)
@@ -182,6 +185,10 @@ pub struct TranscriptEntry {
     /// Optional metadata for anchor entries (summary, hash, etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<EntryMetadata>,
+    /// Tool call ID for correlating tool_call and tool_result entries.
+    /// Present on tool_call and tool_result entry types; absent on messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 impl TranscriptEntry {
@@ -201,6 +208,7 @@ pub struct TranscriptEntryBuilder {
     content: Option<String>,
     entry_type: Option<String>,
     metadata: Option<EntryMetadata>,
+    tool_call_id: Option<String>,
 }
 
 impl TranscriptEntryBuilder {
@@ -234,6 +242,12 @@ impl TranscriptEntryBuilder {
         self
     }
 
+    /// Set the tool call ID for correlating tool_call/tool_result pairs
+    pub fn tool_call_id(mut self, id: impl Into<String>) -> Self {
+        self.tool_call_id = Some(id.into());
+        self
+    }
+
     /// Build the TranscriptEntry with auto-generated ID and current timestamp
     pub fn build(self) -> TranscriptEntry {
         TranscriptEntry {
@@ -246,6 +260,7 @@ impl TranscriptEntryBuilder {
                 .entry_type
                 .unwrap_or_else(|| ENTRY_TYPE_MESSAGE.to_string()),
             metadata: self.metadata,
+            tool_call_id: self.tool_call_id,
         }
     }
 }

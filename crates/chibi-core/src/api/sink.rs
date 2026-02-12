@@ -16,6 +16,9 @@ pub enum ResponseEvent<'a> {
     /// A chunk of text content from the streaming response.
     TextChunk(&'a str),
 
+    /// A chunk of thinking/reasoning content from the streaming response.
+    Reasoning(&'a str),
+
     /// A diagnostic message (typically shown in verbose mode or always).
     Diagnostic {
         message: String,
@@ -99,6 +102,8 @@ pub trait ResponseSink {
 pub struct CollectingSink {
     /// Accumulated text content from the response.
     pub text: String,
+    /// Accumulated reasoning/thinking content from the response.
+    pub reasoning: String,
     /// Transcript entries emitted during the interaction.
     pub entries: Vec<TranscriptEntry>,
     /// Diagnostic messages emitted.
@@ -117,6 +122,9 @@ impl ResponseSink for CollectingSink {
         match event {
             ResponseEvent::TextChunk(chunk) => {
                 self.text.push_str(chunk);
+            }
+            ResponseEvent::Reasoning(chunk) => {
+                self.reasoning.push_str(chunk);
             }
             ResponseEvent::TranscriptEntry(entry) => {
                 self.entries.push(entry);

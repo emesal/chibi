@@ -5,8 +5,10 @@
 //! - update_todos: Per-context task tracking
 //! - update_goals: Per-context goal tracking
 //! - send_message: Inter-context messaging
-//! - recurse: Signal to continue processing
+//! - call_agent/call_user: Control flow handoff
+//! - model_info: Model metadata lookup (async, dispatched in api/send.rs)
 
+use crate::config::ResolvedConfig;
 use crate::state::AppState;
 use std::io::{self, ErrorKind};
 use std::path::Path;
@@ -30,6 +32,9 @@ pub const CALL_AGENT_TOOL_NAME: &str = "call_agent";
 
 /// Name of the built-in call_user tool for control handoff
 pub const CALL_USER_TOOL_NAME: &str = "call_user";
+
+/// Name of the built-in model_info tool for metadata lookup
+pub const MODEL_INFO_TOOL_NAME: &str = "model_info";
 
 // === Tool Definition Registry ===
 
@@ -162,6 +167,17 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
         }],
         required: &[],
     },
+    BuiltinToolDef {
+        name: MODEL_INFO_TOOL_NAME,
+        description: "Look up metadata for a model: context window, max output tokens, pricing, capabilities, and parameter ranges. Use this to check model specifications before making recommendations or decisions about model selection.",
+        properties: &[ToolPropertyDef {
+            name: "model",
+            prop_type: "string",
+            description: "Model identifier (e.g. 'anthropic/claude-sonnet-4')",
+            default: None,
+        }],
+        required: &["model"],
+    },
 ];
 
 /// Look up a specific builtin tool definition by name.
@@ -201,6 +217,11 @@ pub fn builtin_tool_metadata(name: &str) -> ToolMetadata {
             parallel: false,
             flow_control: true,
             ends_turn: true,
+        },
+        "shell_exec" => ToolMetadata {
+            parallel: false,
+            flow_control: false,
+            ends_turn: false,
         },
         _ => ToolMetadata::new(),
     }
@@ -301,6 +322,7 @@ pub fn execute_builtin_tool(
     context_name: &str,
     tool_name: &str,
     args: &serde_json::Value,
+    resolved_config: Option<&ResolvedConfig>,
 ) -> Option<io::Result<String>> {
     match tool_name {
         TODOS_TOOL_NAME => {
@@ -317,11 +339,12 @@ pub fn execute_builtin_tool(
                     .map(|_| format!("Goals updated ({} characters).", content.len())),
             )
         }
-        REFLECTION_TOOL_NAME => Some(execute_reflection_tool(
-            &app.prompts_dir,
-            args,
-            app.config.reflection_character_limit,
-        )),
+        REFLECTION_TOOL_NAME => {
+            let limit = resolved_config
+                .map(|c| c.reflection_character_limit)
+                .unwrap_or(app.config.reflection_character_limit);
+            Some(execute_reflection_tool(&app.prompts_dir, args, limit))
+        }
         SEND_MESSAGE_TOOL_NAME => {
             let to = args.get("to").and_then(|v| v.as_str())?;
             let content = args.get("content").and_then(|v| v.as_str())?;
@@ -534,6 +557,25 @@ mod tests {
     }
 
     #[test]
+    fn test_model_info_tool_api_format() {
+        let tool = get_tool_api(MODEL_INFO_TOOL_NAME);
+        assert_eq!(tool["type"], "function");
+        assert_eq!(tool["function"]["name"], MODEL_INFO_TOOL_NAME);
+        assert!(
+            tool["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("metadata")
+        );
+        assert!(
+            tool["function"]["parameters"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("model"))
+        );
+    }
+
+    #[test]
     fn test_handoff_constants() {
         assert_eq!(CALL_AGENT_TOOL_NAME, "call_agent");
         assert_eq!(CALL_USER_TOOL_NAME, "call_user");
@@ -597,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_registry_contains_all_tools() {
-        assert_eq!(BUILTIN_TOOL_DEFS.len(), 6);
+        assert_eq!(BUILTIN_TOOL_DEFS.len(), 7);
         let names: Vec<_> = BUILTIN_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&REFLECTION_TOOL_NAME));
         assert!(names.contains(&TODOS_TOOL_NAME));
@@ -605,12 +647,13 @@ mod tests {
         assert!(names.contains(&SEND_MESSAGE_TOOL_NAME));
         assert!(names.contains(&CALL_AGENT_TOOL_NAME));
         assert!(names.contains(&CALL_USER_TOOL_NAME));
+        assert!(names.contains(&MODEL_INFO_TOOL_NAME));
     }
 
     #[test]
     fn test_all_builtin_tools_to_api_format() {
         let tools = all_builtin_tools_to_api_format();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
         for tool in &tools {
             assert_eq!(tool["type"], "function");
             assert!(tool["function"]["name"].as_str().is_some());
@@ -621,13 +664,13 @@ mod tests {
     #[test]
     fn test_builtin_tools_to_api_format_with_reflection() {
         let tools = builtin_tools_to_api_format(true);
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
     }
 
     #[test]
     fn test_builtin_tools_to_api_format_without_reflection() {
         let tools = builtin_tools_to_api_format(false);
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 6);
         for tool in &tools {
             assert_ne!(tool["function"]["name"], REFLECTION_TOOL_NAME);
         }

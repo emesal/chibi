@@ -56,11 +56,13 @@ use std::path::PathBuf;
 /// let default_opts = LoadOptions::default();
 /// assert!(!default_opts.verbose);
 /// assert!(default_opts.home.is_none());
+/// assert!(default_opts.project_root.is_none());
 ///
 /// // Custom options with verbose output and custom home
 /// let custom_opts = LoadOptions {
 ///     verbose: true,
 ///     home: Some(PathBuf::from("/custom/chibi")),
+///     project_root: Some(PathBuf::from("/my/project")),
 /// };
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -70,6 +72,9 @@ pub struct LoadOptions {
     /// Override the chibi home directory.
     /// If `None`, uses `CHIBI_HOME` env var or `~/.chibi`.
     pub home: Option<PathBuf>,
+    /// Override the project root directory.
+    /// If `None`, uses `CHIBI_PROJECT_ROOT` env var or current working directory.
+    pub project_root: Option<PathBuf>,
 }
 
 /// High-level facade for chibi embedding.
@@ -81,6 +86,8 @@ pub struct Chibi {
     pub app: AppState,
     /// Loaded tools (plugins from ~/.chibi/plugins/).
     pub tools: Vec<Tool>,
+    /// Project root directory (always resolved, never None).
+    pub project_root: PathBuf,
 }
 
 impl Chibi {
@@ -114,6 +121,11 @@ impl Chibi {
     /// This is the most flexible way to load chibi, allowing control over
     /// both the home directory and verbose output.
     ///
+    /// Project root resolution order: `options.project_root` > `CHIBI_PROJECT_ROOT` env > cwd.
+    ///
+    /// Sets `CHIBI_PROJECT_ROOT` and `CHIBI_INDEX_DB` environment variables so
+    /// plugins and hooks can discover the project root and index database path.
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -123,13 +135,30 @@ impl Chibi {
     /// let chibi = Chibi::load_with_options(LoadOptions {
     ///     verbose: true,
     ///     home: Some("/custom/path".into()),
+    ///     ..Default::default()
     /// })?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn load_with_options(options: LoadOptions) -> io::Result<Self> {
         let app = AppState::load(options.home)?;
-        let tools = tools::load_tools(&app.plugins_dir, options.verbose)?;
-        Ok(Self { app, tools })
+        // CLI flag overrides config setting
+        let verbose = options.verbose || app.config.verbose;
+        let tools = tools::load_tools(&app.plugins_dir, verbose)?;
+        let project_root = resolve_project_root(options.project_root)?;
+
+        // Expose project root to plugins/hooks via environment variables.
+        // SAFETY: Called once during single-threaded initialization, before any
+        // plugin/hook child processes are spawned.
+        unsafe {
+            std::env::set_var("CHIBI_PROJECT_ROOT", &project_root);
+            std::env::set_var("CHIBI_INDEX_DB", project_index_db_path(&project_root));
+        }
+
+        Ok(Self {
+            app,
+            tools,
+            project_root,
+        })
     }
 
     /// Initialize the session.
@@ -151,7 +180,11 @@ impl Chibi {
     /// # }
     /// ```
     pub fn init(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
-        let hook_data = serde_json::json!({});
+        let hook_data = serde_json::json!({
+            "chibi_home": self.app.chibi_dir.to_string_lossy(),
+            "project_root": self.project_root.to_string_lossy(),
+            "tool_count": self.tools.len(),
+        });
         tools::execute_hook(&self.tools, tools::HookPoint::OnStart, &hook_data)
     }
 
@@ -160,7 +193,11 @@ impl Chibi {
     /// Executes `OnEnd` hooks. Call this once at the end of a session,
     /// after all prompts are complete.
     pub fn shutdown(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
-        let hook_data = serde_json::json!({});
+        let hook_data = serde_json::json!({
+            "chibi_home": self.app.chibi_dir.to_string_lossy(),
+            "project_root": self.project_root.to_string_lossy(),
+            "tool_count": self.tools.len(),
+        });
         tools::execute_hook(&self.tools, tools::HookPoint::OnEnd, &hook_data)
     }
 
@@ -259,7 +296,9 @@ impl Chibi {
         args: serde_json::Value,
     ) -> io::Result<String> {
         // Try built-in tools first
-        if let Some(result) = tools::execute_builtin_tool(&self.app, context_name, name, &args) {
+        if let Some(result) =
+            tools::execute_builtin_tool(&self.app, context_name, name, &args, None)
+        {
             return result;
         }
 
@@ -334,6 +373,33 @@ impl Chibi {
     }
 }
 
+/// Resolve project root: explicit path > `CHIBI_PROJECT_ROOT` env > current working directory.
+fn resolve_project_root(explicit: Option<PathBuf>) -> io::Result<PathBuf> {
+    if let Some(root) = explicit {
+        return Ok(root);
+    }
+    if let Ok(env_root) = std::env::var("CHIBI_PROJECT_ROOT")
+        && !env_root.is_empty()
+    {
+        return Ok(PathBuf::from(env_root));
+    }
+    std::env::current_dir()
+}
+
+/// Return the project-local chibi directory (`<project_root>/.chibi/`), creating it if absent.
+pub fn project_chibi_dir(root: &Path) -> io::Result<PathBuf> {
+    let dir = root.join(".chibi");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)?;
+    }
+    Ok(dir)
+}
+
+/// Return the path to the project's codebase index database.
+pub fn project_index_db_path(root: &Path) -> PathBuf {
+    root.join(".chibi").join("codebase.db")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +426,7 @@ mod tests {
         let opts = LoadOptions::default();
         assert!(!opts.verbose);
         assert!(opts.home.is_none());
+        assert!(opts.project_root.is_none());
     }
 
     #[test]
@@ -378,5 +445,63 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(opts.home, Some(PathBuf::from("/tmp/test-chibi")));
+    }
+
+    #[test]
+    fn test_load_options_with_project_root() {
+        let opts = LoadOptions {
+            project_root: Some(PathBuf::from("/my/project")),
+            ..Default::default()
+        };
+        assert_eq!(opts.project_root, Some(PathBuf::from("/my/project")));
+    }
+
+    #[test]
+    fn test_resolve_project_root_explicit() {
+        let root = resolve_project_root(Some(PathBuf::from("/explicit/root"))).unwrap();
+        assert_eq!(root, PathBuf::from("/explicit/root"));
+    }
+
+    #[test]
+    fn test_resolve_project_root_from_env() {
+        // SAFETY: Test runs in single-threaded context
+        unsafe {
+            std::env::set_var("CHIBI_PROJECT_ROOT", "/env/root");
+        }
+        let root = resolve_project_root(None).unwrap();
+        unsafe {
+            std::env::remove_var("CHIBI_PROJECT_ROOT");
+        }
+        assert_eq!(root, PathBuf::from("/env/root"));
+    }
+
+    #[test]
+    fn test_resolve_project_root_falls_back_to_cwd() {
+        // SAFETY: Test runs in single-threaded context
+        unsafe {
+            std::env::remove_var("CHIBI_PROJECT_ROOT");
+        }
+        let root = resolve_project_root(None).unwrap();
+        assert_eq!(root, std::env::current_dir().unwrap());
+    }
+
+    #[test]
+    fn test_project_chibi_dir_creates_directory() {
+        let tmp = std::env::temp_dir().join("chibi-test-project-dir");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dir = project_chibi_dir(&tmp).unwrap();
+        assert_eq!(dir, tmp.join(".chibi"));
+        assert!(dir.exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_project_index_db_path() {
+        let root = PathBuf::from("/my/project");
+        assert_eq!(
+            project_index_db_path(&root),
+            PathBuf::from("/my/project/.chibi/codebase.db")
+        );
     }
 }

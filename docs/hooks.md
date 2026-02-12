@@ -45,8 +45,21 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_agentic_loop` | Before entering the tool loop | Yes (fallback target) |
-| `post_tool_batch` | After processing a batch of tool calls | Yes (fallback target) |
+| `pre_agentic_loop` | Before entering the tool loop (each iteration) | Yes (fallback target, fuel) |
+| `post_tool_batch` | After processing a batch of tool calls | Yes (fallback target, fuel delta) |
+
+### File Write Permission
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_file_write` | Before `write_file`/`file_edit` execution | Yes (approve/deny, fail-safe deny if no hook registered) |
+
+### Sub-Agent Lifecycle
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_spawn_agent` | Before a sub-agent LLM call | Yes (can provide response or block) |
+| `post_spawn_agent` | After sub-agent returns | No |
 
 ### Tool Output Caching
 
@@ -91,10 +104,10 @@ Plugins register for hooks via their `--schema` JSON output:
 
 ## Hook Execution
 
-When a hook fires, registered plugins are called with environment variables:
+When a hook fires, registered plugins are called with:
 
-- `CHIBI_HOOK` - Hook point name (e.g., "pre_message")
-- `CHIBI_HOOK_DATA` - JSON data about the event
+- `CHIBI_HOOK` env var - Hook point name (e.g., "pre_message")
+- stdin - JSON data about the event
 
 ## Hook Data by Type
 
@@ -163,13 +176,15 @@ Called before tools are sent to the API. Allows dynamic filtering of which tools
     {"name": "file_head", "type": "file"},
     {"name": "my_plugin", "type": "plugin"}
   ],
-  "recursion_depth": 0
+  "fuel_remaining": 30,
+  "fuel_total": 30
 }
 ```
 
 Tool types are:
 - `builtin`: update_todos, update_goals, update_reflection, send_message
 - `file`: file_head, file_tail, file_lines, file_grep, cache_list
+- `agent`: spawn_agent, retrieve_content
 - `plugin`: Tools loaded from the plugins directory
 
 **Can return (to filter tools):**
@@ -204,7 +219,8 @@ Called after tools are filtered but before the HTTP request is sent. Allows modi
     "temperature": 0.7,
     ...
   },
-  "recursion_depth": 0
+  "fuel_remaining": 30,
+  "fuel_total": 30
 }
 ```
 
@@ -222,12 +238,13 @@ Returned fields are **merged** into the request body, not replaced entirely. Thi
 
 ### pre_agentic_loop
 
-Called once before entering the agentic tool loop. Allows plugins to override the fallback handoff target (what happens when the LLM doesn't explicitly call `call_agent` or `call_user`).
+Called before each iteration of the agentic loop (including re-entries on agent continuation). Allows plugins to override the fallback handoff target and adjust the fuel budget.
 
 ```json
 {
   "context_name": "default",
-  "recursion_depth": 0,
+  "fuel_remaining": 30,
+  "fuel_total": 30,
   "current_fallback": "call_agent",
   "message": "user's message here"
 }
@@ -242,14 +259,24 @@ Called once before entering the agentic tool loop. Allows plugins to override th
 
 Valid fallback values are `"call_agent"` (continue processing) or `"call_user"` (return to user).
 
+**Can return (to set fuel):**
+```json
+{
+  "fuel": 50
+}
+```
+
+Sets `fuel_remaining` to the given value. Plugins can inspect the current `fuel_remaining` in the hook data and decide whether to top up, cap, or reset the budget.
+
 ### post_tool_batch
 
-Called after processing a batch of tool calls, before deciding whether to recurse or return. Allows plugins to override the fallback based on which tools were called.
+Called after processing a batch of tool calls, before deciding whether to continue or return. Allows plugins to override the fallback and adjust fuel based on which tools were called.
 
 ```json
 {
   "context_name": "default",
-  "recursion_depth": 1,
+  "fuel_remaining": 28,
+  "fuel_total": 30,
   "current_fallback": "call_agent",
   "tool_calls": [
     {"name": "read_file", "arguments": {"path": "Cargo.toml"}},
@@ -264,6 +291,15 @@ Called after processing a batch of tool calls, before deciding whether to recurs
   "fallback": "call_user"
 }
 ```
+
+**Can return (to adjust fuel):**
+```json
+{
+  "fuel_delta": -5
+}
+```
+
+Positive values add fuel (saturating), negative values consume fuel (saturating to 0). Use this to make certain tool patterns cost more or less fuel.
 
 **Priority:** `post_tool_batch` output > `pre_agentic_loop` output > config fallback. Each `post_tool_batch` hook can keep overriding, so the last hook to set a fallback wins.
 
@@ -411,6 +447,73 @@ Notification after output has been cached.
 }
 ```
 
+### pre_file_write
+
+Called before `write_file` or `file_edit` execution. File write tools require at least one `pre_file_write` hook to be registered — if no hook is registered, the operation is denied (fail-safe).
+
+```json
+{
+  "tool_name": "write_file",
+  "path": "/home/user/project/file.txt",
+  "content": "file content here",
+}
+```
+
+**Must return (to approve):**
+```json
+{
+  "approved": true
+}
+```
+
+**To deny:**
+```json
+{
+  "approved": false,
+  "reason": "Path not allowed"
+}
+```
+
+### pre_spawn_agent
+
+Called before a sub-agent LLM call (from `spawn_agent` or `retrieve_content` tools). Can intercept and replace the call entirely, or block it.
+
+```json
+{
+  "system_prompt": "You are a summarizer...",
+  "input": "Content to process...",
+  "model": "anthropic/claude-sonnet-4",
+  "temperature": 0.7,
+  "max_tokens": 4096
+}
+```
+
+**Can return (to replace the LLM call):**
+```json
+{
+  "response": "Pre-computed or cached response"
+}
+```
+
+Or to block:
+```json
+{
+  "block": true,
+  "message": "Sub-agent calls are not allowed in this context"
+}
+```
+
+### post_spawn_agent
+
+```json
+{
+  "system_prompt": "You are a summarizer...",
+  "input": "Content to process...",
+  "model": "anthropic/claude-sonnet-4",
+  "response": "The sub-agent's response..."
+}
+```
+
 ### pre_clear / post_clear
 
 ```json
@@ -474,8 +577,9 @@ fi
 
 # Handle hook call
 if [[ -n "$CHIBI_HOOK" ]]; then
+  data=$(cat)  # Read JSON from stdin
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $CHIBI_HOOK" >> ~/.chibi/hook.log
-  echo "$CHIBI_HOOK_DATA" | jq '.' >> ~/.chibi/hook.log
+  echo "$data" | jq '.' >> ~/.chibi/hook.log
   echo "{}"  # Return empty JSON (no modifications)
   exit 0
 fi
@@ -507,7 +611,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
 
 hook = os.environ.get("CHIBI_HOOK", "")
 if hook == "pre_message":
-    data = json.loads(os.environ.get("CHIBI_HOOK_DATA", "{}"))
+    data = json.load(sys.stdin)
     prompt = data.get("prompt", "")
 
     # Add timestamp to every prompt
@@ -541,11 +645,12 @@ EOF
 fi
 
 if [[ "$CHIBI_HOOK" == "pre_tool" ]]; then
-  tool_name=$(echo "$CHIBI_HOOK_DATA" | jq -r '.tool_name')
+  data=$(cat)  # Read JSON from stdin
+  tool_name=$(echo "$data" | jq -r '.tool_name')
 
   # Block run_command for certain patterns
   if [[ "$tool_name" == "run_command" ]]; then
-    command=$(echo "$CHIBI_HOOK_DATA" | jq -r '.arguments.command // ""')
+    command=$(echo "$data" | jq -r '.arguments.command // ""')
     if [[ "$command" == *"rm -rf"* ]]; then
       echo '{"block": true, "message": "Blocked: rm -rf commands are not allowed"}'
       exit 0
@@ -580,7 +685,8 @@ EOF
 fi
 
 if [[ "$CHIBI_HOOK" == "pre_api_tools" ]]; then
-  context=$(echo "$CHIBI_HOOK_DATA" | jq -r '.context_name')
+  data=$(cat)  # Read JSON from stdin
+  context=$(echo "$data" | jq -r '.context_name')
 
   # Restrict tools in "safe" context
   if [[ "$context" == "safe" ]]; then
@@ -619,7 +725,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
 
 hook = os.environ.get("CHIBI_HOOK", "")
 if hook == "pre_api_request":
-    data = json.loads(os.environ.get("CHIBI_HOOK_DATA", "{}"))
+    data = json.load(sys.stdin)
     context = data.get("context_name", "")
 
     # Use low temperature for "coding" context
@@ -658,7 +764,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
 
 hook = os.environ.get("CHIBI_HOOK", "")
 if hook == "post_tool_batch":
-    data = json.loads(os.environ.get("CHIBI_HOOK_DATA", "{}"))
+    data = json.load(sys.stdin)
     tool_calls = data.get("tool_calls", [])
 
     # List of tools that should require user confirmation
@@ -667,7 +773,8 @@ if hook == "post_tool_batch":
     for call in tool_calls:
         if call.get("name") in dangerous_tools:
             # Force return to user after dangerous tool calls
-            print(json.dumps({"fallback": "call_user"}))
+            # Also penalize fuel to discourage repeated dangerous operations
+            print(json.dumps({"fallback": "call_user", "fuel_delta": -5}))
             sys.exit(0)
 
 print("{}")

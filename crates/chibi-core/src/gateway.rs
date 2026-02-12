@@ -3,10 +3,12 @@
 //! This module provides type conversions between chibi's internal types
 //! and ratatoskr's ModelGateway types.
 
-use crate::config::ResolvedConfig;
-use crate::tools::Tool;
+use crate::config::{self, ResolvedConfig};
 use ratatoskr::{
-    ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr, Role, ToolCall, ToolDefinition,
+    ChatOptions, EmbeddedGateway, Message, ModelGateway, Ratatoskr,
+    ReasoningConfig as RatatoskrReasoningConfig, ReasoningEffort as RatatoskrReasoningEffort,
+    ResponseFormat as RatatoskrResponseFormat, ToolCall, ToolChoice as RatatoskrToolChoice,
+    ToolDefinition,
 };
 use std::io;
 
@@ -57,63 +59,6 @@ pub fn to_ratatoskr_message(json: &serde_json::Value) -> io::Result<Message> {
     }
 }
 
-/// Convert ratatoskr Message back to chibi's JSON format.
-///
-/// Currently unused — will be needed when chibi's internals migrate from JSON to ratatoskr types.
-#[allow(dead_code)]
-pub fn from_ratatoskr_message(msg: &Message) -> serde_json::Value {
-    use serde_json::json;
-
-    let content = msg.content.as_text().unwrap_or("");
-
-    match &msg.role {
-        Role::System => json!({
-            "role": "system",
-            "content": content
-        }),
-        Role::User => json!({
-            "role": "user",
-            "content": content
-        }),
-        Role::Assistant => {
-            let mut obj = json!({
-                "role": "assistant",
-                "content": content
-            });
-            if let Some(tool_calls) = &msg.tool_calls {
-                let tc_json: Vec<serde_json::Value> = tool_calls
-                    .iter()
-                    .map(|tc| {
-                        json!({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": tc.arguments
-                            }
-                        })
-                    })
-                    .collect();
-                obj["tool_calls"] = json!(tc_json);
-            }
-            obj
-        }
-        Role::Tool { tool_call_id } => json!({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": content
-        }),
-    }
-}
-
-/// Convert chibi Tool to ratatoskr ToolDefinition.
-///
-/// Currently unused — will be needed when chibi's internals migrate from JSON to ratatoskr types.
-#[allow(dead_code)]
-pub fn to_tool_definition(tool: &Tool) -> ToolDefinition {
-    ToolDefinition::new(&tool.name, &tool.description, tool.parameters.clone())
-}
-
 /// Convert OpenAI-format tool JSON to ratatoskr ToolDefinition.
 ///
 /// Expects the format: `{"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}`
@@ -124,7 +69,7 @@ pub fn json_tool_to_definition(json: &serde_json::Value) -> io::Result<ToolDefin
 
 /// Convert ResolvedConfig to ChatOptions.
 pub fn to_chat_options(config: &ResolvedConfig) -> ChatOptions {
-    let mut opts = ChatOptions::default().model(&config.model);
+    let mut opts = ChatOptions::new(&config.model);
 
     let api = &config.api;
 
@@ -143,8 +88,85 @@ pub fn to_chat_options(config: &ResolvedConfig) -> ChatOptions {
     if let Some(seed) = api.seed {
         opts = opts.seed(seed);
     }
+    if let Some(penalty) = api.frequency_penalty {
+        opts = opts.frequency_penalty(penalty);
+    }
+    if let Some(penalty) = api.presence_penalty {
+        opts = opts.presence_penalty(penalty);
+    }
+    if let Some(parallel) = api.parallel_tool_calls {
+        opts = opts.parallel_tool_calls(parallel);
+    }
+    if let Some(ref tool_choice) = api.tool_choice {
+        opts = opts.tool_choice(to_ratatoskr_tool_choice(tool_choice));
+    }
+    if let Some(ref format) = api.response_format {
+        opts = opts.response_format(to_ratatoskr_response_format(format));
+    }
+    if let Some(cache) = api.prompt_caching {
+        opts = opts.cache_prompt(cache);
+    }
+
+    if !api.reasoning.is_empty() {
+        opts = opts.reasoning(to_ratatoskr_reasoning(&api.reasoning));
+    }
 
     opts
+}
+
+/// Convert chibi's ToolChoice to ratatoskr's ToolChoice.
+fn to_ratatoskr_tool_choice(choice: &config::ToolChoice) -> RatatoskrToolChoice {
+    match choice {
+        config::ToolChoice::Mode(mode) => match mode {
+            config::ToolChoiceMode::Auto => RatatoskrToolChoice::Auto,
+            config::ToolChoiceMode::None => RatatoskrToolChoice::None,
+            config::ToolChoiceMode::Required => RatatoskrToolChoice::Required,
+        },
+        config::ToolChoice::Function { function, .. } => RatatoskrToolChoice::Function {
+            name: function.name.clone(),
+        },
+    }
+}
+
+/// Convert chibi's ResponseFormat to ratatoskr's ResponseFormat.
+fn to_ratatoskr_response_format(format: &config::ResponseFormat) -> RatatoskrResponseFormat {
+    match format {
+        config::ResponseFormat::Text => RatatoskrResponseFormat::Text,
+        config::ResponseFormat::JsonObject => RatatoskrResponseFormat::JsonObject,
+        config::ResponseFormat::JsonSchema { json_schema } => RatatoskrResponseFormat::JsonSchema {
+            schema: json_schema
+                .clone()
+                .unwrap_or(serde_json::Value::Object(Default::default())),
+        },
+    }
+}
+
+/// Convert chibi's ReasoningConfig to ratatoskr's ReasoningConfig.
+///
+/// When `enabled = true` without explicit effort or max_tokens, defaults to medium effort.
+fn to_ratatoskr_reasoning(reasoning: &config::ReasoningConfig) -> RatatoskrReasoningConfig {
+    let effort = match (reasoning.effort, reasoning.enabled) {
+        // Explicit effort always wins
+        (Some(e), _) => Some(match e {
+            config::ReasoningEffort::XHigh => RatatoskrReasoningEffort::XHigh,
+            config::ReasoningEffort::High => RatatoskrReasoningEffort::High,
+            config::ReasoningEffort::Medium => RatatoskrReasoningEffort::Medium,
+            config::ReasoningEffort::Low => RatatoskrReasoningEffort::Low,
+            config::ReasoningEffort::Minimal => RatatoskrReasoningEffort::Minimal,
+            config::ReasoningEffort::None => RatatoskrReasoningEffort::None,
+        }),
+        // enabled=true without effort or max_tokens → default to medium
+        (None, Some(true)) if reasoning.max_tokens.is_none() => {
+            Some(RatatoskrReasoningEffort::Medium)
+        }
+        _ => None,
+    };
+
+    RatatoskrReasoningConfig {
+        effort,
+        max_tokens: reasoning.max_tokens,
+        exclude_from_output: reasoning.exclude,
+    }
 }
 
 /// Build a gateway from ResolvedConfig.
@@ -179,6 +201,8 @@ pub async fn chat(config: &ResolvedConfig, messages: &[serde_json::Value]) -> io
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ResolvedConfig;
+    use ratatoskr::Role;
     use serde_json::json;
 
     #[test]
@@ -225,6 +249,107 @@ mod tests {
     }
 
     #[test]
+    fn test_to_chat_options_includes_parallel_tool_calls() {
+        let config = test_config(|api| {
+            api.parallel_tool_calls = Some(true);
+        });
+        let opts = to_chat_options(&config);
+        assert_eq!(opts.parallel_tool_calls, Some(true));
+    }
+
+    #[test]
+    fn test_to_chat_options_omits_parallel_tool_calls_when_none() {
+        let config = test_config(|_| {});
+        let opts = to_chat_options(&config);
+        assert_eq!(opts.parallel_tool_calls, None);
+    }
+
+    #[test]
+    fn test_to_chat_options_includes_tool_choice() {
+        let config = test_config(|api| {
+            api.tool_choice = Some(config::ToolChoice::Mode(config::ToolChoiceMode::Required));
+        });
+        let opts = to_chat_options(&config);
+        assert!(matches!(
+            opts.tool_choice,
+            Some(RatatoskrToolChoice::Required)
+        ));
+    }
+
+    #[test]
+    fn test_tool_choice_conversion_auto() {
+        let choice = config::ToolChoice::Mode(config::ToolChoiceMode::Auto);
+        assert!(matches!(
+            to_ratatoskr_tool_choice(&choice),
+            RatatoskrToolChoice::Auto
+        ));
+    }
+
+    #[test]
+    fn test_tool_choice_conversion_none() {
+        let choice = config::ToolChoice::Mode(config::ToolChoiceMode::None);
+        assert!(matches!(
+            to_ratatoskr_tool_choice(&choice),
+            RatatoskrToolChoice::None
+        ));
+    }
+
+    #[test]
+    fn test_tool_choice_conversion_required() {
+        let choice = config::ToolChoice::Mode(config::ToolChoiceMode::Required);
+        assert!(matches!(
+            to_ratatoskr_tool_choice(&choice),
+            RatatoskrToolChoice::Required
+        ));
+    }
+
+    #[test]
+    fn test_tool_choice_conversion_function() {
+        let choice = config::ToolChoice::Function {
+            type_: "function".to_string(),
+            function: config::ToolChoiceFunction {
+                name: "my_tool".to_string(),
+            },
+        };
+        match to_ratatoskr_tool_choice(&choice) {
+            RatatoskrToolChoice::Function { name } => assert_eq!(name, "my_tool"),
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    /// Helper to build a minimal ResolvedConfig for gateway tests.
+    fn test_config(api_modifier: impl FnOnce(&mut config::ApiParams)) -> ResolvedConfig {
+        let mut api = config::ApiParams::default();
+        api_modifier(&mut api);
+        ResolvedConfig {
+            api_key: String::new(),
+            model: "test-model".to_string(),
+            context_window_limit: 4096,
+            warn_threshold_percent: 80.0,
+            verbose: false,
+            hide_tool_calls: false,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 0.9,
+            fuel: 10,
+            fuel_empty_response_cost: 15,
+            username: "test".to_string(),
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 10000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: false,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api,
+            tools: config::ToolsConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            storage: crate::partition::StorageConfig::default(),
+        }
+    }
+
+    #[test]
     fn test_to_ratatoskr_message_assistant_with_tool_calls() {
         let json = json!({
             "role": "assistant",
@@ -243,17 +368,5 @@ mod tests {
         let tool_calls = msg.tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].name, "get_weather");
-    }
-
-    #[test]
-    fn test_from_ratatoskr_message_roundtrip() {
-        let original = json!({
-            "role": "user",
-            "content": "Test message"
-        });
-        let msg = to_ratatoskr_message(&original).unwrap();
-        let back = from_ratatoskr_message(&msg);
-        assert_eq!(back["role"], "user");
-        assert_eq!(back["content"], "Test message");
     }
 }

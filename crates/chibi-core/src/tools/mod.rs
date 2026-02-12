@@ -6,7 +6,9 @@
 //! - File tools for examining cached tool outputs
 //! - Hook system for plugin lifecycle events
 
+pub mod agent_tools;
 mod builtin;
+pub mod coding_tools;
 pub mod file_tools;
 mod hooks;
 mod plugins;
@@ -23,7 +25,7 @@ pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
 
 // Re-export built-in tool constants (used by api module)
 pub use builtin::{CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME};
-pub use builtin::{REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
+pub use builtin::{MODEL_INFO_TOOL_NAME, REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
 
 // Re-export handoff types for control flow
 pub use builtin::{Handoff, HandoffTarget};
@@ -40,6 +42,15 @@ pub use builtin::execute_builtin_tool;
 // Re-export tool metadata functions
 pub use builtin::builtin_tool_metadata;
 
+// Re-export coding tool registry functions and execution
+pub use coding_tools::{
+    CODING_TOOL_DEFS, all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool,
+};
+pub use coding_tools::{
+    DIR_LIST_TOOL_NAME, FILE_EDIT_TOOL_NAME, GLOB_FILES_TOOL_NAME, GREP_FILES_TOOL_NAME,
+    INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_UPDATE_TOOL_NAME, SHELL_EXEC_TOOL_NAME,
+};
+
 // Re-export file tool registry functions
 pub use file_tools::{all_file_tools_to_api_format, get_file_tool_def};
 
@@ -47,13 +58,23 @@ pub use file_tools::{all_file_tools_to_api_format, get_file_tool_def};
 pub use file_tools::{execute_file_tool, is_file_tool};
 
 // Re-export file write tool names for permission gating
-pub use file_tools::{PATCH_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME};
+pub use file_tools::WRITE_FILE_TOOL_NAME;
+
+// Re-export agent tool registry functions
+pub use agent_tools::{all_agent_tools_to_api_format, get_agent_tool_def};
+
+// Re-export agent tool execution and utilities
+pub use agent_tools::{execute_agent_tool, is_agent_tool, spawn_agent};
+
+// Re-export agent tool types and constants
+pub use agent_tools::{RETRIEVE_CONTENT_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SpawnOptions};
 
 /// Metadata for tool behavior in the agentic loop
 #[derive(Debug, Clone, Default)]
 pub struct ToolMetadata {
     /// Can this tool run in parallel with others? (default: true)
-    /// NOTE: Parallel execution not yet implemented - see #101
+    /// Tools with parallel=true are executed concurrently via join_all.
+    /// Flow control tools are always sequential regardless of this flag.
     pub parallel: bool,
 
     /// Is this a flow control tool? (default: false)
@@ -85,6 +106,20 @@ pub struct Tool {
     pub path: PathBuf,
     pub hooks: Vec<HookPoint>,
     pub metadata: ToolMetadata,
+}
+
+/// Collect names of all built-in tools (core, file, agent).
+///
+/// Returns a flat list of tool names from all internal registries.
+/// New tool categories should be added here when introduced.
+pub fn builtin_tool_names() -> Vec<&'static str> {
+    builtin::BUILTIN_TOOL_DEFS
+        .iter()
+        .chain(file_tools::FILE_TOOL_DEFS.iter())
+        .chain(agent_tools::AGENT_TOOL_DEFS.iter())
+        .chain(coding_tools::CODING_TOOL_DEFS.iter())
+        .map(|def| def.name)
+        .collect()
 }
 
 /// Get metadata for any tool (plugin or builtin)
@@ -148,5 +183,34 @@ mod tests {
         assert!(meta.parallel);
         assert!(!meta.flow_control);
         assert!(!meta.ends_turn);
+    }
+
+    #[test]
+    fn test_builtin_tool_names_includes_all_registries() {
+        let names = builtin_tool_names();
+
+        // Should include tools from all four registries
+        assert!(names.contains(&"update_reflection")); // core builtin
+        assert!(names.contains(&"model_info")); // core builtin
+        assert!(names.contains(&"file_head")); // file tool
+        assert!(names.contains(&"spawn_agent")); // agent tool
+        assert!(names.contains(&"shell_exec")); // coding tool
+        assert!(names.contains(&"file_edit")); // coding tool
+
+        // Should be the sum of all registries
+        let expected_count = builtin::BUILTIN_TOOL_DEFS.len()
+            + file_tools::FILE_TOOL_DEFS.len()
+            + agent_tools::AGENT_TOOL_DEFS.len()
+            + coding_tools::CODING_TOOL_DEFS.len();
+        assert_eq!(names.len(), expected_count);
+    }
+
+    #[test]
+    fn test_builtin_tool_names_no_duplicates() {
+        let names = builtin_tool_names();
+        let mut seen = std::collections::HashSet::new();
+        for name in &names {
+            assert!(seen.insert(name), "duplicate built-in tool name: {}", name);
+        }
     }
 }

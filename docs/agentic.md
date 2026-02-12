@@ -8,6 +8,8 @@ The LLM always has access to these tools (no setup required):
 
 | Tool | Description |
 |------|-------------|
+| `call_user` | Hand control back to the user (ends the agentic loop) |
+| `call_agent` | Continue the agentic loop with a new prompt |
 | `update_todos` | Track tasks for the current conversation |
 | `update_goals` | Set high-level objectives |
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
@@ -17,6 +19,10 @@ The LLM always has access to these tools (no setup required):
 | `file_lines` | Read a specific line range from a cached output or file |
 | `file_grep` | Search for a pattern in a cached output or file |
 | `cache_list` | List all cached tool outputs for the current context |
+| `write_file` | Write content to a file (requires `file_tools_allowed_paths`, gated by `pre_file_write` hook) |
+| `spawn_agent` | Spawn a sub-agent with a custom system prompt to process input |
+| `retrieve_content` | Read a file/URL and process content through a sub-agent |
+| `model_info` | Look up model metadata (context window, pricing, capabilities, parameters) |
 
 ## External Plugins
 
@@ -182,6 +188,32 @@ See [hooks.md](hooks.md#pre_send_message) for details.
 
 ## Sub-Agents
 
+### Built-in Agent Tools
+
+Chibi provides two built-in tools for spawning sub-agents — separate LLM calls with their own system prompts that return results as tool output.
+
+**`spawn_agent`** — General-purpose sub-agent spawning:
+```json
+{
+  "system_prompt": "You are a code reviewer. Be concise.",
+  "input": "Review this function:\ndef add(a, b): return a + b",
+  "model": "anthropic/claude-haiku",
+  "temperature": 0.3
+}
+```
+
+**`retrieve_content`** — Read a file or fetch a URL, then process through a sub-agent:
+```json
+{
+  "source": "https://example.com/api-docs",
+  "instructions": "Summarize the authentication section"
+}
+```
+
+Both tools accept optional `model`, `temperature`, and `max_tokens` overrides. Without overrides, the parent's model and settings are used.
+
+Sub-agent calls are non-streaming (results returned as tool output). Plugins can intercept or replace sub-agent calls via `pre_spawn_agent` / `post_spawn_agent` hooks — see [hooks.md](hooks.md#pre_spawn_agent).
+
 ### Ephemeral Context Flag
 
 Use `-C` to spawn agents without affecting global context state:
@@ -260,12 +292,12 @@ Round 1:
 LLM: Sets goals: "Research quantum computing, write summary report"
      Sets todos: "- [ ] Search for introductory materials"
      [calls sub-agent: context="research", task="Find quantum computing basics"]
-     [calls recurse: "Check research results and continue"]
+     [calls call_agent: "Check research results and continue"]
 
 Round 2:
 LLM: [calls read_context: "research"]
      Updates todos: "- [x] Search for materials\n- [ ] Synthesize findings"
-     [calls recurse: "Write the summary"]
+     [calls call_agent: "Write the summary"]
 
 Round 3:
 LLM: Writes summary report

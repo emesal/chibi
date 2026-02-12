@@ -1,0 +1,137 @@
+# CLAUDE.md
+
+## Vision
+
+Chibi is a minimal, composable building block for LLM interactions — not an agent framework. It provides persistent context storage, extensible behavior via plugins/hooks, and communication primitives. Everything else (coordination patterns, workflows, domain behaviors) lives in plugins. This separation keeps chibi small and enables unlimited experimentation at the plugin layer.
+
+## Principles
+
+- Establish patterns now that scale well, refactor liberally when beneficial.
+- Backwards compatibility not a priority, legacy code unwanted. (Pre-alpha.)
+- Focused, secure core. Protect file operations from corruption and race conditions.
+- Self-documenting code; keep symbols, comments, and docs consistent.
+- Missing or incorrent documentation including code comments are critical bugs.
+- Comprehensive tests including edge cases.
+- Remind user about `just pre-push` before pushing and `just merge-to-dev` when merging feature branches.
+
+## Build
+
+```bash
+cargo build                              # Debug build
+cargo test                               # Run tests
+cargo install --path .                   # Install to ~/.cargo/bin
+```
+
+Git dependencies: [ratatoskr](https://github.com/emesal/ratatoskr) (LLM API client), [streamdown-rs](https://github.com/emesal/streamdown-rs) (markdown renderer).
+
+## Architecture
+
+Cargo workspace with two crates:
+
+**`crates/chibi-core/`** — Library crate (reusable logic)
+- `chibi.rs` — Main `Chibi` struct, tool execution
+- `context.rs`, `state/` — Context management, file I/O
+- `api/` — Request building, streaming, tool execution loop
+- `gateway.rs` — Type conversions between chibi and ratatoskr
+- `model_info.rs` — Model metadata retrieval and formatting
+- `tools/` — Plugins, hooks, built-in tools
+- `partition.rs` — Partitioned transcript storage with bloom filters
+- `config.rs` — Core configuration types
+
+**LLM Communication:** Delegated to the [ratatoskr](https://github.com/emesal/ratatoskr) crate, which handles HTTP requests, SSE streaming, and response parsing. Chibi's `gateway.rs` converts between internal types and ratatoskr's `ModelGateway` interface. This abstraction keeps HTTP/networking concerns out of chibi's core logic.
+
+**`crates/chibi-cli/`** — Binary crate (CLI-specific)
+- `main.rs` — Entry point, command dispatch
+- `cli.rs` — Argument parsing (clap)
+- `input.rs` — Input types (`ChibiInput`, `Command`, `Flags`)
+- `session.rs` — CLI session state (implied context)
+- `config.rs` — CLI-specific config (markdown, images)
+
+**Data flow:** CLI args → `parse()` → `ChibiInput` → `execute_from_input()` → core APIs
+
+## Storage Layout
+
+```
+~/.chibi/
+├── config.toml, models.toml
+├── state.json               # Context metadata (core)
+├── session.json             # Navigation state (CLI)
+├── prompts/{chibi,reflection,compaction,continuation}.md
+├── plugins/
+└── contexts/<name>/
+    ├── context.jsonl          # LLM window (compaction-bounded)
+    ├── transcript/            # Authoritative log (partitioned)
+    ├── local.toml, todos.md, goals.md, inbox.jsonl, summary.md
+    └── tool_cache/
+```
+
+Home directory: `--home` flag > `CHIBI_HOME` env > `~/.chibi`
+
+## Plugins
+
+Executable scripts in `~/.chibi/plugins/`. Schema via `--schema`, args via stdin (JSON).
+
+```python
+#!/usr/bin/env -S uv run --quiet --script
+import json, os, sys
+
+if len(sys.argv) > 1 and sys.argv[1] == "--schema":
+    print(json.dumps({
+        "name": "tool_name",
+        "description": "...",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "hooks": ["on_start"]  # optional
+    }))
+    sys.exit(0)
+
+if os.environ.get("CHIBI_HOOK"):
+    data = json.load(sys.stdin)  # Hook data via stdin
+    # process hook...
+    print("{}")
+    sys.exit(0)
+
+params = json.load(sys.stdin)  # Tool args via stdin
+print("result")
+```
+
+## Hooks
+
+29 hook points in `tools/hooks.rs`. Plugins register via `"hooks": [...]` in schema.
+
+`on_start`, `on_end`, `pre_message`, `post_message`, `pre_tool`, `post_tool`, `pre_tool_output`, `post_tool_output`, `pre_system_prompt`, `post_system_prompt`, `pre_send_message`, `post_send_message`, `pre_clear`, `post_clear`, `pre_compact`, `post_compact`, `pre_rolling_compact`, `post_rolling_compact`, `pre_cache_output`, `post_cache_output`, `pre_api_tools`, `pre_api_request`, `pre_agentic_loop`, `post_tool_batch`, `pre_file_write`, `pre_shell_exec`, `pre_spawn_agent`, `post_spawn_agent`, `post_index_file`
+
+Hook data: `CHIBI_HOOK` env var + stdin (JSON).
+
+## Language Plugins
+
+Language plugins provide symbol extraction for the codebase index. Core handles all database writes.
+
+**Convention:** plugins named `lang_<language>` (e.g. `lang_rust`, `lang_python`).
+
+**Input** (stdin, JSON):
+```json
+{"files": [{"path": "src/foo.rs", "content": "..."}]}
+```
+
+**Output** (stdout, JSON):
+```json
+{
+  "symbols": [
+    {"name": "parse", "kind": "function", "parent": "Parser",
+     "line_start": 42, "line_end": 67, "signature": "fn parse(&self) -> Result<AST>", "visibility": "public"}
+  ],
+  "refs": [
+    {"from_line": 55, "to_name": "TokenStream::new", "kind": "call"}
+  ]
+}
+```
+
+Fields: `name` (required), `kind` (required), `line_start`/`line_end` (optional), `parent` (optional, for nesting), `signature`/`visibility` (optional). Refs: `from_line`, `to_name`, `kind` (all optional but recommended).
+
+The `post_index_file` hook fires after each file is indexed with `{"path", "lang", "symbol_count", "ref_count"}`.
+
+## CLI Conventions
+
+- stdout: LLM output only (pipeable); markdown-rendered when TTY
+- stderr: Diagnostics (with `-v`)
+- `--raw` disables markdown rendering

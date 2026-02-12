@@ -85,11 +85,27 @@ chibi -c -            # current='work', previous='personal'
 | `--clear-cache-for <CTX>` | Clear the tool output cache for specified context |
 | `--cleanup-cache` | Remove old cache entries across all contexts |
 
+## Model Metadata
+
+| Flag | Description |
+|------|-------------|
+| `-m, --model-metadata <MODEL>` | Show model metadata in TOML format (settable fields only) |
+| `-M, --model-metadata-full <MODEL>` | Show full model metadata (with pricing, capabilities, parameter ranges) |
+
+Model metadata is fetched via ratatoskr's gateway (embedded registry → cache → OpenRouter API on miss). The `-m` flag shows only fields you can set in `models.toml`, while `-M` includes everything (pricing, capabilities, parameter ranges).
+
+```bash
+chibi -m anthropic/claude-sonnet-4       # Settable fields only
+chibi -M openai/gpt-4o                   # Full metadata including pricing
+```
+
 ## Control Flags
 
 | Flag | Description |
 |------|-------------|
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
+| `--hide-tool-calls` | Hide tool call display (tool calls are shown by default; verbose overrides) |
+| `--no-tool-calls` | Omit tools from API requests entirely (pure text mode) |
 | `-x, --no-chibi` | Don't invoke the LLM |
 | `-X, --force-chibi` | Force LLM invocation (overrides implied -x) |
 | `--raw` | Disable markdown rendering (plain text output) |
@@ -116,7 +132,7 @@ When using `--json-config`, pass a JSON object to stdin:
 }
 ```
 
-**Flags:** `"verbose"`, `"json_output"`, `"force_call_user"`, `"force_call_agent"`, `"raw"`
+**Flags:** `"verbose"`, `"json_output"`, `"force_call_user"`, `"force_call_agent"`, `"hide_tool_calls"`, `"no_tool_calls"`, `"raw"`
 
 **Simple commands:** `"list_contexts"`, `"list_current_context"`, `"no_op"`
 

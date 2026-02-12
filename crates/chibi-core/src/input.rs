@@ -71,6 +71,8 @@ pub enum Command {
     CheckInbox { context: String },
     /// Check all context inboxes and process any messages (-b)
     CheckAllInboxes,
+    /// Show model metadata from registry (-m/-M)
+    ModelMetadata { model: String, full: bool },
     /// Show help
     ShowHelp,
     /// Show version
@@ -156,6 +158,15 @@ pub struct Flags {
     /// Force handoff to agent (-X)
     #[serde(default)]
     pub force_call_agent: bool,
+    /// Hide tool call display (--hide-tool-calls, verbose overrides)
+    #[serde(default)]
+    pub hide_tool_calls: bool,
+    /// Omit tools from API requests entirely (--no-tool-calls)
+    #[serde(default)]
+    pub no_tool_calls: bool,
+    /// Show thinking/reasoning content (--show-thinking, verbose overrides)
+    #[serde(default)]
+    pub show_thinking: bool,
     /// Disable markdown rendering (--raw)
     #[serde(default)]
     pub raw: bool,
@@ -188,6 +199,9 @@ mod tests {
     fn test_flags_serialization() {
         let flags = Flags {
             verbose: true,
+            hide_tool_calls: false,
+            show_thinking: false,
+            no_tool_calls: false,
             json_output: true,
             force_call_user: false,
             force_call_agent: false,

@@ -23,10 +23,10 @@ use crate::jsonl::read_jsonl_file;
 use crate::config::{Config, ModelsConfig, ResolvedConfig};
 // Note: ImageConfig, MarkdownStyle removed - these are CLI presentation concerns
 use crate::context::{
-    Context, ContextEntry, ContextMeta, ContextState, Message, TranscriptEntry,
-    is_valid_context_name, now_timestamp,
+    Context, ContextEntry, ContextMeta, ContextState, TranscriptEntry, is_valid_context_name,
+    now_timestamp,
 };
-use crate::partition::{ActiveState, PartitionManager, StorageConfig};
+use crate::partition::{ActiveState, PartitionManager};
 use dirs_next::home_dir;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -472,6 +472,7 @@ impl AppState {
                     content: "Context created".to_string(),
                     entry_type: ENTRY_TYPE_CONTEXT_CREATED.to_string(),
                     metadata: None,
+                    tool_call_id: None,
                 };
                 // Include all transcript entries (excluding system_prompt_changed)
                 let entries: Vec<_> = transcript_entries
@@ -517,7 +518,7 @@ impl AppState {
     pub fn read_transcript_entries(&self, name: &str) -> io::Result<Vec<TranscriptEntry>> {
         self.migrate_transcript_if_needed(name)?;
         let transcript_dir = self.transcript_dir(name);
-        let storage_config = self.get_storage_config(name)?;
+        let storage_config = self.resolve_config(name, None)?.storage;
         let pm = PartitionManager::load_with_config(&transcript_dir, storage_config)?;
         pm.read_all_entries()
     }
@@ -562,34 +563,6 @@ impl AppState {
             created_at: old_context.created_at,
             updated_at: old_context.updated_at,
             summary,
-        })
-    }
-
-    /// Get the resolved storage configuration for a context
-    fn get_storage_config(&self, name: &str) -> io::Result<StorageConfig> {
-        let local = self.load_local_config(name)?;
-        // Merge local overrides with global config
-        Ok(StorageConfig {
-            partition_max_entries: local
-                .storage
-                .partition_max_entries
-                .or(self.config.storage.partition_max_entries),
-            partition_max_age_seconds: local
-                .storage
-                .partition_max_age_seconds
-                .or(self.config.storage.partition_max_age_seconds),
-            partition_max_tokens: local
-                .storage
-                .partition_max_tokens
-                .or(self.config.storage.partition_max_tokens),
-            bytes_per_token: local
-                .storage
-                .bytes_per_token
-                .or(self.config.storage.bytes_per_token),
-            enable_bloom_filters: local
-                .storage
-                .enable_bloom_filters
-                .or(self.config.storage.enable_bloom_filters),
         })
     }
 
@@ -665,52 +638,208 @@ impl AppState {
         crate::safe_io::atomic_write_json(&path, meta)
     }
 
-    /// Convert transcript entries to messages (for backwards compat)
-    fn entries_to_messages(&self, entries: &[TranscriptEntry]) -> Vec<Message> {
-        entries
-            .iter()
-            .filter(|e| e.entry_type == crate::context::ENTRY_TYPE_MESSAGE)
-            .map(|e| {
-                let role = if e.to == "user" {
-                    "assistant".to_string()
-                } else {
-                    "user".to_string()
-                };
-                Message {
-                    id: e.id.clone(),
-                    role,
-                    content: e.content.clone(),
+    /// Convert transcript entries to JSON messages, preserving tool history.
+    ///
+    /// Walks entries sequentially:
+    /// - "message" entries → `{"_id", "role", "content"}`
+    /// - "tool_call" entries → collected into a batch, emitted as assistant message
+    ///   with `tool_calls[]` followed by individual tool result messages
+    /// - Other entry types (compaction, archival, context_created, system_prompt_changed)
+    ///   are skipped.
+    ///
+    /// Backward compat: old interleaved entries without tool_call_id are paired by
+    /// position with synthetic IDs derived from the tool_call entry's own ID.
+    fn entries_to_messages(&self, entries: &[TranscriptEntry]) -> Vec<serde_json::Value> {
+        let mut messages = Vec::new();
+        let mut i = 0;
+
+        while i < entries.len() {
+            let entry = &entries[i];
+
+            match entry.entry_type.as_str() {
+                crate::context::ENTRY_TYPE_MESSAGE => {
+                    let role = if entry.to == "user" {
+                        "assistant"
+                    } else {
+                        "user"
+                    };
+                    messages.push(serde_json::json!({
+                        "_id": entry.id,
+                        "role": role,
+                        "content": entry.content,
+                    }));
+                    i += 1;
                 }
-            })
-            .collect()
+                crate::context::ENTRY_TYPE_TOOL_CALL => {
+                    // Collect consecutive tool_call and tool_result entries into a batch
+                    let mut tool_calls = Vec::new();
+                    let mut tool_results = Vec::new();
+                    while i < entries.len() {
+                        match entries[i].entry_type.as_str() {
+                            crate::context::ENTRY_TYPE_TOOL_CALL => {
+                                tool_calls.push(&entries[i]);
+                                i += 1;
+                            }
+                            crate::context::ENTRY_TYPE_TOOL_RESULT => {
+                                tool_results.push(&entries[i]);
+                                i += 1;
+                            }
+                            _ => break,
+                        }
+                    }
+
+                    // Build assistant message with tool_calls array
+                    let tool_calls_json: Vec<serde_json::Value> = tool_calls
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, tc)| {
+                            // Use stored tool_call_id, or synthesize from the entry's own ID
+                            let tc_id = tc
+                                .tool_call_id
+                                .clone()
+                                .unwrap_or_else(|| format!("synth_{}", tc.id));
+                            let _ = idx; // idx used for position-based pairing below
+                            serde_json::json!({
+                                "id": tc_id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.to,
+                                    "arguments": tc.content,
+                                }
+                            })
+                        })
+                        .collect();
+
+                    messages.push(serde_json::json!({
+                        "_id": tool_calls.first().map(|tc| tc.id.as_str()).unwrap_or(""),
+                        "role": "assistant",
+                        "tool_calls": tool_calls_json,
+                    }));
+
+                    // Emit tool result messages, paired by tool_call_id or position
+                    for (idx, tr) in tool_results.iter().enumerate() {
+                        let tc_id = if let Some(ref id) = tr.tool_call_id {
+                            id.clone()
+                        } else if idx < tool_calls.len() {
+                            // Backward compat: pair by position with synthetic ID
+                            tool_calls[idx]
+                                .tool_call_id
+                                .clone()
+                                .unwrap_or_else(|| format!("synth_{}", tool_calls[idx].id))
+                        } else {
+                            format!("synth_{}", tr.id)
+                        };
+                        messages.push(serde_json::json!({
+                            "_id": tr.id,
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": tr.content,
+                        }));
+                    }
+                }
+                crate::context::ENTRY_TYPE_TOOL_RESULT => {
+                    // Orphaned tool result (shouldn't happen but handle gracefully)
+                    let tc_id = entry
+                        .tool_call_id
+                        .clone()
+                        .unwrap_or_else(|| format!("synth_{}", entry.id));
+                    messages.push(serde_json::json!({
+                        "_id": entry.id,
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": entry.content,
+                    }));
+                    i += 1;
+                }
+                _ => {
+                    // Skip non-message types (compaction, archival, context_created, etc.)
+                    i += 1;
+                }
+            }
+        }
+
+        messages
     }
 
-    /// Convert messages to transcript entries (for migration)
+    /// Convert JSON messages back to transcript entries (for save_context).
+    ///
+    /// Decomposes JSON values:
+    /// - role "user" or "assistant" (no tool_calls) → ENTRY_TYPE_MESSAGE
+    /// - role "assistant" with tool_calls → N ENTRY_TYPE_TOOL_CALL entries
+    /// - role "tool" → ENTRY_TYPE_TOOL_RESULT entry
+    /// - role "system" → skipped
     fn messages_to_entries(
         &self,
-        messages: &[Message],
+        messages: &[serde_json::Value],
         context_name: &str,
     ) -> Vec<TranscriptEntry> {
-        messages
-            .iter()
-            .filter(|m| m.role != "system")
-            .map(|m| {
-                let (from, to) = if m.role == "assistant" {
-                    (context_name.to_string(), "user".to_string())
-                } else {
-                    ("user".to_string(), context_name.to_string())
-                };
-                TranscriptEntry {
-                    id: m.id.clone(),
-                    timestamp: now_timestamp(),
-                    from,
-                    to,
-                    content: m.content.clone(),
-                    entry_type: crate::context::ENTRY_TYPE_MESSAGE.to_string(),
-                    metadata: None,
+        let mut entries = Vec::new();
+
+        for m in messages {
+            let role = m["role"].as_str().unwrap_or("");
+            match role {
+                "system" => continue,
+                "assistant" => {
+                    if let Some(tool_calls) = m["tool_calls"].as_array() {
+                        // Assistant message with tool calls → one entry per tool call
+                        for tc in tool_calls {
+                            let name = tc["function"]["name"].as_str().unwrap_or("unknown");
+                            let arguments = tc["function"]["arguments"].as_str().unwrap_or("{}");
+                            let tc_id = tc["id"].as_str().unwrap_or("");
+                            let mut builder = TranscriptEntry::builder()
+                                .from(context_name)
+                                .to(name)
+                                .content(arguments)
+                                .entry_type(crate::context::ENTRY_TYPE_TOOL_CALL);
+                            if !tc_id.is_empty() {
+                                builder = builder.tool_call_id(tc_id);
+                            }
+                            entries.push(builder.build());
+                        }
+                    } else {
+                        // Plain assistant message
+                        let content = m["content"].as_str().unwrap_or("");
+                        entries.push(
+                            TranscriptEntry::builder()
+                                .from(context_name)
+                                .to("user")
+                                .content(content)
+                                .entry_type(crate::context::ENTRY_TYPE_MESSAGE)
+                                .build(),
+                        );
+                    }
                 }
-            })
-            .collect()
+                "tool" => {
+                    let tc_id = m["tool_call_id"].as_str().unwrap_or("");
+                    let content = m["content"].as_str().unwrap_or("");
+                    // Use _id as a hint for tool name if available, otherwise "tool"
+                    let tool_name = "tool";
+                    let mut builder = TranscriptEntry::builder()
+                        .from(tool_name)
+                        .to(context_name)
+                        .content(content)
+                        .entry_type(crate::context::ENTRY_TYPE_TOOL_RESULT);
+                    if !tc_id.is_empty() {
+                        builder = builder.tool_call_id(tc_id);
+                    }
+                    entries.push(builder.build());
+                }
+                _ => {
+                    // "user" or unknown → user message
+                    let content = m["content"].as_str().unwrap_or("");
+                    entries.push(
+                        TranscriptEntry::builder()
+                            .from("user")
+                            .to(context_name)
+                            .content(content)
+                            .entry_type(crate::context::ENTRY_TYPE_MESSAGE)
+                            .build(),
+                    );
+                }
+            }
+        }
+
+        entries
     }
 
     pub fn save_context(&self, context: &Context) -> io::Result<()> {
@@ -764,11 +893,24 @@ impl AppState {
             .open(self.transcript_md_file(&context.name))?;
 
         for msg in &context.messages {
+            let role = msg["role"].as_str().unwrap_or("unknown");
             // Skip system messages to avoid cluttering transcript with boilerplate
-            if msg.role == "system" {
+            if role == "system" {
                 continue;
             }
-            writeln!(file, "[{}]: {}\n", msg.role.to_uppercase(), msg.content)?;
+            if let Some(tool_calls) = msg["tool_calls"].as_array() {
+                let names: Vec<&str> = tool_calls
+                    .iter()
+                    .filter_map(|tc| tc["function"]["name"].as_str())
+                    .collect();
+                writeln!(file, "[ASSISTANT]: [called tools: {}]\n", names.join(", "))?;
+            } else if role == "tool" {
+                let content = msg["content"].as_str().unwrap_or("");
+                writeln!(file, "[TOOL RESULT]: {}\n", content)?;
+            } else {
+                let content = msg["content"].as_str().unwrap_or("");
+                writeln!(file, "[{}]: {}\n", role.to_uppercase(), content)?;
+            }
         }
 
         Ok(())
@@ -786,7 +928,7 @@ impl AppState {
         self.ensure_context_dir(context_name)?;
         self.migrate_transcript_if_needed(context_name)?;
         let transcript_dir = self.transcript_dir(context_name);
-        let storage_config = self.get_storage_config(context_name)?;
+        let storage_config = self.resolve_config(context_name, None)?.storage;
 
         // Get cached state if available
         let cached_state = self.active_state_cache.borrow().get(context_name).cloned();
@@ -834,21 +976,22 @@ impl AppState {
     // - append_to_transcript_and_context(context_name, entry)
     // - get_or_create_context(name)
 
-    pub fn calculate_token_count(&self, messages: &[Message]) -> usize {
-        // Rough estimation: 4 chars per token on average
+    pub fn calculate_token_count(&self, messages: &[serde_json::Value]) -> usize {
+        // Rough estimation: serialize each message and divide by 4 chars per token.
+        // More accurate than the old version since it includes tool call arguments/results.
         messages
             .iter()
-            .map(|m| (m.content.len() + m.role.len()) / 4)
+            .map(|m| serde_json::to_string(m).map(|s| s.len() / 4).unwrap_or(0))
             .sum()
     }
 
-    pub fn should_warn(&self, messages: &[Message]) -> bool {
+    pub fn should_warn(&self, messages: &[serde_json::Value]) -> bool {
         let tokens = self.calculate_token_count(messages);
         let usage_percent = (tokens as f32 / self.config.context_window_limit as f32) * 100.0;
         usage_percent >= self.config.warn_threshold_percent
     }
 
-    pub fn remaining_tokens(&self, messages: &[Message]) -> usize {
+    pub fn remaining_tokens(&self, messages: &[serde_json::Value]) -> usize {
         let tokens = self.calculate_token_count(messages);
         self.config.context_window_limit.saturating_sub(tokens)
     }
