@@ -2,7 +2,7 @@
 
 **date:** 2026-02-11
 **branch:** `bugfix/unwired-features-2602`
-**status:** in progress (issues 4, 5, 6 done)
+**status:** in progress (issues 2, 4, 5, 6 done)
 
 ## overview
 
@@ -27,26 +27,22 @@ decide: wire it through to ratatoskr (if ratatoskr supports a prompt caching opt
 
 ---
 
-## issue 2: `entries_to_messages` drops tool call/result history on reload
+## issue 2: `entries_to_messages` drops tool call/result history on reload ✓
 
 **severity:** critical (data loss on restart)
-**files:** `state/mod.rs:667-685`
+**files:** `state/mod.rs`, `context.rs`, `entries.rs`, `send.rs`, `compact.rs`, `context_ops.rs`, `lib.rs`
+**status:** done (516b8a0)
 
-`entries_to_messages()` filters to `entry_type == "message"` only. tool_call and tool_result entries ARE stored in context.jsonl but are silently discarded when rebuilding `context.messages`. after restart, the LLM sees only text exchanges -- all tool interaction history is invisible.
-
-this cascades into:
-- compaction sees only text, not tool interactions (`compact.rs:421`)
-- rolling compaction same issue (`compact.rs:57`)
-- gateway's `to_ratatoskr_message()` tool_call handling is dead code on reload
+`entries_to_messages()` filtered to `entry_type == "message"` only. tool_call and tool_result entries were stored in context.jsonl but silently discarded when rebuilding `context.messages`.
 
 ### fix
 
-rewrite `entries_to_messages()` to reconstruct the full message sequence:
-- `tool_call` entries become assistant messages with `tool_calls` arrays
-- `tool_result` entries become `role: "tool"` messages with `tool_call_id`
-- group consecutive tool_call entries from the same turn into one assistant message
-
-this is the highest-impact single fix -- resolves multiple downstream issues simultaneously.
+- replaced `Context.messages: Vec<Message>` with `Vec<serde_json::Value>` so tool interactions flow through natively
+- rewrote `entries_to_messages()` to group consecutive tool entries into assistant+tool_calls JSON with tool result messages
+- added `tool_call_id: Option<String>` to `TranscriptEntry` for correlating tool_call/tool_result pairs
+- fixed write order in `process_tool_calls` (all tool_call entries before tool_result entries, matching API format)
+- updated compaction to handle tool exchanges atomically (assistant + tool results dropped together)
+- backward compatible: old entries without `tool_call_id` get synthetic IDs on reconstruction
 
 ---
 
@@ -302,7 +298,7 @@ add a comment explaining why the field exists but is never read. or restructure 
 1. **issue 5** -- `reflection_enabled` resolved config fix ✓ (803cea6)
 2. **issue 4** -- reasoning in JSON mode ✓ (91317bf)
 3. **issue 6** -- fuel model refactor ✓
-4. **issue 2** -- `entries_to_messages` reconstruction (high impact but complex)
+4. **issue 2** -- `entries_to_messages` reconstruction ✓ (516b8a0)
 5. **issue 1** -- dead `prompt_caching` field (decide and act)
 6. **issue 7** -- gateway param gaps (depends on ratatoskr audit)
 7. **issue 3** -- unfired cache hooks
