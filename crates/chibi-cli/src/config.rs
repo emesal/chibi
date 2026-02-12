@@ -343,8 +343,8 @@ impl ResolvedConfig {
     pub fn auto_compact_threshold(&self) -> f32 {
         self.core.auto_compact_threshold
     }
-    pub fn max_recursion_depth(&self) -> usize {
-        self.core.max_recursion_depth
+    pub fn fuel(&self) -> usize {
+        self.core.fuel
     }
     pub fn username(&self) -> &str {
         &self.core.username

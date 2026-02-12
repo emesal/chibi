@@ -2,7 +2,7 @@
 
 **date:** 2026-02-11
 **branch:** `bugfix/unwired-features-2602`
-**status:** planned
+**status:** in progress (issues 4, 5, 6 done)
 
 ## overview
 
@@ -63,10 +63,11 @@ add `execute_hook(tools, HookPoint::PreCacheOutput, &hook_data)` and `PostCacheO
 
 ---
 
-## issue 4: reasoning content silently dropped in `--json-output` mode
+## issue 4: reasoning content silently dropped in `--json-output` mode ✓
 
 **severity:** critical (silent data loss for programmatic consumers)
 **files:** `send.rs:597-601`
+**status:** done (91317bf)
 
 when `json_mode` is true, reasoning chunks are silently discarded -- neither forwarded to the sink nor accumulated anywhere. JSON consumers have no access to reasoning content.
 
@@ -76,10 +77,11 @@ remove the `if !json_mode` guard. always forward reasoning to the sink. the sink
 
 ---
 
-## issue 5: `reflection_enabled` reads global config, not resolved config
+## issue 5: `reflection_enabled` reads global config, not resolved config ✓
 
 **severity:** medium (per-context overrides silently ignored)
 **files:** `main.rs:639,727,807,882`
+**status:** done (803cea6)
 
 ```rust
 let use_reflection = chibi.app.config.reflection_enabled;
@@ -97,12 +99,13 @@ four instances in main.rs. replace `chibi.app.config.reflection_enabled` with th
 
 ---
 
-## issue 6: fuel model refactor (was `max_recursion_depth` + `max_empty_responses`)
+## issue 6: fuel model refactor (was `max_recursion_depth` + `max_empty_responses`) ✓
 
 **severity:** medium (per-context overrides silently ignored + conceptual misfit)
-**files:** `send.rs:1429,1701`, `config.rs:329-330`, `config_resolution.rs`
+**files:** `send.rs`, `config.rs`, `config_resolution.rs`, `gateway.rs`, `agent_tools.rs`, `tests.rs`, `cli/config.rs`, `docs/configuration.md`, `docs/hooks.md`
+**status:** done
 
-### current state
+### current state (prior to fix)
 
 `max_recursion_depth` (default: 30) counts recursive `send_prompt_with_depth` calls. `max_empty_responses` (default: 2) counts consecutive empty LLM responses. both read from `app.config` instead of `resolved_config`, silently ignoring per-context overrides. the "recursion depth" metaphor doesn't match how the agentic loop actually works -- it's not recursion, it's a fuel budget.
 
@@ -296,9 +299,9 @@ add a comment explaining why the field exists but is never read. or restructure 
 
 ## execution order
 
-1. **issue 5** -- `reflection_enabled` resolved config fix (smallest, safest)
-2. **issue 4** -- reasoning in JSON mode (one-line fix)
-3. **issue 6** -- fuel model refactor (largest, most impactful redesign)
+1. **issue 5** -- `reflection_enabled` resolved config fix ✓ (803cea6)
+2. **issue 4** -- reasoning in JSON mode ✓ (91317bf)
+3. **issue 6** -- fuel model refactor ✓
 4. **issue 2** -- `entries_to_messages` reconstruction (high impact but complex)
 5. **issue 1** -- dead `prompt_caching` field (decide and act)
 6. **issue 7** -- gateway param gaps (depends on ratatoskr audit)

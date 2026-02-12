@@ -326,8 +326,8 @@ impl ConfigDefaults {
     // Numeric defaults
     pub const AUTO_COMPACT_THRESHOLD: f32 = 80.0;
     pub const REFLECTION_CHARACTER_LIMIT: usize = 10_000;
-    pub const MAX_RECURSION_DEPTH: usize = 30;
-    pub const MAX_EMPTY_RESPONSES: usize = 2;
+    pub const FUEL: usize = 30;
+    pub const FUEL_EMPTY_RESPONSE_COST: usize = 15;
     pub const LOCK_HEARTBEAT_SECONDS: u64 = 30;
     pub const ROLLING_COMPACT_DROP_PERCENTAGE: f32 = 50.0;
     pub const TOOL_OUTPUT_CACHE_THRESHOLD: usize = 4_000;
@@ -361,11 +361,11 @@ fn default_reflection_enabled() -> bool {
 fn default_reflection_character_limit() -> usize {
     ConfigDefaults::REFLECTION_CHARACTER_LIMIT
 }
-fn default_max_recursion_depth() -> usize {
-    ConfigDefaults::MAX_RECURSION_DEPTH
+fn default_fuel() -> usize {
+    ConfigDefaults::FUEL
 }
-fn default_max_empty_responses() -> usize {
-    ConfigDefaults::MAX_EMPTY_RESPONSES
+fn default_fuel_empty_response_cost() -> usize {
+    ConfigDefaults::FUEL_EMPTY_RESPONSE_COST
 }
 fn default_lock_heartbeat_seconds() -> u64 {
     ConfigDefaults::LOCK_HEARTBEAT_SECONDS
@@ -423,11 +423,12 @@ pub struct Config {
     /// Maximum characters for reflection tool output
     #[serde(default = "default_reflection_character_limit")]
     pub reflection_character_limit: usize,
-    #[serde(default = "default_max_recursion_depth")]
-    pub max_recursion_depth: usize,
-    /// Maximum consecutive empty responses before stopping the agentic loop
-    #[serde(default = "default_max_empty_responses")]
-    pub max_empty_responses: usize,
+    /// Total fuel budget for the agentic loop (tool rounds, continuations, empty responses)
+    #[serde(default = "default_fuel")]
+    pub fuel: usize,
+    /// Fuel cost of an empty response (high cost prevents infinite empty loops)
+    #[serde(default = "default_fuel_empty_response_cost")]
+    pub fuel_empty_response_cost: usize,
     #[serde(default = "default_username")]
     pub username: String,
     #[serde(default = "default_lock_heartbeat_seconds")]
@@ -475,9 +476,10 @@ pub struct LocalConfig {
     pub no_tool_calls: Option<bool>,
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
-    pub max_recursion_depth: Option<usize>,
-    /// Maximum consecutive empty responses before stopping the agentic loop
-    pub max_empty_responses: Option<usize>,
+    /// Per-context fuel budget override
+    pub fuel: Option<usize>,
+    /// Per-context fuel cost for empty responses
+    pub fuel_empty_response_cost: Option<usize>,
     pub warn_threshold_percent: Option<f32>,
     pub context_window_limit: Option<usize>,
     pub reflection_enabled: Option<bool>,
@@ -542,9 +544,10 @@ pub struct ResolvedConfig {
     pub no_tool_calls: bool,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
-    pub max_recursion_depth: usize,
-    /// Maximum consecutive empty responses before stopping the agentic loop
-    pub max_empty_responses: usize,
+    /// Total fuel budget for the agentic loop
+    pub fuel: usize,
+    /// Fuel cost of an empty response
+    pub fuel_empty_response_cost: usize,
     pub username: String,
     pub reflection_enabled: bool,
     /// Threshold (in chars) above which tool output is cached
@@ -581,8 +584,8 @@ impl ResolvedConfig {
             "warn_threshold_percent" => Some(format!("{}", self.warn_threshold_percent as i32)),
             "auto_compact" => Some(self.auto_compact.to_string()),
             "auto_compact_threshold" => Some(format!("{}", self.auto_compact_threshold as i32)),
-            "max_recursion_depth" => Some(self.max_recursion_depth.to_string()),
-            "max_empty_responses" => Some(self.max_empty_responses.to_string()),
+            "fuel" => Some(self.fuel.to_string()),
+            "fuel_empty_response_cost" => Some(self.fuel_empty_response_cost.to_string()),
             "reflection_enabled" => Some(self.reflection_enabled.to_string()),
             "tool_output_cache_threshold" => Some(self.tool_output_cache_threshold.to_string()),
             "tool_cache_max_age_days" => Some(self.tool_cache_max_age_days.to_string()),
@@ -631,8 +634,8 @@ impl ResolvedConfig {
             "warn_threshold_percent",
             "auto_compact",
             "auto_compact_threshold",
-            "max_recursion_depth",
-            "max_empty_responses",
+            "fuel",
+            "fuel_empty_response_cost",
             "reflection_enabled",
             "tool_output_cache_threshold",
             "tool_cache_max_age_days",
@@ -736,8 +739,8 @@ mod tests {
             no_tool_calls: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
-            max_recursion_depth: 30,
-            max_empty_responses: 2,
+            fuel: 30,
+            fuel_empty_response_cost: 15,
             username: "testuser".to_string(),
             reflection_enabled: true,
             tool_output_cache_threshold: 4000,

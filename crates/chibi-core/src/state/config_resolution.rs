@@ -79,8 +79,8 @@ impl AppState {
             no_tool_calls: self.config.no_tool_calls,
             auto_compact: self.config.auto_compact,
             auto_compact_threshold: self.config.auto_compact_threshold,
-            max_recursion_depth: self.config.max_recursion_depth,
-            max_empty_responses: self.config.max_empty_responses,
+            fuel: self.config.fuel,
+            fuel_empty_response_cost: self.config.fuel_empty_response_cost,
             username: self.config.username.clone(),
             reflection_enabled: self.config.reflection_enabled,
             tool_output_cache_threshold: self.config.tool_output_cache_threshold,
@@ -121,11 +121,11 @@ impl AppState {
         if let Some(auto_compact_threshold) = local.auto_compact_threshold {
             resolved.auto_compact_threshold = auto_compact_threshold;
         }
-        if let Some(max_recursion_depth) = local.max_recursion_depth {
-            resolved.max_recursion_depth = max_recursion_depth;
+        if let Some(fuel) = local.fuel {
+            resolved.fuel = fuel;
         }
-        if let Some(max_empty_responses) = local.max_empty_responses {
-            resolved.max_empty_responses = max_empty_responses;
+        if let Some(fuel_empty_response_cost) = local.fuel_empty_response_cost {
+            resolved.fuel_empty_response_cost = fuel_empty_response_cost;
         }
         if let Some(ref username) = local.username {
             resolved.username = username.clone();

@@ -306,11 +306,15 @@ fn apply_request_modifications<S: ResponseSink>(
     Ok(request_body)
 }
 
-/// Apply fallback override from hook results.
-/// Hooks can return `{"fallback": "<tool_name>"}` to override the fallback tool.
-/// The tool must be a flow_control tool (validated elsewhere).
-fn apply_fallback_override<S: ResponseSink>(
+/// Apply hook overrides from hook results.
+///
+/// Handles three keys from hook return values:
+/// - `"fallback"`: override the fallback tool (existing behaviour)
+/// - `"fuel"`: absolute fuel override (e.g. from `pre_agentic_loop`)
+/// - `"fuel_delta"`: relative fuel adjustment (e.g. from `post_tool_batch`)
+fn apply_hook_overrides<S: ResponseSink>(
     handoff: &mut tools::Handoff,
+    fuel_remaining: &mut usize,
     hook_results: &[(String, serde_json::Value)],
     verbose: bool,
     sink: &mut S,
@@ -336,6 +340,28 @@ fn apply_fallback_override<S: ResponseSink>(
                 })?;
             }
         }
+        if let Some(fuel) = hook_result.get("fuel").and_then(|v| v.as_u64()) {
+            *fuel_remaining = fuel as usize;
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!("[Hook {} set fuel to {}]", hook_name, fuel),
+                    verbose_only: true,
+                })?;
+            }
+        }
+        if let Some(delta) = hook_result.get("fuel_delta").and_then(|v| v.as_i64()) {
+            if delta < 0 {
+                *fuel_remaining = fuel_remaining.saturating_sub((-delta) as usize);
+            } else {
+                *fuel_remaining = fuel_remaining.saturating_add(delta as usize);
+            }
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!("[Hook {} adjusted fuel by {}]", hook_name, delta),
+                    verbose_only: true,
+                })?;
+            }
+        }
     }
     Ok(())
 }
@@ -345,7 +371,7 @@ fn apply_fallback_override<S: ResponseSink>(
 /// This is the main entry point for sending prompts. It handles:
 /// - Hook execution (pre_message, post_message, etc.)
 /// - Inbox message injection
-/// - Tool execution loop
+/// - Tool execution loop with fuel budget
 /// - Context management
 /// - Auto-compaction
 ///
@@ -361,12 +387,11 @@ pub async fn send_prompt<S: ResponseSink>(
     options: &PromptOptions<'_>,
     sink: &mut S,
 ) -> io::Result<()> {
-    send_prompt_with_depth(
+    send_prompt_loop(
         app,
         context_name,
         prompt,
         tools,
-        0,
         resolved_config,
         options,
         sink,
@@ -1172,7 +1197,8 @@ async fn process_tool_calls<S: ResponseSink>(
     handoff: &mut tools::Handoff,
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
-    recursion_depth: usize,
+    fuel_remaining: &mut usize,
+    fuel_total: usize,
     verbose: bool,
     sink: &mut S,
 ) -> io::Result<()> {
@@ -1345,12 +1371,13 @@ async fn process_tool_calls<S: ResponseSink>(
         .collect();
     let hook_data = json!({
         "context_name": context_name,
-        "recursion_depth": recursion_depth,
+        "fuel_remaining": fuel_remaining,
+        "fuel_total": fuel_total,
         "current_fallback": resolved_config.fallback_tool,
         "tool_calls": tool_batch_info,
     });
     let hook_results = tools::execute_hook(tools, tools::HookPoint::PostToolBatch, &hook_data)?;
-    apply_fallback_override(handoff, &hook_results, verbose, sink)?;
+    apply_hook_overrides(handoff, fuel_remaining, &hook_results, verbose, sink)?;
 
     Ok(())
 }
@@ -1375,8 +1402,7 @@ fn handle_final_response<S: ResponseSink>(
     final_prompt: &str,
     mut handoff: tools::Handoff,
     tools: &[Tool],
-    recursion_depth: usize,
-    resolved_config: &ResolvedConfig,
+    _resolved_config: &ResolvedConfig,
     verbose: bool,
     sink: &mut S,
 ) -> io::Result<FinalResponseAction> {
@@ -1414,338 +1440,349 @@ fn handle_final_response<S: ResponseSink>(
 
     sink.handle(ResponseEvent::Newline)?;
 
-    // Determine next action based on handoff
+    // Determine next action based on handoff.
+    // Fuel exhaustion is the caller's responsibility — we just report the action.
     match handoff.take() {
         tools::HandoffTarget::User { message } => {
             if !message.is_empty() {
-                // Output the message as final text
                 sink.handle(ResponseEvent::TextChunk(&message))?;
                 sink.handle(ResponseEvent::Newline)?;
             }
             Ok(FinalResponseAction::ReturnToUser)
         }
         tools::HandoffTarget::Agent { prompt } => {
-            let new_depth = recursion_depth + 1;
-            if new_depth >= app.config.max_recursion_depth {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Max recursion depth ({}) reached, stopping]",
-                        app.config.max_recursion_depth
-                    ),
-                    verbose_only: false,
-                })?;
-                return Ok(FinalResponseAction::ReturnToUser);
-            }
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Continuing processing ({}/{}): {}]",
-                        new_depth,
-                        app.config.max_recursion_depth,
-                        if prompt.is_empty() {
-                            "(no prompt)"
-                        } else {
-                            &prompt
-                        }
-                    ),
-                    verbose_only: true,
-                })?;
-            }
-            let continue_prompt = if prompt.is_empty() {
-                format!(
-                    "[Reengaged ({}/{}) via {} tool. call_user(<message>) to end turn.]",
-                    new_depth, app.config.max_recursion_depth, resolved_config.fallback_tool
-                )
-            } else {
-                format!(
-                    "[Reengaged ({}/{}) via {} tool: {}]",
-                    new_depth,
-                    app.config.max_recursion_depth,
-                    resolved_config.fallback_tool,
-                    prompt
-                )
-            };
-            Ok(FinalResponseAction::ContinueWithPrompt(continue_prompt))
+            Ok(FinalResponseAction::ContinueWithPrompt(prompt))
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn send_prompt_with_depth<S: ResponseSink>(
+async fn send_prompt_loop<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
-    prompt: String,
+    initial_prompt: String,
     tools: &[Tool],
-    recursion_depth: usize,
     resolved_config: &ResolvedConfig,
     options: &PromptOptions<'_>,
     sink: &mut S,
 ) -> io::Result<()> {
-    // === Validation & Setup ===
-    if prompt.trim().is_empty() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "Prompt cannot be empty",
-        ));
-    }
+    let fuel_total = resolved_config.fuel;
+    let mut fuel_remaining = fuel_total;
+    let mut current_prompt = initial_prompt;
 
-    app.validate_config(resolved_config, tools)?;
-
-    let verbose = options.verbose;
-    let use_reflection = options.use_reflection;
-    let debug = options.debug;
-
-    let mut context = app.get_or_create_context(context_name)?;
-
-    // === Pre-message Hooks & Inbox ===
-    let mut final_prompt = prompt.clone();
-    let hook_data = serde_json::json!({
-        "prompt": prompt,
-        "context_name": context.name,
-        "summary": context.summary,
-    });
-    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data)?;
-    for (tool_name, result) in hook_results {
-        if let Some(modified) = result.get_str("prompt") {
-            if verbose {
-                eprintln!("[Hook pre_message: {} modified prompt]", tool_name);
-            }
-            final_prompt = modified.to_string();
-        }
-    }
-
-    // Check inbox and inject messages before the user prompt
-    let inbox_messages = app.load_and_clear_inbox(context_name)?;
-    if !inbox_messages.is_empty() {
-        let mut inbox_content = String::from("--- INBOX MESSAGES ---\n");
-        for msg in &inbox_messages {
-            inbox_content.push_str(&format!("[From: {}] {}\n", msg.from, msg.content));
-        }
-        inbox_content.push_str("--- END INBOX ---\n\n");
-        final_prompt = format!("{}{}", inbox_content, final_prompt);
-        if verbose {
-            sink.handle(ResponseEvent::Diagnostic {
-                message: format!("[Inbox: {} message(s) injected]", inbox_messages.len()),
-                verbose_only: true,
-            })?;
-        }
-    }
-
-    // Add datetime prefix to user message
-    let datetime_prefix = chrono::Local::now().format("%Y%m%d-%H%M%z").to_string();
-    let prefixed_prompt = format!("[{}] {}", datetime_prefix, final_prompt);
-
-    // Add user message to context and transcript
-    app.add_message(&mut context, "user".to_string(), prefixed_prompt.clone());
-    let user_entry =
-        create_user_message_entry(context_name, &prefixed_prompt, &resolved_config.username);
-    app.append_to_transcript_and_context(context_name, &user_entry)?;
-    sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
-
-    // Context window warning
-    if app.should_warn(&context.messages) {
-        let remaining = app.remaining_tokens(&context.messages);
-        if verbose {
-            sink.handle(ResponseEvent::Diagnostic {
-                message: format!("[Context window warning: {} tokens remaining]", remaining),
-                verbose_only: true,
-            })?;
-        }
-    }
-
-    // === Auto-compaction Check ===
-    if app.should_auto_compact(&context, resolved_config) {
-        return compact_context_with_llm(app, context_name, resolved_config, verbose).await;
-    }
-
-    // === Build System Prompt ===
-    let full_system_prompt = build_full_system_prompt(
-        app,
-        context_name,
-        &context.summary,
-        use_reflection,
-        tools,
-        resolved_config,
-        verbose,
-        sink,
-    )?;
-
-    // === Prepare Messages ===
-    let mut messages: Vec<serde_json::Value> = if !full_system_prompt.is_empty() {
-        vec![serde_json::json!({
-            "role": "system",
-            "content": full_system_prompt,
-        })]
-    } else {
-        Vec::new()
-    };
-
-    // Add conversation messages (skip system messages)
-    for m in &context.messages {
-        if m.role == "system" {
-            continue;
-        }
-        messages.push(serde_json::json!({
-            "role": m.role,
-            "content": m.content,
-        }));
-    }
-
-    // === Prepare Tools ===
-    let mut all_tools = tools::tools_to_api_format(tools);
-    all_tools.extend(tools::builtin_tools_to_api_format(use_reflection));
-    all_tools.extend(tools::all_file_tools_to_api_format());
-    all_tools.extend(tools::all_agent_tools_to_api_format());
-    all_tools.extend(tools::all_coding_tools_to_api_format());
-    annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
-    all_tools = filter_tools_by_config(all_tools, &resolved_config.tools);
-
-    // Execute pre_api_tools hook
-    let tool_info = build_tool_info_list(&all_tools, tools);
-    let hook_data = json!({
-        "context_name": context.name,
-        "tools": tool_info,
-        "recursion_depth": recursion_depth,
-    });
-    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiTools, &hook_data)?;
-    all_tools = filter_tools_from_hook_results(all_tools, &hook_results, verbose, sink)?;
-
-    // === Build Request ===
-    let tools_for_request = if resolved_config.no_tool_calls {
-        None
-    } else {
-        Some(all_tools.as_slice())
-    };
-    let mut request_body = build_request_body(resolved_config, &messages, tools_for_request, true);
-
-    // Execute pre_api_request hook
-    let hook_data = json!({
-        "context_name": context.name,
-        "request_body": request_body,
-        "recursion_depth": recursion_depth,
-    });
-    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
-    request_body = apply_request_modifications(request_body, &hook_results, verbose, sink)?;
-
-    // === Initialize Handoff ===
-    let fallback = options.fallback_override.clone().unwrap_or_else(|| {
-        let meta = tools::get_tool_metadata(tools, &resolved_config.fallback_tool);
-        if meta.ends_turn {
-            tools::HandoffTarget::User {
-                message: String::new(),
-            }
-        } else {
-            tools::HandoffTarget::Agent {
-                prompt: String::new(),
-            }
-        }
-    });
-    let mut handoff = tools::Handoff::new(fallback);
-
-    // Execute pre_agentic_loop hook
-    let hook_data = json!({
-        "context_name": context.name,
-        "recursion_depth": recursion_depth,
-        "current_fallback": resolved_config.fallback_tool,
-        "message": final_prompt,
-    });
-    let hook_results = tools::execute_hook(tools, tools::HookPoint::PreAgenticLoop, &hook_data)?;
-    apply_fallback_override(&mut handoff, &hook_results, verbose, sink)?;
-
-    // === Main Loop ===
-    let mut consecutive_empty_responses = 0usize;
+    // Outer loop: each iteration is a full setup + agentic exchange.
+    // First iteration is the user's turn (free); continuations cost 1 fuel.
     loop {
-        sink.handle(ResponseEvent::StartResponse)?;
-        log_request_if_enabled(app, context_name, debug, &request_body);
-
-        let response =
-            collect_streaming_response(resolved_config, &messages, &all_tools, verbose, sink)
-                .await?;
-
-        // Log response metadata
-        if let Some(ref meta) = response.response_meta {
-            log_response_meta_if_enabled(app, context_name, debug, meta);
+        // === Validation & Setup ===
+        if current_prompt.trim().is_empty() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Prompt cannot be empty",
+            ));
         }
 
-        // Signal streaming finished
-        if !sink.is_json_mode() {
-            sink.handle(ResponseEvent::Finished)?;
-        }
+        app.validate_config(resolved_config, tools)?;
 
-        // Handle tool calls
-        if response.has_tool_calls && !response.tool_calls.is_empty() {
-            process_tool_calls(
-                app,
-                context_name,
-                &response.tool_calls,
-                &mut messages,
-                tools,
-                &mut handoff,
-                use_reflection,
-                resolved_config,
-                recursion_depth,
-                verbose,
-                sink,
-            )
-            .await?;
+        let verbose = options.verbose;
+        let use_reflection = options.use_reflection;
+        let debug = options.debug;
 
-            // Keep request_body in sync for logging
-            request_body["messages"] = serde_json::json!(messages);
-            consecutive_empty_responses = 0;
-            continue;
-        }
+        let mut context = app.get_or_create_context(context_name)?;
 
-        // Check for empty response
-        if response.full_response.trim().is_empty() {
-            consecutive_empty_responses += 1;
-            if consecutive_empty_responses >= app.config.max_empty_responses {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Max consecutive empty responses ({}) reached, stopping]",
-                        app.config.max_empty_responses
-                    ),
-                    verbose_only: false,
-                })?;
-                return Ok(());
+        // === Pre-message Hooks & Inbox ===
+        let mut final_prompt = current_prompt.clone();
+        let hook_data = serde_json::json!({
+            "prompt": current_prompt,
+            "context_name": context.name,
+            "summary": context.summary,
+        });
+        let hook_results = tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data)?;
+        for (tool_name, result) in hook_results {
+            if let Some(modified) = result.get_str("prompt") {
+                if verbose {
+                    eprintln!("[Hook pre_message: {} modified prompt]", tool_name);
+                }
+                final_prompt = modified.to_string();
             }
+        }
+
+        // Check inbox and inject messages before the user prompt
+        let inbox_messages = app.load_and_clear_inbox(context_name)?;
+        if !inbox_messages.is_empty() {
+            let mut inbox_content = String::from("--- INBOX MESSAGES ---\n");
+            for msg in &inbox_messages {
+                inbox_content.push_str(&format!("[From: {}] {}\n", msg.from, msg.content));
+            }
+            inbox_content.push_str("--- END INBOX ---\n\n");
+            final_prompt = format!("{}{}", inbox_content, final_prompt);
             if verbose {
                 sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Empty response {}/{}, retrying]",
-                        consecutive_empty_responses, app.config.max_empty_responses
-                    ),
+                    message: format!("[Inbox: {} message(s) injected]", inbox_messages.len()),
                     verbose_only: true,
                 })?;
             }
-            continue;
         }
 
-        // Handle final response
-        match handle_final_response(
+        // Add datetime prefix to user message
+        let datetime_prefix = chrono::Local::now().format("%Y%m%d-%H%M%z").to_string();
+        let prefixed_prompt = format!("[{}] {}", datetime_prefix, final_prompt);
+
+        // Add user message to context and transcript
+        app.add_message(&mut context, "user".to_string(), prefixed_prompt.clone());
+        let user_entry =
+            create_user_message_entry(context_name, &prefixed_prompt, &resolved_config.username);
+        app.append_to_transcript_and_context(context_name, &user_entry)?;
+        sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
+
+        // Context window warning
+        if app.should_warn(&context.messages) {
+            let remaining = app.remaining_tokens(&context.messages);
+            if verbose {
+                sink.handle(ResponseEvent::Diagnostic {
+                    message: format!("[Context window warning: {} tokens remaining]", remaining),
+                    verbose_only: true,
+                })?;
+            }
+        }
+
+        // === Auto-compaction Check ===
+        if app.should_auto_compact(&context, resolved_config) {
+            return compact_context_with_llm(app, context_name, resolved_config, verbose).await;
+        }
+
+        // === Build System Prompt ===
+        let full_system_prompt = build_full_system_prompt(
             app,
             context_name,
-            &response.full_response,
-            &final_prompt,
-            handoff,
+            &context.summary,
+            use_reflection,
             tools,
-            recursion_depth,
             resolved_config,
             verbose,
             sink,
-        )? {
-            FinalResponseAction::ReturnToUser => return Ok(()),
-            FinalResponseAction::ContinueWithPrompt(continue_prompt) => {
-                return Box::pin(send_prompt_with_depth(
+        )?;
+
+        // === Prepare Messages ===
+        let mut messages: Vec<serde_json::Value> = if !full_system_prompt.is_empty() {
+            vec![serde_json::json!({
+                "role": "system",
+                "content": full_system_prompt,
+            })]
+        } else {
+            Vec::new()
+        };
+
+        // Add conversation messages (skip system messages)
+        for m in &context.messages {
+            if m.role == "system" {
+                continue;
+            }
+            messages.push(serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            }));
+        }
+
+        // === Prepare Tools ===
+        let mut all_tools = tools::tools_to_api_format(tools);
+        all_tools.extend(tools::builtin_tools_to_api_format(use_reflection));
+        all_tools.extend(tools::all_file_tools_to_api_format());
+        all_tools.extend(tools::all_agent_tools_to_api_format());
+        all_tools.extend(tools::all_coding_tools_to_api_format());
+        annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
+        all_tools = filter_tools_by_config(all_tools, &resolved_config.tools);
+
+        // Execute pre_api_tools hook
+        let tool_info = build_tool_info_list(&all_tools, tools);
+        let hook_data = json!({
+            "context_name": context.name,
+            "tools": tool_info,
+            "fuel_remaining": fuel_remaining,
+            "fuel_total": fuel_total,
+        });
+        let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiTools, &hook_data)?;
+        all_tools = filter_tools_from_hook_results(all_tools, &hook_results, verbose, sink)?;
+
+        // === Build Request ===
+        let tools_for_request = if resolved_config.no_tool_calls {
+            None
+        } else {
+            Some(all_tools.as_slice())
+        };
+        let mut request_body =
+            build_request_body(resolved_config, &messages, tools_for_request, true);
+
+        // Execute pre_api_request hook
+        let hook_data = json!({
+            "context_name": context.name,
+            "request_body": request_body,
+            "fuel_remaining": fuel_remaining,
+            "fuel_total": fuel_total,
+        });
+        let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
+        request_body = apply_request_modifications(request_body, &hook_results, verbose, sink)?;
+
+        // === Initialize Handoff ===
+        let fallback = options.fallback_override.clone().unwrap_or_else(|| {
+            let meta = tools::get_tool_metadata(tools, &resolved_config.fallback_tool);
+            if meta.ends_turn {
+                tools::HandoffTarget::User {
+                    message: String::new(),
+                }
+            } else {
+                tools::HandoffTarget::Agent {
+                    prompt: String::new(),
+                }
+            }
+        });
+        let mut handoff = tools::Handoff::new(fallback);
+
+        // Execute pre_agentic_loop hook
+        let hook_data = json!({
+            "context_name": context.name,
+            "fuel_remaining": fuel_remaining,
+            "fuel_total": fuel_total,
+            "current_fallback": resolved_config.fallback_tool,
+            "message": final_prompt,
+        });
+        let hook_results =
+            tools::execute_hook(tools, tools::HookPoint::PreAgenticLoop, &hook_data)?;
+        apply_hook_overrides(
+            &mut handoff,
+            &mut fuel_remaining,
+            &hook_results,
+            verbose,
+            sink,
+        )?;
+
+        // === Inner Loop: stream responses and process tool calls ===
+        loop {
+            sink.handle(ResponseEvent::StartResponse)?;
+            log_request_if_enabled(app, context_name, debug, &request_body);
+
+            let response =
+                collect_streaming_response(resolved_config, &messages, &all_tools, verbose, sink)
+                    .await?;
+
+            // Log response metadata
+            if let Some(ref meta) = response.response_meta {
+                log_response_meta_if_enabled(app, context_name, debug, meta);
+            }
+
+            // Signal streaming finished
+            if !sink.is_json_mode() {
+                sink.handle(ResponseEvent::Finished)?;
+            }
+
+            // Handle tool calls
+            if response.has_tool_calls && !response.tool_calls.is_empty() {
+                process_tool_calls(
                     app,
                     context_name,
-                    continue_prompt,
+                    &response.tool_calls,
+                    &mut messages,
                     tools,
-                    recursion_depth + 1,
+                    &mut handoff,
+                    use_reflection,
                     resolved_config,
-                    options,
+                    &mut fuel_remaining,
+                    fuel_total,
+                    verbose,
                     sink,
-                ))
-                .await;
+                )
+                .await?;
+
+                // Keep request_body in sync for logging
+                request_body["messages"] = serde_json::json!(messages);
+
+                // Tool call round costs 1 fuel
+                fuel_remaining = fuel_remaining.saturating_sub(1);
+                if fuel_remaining == 0 {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!(
+                            "[fuel exhausted (0/{}), returning control to user]",
+                            fuel_total
+                        ),
+                        verbose_only: false,
+                    })?;
+                    return Ok(());
+                }
+                continue;
+            }
+
+            // Check for empty response
+            if response.full_response.trim().is_empty() {
+                fuel_remaining =
+                    fuel_remaining.saturating_sub(resolved_config.fuel_empty_response_cost);
+                if fuel_remaining == 0 {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!(
+                            "[fuel exhausted (0/{}), returning control to user]",
+                            fuel_total
+                        ),
+                        verbose_only: false,
+                    })?;
+                    return Ok(());
+                }
+                if verbose {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!(
+                            "[empty response, fuel: {}/{}]",
+                            fuel_remaining, fuel_total
+                        ),
+                        verbose_only: true,
+                    })?;
+                }
+                continue;
+            }
+
+            // Text response — break inner loop to handle final response
+            match handle_final_response(
+                app,
+                context_name,
+                &response.full_response,
+                &final_prompt,
+                handoff,
+                tools,
+                resolved_config,
+                verbose,
+                sink,
+            )? {
+                FinalResponseAction::ReturnToUser => return Ok(()),
+                FinalResponseAction::ContinueWithPrompt(continue_prompt) => {
+                    fuel_remaining = fuel_remaining.saturating_sub(1);
+                    if fuel_remaining == 0 {
+                        sink.handle(ResponseEvent::Diagnostic {
+                            message: format!(
+                                "[fuel exhausted (0/{}), returning control to user]",
+                                fuel_total
+                            ),
+                            verbose_only: false,
+                        })?;
+                        return Ok(());
+                    }
+                    if verbose {
+                        sink.handle(ResponseEvent::Diagnostic {
+                            message: format!(
+                                "[continuing (fuel: {}/{}): {}]",
+                                fuel_remaining,
+                                fuel_total,
+                                if continue_prompt.len() > 80 {
+                                    format!("{}...", &continue_prompt[..77])
+                                } else {
+                                    continue_prompt.clone()
+                                }
+                            ),
+                            verbose_only: true,
+                        })?;
+                    }
+                    // Prefix the continuation prompt with fuel info for the LLM
+                    current_prompt = format!(
+                        "[reengaged (fuel: {}/{}) via {}. call_user(<message>) to end turn.]\n{}",
+                        fuel_remaining, fuel_total, resolved_config.fallback_tool, continue_prompt
+                    );
+                    break; // break inner, continue outer
+                }
             }
         }
     }

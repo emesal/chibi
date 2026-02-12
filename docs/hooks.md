@@ -45,8 +45,8 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_agentic_loop` | Before entering the tool loop | Yes (fallback target) |
-| `post_tool_batch` | After processing a batch of tool calls | Yes (fallback target) |
+| `pre_agentic_loop` | Before entering the tool loop (each iteration) | Yes (fallback target, fuel) |
+| `post_tool_batch` | After processing a batch of tool calls | Yes (fallback target, fuel delta) |
 
 ### File Write Permission
 
@@ -176,7 +176,8 @@ Called before tools are sent to the API. Allows dynamic filtering of which tools
     {"name": "file_head", "type": "file"},
     {"name": "my_plugin", "type": "plugin"}
   ],
-  "recursion_depth": 0
+  "fuel_remaining": 30,
+  "fuel_total": 30
 }
 ```
 
@@ -218,7 +219,8 @@ Called after tools are filtered but before the HTTP request is sent. Allows modi
     "temperature": 0.7,
     ...
   },
-  "recursion_depth": 0
+  "fuel_remaining": 30,
+  "fuel_total": 30
 }
 ```
 
@@ -236,12 +238,13 @@ Returned fields are **merged** into the request body, not replaced entirely. Thi
 
 ### pre_agentic_loop
 
-Called once before entering the agentic tool loop. Allows plugins to override the fallback handoff target (what happens when the LLM doesn't explicitly call `call_agent` or `call_user`).
+Called before each iteration of the agentic loop (including re-entries on agent continuation). Allows plugins to override the fallback handoff target and adjust the fuel budget.
 
 ```json
 {
   "context_name": "default",
-  "recursion_depth": 0,
+  "fuel_remaining": 30,
+  "fuel_total": 30,
   "current_fallback": "call_agent",
   "message": "user's message here"
 }
@@ -256,14 +259,24 @@ Called once before entering the agentic tool loop. Allows plugins to override th
 
 Valid fallback values are `"call_agent"` (continue processing) or `"call_user"` (return to user).
 
+**Can return (to set fuel):**
+```json
+{
+  "fuel": 50
+}
+```
+
+Sets `fuel_remaining` to the given value. Plugins can inspect the current `fuel_remaining` in the hook data and decide whether to top up, cap, or reset the budget.
+
 ### post_tool_batch
 
-Called after processing a batch of tool calls, before deciding whether to recurse or return. Allows plugins to override the fallback based on which tools were called.
+Called after processing a batch of tool calls, before deciding whether to continue or return. Allows plugins to override the fallback and adjust fuel based on which tools were called.
 
 ```json
 {
   "context_name": "default",
-  "recursion_depth": 1,
+  "fuel_remaining": 28,
+  "fuel_total": 30,
   "current_fallback": "call_agent",
   "tool_calls": [
     {"name": "read_file", "arguments": {"path": "Cargo.toml"}},
@@ -278,6 +291,15 @@ Called after processing a batch of tool calls, before deciding whether to recurs
   "fallback": "call_user"
 }
 ```
+
+**Can return (to adjust fuel):**
+```json
+{
+  "fuel_delta": -5
+}
+```
+
+Positive values add fuel (saturating), negative values consume fuel (saturating to 0). Use this to make certain tool patterns cost more or less fuel.
 
 **Priority:** `post_tool_batch` output > `pre_agentic_loop` output > config fallback. Each `post_tool_batch` hook can keep overriding, so the last hook to set a fallback wins.
 
@@ -751,7 +773,8 @@ if hook == "post_tool_batch":
     for call in tool_calls:
         if call.get("name") in dangerous_tools:
             # Force return to user after dangerous tool calls
-            print(json.dumps({"fallback": "call_user"}))
+            # Also penalize fuel to discourage repeated dangerous operations
+            print(json.dumps({"fallback": "call_user", "fuel_delta": -5}))
             sys.exit(0)
 
 print("{}")
