@@ -24,8 +24,8 @@ default:
   @echo "🚀 Release cycle:"
   @echo "  just freeze <reason>      → Lock tree for release (bugfixes only)"
   @echo "  just thaw                 → Unlock tree for features again"
-  @echo "  just release v0.x         → Squash dev→main, run tests, tag release"
-  @echo "  just push-release v0.x    → Push release to github"
+  @echo "  just release 0.x.y        → Squash dev→main, run tests, tag release"
+  @echo "  just push-release 0.x.y   → Push release to github"
   @echo "  just update-deps          → Update dependencies post-release"
   @echo ""
   @echo "🔎 Archaeology:"
@@ -245,9 +245,26 @@ pre-push: check-freeze lint test
 push: pre-push
   git push
 
-# Install to ~/.cargo/bin
+# Install all binary crates to ~/.cargo/bin
 install:
-  cargo install --path crates/chibi-cli
+  #!/usr/bin/env bash
+  set -e
+  BINS=$(cargo metadata --format-version=1 --no-deps 2>/dev/null \
+    | jq -r '
+        .workspace_root as $root |
+        [.packages[] | select(any(.targets[]; .kind[] == "bin")) | .manifest_path] |
+        unique | .[] |
+        if . == ($root + "/Cargo.toml") then "."
+        else (ltrimstr($root + "/") | rtrimstr("/Cargo.toml"))
+        end')
+  if [ -z "$BINS" ]; then
+    echo "❌ No binary crates found"
+    exit 1
+  fi
+  for crate in $BINS; do
+    echo "Installing ${crate}..."
+    cargo install --path "$crate"
+  done
 
 # === Documentation ===
 
@@ -261,11 +278,21 @@ rustdoc-all:
 
 # === Release Cycle Commands ===
 
+# Normalize version input: strip leading 'v' if present, validate semver-ish format.
+# Sets VER (bare: "0.7.1") and TAG (prefixed: "v0.7.1").
+# Accepts "v0.7.1", "0.7.1", or "v0.7.1-rc.1" etc.
+[private]
+@_parse-version version:
+  echo "{{version}}" | sed 's/^v//' | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+' \
+    || (echo "❌ Invalid version '{{version}}'. Expected semver, e.g. 0.7.1 or v0.7.1" && exit 1)
+
 # Lock the tree for release (squash-merge dev to main, tag release)
-release version:
+release version: (_parse-version version)
   #!/usr/bin/env bash
   set -e
-  echo "Preparing release v{{version}}..."
+  VER="$(echo "{{version}}" | sed 's/^v//')"
+  TAG="v${VER}"
+  echo "Preparing release ${TAG}..."
 
   # Ensure we're on dev and up to date
   git checkout dev
@@ -280,28 +307,30 @@ release version:
   # Create release commit on main with dev's tree (no merge conflicts, no history leak)
   git checkout main
   git pull
-  RELEASE_COMMIT=$(git commit-tree dev^{tree} -p HEAD -m "Release v{{version}}")
+  RELEASE_COMMIT=$(git commit-tree dev^{tree} -p HEAD -m "Release ${TAG}")
   git reset --hard "$RELEASE_COMMIT"
 
   # Tag the release
-  git tag -a "v{{version}}" -m "Release v{{version}}"
+  git tag -a "${TAG}" -m "Release ${TAG}"
 
-  echo "✓ Release v{{version}} prepared on main"
+  echo "✓ Release ${TAG} prepared on main"
   echo "  Review with: git show HEAD"
-  echo "  Push with: just push-release v{{version}}"
+  echo "  Push with: just push-release ${VER}"
 
 # Push a release to remote (after review)
-push-release version:
+push-release version: (_parse-version version)
   #!/usr/bin/env bash
   set -e
+  VER="$(echo "{{version}}" | sed 's/^v//')"
+  TAG="v${VER}"
   git checkout main
   git push origin main
-  git push origin "v{{version}}"
+  git push origin "${TAG}"
 
   # Return to dev
   git checkout dev
 
-  echo "✓ Released v{{version}}"
+  echo "✓ Released ${TAG}"
 
 # Update dependencies after release
 update-deps:
