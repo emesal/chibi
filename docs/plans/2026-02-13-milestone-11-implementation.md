@@ -21,8 +21,8 @@
 | 5 | done | ed4fa53 | as planned |
 | 6 | done | ed4fa53 | as planned; added ToolsConfig::merge_local() |
 | 7 | done | ed4fa53 | merged into task 4 (docs already in configuration.md) |
-| 8a | pending | | --trust flag + Y/n permission default |
-| 8b | pending | | document zero-config coding tools in docs/ |
+| 8a | done | dca75b0 | -t/--trust flag, Y/n default-allow, select_permission_handler |
+| 8b | done | dca75b0 | docs in docs/configuration.md, not AGENTS.md |
 | 9–14 | pending | | phases 2–5 |
 
 **Deviations from plan:**
@@ -32,6 +32,7 @@
 - Task 7: merged into task 4 since tool filtering docs already lived in docs/configuration.md.
 - Task 3: passed `home_dir`/`project_root` as params to `build_full_system_prompt` rather than adding fields to `AppState` (cleaner separation of concerns). Required threading through `send_prompt` → `send_prompt_loop` → `build_full_system_prompt`.
 - Task 1: updated existing test `test_resolve_project_root_falls_back_to_cwd` → `test_resolve_project_root_falls_back_to_vcs_or_cwd` (test ran inside git repo, so VCS detection correctly finds repo root).
+- Task 8: split into 8a (--trust + Y/n) and 8b (docs). Original plan had manual verification steps; assessment done in-conversation instead. Docs placed in docs/configuration.md (not AGENTS.md). Committed together.
 
 ---
 
