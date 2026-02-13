@@ -210,6 +210,16 @@ fn parse_single_tool_schema(
         ends_turn: schema["ends_turn"].as_bool().unwrap_or(false),
     };
 
+    // Parse summary_params array (optional)
+    let summary_params = schema["summary_params"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(Tool {
         name,
         description,
@@ -217,6 +227,7 @@ fn parse_single_tool_schema(
         path: path.to_path_buf(),
         hooks,
         metadata,
+        summary_params,
     })
 }
 
@@ -309,6 +320,7 @@ mod tests {
             path: PathBuf::from("/usr/bin/test"),
             hooks: vec![HookPoint::OnStart, HookPoint::OnEnd],
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         };
         assert_eq!(tool.name, "test_tool");
         assert_eq!(tool.hooks.len(), 2);
@@ -325,6 +337,7 @@ mod tests {
                 path: PathBuf::from("/bin/one"),
                 hooks: vec![],
                 metadata: ToolMetadata::new(),
+                summary_params: vec![],
             },
             Tool {
                 name: "tool_two".to_string(),
@@ -333,6 +346,7 @@ mod tests {
                 path: PathBuf::from("/bin/two"),
                 hooks: vec![HookPoint::PreTool],
                 metadata: ToolMetadata::new(),
+                summary_params: vec![],
             },
         ];
 
@@ -358,6 +372,7 @@ mod tests {
                 path: PathBuf::from("/bin/alpha"),
                 hooks: vec![],
                 metadata: ToolMetadata::new(),
+                summary_params: vec![],
             },
             Tool {
                 name: "beta".to_string(),
@@ -366,6 +381,7 @@ mod tests {
                 path: PathBuf::from("/bin/beta"),
                 hooks: vec![],
                 metadata: ToolMetadata::new(),
+                summary_params: vec![],
             },
         ];
 
@@ -439,6 +455,7 @@ mod tests {
             path: script_path,
             hooks: vec![],
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         };
 
         let params = serde_json::json!({"key": "value", "num": 42});
@@ -466,6 +483,7 @@ mod tests {
             path: script_path,
             hooks: vec![],
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         };
 
         // Test without verbose
@@ -491,6 +509,7 @@ mod tests {
             path: script_path,
             hooks: vec![],
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         };
 
         // Note: can't use execute_tool_with_retry here since failure is expected
@@ -532,6 +551,7 @@ echo 'OK'
             path: script_path,
             hooks: vec![],
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         };
 
         let result = execute_tool_with_retry(&tool, &serde_json::json!({}), false).unwrap();

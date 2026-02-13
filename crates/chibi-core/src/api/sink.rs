@@ -30,7 +30,10 @@ pub enum ResponseEvent<'a> {
     TranscriptEntry(TranscriptEntry),
 
     /// A tool has started execution.
-    ToolStart { name: String },
+    ToolStart {
+        name: String,
+        summary: Option<String>,
+    },
 
     /// A tool has completed execution.
     ToolResult {

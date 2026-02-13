@@ -48,6 +48,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &[],
+        summary_params: &["path"],
     },
     BuiltinToolDef {
         name: FILE_TAIL_TOOL_NAME,
@@ -73,6 +74,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &[],
+        summary_params: &["path"],
     },
     BuiltinToolDef {
         name: FILE_LINES_TOOL_NAME,
@@ -104,6 +106,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["start", "end"],
+        summary_params: &["path"],
     },
     BuiltinToolDef {
         name: FILE_GREP_TOOL_NAME,
@@ -141,12 +144,14 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["pattern"],
+        summary_params: &["pattern", "path"],
     },
     BuiltinToolDef {
         name: CACHE_LIST_TOOL_NAME,
         description: "List all cached tool outputs for this context. Shows cache IDs, tool names, sizes, and timestamps.",
         properties: &[],
         required: &[],
+        summary_params: &[],
     },
     BuiltinToolDef {
         name: WRITE_FILE_TOOL_NAME,
@@ -166,6 +171,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["path", "content"],
+        summary_params: &["path"],
     },
 ];
 

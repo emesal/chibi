@@ -53,6 +53,8 @@ pub struct BuiltinToolDef {
     pub description: &'static str,
     pub properties: &'static [ToolPropertyDef],
     pub required: &'static [&'static str],
+    /// Parameter names whose values should appear in tool-call notices.
+    pub summary_params: &'static [&'static str],
 }
 
 impl BuiltinToolDef {
@@ -97,6 +99,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             default: None,
         }],
         required: &["content"],
+        summary_params: &[],
     },
     BuiltinToolDef {
         name: TODOS_TOOL_NAME,
@@ -108,6 +111,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             default: None,
         }],
         required: &["content"],
+        summary_params: &[],
     },
     BuiltinToolDef {
         name: GOALS_TOOL_NAME,
@@ -119,6 +123,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             default: None,
         }],
         required: &["content"],
+        summary_params: &[],
     },
     BuiltinToolDef {
         name: SEND_MESSAGE_TOOL_NAME,
@@ -144,6 +149,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["to", "content"],
+        summary_params: &["to"],
     },
     BuiltinToolDef {
         name: CALL_AGENT_TOOL_NAME,
@@ -155,6 +161,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             default: None,
         }],
         required: &["prompt"],
+        summary_params: &["prompt"],
     },
     BuiltinToolDef {
         name: CALL_USER_TOOL_NAME,
@@ -166,6 +173,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             default: None,
         }],
         required: &[],
+        summary_params: &[],
     },
     BuiltinToolDef {
         name: MODEL_INFO_TOOL_NAME,
@@ -177,8 +185,24 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
             default: None,
         }],
         required: &["model"],
+        summary_params: &["model"],
     },
 ];
+
+/// Look up summary_params for a built-in tool by name.
+///
+/// Searches all built-in registries (core, file, coding, agent). Returns
+/// an empty slice if the tool is not found.
+pub fn builtin_summary_params(name: &str) -> &'static [&'static str] {
+    BUILTIN_TOOL_DEFS
+        .iter()
+        .chain(super::file_tools::FILE_TOOL_DEFS.iter())
+        .chain(super::coding_tools::CODING_TOOL_DEFS.iter())
+        .chain(super::agent_tools::AGENT_TOOL_DEFS.iter())
+        .find(|def| def.name == name)
+        .map(|def| def.summary_params)
+        .unwrap_or(&[])
+}
 
 /// Look up a specific builtin tool definition by name.
 /// Returns None if not found. Use this for testing or conditional tool access.

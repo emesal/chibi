@@ -1384,8 +1384,10 @@ async fn process_tool_calls<S: ResponseSink>(
             }
         }
 
+        let summary = tools::tool_call_summary(tools, &tc.name, &tc.arguments);
         sink.handle(ResponseEvent::ToolStart {
             name: tc.name.clone(),
+            summary,
         })?;
 
         // Log tool result to transcript
@@ -1404,6 +1406,16 @@ async fn process_tool_calls<S: ResponseSink>(
             result: result.final_result.clone(),
             cached: result.was_cached,
         })?;
+
+        // Show full content of todos/goals updates in verbose mode
+        if verbose && matches!(tc.name.as_str(), "update_todos" | "update_goals")
+            && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments)
+                && let Some(content) = args["content"].as_str() {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!("[{}]\n{}", tc.name, content),
+                        verbose_only: true,
+                    })?;
+                }
 
         // Execute post_tool hooks
         let args: serde_json::Value =

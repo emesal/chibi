@@ -243,6 +243,7 @@ mod tests {
             path: script_path,
             hooks: vec![HookPoint::OnStart],
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         }];
 
         let data = serde_json::json!({"event": "start", "context": "test"});
@@ -270,6 +271,7 @@ mod tests {
             path: script_path,
             hooks: vec![HookPoint::PreMessage],
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         }];
 
         let results =
@@ -304,6 +306,7 @@ echo 'OK'
             path: script_path,
             hooks: vec![HookPoint::OnEnd],
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         }];
 
         let results =
@@ -326,6 +329,7 @@ echo 'OK'
             path: script_path,
             hooks: vec![HookPoint::OnStart], // Registered for OnStart only
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         }];
 
         // Call with OnEnd - should not execute the tool
@@ -347,6 +351,7 @@ echo 'OK'
             path: script_path,
             hooks: vec![HookPoint::OnStart],
             metadata: ToolMetadata::new(),
+            summary_params: vec![],
         }];
 
         // Failed hooks should be skipped (not error)
@@ -378,6 +383,7 @@ echo 'OK'
                 path: script1,
                 hooks: vec![HookPoint::OnStart],
                 metadata: ToolMetadata::new(),
+                summary_params: vec![],
             },
             Tool {
                 name: "second_hook".to_string(),
@@ -386,6 +392,7 @@ echo 'OK'
                 path: script2,
                 hooks: vec![HookPoint::OnStart],
                 metadata: ToolMetadata::new(),
+                summary_params: vec![],
             },
         ];
 

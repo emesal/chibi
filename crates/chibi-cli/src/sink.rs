@@ -117,16 +117,17 @@ impl ResponseSink for CliResponseSink<'_> {
             ResponseEvent::Newline => {
                 self.output.newline();
             }
-            ResponseEvent::ToolStart { name } => {
-                self.output
-                    .diagnostic(&format!("\n[Tool: {}]\n", name), self.show_tool_calls);
+            ResponseEvent::ToolStart { name, summary } => {
+                let msg = match summary {
+                    Some(s) => format!("\n[Tool: {}] {}", name, s),
+                    None => format!("\n[Tool: {}]", name),
+                };
+                self.output.diagnostic(&msg, self.show_tool_calls);
             }
             ResponseEvent::ToolResult { name, cached, .. } => {
                 if cached {
-                    self.output.diagnostic(
-                        &format!("\n[Tool {} (cached)]\n", name),
-                        self.show_tool_calls,
-                    );
+                    self.output
+                        .diagnostic(&format!("\n[Tool {} (cached)]", name), self.show_tool_calls);
                 }
             }
             ResponseEvent::StartResponse => {
@@ -246,6 +247,7 @@ mod tests {
         // Should not panic
         sink.handle(ResponseEvent::ToolStart {
             name: "test_tool".to_string(),
+            summary: None,
         })
         .unwrap();
     }
