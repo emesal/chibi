@@ -9,6 +9,7 @@ use super::logging::{log_request_if_enabled, log_response_meta_if_enabled};
 use super::request::{PromptOptions, build_request_body};
 use super::sink::{ResponseEvent, ResponseSink};
 use crate::cache;
+use crate::chibi::PermissionHandler;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
 use crate::gateway::{
@@ -100,6 +101,56 @@ fn classify_tool_type(name: &str, plugin_names: &[&str]) -> ToolType {
         // Unknown tools default to plugin type
         ToolType::Plugin
     }
+}
+
+// ============================================================================
+// Permission Checking
+// ============================================================================
+
+/// Evaluate permission from pre-computed hook results.
+///
+/// Deny-only protocol: if any plugin returns `"denied": true`, the operation
+/// is blocked. Otherwise, falls through to the permission handler (if set)
+/// or fail-safe deny.
+///
+/// Separated from `check_permission()` for unit testing.
+fn evaluate_permission(
+    hook_results: &[(String, serde_json::Value)],
+    hook_data: &serde_json::Value,
+    permission_handler: Option<&PermissionHandler>,
+) -> io::Result<Result<(), String>> {
+    // Check for explicit denial from any plugin
+    for (_plugin_name, result) in hook_results {
+        if result.get_bool_or("denied", false) {
+            let reason = result.get_str_or("reason", "denied by plugin").to_string();
+            return Ok(Err(reason));
+        }
+    }
+
+    // No plugin denied — delegate to permission handler or fail-safe deny
+    match permission_handler {
+        Some(handler) => {
+            if handler(hook_data)? {
+                Ok(Ok(()))
+            } else {
+                Ok(Err("permission denied".to_string()))
+            }
+        }
+        None => Ok(Err(
+            "no permission handler configured (fail-safe deny)".to_string()
+        )),
+    }
+}
+
+/// Full permission check: fire the hook, then evaluate results.
+fn check_permission(
+    tools: &[Tool],
+    hook: tools::HookPoint,
+    hook_data: &serde_json::Value,
+    permission_handler: Option<&PermissionHandler>,
+) -> io::Result<Result<(), String>> {
+    let hook_results = tools::execute_hook(tools, hook, hook_data)?;
+    evaluate_permission(&hook_results, hook_data, permission_handler)
 }
 
 /// Build tool info list for pre_api_tools hook data
@@ -378,6 +429,7 @@ fn apply_hook_overrides<S: ResponseSink>(
 /// # Arguments
 ///
 /// * `context_name` - The name of the context to use for this prompt
+#[allow(clippy::too_many_arguments)]
 pub async fn send_prompt<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
@@ -386,6 +438,7 @@ pub async fn send_prompt<S: ResponseSink>(
     resolved_config: &ResolvedConfig,
     options: &PromptOptions<'_>,
     sink: &mut S,
+    permission_handler: Option<&PermissionHandler>,
 ) -> io::Result<()> {
     send_prompt_loop(
         app,
@@ -395,6 +448,7 @@ pub async fn send_prompt<S: ResponseSink>(
         resolved_config,
         options,
         sink,
+        permission_handler,
     )
     .await
 }
@@ -704,6 +758,7 @@ async fn execute_tool_pure(
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
     verbose: bool,
+    permission_handler: Option<&PermissionHandler>,
 ) -> io::Result<ToolExecutionResult> {
     let mut args: serde_json::Value =
         serde_json::from_str(&tool_call.arguments).unwrap_or(serde_json::json!({}));
@@ -803,37 +858,20 @@ async fn execute_tool_pure(
             None => "Error: missing required 'model' parameter".to_string(),
         }
     } else if tools::is_file_tool(&tool_call.name) {
-        // For write tools, check permission via pre_file_write hook first
+        // Write tools need permission via pre_file_write hook
         if tool_call.name == tools::WRITE_FILE_TOOL_NAME {
             let hook_data = serde_json::json!({
                 "tool_name": tool_call.name,
                 "path": args.get_str("path").unwrap_or(""),
                 "content": args.get_str("content"),
             });
-            let hook_results =
-                tools::execute_hook(tools, tools::HookPoint::PreFileWrite, &hook_data)?;
-
-            // Check if any hook denied the operation
-            let mut denied = false;
-            let mut deny_reason = String::new();
-            for (_hook_name, result) in &hook_results {
-                if !result.get_bool_or("approved", false) {
-                    denied = true;
-                    deny_reason = result
-                        .get_str_or("reason", "Permission denied by hook")
-                        .to_string();
-                    break;
-                }
-            }
-
-            if denied {
-                format!("Error: {}", deny_reason)
-            } else if hook_results.is_empty() {
-                // No hooks registered = fail-safe deny
-                "Error: No permission handler configured. File write tools require a pre_file_write hook plugin.".to_string()
-            } else {
-                // Permission granted, execute the tool
-                match tools::execute_file_tool(
+            match check_permission(
+                tools,
+                tools::HookPoint::PreFileWrite,
+                &hook_data,
+                permission_handler,
+            )? {
+                Ok(()) => match tools::execute_file_tool(
                     app,
                     context_name,
                     &tool_call.name,
@@ -843,10 +881,11 @@ async fn execute_tool_pure(
                     Some(Ok(r)) => r,
                     Some(Err(e)) => format!("Error: {}", e),
                     None => format!("Error: Unknown file tool '{}'", tool_call.name),
-                }
+                },
+                Err(reason) => format!("Error: {}", reason),
             }
         } else {
-            // Regular file tools (read-only) don't need permission
+            // Read-only file tools don't need permission
             match tools::execute_file_tool(
                 app,
                 context_name,
@@ -865,82 +904,58 @@ async fn execute_tool_pure(
             Err(e) => format!("Error: {}", e),
         }
     } else if tools::is_coding_tool(&tool_call.name) {
-        // Coding tools that modify state need permission hooks
+        // Gated coding tools need permission checks
         if tool_call.name == tools::SHELL_EXEC_TOOL_NAME {
-            // shell_exec: check PreShellExec hook, fail-safe deny
             let hook_data = serde_json::json!({
                 "tool_name": tool_call.name,
                 "command": args.get_str("command").unwrap_or(""),
             });
-            let hook_results =
-                tools::execute_hook(tools, tools::HookPoint::PreShellExec, &hook_data)?;
-
-            let mut denied = false;
-            let mut deny_reason = String::new();
-            for (_hook_name, result) in &hook_results {
-                if !result.get_bool_or("approved", false) {
-                    denied = true;
-                    deny_reason = result
-                        .get_str_or("reason", "Permission denied by hook")
-                        .to_string();
-                    break;
+            match check_permission(
+                tools,
+                tools::HookPoint::PreShellExec,
+                &hook_data,
+                permission_handler,
+            )? {
+                Ok(()) => {
+                    let project_root = std::env::var("CHIBI_PROJECT_ROOT")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+                    match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools)
+                        .await
+                    {
+                        Some(Ok(r)) => r,
+                        Some(Err(e)) => format!("Error: {}", e),
+                        None => format!("Error: Unknown coding tool '{}'", tool_call.name),
+                    }
                 }
-            }
-
-            if denied {
-                format!("Error: {}", deny_reason)
-            } else if hook_results.is_empty() {
-                // No hooks registered = fail-safe deny
-                "Error: No permission handler configured. shell_exec requires a pre_shell_exec hook plugin.".to_string()
-            } else {
-                // Permission granted
-                let project_root = std::env::var("CHIBI_PROJECT_ROOT")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await
-                {
-                    Some(Ok(r)) => r,
-                    Some(Err(e)) => format!("Error: {}", e),
-                    None => format!("Error: Unknown coding tool '{}'", tool_call.name),
-                }
+                Err(reason) => format!("Error: {}", reason),
             }
         } else if tool_call.name == tools::FILE_EDIT_TOOL_NAME {
-            // file_edit: reuse PreFileWrite hook
             let hook_data = serde_json::json!({
                 "tool_name": tool_call.name,
                 "path": args.get_str("path").unwrap_or(""),
                 "operation": args.get_str("operation").unwrap_or(""),
                 "content": args.get_str("content"),
             });
-            let hook_results =
-                tools::execute_hook(tools, tools::HookPoint::PreFileWrite, &hook_data)?;
-
-            let mut denied = false;
-            let mut deny_reason = String::new();
-            for (_hook_name, result) in &hook_results {
-                if !result.get_bool_or("approved", false) {
-                    denied = true;
-                    deny_reason = result
-                        .get_str_or("reason", "Permission denied by hook")
-                        .to_string();
-                    break;
+            match check_permission(
+                tools,
+                tools::HookPoint::PreFileWrite,
+                &hook_data,
+                permission_handler,
+            )? {
+                Ok(()) => {
+                    let project_root = std::env::var("CHIBI_PROJECT_ROOT")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+                    match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools)
+                        .await
+                    {
+                        Some(Ok(r)) => r,
+                        Some(Err(e)) => format!("Error: {}", e),
+                        None => format!("Error: Unknown coding tool '{}'", tool_call.name),
+                    }
                 }
-            }
-
-            if denied {
-                format!("Error: {}", deny_reason)
-            } else if hook_results.is_empty() {
-                "Error: No permission handler configured. file_edit requires a pre_file_write hook plugin.".to_string()
-            } else {
-                let project_root = std::env::var("CHIBI_PROJECT_ROOT")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await
-                {
-                    Some(Ok(r)) => r,
-                    Some(Err(e)) => format!("Error: {}", e),
-                    None => format!("Error: Unknown coding tool '{}'", tool_call.name),
-                }
+                Err(reason) => format!("Error: {}", reason),
             }
         } else {
             // Read-only coding tools (dir_list, glob_files, grep_files) don't need permission
@@ -1108,6 +1123,7 @@ async fn execute_single_tool<S: ResponseSink>(
     handoff: &mut tools::Handoff,
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
+    permission_handler: Option<&PermissionHandler>,
     verbose: bool,
     sink: &mut S,
 ) -> io::Result<ToolExecutionResult> {
@@ -1131,6 +1147,7 @@ async fn execute_single_tool<S: ResponseSink>(
         use_reflection,
         resolved_config,
         verbose,
+        permission_handler,
     )
     .await?;
 
@@ -1241,6 +1258,7 @@ async fn process_tool_calls<S: ResponseSink>(
     fuel_total: usize,
     verbose: bool,
     sink: &mut S,
+    permission_handler: Option<&PermissionHandler>,
 ) -> io::Result<()> {
     // Convert tool calls to JSON format for the assistant message
     let tool_calls_json: Vec<serde_json::Value> = tool_calls
@@ -1295,6 +1313,7 @@ async fn process_tool_calls<S: ResponseSink>(
                     use_reflection,
                     resolved_config,
                     verbose,
+                    permission_handler,
                 )
             })
             .collect();
@@ -1316,6 +1335,7 @@ async fn process_tool_calls<S: ResponseSink>(
             handoff,
             use_reflection,
             resolved_config,
+            permission_handler,
             verbose,
             sink,
         )
@@ -1522,6 +1542,7 @@ async fn send_prompt_loop<S: ResponseSink>(
     resolved_config: &ResolvedConfig,
     options: &PromptOptions<'_>,
     sink: &mut S,
+    permission_handler: Option<&PermissionHandler>,
 ) -> io::Result<()> {
     let fuel_total = resolved_config.fuel;
     let mut fuel_remaining = fuel_total;
@@ -1755,6 +1776,7 @@ async fn send_prompt_loop<S: ResponseSink>(
                     fuel_total,
                     verbose,
                     sink,
+                    permission_handler,
                 )
                 .await?;
 
@@ -2046,5 +2068,81 @@ mod tests {
             formatted.chars().nth(8) == Some('-'),
             "should have dash separator"
         );
+    }
+
+    // ========================================================================
+    // evaluate_permission tests
+    // ========================================================================
+
+    #[test]
+    fn test_evaluate_permission_plugin_denies() {
+        let results = vec![(
+            "security_gate".to_string(),
+            json!({"denied": true, "reason": "path outside project"}),
+        )];
+        let hook_data = json!({"tool_name": "write_file", "path": "/etc/passwd"});
+        let handler: PermissionHandler = Box::new(|_| Ok(true));
+
+        let result = evaluate_permission(&results, &hook_data, Some(&handler)).unwrap();
+        assert_eq!(result, Err("path outside project".to_string()));
+    }
+
+    #[test]
+    fn test_evaluate_permission_no_denials_handler_approves() {
+        let results = vec![("audit_log".to_string(), json!({}))];
+        let hook_data = json!({"tool_name": "write_file", "path": "/tmp/ok.txt"});
+        let handler: PermissionHandler = Box::new(|_| Ok(true));
+
+        let result = evaluate_permission(&results, &hook_data, Some(&handler)).unwrap();
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn test_evaluate_permission_no_denials_handler_denies() {
+        let results = vec![("audit_log".to_string(), json!({}))];
+        let hook_data = json!({"tool_name": "write_file", "path": "/tmp/ok.txt"});
+        let handler: PermissionHandler = Box::new(|_| Ok(false));
+
+        let result = evaluate_permission(&results, &hook_data, Some(&handler)).unwrap();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "permission denied");
+    }
+
+    #[test]
+    fn test_evaluate_permission_no_handler_failsafe_deny() {
+        let results: Vec<(String, serde_json::Value)> = vec![];
+        let hook_data = json!({"tool_name": "write_file"});
+
+        let result = evaluate_permission(&results, &hook_data, None).unwrap();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("fail-safe deny"));
+    }
+
+    #[test]
+    fn test_evaluate_permission_empty_result_falls_through_to_handler() {
+        // Plugin returns {} (no opinion) — should fall through to handler
+        let results = vec![("passive_plugin".to_string(), json!({}))];
+        let hook_data = json!({"tool_name": "shell_exec", "command": "ls"});
+        let handler: PermissionHandler = Box::new(|_| Ok(true));
+
+        let result = evaluate_permission(&results, &hook_data, Some(&handler)).unwrap();
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn test_evaluate_permission_multiple_plugins_one_denies() {
+        let results = vec![
+            ("audit_log".to_string(), json!({})),
+            (
+                "security_gate".to_string(),
+                json!({"denied": true, "reason": "blocked by policy"}),
+            ),
+            ("metrics".to_string(), json!({})),
+        ];
+        let hook_data = json!({"tool_name": "shell_exec", "command": "rm -rf /"});
+        let handler: PermissionHandler = Box::new(|_| Ok(true));
+
+        let result = evaluate_permission(&results, &hook_data, Some(&handler)).unwrap();
+        assert_eq!(result, Err("blocked by policy".to_string()));
     }
 }
