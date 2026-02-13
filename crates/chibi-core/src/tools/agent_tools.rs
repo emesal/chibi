@@ -60,6 +60,7 @@ pub static AGENT_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["system_prompt", "input"],
+        summary_params: &[],
     },
     BuiltinToolDef {
         name: RETRIEVE_CONTENT_TOOL_NAME,
@@ -97,6 +98,7 @@ pub static AGENT_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["source", "instructions"],
+        summary_params: &["source"],
     },
 ];
 

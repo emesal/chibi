@@ -80,7 +80,8 @@ if len(sys.argv) > 1 and sys.argv[1] == "--schema":
         "name": "tool_name",
         "description": "...",
         "parameters": {"type": "object", "properties": {}, "required": []},
-        "hooks": ["on_start"]  # optional
+        "hooks": ["on_start"],  # optional
+        "summary_params": ["param_name"]  # optional: params to show in tool-call notices
     }))
     sys.exit(0)
 

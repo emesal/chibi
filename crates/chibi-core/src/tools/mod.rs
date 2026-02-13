@@ -42,6 +42,9 @@ pub use builtin::execute_builtin_tool;
 // Re-export tool metadata functions
 pub use builtin::builtin_tool_metadata;
 
+// Re-export summary_params lookup
+pub use builtin::builtin_summary_params;
+
 // Re-export coding tool registry functions and execution
 pub use coding_tools::{
     CODING_TOOL_DEFS, all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool,
@@ -106,6 +109,8 @@ pub struct Tool {
     pub path: PathBuf,
     pub hooks: Vec<HookPoint>,
     pub metadata: ToolMetadata,
+    /// Parameter names whose values should appear in tool-call notices.
+    pub summary_params: Vec<String>,
 }
 
 /// Collect names of all built-in tools (core, file, agent).
@@ -132,6 +137,37 @@ pub fn get_tool_metadata(tools: &[Tool], name: &str) -> ToolMetadata {
     builtin_tool_metadata(name)
 }
 
+/// Build a concise summary string from a tool's declared summary_params and actual arguments.
+///
+/// Checks plugins first, then falls back to builtin_summary_params. Extracts
+/// string values for each declared param from the JSON args and joins them
+/// with spaces. Returns None if no params are declared or no values found.
+pub fn tool_call_summary(tools: &[Tool], name: &str, args_json: &str) -> Option<String> {
+    let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
+
+    // Check plugins first, then builtins
+    let params: Vec<&str> = if let Some(tool) = tools.iter().find(|t| t.name == name) {
+        tool.summary_params.iter().map(|s| s.as_str()).collect()
+    } else {
+        builtin_summary_params(name).to_vec()
+    };
+
+    if params.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<String> = params
+        .iter()
+        .filter_map(|p| args[*p].as_str().map(String::from))
+        .collect();
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
 // Tests for Tool struct are in plugins.rs
 
 #[cfg(test)]
@@ -152,6 +188,7 @@ mod tests {
                 flow_control: true,
                 ends_turn: true,
             },
+            summary_params: vec![],
         }];
 
         let meta = get_tool_metadata(&tools, "custom_flow");
@@ -212,5 +249,56 @@ mod tests {
         for name in &names {
             assert!(seen.insert(name), "duplicate built-in tool name: {}", name);
         }
+    }
+
+    #[test]
+    fn test_tool_call_summary_with_plugin() {
+        let tools = vec![Tool {
+            name: "my_plugin".to_string(),
+            description: "test".to_string(),
+            parameters: serde_json::json!({}),
+            path: PathBuf::from("/bin/test"),
+            hooks: vec![],
+            metadata: ToolMetadata::new(),
+            summary_params: vec!["path".to_string(), "pattern".to_string()],
+        }];
+
+        let summary = tool_call_summary(
+            &tools,
+            "my_plugin",
+            r#"{"path": "src/main.rs", "pattern": "TODO"}"#,
+        );
+        assert_eq!(summary, Some("src/main.rs TODO".to_string()));
+    }
+
+    #[test]
+    fn test_tool_call_summary_builtin_fallback() {
+        let tools: Vec<Tool> = vec![];
+
+        // shell_exec has summary_params: &["command"]
+        let summary = tool_call_summary(&tools, "shell_exec", r#"{"command": "cargo test"}"#);
+        assert_eq!(summary, Some("cargo test".to_string()));
+    }
+
+    #[test]
+    fn test_tool_call_summary_no_params() {
+        let tools: Vec<Tool> = vec![];
+
+        // update_reflection has summary_params: &[]
+        let summary = tool_call_summary(
+            &tools,
+            "update_reflection",
+            r#"{"content": "some reflection"}"#,
+        );
+        assert_eq!(summary, None);
+    }
+
+    #[test]
+    fn test_tool_call_summary_missing_values() {
+        let tools: Vec<Tool> = vec![];
+
+        // file_head has summary_params: &["path"], but no path in args
+        let summary = tool_call_summary(&tools, "file_head", r#"{"cache_id": "abc123"}"#);
+        assert_eq!(summary, None);
     }
 }

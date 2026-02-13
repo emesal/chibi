@@ -46,6 +46,7 @@ pub static CODING_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["command"],
+        summary_params: &["command"],
     },
     BuiltinToolDef {
         name: DIR_LIST_TOOL_NAME,
@@ -71,6 +72,7 @@ pub static CODING_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["path"],
+        summary_params: &["path"],
     },
     BuiltinToolDef {
         name: GLOB_FILES_TOOL_NAME,
@@ -96,6 +98,7 @@ pub static CODING_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["pattern"],
+        summary_params: &["pattern"],
     },
     BuiltinToolDef {
         name: GREP_FILES_TOOL_NAME,
@@ -133,6 +136,7 @@ pub static CODING_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["pattern"],
+        summary_params: &["pattern", "path"],
     },
     BuiltinToolDef {
         name: FILE_EDIT_TOOL_NAME,
@@ -182,6 +186,7 @@ pub static CODING_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &["path", "operation"],
+        summary_params: &["path"],
     },
     BuiltinToolDef {
         name: INDEX_UPDATE_TOOL_NAME,
@@ -193,6 +198,7 @@ pub static CODING_TOOL_DEFS: &[BuiltinToolDef] = &[
             default: None,
         }],
         required: &[],
+        summary_params: &[],
     },
     BuiltinToolDef {
         name: INDEX_QUERY_TOOL_NAME,
@@ -230,12 +236,14 @@ pub static CODING_TOOL_DEFS: &[BuiltinToolDef] = &[
             },
         ],
         required: &[],
+        summary_params: &["name", "kind"],
     },
     BuiltinToolDef {
         name: INDEX_STATUS_TOOL_NAME,
         description: "Show a summary of the codebase index: file counts, language breakdown, symbol and reference totals.",
         properties: &[],
         required: &[],
+        summary_params: &[],
     },
 ];
 
