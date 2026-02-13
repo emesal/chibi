@@ -23,7 +23,8 @@
 | 7 | done | ed4fa53 | merged into task 4 (docs already in configuration.md) |
 | 8a | done | dca75b0 | -t/--trust flag, Y/n default-allow, select_permission_handler |
 | 8b | done | dca75b0 | docs in docs/configuration.md, not AGENTS.md |
-| 9–14 | pending | | phases 2–5 |
+| 9 | done | — | research task; audit in docs/plans/2026-02-13-twelve-factor-audit.md; filed #140 |
+| 10–14 | pending | | phases 3–5 |
 
 **Deviations from plan:**
 - Tasks 1–3 committed together (single logical feature, all #125).
