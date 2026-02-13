@@ -29,6 +29,44 @@ By default, chibi stores all data in `~/.chibi`. This can be overridden:
 
 Use `-n home` to see the resolved path.
 
+## Project Root
+
+Chibi auto-detects the project root for context-aware features (AGENTS.md loading, codebase indexing). Resolution order:
+
+1. `--project-root` CLI flag (highest priority)
+2. `CHIBI_PROJECT_ROOT` environment variable
+3. VCS root detection (walk up from cwd)
+4. Current working directory (fallback)
+
+**Supported VCS markers** (checked in order, nearest match wins):
+
+| Marker | VCS |
+|--------|-----|
+| `.git` (dir or file) | Git (incl. worktrees, submodules) |
+| `.hg/` | Mercurial |
+| `.svn/` | Subversion |
+| `.bzr/` | Bazaar |
+| `.pijul/` | Pijul |
+| `.jj/` | Jujutsu |
+| `.fslckout` (file) | Fossil |
+| `_FOSSIL_` (file) | Fossil (alt) |
+| `CVS/` | CVS (walks up to highest containing dir) |
+
+## AGENTS.md
+
+Chibi loads instruction files from standard locations and injects them into the system prompt. Files are concatenated in order; later entries appear later in the prompt and can effectively override earlier guidance.
+
+**Discovery locations** (in order):
+
+1. `~/AGENTS.md` — user-global, tool-independent instructions
+2. `~/.chibi/AGENTS.md` — chibi-global instructions
+3. `<project_root>/AGENTS.md` — project root
+4. Each directory from project root down to cwd (e.g. `<project_root>/packages/frontend/AGENTS.md`)
+
+Empty files are skipped. When cwd equals project root, the root file appears only once.
+
+Content appears in the system prompt under `--- AGENT INSTRUCTIONS ---`, after the base prompt and before context metadata.
+
 ## Global Configuration (config.toml)
 
 Create `~/.chibi/config.toml` (or `<CHIBI_HOME>/config.toml` if overridden):
@@ -138,6 +176,15 @@ tool_cache_preview_chars = 500
 # Paths allowed for read-only file tools (default: empty = cache only)
 # When empty, file tools only work with cache_id. Add paths to allow file access.
 # file_tools_allowed_paths = ["~", "/tmp"]
+
+# =============================================================================
+# Tool Filtering (global baseline, per-context local.toml merges on top)
+# =============================================================================
+
+# [tools]
+# include = ["update_todos", "shell_exec"]  # allowlist (local overrides entirely)
+# exclude = ["file_grep"]                    # blocklist (local appends)
+# exclude_categories = ["agent"]             # category blocklist (local appends)
 
 # =============================================================================
 # API Parameters
@@ -291,13 +338,16 @@ max_tokens = 8000
 [api.reasoning]
 effort = "high"
 
-# Tool filtering (allowlist or blocklist)
+# Tool filtering (merges with global [tools] config)
 [tools]
-# Allowlist mode - only these tools are available
+# Allowlist mode - only these tools are available (overrides global include)
 # include = ["update_todos", "update_goals", "send_message"]
 
-# Or blocklist mode - these tools are excluded
+# Blocklist mode - these tools are excluded (appends to global exclude)
 exclude = ["file_grep"]
+
+# Exclude entire categories (appends to global exclude_categories)
+# exclude_categories = ["coding"]
 ```
 
 Set username via CLI (automatically saves to local.toml):
@@ -468,7 +518,7 @@ Plugin input is passed via stdin as JSON (tool arguments for tool calls, hook da
 
 ## Tool Filtering Configuration
 
-Control which tools are available to the LLM in `~/.chibi/contexts/<name>/local.toml`:
+Control which tools are available to the LLM. Tool filtering can be configured globally in `config.toml` and per-context in `local.toml`.
 
 ```toml
 [tools]
@@ -479,19 +529,35 @@ include = ["update_todos", "update_goals", "update_reflection"]
 # OR blocklist mode - these tools are excluded
 # When set, listed tools are removed from available tools
 # exclude = ["file_grep", "file_head", "file_tail"]
+
+# Exclude entire tool categories
+# exclude_categories = ["coding", "agent"]
 ```
 
-**Tool Types:**
-- `builtin`: update_todos, update_goals, update_reflection, send_message, call_user, call_agent
-- `file`: file_head, file_tail, file_lines, file_grep, cache_list, write_file
-- `agent`: spawn_agent, retrieve_content
-- `plugin`: Tools loaded from the plugins directory
+**Tool Categories:**
+
+| Category | Tools |
+|----------|-------|
+| `builtin` | update_todos, update_goals, update_reflection, send_message |
+| `file` | file_head, file_tail, file_lines, file_grep, cache_list |
+| `agent` | spawn_agent, retrieve_content |
+| `coding` | shell_exec, dir_list, glob_files, grep_files, file_edit, index_update, index_query, index_status |
+| `plugin` | Tools loaded from the plugins directory |
+
+**Global vs. per-context:**
+
+- `[tools]` in `config.toml` sets the global baseline
+- `[tools]` in `local.toml` merges on top:
+  - `include`: local **overrides** global entirely (if set)
+  - `exclude`: local **appends** to global
+  - `exclude_categories`: local **appends** to global
 
 **Filter Precedence:**
 1. Config `include` (if set, only these tools considered)
 2. Config `exclude` (remove from remaining)
-3. Hook `include` (intersect with remaining) - via `pre_api_tools` hook
-4. Hook `exclude` (remove from remaining) - via `pre_api_tools` hook
+3. Config `exclude_categories` (remove matching categories)
+4. Hook `include` (intersect with remaining) — via `pre_api_tools` hook
+5. Hook `exclude` (remove from remaining) — via `pre_api_tools` hook
 
 For dynamic tool filtering based on context or other conditions, use the `pre_api_tools` hook. See [Hooks documentation](hooks.md).
 

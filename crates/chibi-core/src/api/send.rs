@@ -200,7 +200,7 @@ fn annotate_fallback_tool(tools: &mut [serde_json::Value], fallback_name: &str) 
     }
 }
 
-/// Filter tools based on config include/exclude lists
+/// Filter tools based on config include/exclude/exclude_categories lists
 fn filter_tools_by_config(
     tools: Vec<serde_json::Value>,
     config: &ToolsConfig,
@@ -224,6 +224,20 @@ fn filter_tools_by_config(
                 .and_then(|f| f.get("name"))
                 .and_then(|n| n.as_str())
                 .is_some_and(|name| !exclude.contains(&name.to_string()))
+        });
+    }
+
+    // Apply category exclusion (remove tools whose category is excluded)
+    if let Some(ref categories) = config.exclude_categories {
+        result.retain(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|name| {
+                    let tool_type = classify_tool_type(name, &[]);
+                    !categories.contains(&tool_type.as_str().to_string())
+                })
+                .unwrap_or(true)
         });
     }
 
@@ -2011,6 +2025,7 @@ mod tests {
         let config = ToolsConfig {
             include: Some(vec!["tool1".to_string(), "tool3".to_string()]),
             exclude: None,
+            exclude_categories: None,
         };
         let result = filter_tools_by_config(tools, &config);
         assert_eq!(result.len(), 2);
@@ -2026,9 +2041,61 @@ mod tests {
         let config = ToolsConfig {
             include: None,
             exclude: Some(vec!["tool2".to_string()]),
+            exclude_categories: None,
         };
         let result = filter_tools_by_config(tools, &config);
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_tools_by_category_exclude() {
+        // shell_exec and dir_list are "coding" category tools
+        // file_head is a "file" category tool
+        // update_todos is a "builtin" category tool
+        // spawn_agent is an "agent" category tool
+        let tools = vec![
+            json!({"function": {"name": "shell_exec"}}),
+            json!({"function": {"name": "dir_list"}}),
+            json!({"function": {"name": "file_head"}}),
+            json!({"function": {"name": "update_todos"}}),
+            json!({"function": {"name": "spawn_agent"}}),
+        ];
+        let config = ToolsConfig {
+            include: None,
+            exclude: None,
+            exclude_categories: Some(vec!["coding".to_string()]),
+        };
+        let result = filter_tools_by_config(tools, &config);
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| t.get("function")?.get("name")?.as_str())
+            .collect();
+        assert!(!names.contains(&"shell_exec"), "coding tool should be excluded");
+        assert!(!names.contains(&"dir_list"), "coding tool should be excluded");
+        assert!(names.contains(&"file_head"), "file tool should remain");
+        assert!(names.contains(&"update_todos"), "builtin tool should remain");
+        assert!(names.contains(&"spawn_agent"), "agent tool should remain");
+    }
+
+    #[test]
+    fn test_filter_tools_by_multiple_categories() {
+        let tools = vec![
+            json!({"function": {"name": "shell_exec"}}),
+            json!({"function": {"name": "file_head"}}),
+            json!({"function": {"name": "spawn_agent"}}),
+            json!({"function": {"name": "update_todos"}}),
+        ];
+        let config = ToolsConfig {
+            include: None,
+            exclude: None,
+            exclude_categories: Some(vec!["coding".to_string(), "agent".to_string()]),
+        };
+        let result = filter_tools_by_config(tools, &config);
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| t.get("function")?.get("name")?.as_str())
+            .collect();
+        assert_eq!(names, vec!["file_head", "update_todos"]);
     }
 
     #[test]

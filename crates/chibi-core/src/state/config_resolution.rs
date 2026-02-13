@@ -2,7 +2,7 @@
 //!
 //! Methods for loading, saving, and resolving local configs and model names.
 
-use crate::config::{ApiParams, LocalConfig, ResolvedConfig, ToolsConfig};
+use crate::config::{ApiParams, LocalConfig, ResolvedConfig};
 use std::fs;
 use std::io::{self, ErrorKind};
 
@@ -91,7 +91,7 @@ impl AppState {
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             api: api_params,
-            tools: ToolsConfig::default(),
+            tools: self.config.tools.clone(),
             fallback_tool: self.config.fallback_tool.clone(),
             storage: self.config.storage.clone(),
         };
@@ -169,9 +169,9 @@ impl AppState {
             resolved.api = resolved.api.merge_with(local_api);
         }
 
-        // Apply context-level tool filtering config
+        // Apply context-level tool filtering config (merge local on top of global)
         if let Some(ref local_tools) = local.tools {
-            resolved.tools = local_tools.clone();
+            resolved.tools = resolved.tools.merge_local(local_tools);
         }
 
         // Apply runtime username override (highest priority)

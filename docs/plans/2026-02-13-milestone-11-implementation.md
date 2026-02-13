@@ -10,6 +10,30 @@
 
 ---
 
+## Progress
+
+| Task | Status | Commit | Notes |
+|------|--------|--------|-------|
+| 1 | done | 7e899f8 | combined with tasks 2–3 into single commit |
+| 2 | done | 7e899f8 | as planned |
+| 3 | done | 7e899f8 | threaded home_dir/project_root through send_prompt chain; no changes to AppState |
+| 4 | done | TBD | docs moved to docs/configuration.md instead of AGENTS.md |
+| 5 | done | TBD | as planned |
+| 6 | done | TBD | as planned; added ToolsConfig::merge_local() |
+| 7 | done | TBD | merged into task 4 (docs already in configuration.md) |
+| 8 | pending | | |
+| 9–14 | pending | | phases 2–5 |
+
+**Deviations from plan:**
+- Tasks 1–3 committed together (single logical feature, all #125).
+- Tasks 4–7 committed together (single commit covering #125 docs + #132 implementation + docs).
+- Task 4: docs placed in docs/configuration.md (user-facing) rather than AGENTS.md (agent-facing). AGENTS.md was growing too large.
+- Task 7: merged into task 4 since tool filtering docs already lived in docs/configuration.md.
+- Task 3: passed `home_dir`/`project_root` as params to `build_full_system_prompt` rather than adding fields to `AppState` (cleaner separation of concerns). Required threading through `send_prompt` → `send_prompt_loop` → `build_full_system_prompt`.
+- Task 1: updated existing test `test_resolve_project_root_falls_back_to_cwd` → `test_resolve_project_root_falls_back_to_vcs_or_cwd` (test ran inside git repo, so VCS detection correctly finds repo root).
+
+---
+
 ## Phase 1: Foundation
 
 ### Task 1: VCS root auto-detection (#125 part 1)

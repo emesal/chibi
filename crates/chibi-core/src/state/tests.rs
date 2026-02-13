@@ -1,7 +1,7 @@
 //! Tests for state module.
 
 use super::*;
-use crate::config::{ApiParams, LocalConfig};
+use crate::config::{ApiParams, LocalConfig, ToolsConfig};
 use crate::context::InboxEntry;
 use crate::partition::StorageConfig;
 use serde_json::json;
@@ -35,6 +35,7 @@ fn create_test_app() -> (AppState, TempDir) {
         api: ApiParams::default(),
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
+        tools: ToolsConfig::default(),
     };
     let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
     (app, temp_dir)
@@ -558,6 +559,7 @@ fn test_resolve_config_model_level_api_params() {
         api: ApiParams::default(),
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
+        tools: ToolsConfig::default(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -620,6 +622,7 @@ fn test_resolve_config_hierarchy_context_over_model() {
         api: ApiParams::default(),
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
+        tools: ToolsConfig::default(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -736,6 +739,7 @@ fn test_resolve_config_supports_tool_calls_false_disables_tools() {
         api: ApiParams::default(),
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
+        tools: ToolsConfig::default(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -784,6 +788,7 @@ fn test_resolve_config_supports_tool_calls_overrides_user_config() {
         api: ApiParams::default(),
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
+        tools: ToolsConfig::default(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -840,6 +845,7 @@ fn test_resolve_config_supports_tool_calls_none_preserves_default() {
         api: ApiParams::default(),
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
+        tools: ToolsConfig::default(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
