@@ -1541,6 +1541,13 @@ async fn send_prompt_loop<S: ResponseSink>(
         app.validate_config(resolved_config, tools)?;
 
         let verbose = options.verbose;
+
+        if verbose {
+            sink.handle(ResponseEvent::Diagnostic {
+                message: format!("[fuel: {}/{} entering turn]", fuel_remaining, fuel_total),
+                verbose_only: true,
+            })?;
+        }
         let use_reflection = options.use_reflection;
         let debug = options.debug;
 
@@ -1756,6 +1763,15 @@ async fn send_prompt_loop<S: ResponseSink>(
 
                 // Tool call round costs 1 fuel
                 fuel_remaining = fuel_remaining.saturating_sub(1);
+                if verbose {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!(
+                            "[fuel: {}/{} after tool batch]",
+                            fuel_remaining, fuel_total
+                        ),
+                        verbose_only: true,
+                    })?;
+                }
                 if fuel_remaining == 0 {
                     sink.handle(ResponseEvent::Diagnostic {
                         message: format!(
