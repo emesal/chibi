@@ -26,6 +26,7 @@ use futures_util::stream::StreamExt;
 use ratatoskr::{ChatEvent, ModelGateway};
 use serde_json::json;
 use std::io::{self, ErrorKind};
+use std::path::Path;
 use uuid::Uuid;
 
 /// Maximum number of simultaneous tool calls allowed (prevents memory exhaustion from malicious responses)
@@ -439,6 +440,8 @@ pub async fn send_prompt<S: ResponseSink>(
     options: &PromptOptions<'_>,
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
+    home_dir: &Path,
+    project_root: &Path,
 ) -> io::Result<()> {
     send_prompt_loop(
         app,
@@ -449,6 +452,8 @@ pub async fn send_prompt<S: ResponseSink>(
         options,
         sink,
         permission_handler,
+        home_dir,
+        project_root,
     )
     .await
 }
@@ -471,6 +476,8 @@ fn build_full_system_prompt<S: ResponseSink>(
     resolved_config: &ResolvedConfig,
     verbose: bool,
     sink: &mut S,
+    home_dir: &Path,
+    project_root: &Path,
 ) -> io::Result<String> {
     // Load base prompts
     let system_prompt = app.load_system_prompt_for(context_name)?;
@@ -513,6 +520,18 @@ fn build_full_system_prompt<S: ResponseSink>(
             }
             full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
         }
+    }
+
+    // Load AGENTS.md instructions from standard locations
+    let agents_md = crate::agents_md::load_agents_md(
+        home_dir,
+        &app.chibi_dir,
+        project_root,
+        &std::env::current_dir().unwrap_or_default(),
+    );
+    if !agents_md.is_empty() {
+        full_system_prompt.push_str("\n\n--- AGENT INSTRUCTIONS ---\n");
+        full_system_prompt.push_str(&agents_md);
     }
 
     // Add username info at the start if not "user"
@@ -1557,6 +1576,8 @@ async fn send_prompt_loop<S: ResponseSink>(
     options: &PromptOptions<'_>,
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
+    home_dir: &Path,
+    project_root: &Path,
 ) -> io::Result<()> {
     let fuel_total = resolved_config.fuel;
     let mut fuel_remaining = fuel_total;
@@ -1659,6 +1680,8 @@ async fn send_prompt_loop<S: ResponseSink>(
             resolved_config,
             verbose,
             sink,
+            home_dir,
+            project_root,
         )?;
 
         // === Prepare Messages ===

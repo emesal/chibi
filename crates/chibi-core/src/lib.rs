@@ -27,6 +27,7 @@
 //!
 //! For lower-level access, use the individual modules directly.
 
+pub mod agents_md;
 pub mod api;
 pub mod cache;
 mod chibi;
@@ -44,6 +45,7 @@ pub mod partition;
 pub mod safe_io;
 pub mod state;
 pub mod tools;
+pub mod vcs;
 
 /// System prompt used when processing inbox messages via -b/-B flags.
 pub const INBOX_CHECK_PROMPT: &str = "[System: You have received new message(s) above. Review and take appropriate action now — you may not be reactivated soon, so handle anything urgent immediately.]";
