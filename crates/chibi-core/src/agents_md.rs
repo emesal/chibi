@@ -36,8 +36,8 @@ pub fn load_agents_md(
     try_load(chibi_home.join("AGENTS.md"), &mut sections);
 
     // 3. Walk from project root down to cwd
-    if let Ok(project_root) = project_root.canonicalize() {
-        if let Ok(cwd) = cwd.canonicalize() {
+    if let Ok(project_root) = project_root.canonicalize()
+        && let Ok(cwd) = cwd.canonicalize() {
             if let Ok(rel) = cwd.strip_prefix(&project_root) {
                 // Project root itself
                 try_load(project_root.join("AGENTS.md"), &mut sections);
@@ -52,7 +52,6 @@ pub fn load_agents_md(
                 try_load(project_root.join("AGENTS.md"), &mut sections);
             }
         }
-    }
 
     sections.join("\n\n")
 }

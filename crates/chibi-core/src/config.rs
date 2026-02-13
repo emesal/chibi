@@ -886,7 +886,10 @@ mod tests {
             exclude_categories = ["builtin"]
         "#;
         let config: ToolsConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.include, Some(vec!["shell_exec".to_string(), "file_edit".to_string()]));
+        assert_eq!(
+            config.include,
+            Some(vec!["shell_exec".to_string(), "file_edit".to_string()])
+        );
         assert_eq!(config.exclude, Some(vec!["spawn_agent".to_string()]));
         assert_eq!(config.exclude_categories, Some(vec!["builtin".to_string()]));
     }
@@ -904,8 +907,14 @@ mod tests {
             exclude_categories: Some(vec!["agent".to_string()]),
         };
         let merged = global.merge_local(&local);
-        assert_eq!(merged.exclude, Some(vec!["tool_a".to_string(), "tool_b".to_string()]));
-        assert_eq!(merged.exclude_categories, Some(vec!["builtin".to_string(), "agent".to_string()]));
+        assert_eq!(
+            merged.exclude,
+            Some(vec!["tool_a".to_string(), "tool_b".to_string()])
+        );
+        assert_eq!(
+            merged.exclude_categories,
+            Some(vec!["builtin".to_string(), "agent".to_string()])
+        );
     }
 
     #[test]
@@ -937,6 +946,9 @@ mod tests {
             exclude_categories: None,
         };
         let merged = global.merge_local(&local);
-        assert_eq!(merged.exclude, Some(vec!["tool_a".to_string(), "tool_b".to_string()]));
+        assert_eq!(
+            merged.exclude,
+            Some(vec!["tool_a".to_string(), "tool_b".to_string()])
+        );
     }
 }

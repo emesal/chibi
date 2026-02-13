@@ -17,11 +17,12 @@
 | 1 | done | 7e899f8 | combined with tasks 2–3 into single commit |
 | 2 | done | 7e899f8 | as planned |
 | 3 | done | 7e899f8 | threaded home_dir/project_root through send_prompt chain; no changes to AppState |
-| 4 | done | TBD | docs moved to docs/configuration.md instead of AGENTS.md |
-| 5 | done | TBD | as planned |
-| 6 | done | TBD | as planned; added ToolsConfig::merge_local() |
-| 7 | done | TBD | merged into task 4 (docs already in configuration.md) |
-| 8 | pending | | |
+| 4 | done | ed4fa53 | docs moved to docs/configuration.md instead of AGENTS.md |
+| 5 | done | ed4fa53 | as planned |
+| 6 | done | ed4fa53 | as planned; added ToolsConfig::merge_local() |
+| 7 | done | ed4fa53 | merged into task 4 (docs already in configuration.md) |
+| 8a | pending | | --trust flag + Y/n permission default |
+| 8b | pending | | document zero-config coding tools in docs/ |
 | 9–14 | pending | | phases 2–5 |
 
 **Deviations from plan:**
@@ -783,46 +784,92 @@ git commit -m "docs: document tool categories and filtering config (#132)"
 
 ---
 
-### Task 8: Verify and document zero-config coding tools (#128)
+### Task 8a: `--trust` flag and Y/n permission default (#128 part 1)
 
 **Files:**
-- Modify: `AGENTS.md`
-- Possibly modify: `crates/chibi-core/src/api/send.rs` or `crates/chibi-cli/src/main.rs`
+- Modify: `crates/chibi-cli/src/cli.rs` (add `--trust` / `-t` flag)
+- Modify: `crates/chibi-cli/src/main.rs` (trust handler + Y/n default)
 
-**Step 1: Manual verification**
+**Context:** Three tools are permission-gated: `shell_exec` (PreShellExec), `file_edit` (PreFileWrite), `write_file` (PreFileWrite). The current interactive handler prompts y/N (default deny) via `/dev/tty`. In headless mode, `/dev/tty` fails → fail-safe deny.
 
-Test with a fresh chibi home (no plugins):
-1. Verify coding tools appear in API request
-2. Verify interactive TTY permission works for `shell_exec`, `file_edit`, `write_file`
-3. Verify read-only tools work without permission prompts
-4. Test piped/headless mode — confirm fail-safe deny behavior
+**Step 1: Add `--trust` flag to CLI**
 
-**Step 2: Assess headless story**
-
-If the current fail-safe deny in headless mode is problematic, consider adding a `--trust` flag that auto-approves all permission checks. This is a simple addition:
+In `cli.rs`, add:
 
 ```rust
-// In Cli struct:
-/// Trust mode: auto-approve all permission checks (use with caution)
-#[arg(long)]
+/// Trust mode: auto-approve all permission checks (for automation/piping)
+#[arg(short = 't', long)]
 pub trust: bool,
 ```
 
-Wire it into the permission handler in `main.rs`. Only implement if the assessment shows it's needed.
+**Step 2: Change interactive permission default to Y/n**
 
-**Step 3: Document**
+In `main.rs`, update `build_interactive_permission_handler` to default-allow on empty input (Enter key). Change the prompt from `[y/N]` to `[Y/n]` and return `true` unless the user explicitly types "n" or "no":
 
-Add to AGENTS.md:
-- What works out of the box (no plugins needed)
-- Permission model: TTY prompt for writes, auto-allow for reads
-- How to use `--trust` for headless/automation (if added)
-- What plugins can enhance (custom permission policies)
+```rust
+// Change match logic:
+let approved = !matches!(response.trim().to_lowercase().as_str(), "n" | "no");
+```
 
-**Step 4: Commit**
+**Step 3: Build trust permission handler**
+
+Add a new handler that always approves:
+
+```rust
+fn build_trust_permission_handler() -> PermissionHandler {
+    Box::new(|_hook_data: &serde_json::Value| Ok(true))
+}
+```
+
+**Step 4: Wire trust flag into handler selection**
+
+In `main.rs`, where the permission handler is set, select based on trust flag:
+
+```rust
+let handler = if cli.trust {
+    build_trust_permission_handler()
+} else {
+    build_interactive_permission_handler()
+};
+```
+
+**Step 5: Run tests**
+
+Run: `cargo test`
+Expected: all pass (permission handler is only used at runtime)
+
+**Step 6: Commit**
 
 ```bash
-git add -u
-git commit -m "feat: document zero-config coding tools experience (#128)"
+git add crates/chibi-cli/src/cli.rs crates/chibi-cli/src/main.rs
+git commit -m "feat: --trust flag and Y/n permission default (#128)
+
+Interactive permission prompts now default-allow (Y/n). The -t/--trust
+flag auto-approves all permission checks for headless/automation use.
+Fail-safe deny still applies when no TTY and no --trust."
+```
+
+---
+
+### Task 8b: Document zero-config coding tools (#128 part 2)
+
+**Files:**
+- Modify: `docs/configuration.md`
+
+**Step 1: Add section to docs/configuration.md**
+
+Add a "Coding Tools & Permissions" section documenting:
+- What works out of the box (no plugins needed): all tool categories
+- Permission model: interactive Y/n prompt for writes/exec, auto-allow for reads
+- `-t`/`--trust` flag for headless/automation
+- Fail-safe deny in headless mode without `--trust`
+- What plugins can enhance (custom permission policies via hooks)
+
+**Step 2: Commit**
+
+```bash
+git add docs/configuration.md
+git commit -m "docs: document coding tools and permission model (#128)"
 ```
 
 ---
@@ -920,7 +967,8 @@ Expected work:
 | 5 | #132 | 1 | Category-based tool filtering |
 | 6 | #132 | 1 | Global tools config |
 | 7 | #132 | 1 | Documentation |
-| 8 | #128 | 1 | Zero-config verification & docs |
+| 8a | #128 | 1 | --trust flag + Y/n permission default |
+| 8b | #128 | 1 | Zero-config coding tools docs |
 | 9 | #130 | 2 | Twelve-factor audit |
 | 10 | #129 | 3 | Ratatoskr work (external) |
 | 11 | #129 | 3 | Chibi preset wiring |

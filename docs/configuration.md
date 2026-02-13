@@ -516,6 +516,39 @@ Plugins receive these environment variables:
 
 Plugin input is passed via stdin as JSON (tool arguments for tool calls, hook data for hooks).
 
+## Coding Tools & Permissions
+
+Chibi includes built-in coding tools that work out of the box — no plugins needed. These tools are automatically included in every API request (unless filtered out via [tool filtering](#tool-filtering-configuration) or `--no-tool-calls`).
+
+**Permission-gated tools** prompt for confirmation before executing:
+
+| Tool | Hook | What it does |
+|------|------|-------------|
+| `shell_exec` | `PreShellExec` | Execute shell commands |
+| `file_edit` | `PreFileWrite` | Patch files (search/replace) |
+| `write_file` | `PreFileWrite` | Create or overwrite files |
+
+The interactive prompt defaults to **allow** (`[Y/n]`) — press Enter to approve, or type `n` to deny. This makes sense because if you gave the LLM tools, you probably want it to use them.
+
+**Read-only tools** execute without prompting: `dir_list`, `glob_files`, `grep_files`, `file_head`, `file_tail`, `file_lines`, `file_grep`, `cache_list`, `index_query`, `index_status`, `index_update`.
+
+### Headless / Automation Mode
+
+When no TTY is available (piped input, CI, parent process), the permission handler cannot prompt and **fails safe by denying** all gated operations. Read-only tools still work.
+
+To allow gated tools in headless mode, use trust mode:
+
+```bash
+echo '{"message": "list files"}' | chibi --json-config --trust
+chibi -t "refactor this module"
+```
+
+`-t` / `--trust` auto-approves all permission checks. Use with caution — the LLM will be able to execute arbitrary shell commands and write files without confirmation.
+
+### Plugin Permission Policies
+
+Plugins can implement custom permission logic via the `PreFileWrite` and `PreShellExec` hooks. A plugin that returns `{"denied": true}` overrides all other approvals (deny wins). See [hooks documentation](hooks.md) for details.
+
 ## Tool Filtering Configuration
 
 Control which tools are available to the LLM. Tool filtering can be configured globally in `config.toml` and per-context in `local.toml`.

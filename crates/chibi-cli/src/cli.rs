@@ -281,6 +281,10 @@ pub struct Cli {
     #[arg(long = "no-tool-calls")]
     pub no_tool_calls: bool,
 
+    /// Trust mode: auto-approve all permission checks (for automation/piping)
+    #[arg(short = 't', long = "trust")]
+    pub trust: bool,
+
     /// Force handoff to user (-x)
     #[arg(short = 'x', long = "force-call-user")]
     pub force_call_user: bool,

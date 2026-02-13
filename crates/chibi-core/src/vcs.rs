@@ -14,8 +14,8 @@ const VCS_MARKERS: &[(&str, bool)] = &[
     (".bzr", true),       // bazaar
     (".pijul", true),     // pijul
     (".jj", true),        // jujutsu
-    (".fslckout", false),  // fossil (file)
-    ("_FOSSIL_", false),   // fossil (alt)
+    (".fslckout", false), // fossil (file)
+    ("_FOSSIL_", false),  // fossil (alt)
 ];
 
 /// Detect VCS root by walking up from `start` looking for markers.
@@ -178,7 +178,10 @@ mod tests {
         std::fs::create_dir(root.join(".git")).unwrap();
         std::fs::create_dir(root.join("CVS")).unwrap();
 
-        assert_eq!(detect_project_root(root), Some(root.canonicalize().unwrap()));
+        assert_eq!(
+            detect_project_root(root),
+            Some(root.canonicalize().unwrap())
+        );
     }
 
     #[test]

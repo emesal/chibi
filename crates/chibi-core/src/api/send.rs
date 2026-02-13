@@ -2070,10 +2070,19 @@ mod tests {
             .iter()
             .filter_map(|t| t.get("function")?.get("name")?.as_str())
             .collect();
-        assert!(!names.contains(&"shell_exec"), "coding tool should be excluded");
-        assert!(!names.contains(&"dir_list"), "coding tool should be excluded");
+        assert!(
+            !names.contains(&"shell_exec"),
+            "coding tool should be excluded"
+        );
+        assert!(
+            !names.contains(&"dir_list"),
+            "coding tool should be excluded"
+        );
         assert!(names.contains(&"file_head"), "file tool should remain");
-        assert!(names.contains(&"update_todos"), "builtin tool should remain");
+        assert!(
+            names.contains(&"update_todos"),
+            "builtin tool should remain"
+        );
         assert!(names.contains(&"spawn_agent"), "agent tool should remain");
     }
 

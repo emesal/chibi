@@ -57,9 +57,9 @@ fn confirm_action(prompt: &str) -> bool {
 
 /// Build the interactive permission handler for gated operations.
 ///
-/// Prompts the user via `/dev/tty` (not stdin, which may be piped) for y/N
-/// confirmation on file writes and shell execution. Returns fail-safe deny
-/// if no TTY is available.
+/// Prompts the user via `/dev/tty` (not stdin, which may be piped) for Y/n
+/// confirmation on file writes and shell execution. Default-allow on Enter
+/// (empty input). Returns fail-safe deny if no TTY is available.
 fn build_interactive_permission_handler() -> PermissionHandler {
     Box::new(|hook_data: &serde_json::Value| {
         use chibi_core::json_ext::JsonExt;
@@ -70,7 +70,7 @@ fn build_interactive_permission_handler() -> PermissionHandler {
             .or_else(|| hook_data.get_str("command"))
             .unwrap_or("(no details)");
 
-        eprint!("[{}] {} [y/N] ", tool_name, display);
+        eprint!("[{}] {} [Y/n] ", tool_name, display);
         io::stderr().flush().ok();
 
         // Read from /dev/tty so piped stdin doesn't interfere
@@ -79,7 +79,8 @@ fn build_interactive_permission_handler() -> PermissionHandler {
                 let mut reader = io::BufReader::new(tty);
                 let mut response = String::new();
                 if io::BufRead::read_line(&mut reader, &mut response).is_ok() {
-                    matches!(response.trim().to_lowercase().as_str(), "y" | "yes")
+                    // Default-allow: only deny on explicit "n" or "no"
+                    !matches!(response.trim().to_lowercase().as_str(), "n" | "no")
                 } else {
                     false
                 }
@@ -89,6 +90,23 @@ fn build_interactive_permission_handler() -> PermissionHandler {
 
         Ok(approved)
     })
+}
+
+/// Build a trust-mode permission handler that auto-approves all operations.
+///
+/// Used with `-t`/`--trust` for headless/automation scenarios where all
+/// permission-gated tools should execute without prompting.
+fn build_trust_permission_handler() -> PermissionHandler {
+    Box::new(|_hook_data: &serde_json::Value| Ok(true))
+}
+
+/// Select the appropriate permission handler based on trust mode.
+fn select_permission_handler(trust: bool) -> PermissionHandler {
+    if trust {
+        build_trust_permission_handler()
+    } else {
+        build_interactive_permission_handler()
+    }
 }
 
 /// Render markdown content to stdout if appropriate.
@@ -1088,6 +1106,7 @@ async fn main() -> io::Result<()> {
 
     let is_json_config = args.iter().any(|a| a == "--json-config");
     let cli_json_output = args.iter().any(|a| a == "--json-output");
+    let trust_mode = args.iter().any(|a| a == "--trust" || a == "-t");
     let home_override = extract_home_override(&args);
     let project_root_override = extract_project_root_override(&args);
 
@@ -1123,7 +1142,7 @@ async fn main() -> io::Result<()> {
             home: home_override,
             project_root: project_root_override.clone(),
         })?;
-        chibi.set_permission_handler(build_interactive_permission_handler());
+        chibi.set_permission_handler(select_permission_handler(trust_mode));
         // CLI flags override config settings
         input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
         input.flags.hide_tool_calls =
@@ -1176,7 +1195,7 @@ async fn main() -> io::Result<()> {
         home: home_override,
         project_root: project_root_override,
     })?;
-    chibi.set_permission_handler(build_interactive_permission_handler());
+    chibi.set_permission_handler(select_permission_handler(trust_mode));
     // CLI flags override config settings
     let verbose = input.flags.verbose || chibi.app.config.verbose;
     input.flags.verbose = verbose;
