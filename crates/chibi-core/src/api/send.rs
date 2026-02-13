@@ -1408,14 +1408,16 @@ async fn process_tool_calls<S: ResponseSink>(
         })?;
 
         // Show full content of todos/goals updates in verbose mode
-        if verbose && matches!(tc.name.as_str(), "update_todos" | "update_goals")
+        if verbose
+            && matches!(tc.name.as_str(), "update_todos" | "update_goals")
             && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments)
-                && let Some(content) = args["content"].as_str() {
-                    sink.handle(ResponseEvent::Diagnostic {
-                        message: format!("[{}]\n{}", tc.name, content),
-                        verbose_only: true,
-                    })?;
-                }
+            && let Some(content) = args["content"].as_str()
+        {
+            sink.handle(ResponseEvent::Diagnostic {
+                message: format!("[{}]\n{}", tc.name, content),
+                verbose_only: true,
+            })?;
+        }
 
         // Execute post_tool hooks
         let args: serde_json::Value =
