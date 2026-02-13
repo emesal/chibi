@@ -778,11 +778,23 @@ pub fn parse() -> io::Result<ChibiInput> {
         std::process::exit(0);
     }
     if cli.version {
-        println!(
-            "chibi v{}-{}",
-            env!("CARGO_PKG_VERSION"),
-            option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown")
-        );
+        let branch = option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown");
+        let is_main = branch == "main";
+        if is_main {
+            println!("chibi v{}", env!("CARGO_PKG_VERSION"));
+        } else {
+            let sha = option_env!("VERGEN_GIT_SHA")
+                .map(|s| &s[..7.min(s.len())])
+                .unwrap_or("unknown");
+            let date = env!("CHIBI_BUILD_DATE");
+            println!(
+                "chibi v{}-{} ({} {})",
+                env!("CARGO_PKG_VERSION"),
+                branch,
+                sha,
+                date
+            );
+        }
         println!("ratatoskr {}", chibi_core::ratatoskr_version());
         std::process::exit(0);
     }
