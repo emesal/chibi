@@ -449,29 +449,51 @@ Notification after output has been cached.
 
 ### pre_file_write
 
-Called before `write_file` or `file_edit` execution. File write tools require at least one `pre_file_write` hook to be registered — if no hook is registered, the operation is denied (fail-safe).
+Called before `write_file` or `file_edit` execution. Uses the **deny-only** permission protocol: plugins act as security gates that can block specific operations. If no plugin denies the operation, it falls through to the frontend's permission handler (e.g. interactive TTY prompt). If no permission handler is configured, operations are fail-safe denied.
 
 ```json
 {
   "tool_name": "write_file",
   "path": "/home/user/project/file.txt",
-  "content": "file content here",
-}
-```
-
-**Must return (to approve):**
-```json
-{
-  "approved": true
+  "content": "file content here"
 }
 ```
 
 **To deny:**
 ```json
 {
-  "approved": false,
+  "denied": true,
   "reason": "Path not allowed"
 }
+```
+
+**No opinion (falls through to frontend handler):**
+```json
+{}
+```
+
+### pre_shell_exec
+
+Called before `shell_exec` execution. Uses the same **deny-only** permission protocol as `pre_file_write`.
+
+```json
+{
+  "tool_name": "shell_exec",
+  "command": "ls -la"
+}
+```
+
+**To deny:**
+```json
+{
+  "denied": true,
+  "reason": "Command not allowed"
+}
+```
+
+**No opinion (falls through to frontend handler):**
+```json
+{}
 ```
 
 ### pre_spawn_agent

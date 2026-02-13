@@ -42,6 +42,15 @@ use crate::tools::{self, Tool};
 
 use std::path::PathBuf;
 
+/// Permission handler for gated operations (file writes, shell execution).
+///
+/// Receives hook data as JSON (containing tool_name, path/command, etc.).
+/// Returns `Ok(true)` to allow the operation, `Ok(false)` to deny.
+///
+/// The frontend (e.g. CLI) registers a handler that prompts the user
+/// interactively. When no handler is set, operations fail-safe to deny.
+pub type PermissionHandler = Box<dyn Fn(&serde_json::Value) -> io::Result<bool>>;
+
 /// Options for loading a Chibi instance.
 ///
 /// Use `Default::default()` for standard behavior, or customize as needed.
@@ -88,6 +97,9 @@ pub struct Chibi {
     pub tools: Vec<Tool>,
     /// Project root directory (always resolved, never None).
     pub project_root: PathBuf,
+    /// Optional permission handler for gated operations.
+    /// If `None`, gated operations fail-safe to deny (unless a plugin approves).
+    permission_handler: Option<PermissionHandler>,
 }
 
 impl Chibi {
@@ -158,7 +170,17 @@ impl Chibi {
             app,
             tools,
             project_root,
+            permission_handler: None,
         })
+    }
+
+    /// Set the permission handler for gated operations.
+    ///
+    /// The handler is called when a gated tool (write_file, file_edit, shell_exec)
+    /// is invoked and no plugin has denied the operation. If no handler is set,
+    /// operations fail-safe to deny.
+    pub fn set_permission_handler(&mut self, handler: PermissionHandler) {
+        self.permission_handler = Some(handler);
     }
 
     /// Initialize the session.
@@ -271,6 +293,7 @@ impl Chibi {
             config,
             options,
             sink,
+            self.permission_handler.as_ref(),
         )
         .await
     }

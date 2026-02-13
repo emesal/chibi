@@ -30,7 +30,9 @@ use chibi_core::context::{
 use chibi_core::input::{Command, DebugKey};
 
 use crate::input::{ChibiInput, ContextSelection, UsernameOverride};
-use chibi_core::{Chibi, Inspectable, LoadOptions, PromptOptions, StatePaths, api, tools};
+use chibi_core::{
+    Chibi, Inspectable, LoadOptions, PermissionHandler, PromptOptions, StatePaths, api, tools,
+};
 use std::io::{self, ErrorKind, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
@@ -51,6 +53,42 @@ fn confirm_action(prompt: &str) -> bool {
     }
 
     matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+/// Build the interactive permission handler for gated operations.
+///
+/// Prompts the user via `/dev/tty` (not stdin, which may be piped) for y/N
+/// confirmation on file writes and shell execution. Returns fail-safe deny
+/// if no TTY is available.
+fn build_interactive_permission_handler() -> PermissionHandler {
+    Box::new(|hook_data: &serde_json::Value| {
+        use chibi_core::json_ext::JsonExt;
+
+        let tool_name = hook_data.get_str_or("tool_name", "unknown");
+        let display = hook_data
+            .get_str("path")
+            .or_else(|| hook_data.get_str("command"))
+            .unwrap_or("(no details)");
+
+        eprint!("[{}] {} [y/N] ", tool_name, display);
+        io::stderr().flush().ok();
+
+        // Read from /dev/tty so piped stdin doesn't interfere
+        let approved = match std::fs::File::open("/dev/tty") {
+            Ok(tty) => {
+                let mut reader = io::BufReader::new(tty);
+                let mut response = String::new();
+                if io::BufRead::read_line(&mut reader, &mut response).is_ok() {
+                    matches!(response.trim().to_lowercase().as_str(), "y" | "yes")
+                } else {
+                    false
+                }
+            }
+            Err(_) => false, // no TTY = fail-safe deny
+        };
+
+        Ok(approved)
+    })
 }
 
 /// Render markdown content to stdout if appropriate.
@@ -1085,6 +1123,7 @@ async fn main() -> io::Result<()> {
             home: home_override,
             project_root: project_root_override.clone(),
         })?;
+        chibi.set_permission_handler(build_interactive_permission_handler());
         // CLI flags override config settings
         input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
         input.flags.hide_tool_calls =
@@ -1137,6 +1176,7 @@ async fn main() -> io::Result<()> {
         home: home_override,
         project_root: project_root_override,
     })?;
+    chibi.set_permission_handler(build_interactive_permission_handler());
     // CLI flags override config settings
     let verbose = input.flags.verbose || chibi.app.config.verbose;
     input.flags.verbose = verbose;
