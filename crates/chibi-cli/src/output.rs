@@ -72,6 +72,11 @@ impl OutputSink for OutputHandler {
 
         matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
     }
+
+    fn emit_markdown(&self, content: &str) -> io::Result<()> {
+        self.emit_result(content);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

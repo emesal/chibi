@@ -33,6 +33,7 @@ pub mod cache;
 mod chibi;
 pub mod config;
 pub mod context;
+pub mod execution;
 pub mod gateway;
 mod inbox;
 pub mod index;
@@ -58,6 +59,7 @@ pub use chibi::{Chibi, LoadOptions, PermissionHandler, project_chibi_dir, projec
 pub use api::{CollectingSink, PromptOptions, ResponseEvent, ResponseSink};
 pub use config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
 pub use context::{Context, ContextEntry, TranscriptEntry};
+pub use execution::{CommandEffect, execute_command};
 pub use input::{Command, ExecutionFlags, Inspectable};
 pub use output::OutputSink;
 pub use partition::StorageConfig;

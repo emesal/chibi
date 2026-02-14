@@ -3,9 +3,9 @@
 //! Methods for loading, saving, and resolving local configs and model names.
 
 use crate::config::{ApiParams, ConfigDefaults, LocalConfig, ResolvedConfig};
+use std::env;
 use std::fs;
 use std::io::{self, ErrorKind};
-use std::env;
 
 use super::{AppState, StatePaths};
 
