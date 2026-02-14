@@ -12,6 +12,7 @@ pub mod coding_tools;
 pub mod file_tools;
 mod hooks;
 mod plugins;
+pub mod security;
 
 use std::path::PathBuf;
 
@@ -74,6 +75,9 @@ pub use agent_tools::{execute_agent_tool, is_agent_tool, spawn_agent};
 
 // Re-export agent tool types and constants
 pub use agent_tools::{RETRIEVE_CONTENT_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SpawnOptions};
+
+// Re-export security utilities
+pub use security::{UrlSafety, classify_url, validate_file_path};
 
 /// Metadata for tool behavior in the agentic loop
 #[derive(Debug, Clone, Default)]

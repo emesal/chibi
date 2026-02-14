@@ -932,6 +932,36 @@ async fn execute_tool_pure(
             }
         }
     } else if tools::is_agent_tool(&tool_call.name) {
+        // URL permission check for retrieve_content with sensitive URLs
+        if tool_call.name == tools::RETRIEVE_CONTENT_TOOL_NAME
+            && let Some(source) = args.get_str("source")
+            && tools::agent_tools::is_url(source)
+            && let tools::UrlSafety::Sensitive(reason) = tools::classify_url(source)
+        {
+            let hook_data = json!({
+                "tool_name": tool_call.name,
+                "url": source,
+                "safety": "sensitive",
+                "reason": reason,
+            });
+            match check_permission(
+                tools,
+                tools::HookPoint::PreFetchUrl,
+                &hook_data,
+                permission_handler,
+            )? {
+                Ok(()) => {} // approved, continue to execute
+                Err(reason) => {
+                    let msg = format!("Permission denied: {}", reason);
+                    return Ok(ToolExecutionResult {
+                        final_result: msg.clone(),
+                        original_result: msg,
+                        was_cached: false,
+                        diagnostics,
+                    });
+                }
+            }
+        }
         match tools::execute_agent_tool(resolved_config, &tool_call.name, &args, tools).await {
             Ok(r) => r,
             Err(e) => format!("Error: {}", e),

@@ -150,21 +150,10 @@ fn apply_spawn_options(config: &ResolvedConfig, opts: &SpawnOptions) -> Resolved
 
 // === Content Reading ===
 
-/// Read a file, with tilde expansion.
-fn read_file(path: &str) -> io::Result<String> {
-    let resolved = if let Some(rest) = path.strip_prefix("~/") {
-        let home = dirs_next::home_dir().ok_or_else(|| {
-            io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
-        })?;
-        home.join(rest)
-    } else if path == "~" {
-        dirs_next::home_dir().ok_or_else(|| {
-            io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
-        })?
-    } else {
-        std::path::PathBuf::from(path)
-    };
-    std::fs::read_to_string(&resolved)
+/// Read a file, validated against `file_tools_allowed_paths`.
+fn read_file(path: &str, config: &ResolvedConfig) -> io::Result<String> {
+    let validated = super::security::validate_file_path(path, config)?;
+    std::fs::read_to_string(&validated)
         .map_err(|e| io::Error::new(e.kind(), format!("Failed to read '{}': {}", path, e)))
 }
 
@@ -196,7 +185,7 @@ async fn fetch_url(url: &str) -> io::Result<String> {
 }
 
 /// Check if a source string is a URL (http:// or https://).
-fn is_url(source: &str) -> bool {
+pub fn is_url(source: &str) -> bool {
     source.starts_with("http://") || source.starts_with("https://")
 }
 
@@ -269,7 +258,7 @@ pub async fn retrieve_content(
     let content = if is_url(source) {
         fetch_url(source).await?
     } else {
-        read_file(source)?
+        read_file(source, config)?
     };
 
     if content.is_empty() {
@@ -500,13 +489,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.txt");
         std::fs::write(&path, "hello world").unwrap();
-        let result = read_file(path.to_str().unwrap()).unwrap();
+        let mut config = make_test_config();
+        config.file_tools_allowed_paths = vec![dir.path().to_string_lossy().to_string()];
+        let result = read_file(path.to_str().unwrap(), &config).unwrap();
         assert_eq!(result, "hello world");
     }
 
     #[test]
     fn test_read_file_not_found() {
-        let result = read_file("/nonexistent/path/to/file.txt");
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = make_test_config();
+        config.file_tools_allowed_paths = vec![dir.path().to_string_lossy().to_string()];
+        let result = read_file(
+            &format!("{}/nonexistent.txt", dir.path().display()),
+            &config,
+        );
         assert!(result.is_err());
     }
 
@@ -515,8 +512,47 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("empty.txt");
         std::fs::write(&path, "").unwrap();
-        let result = read_file(path.to_str().unwrap()).unwrap();
+        let mut config = make_test_config();
+        config.file_tools_allowed_paths = vec![dir.path().to_string_lossy().to_string()];
+        let result = read_file(path.to_str().unwrap(), &config).unwrap();
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_read_file_respects_allowed_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("allowed.txt");
+        std::fs::write(&file, "allowed content").unwrap();
+
+        let mut config = make_test_config();
+        config.file_tools_allowed_paths = vec![dir.path().to_string_lossy().to_string()];
+        let result = read_file(file.to_str().unwrap(), &config);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "allowed content");
+    }
+
+    #[test]
+    fn test_read_file_denies_outside_allowed_paths() {
+        let allowed = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("secret.txt");
+        std::fs::write(&file, "secret").unwrap();
+
+        let mut config = make_test_config();
+        config.file_tools_allowed_paths = vec![allowed.path().to_string_lossy().to_string()];
+        let result = read_file(file.to_str().unwrap(), &config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_file_denies_empty_allowlist() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let config = make_test_config(); // empty allowed_paths
+        let result = read_file(file.to_str().unwrap(), &config);
+        assert!(result.is_err());
     }
 
     // === Source classification ===
