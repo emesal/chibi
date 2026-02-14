@@ -27,7 +27,7 @@
 | 10 | done | 967463d | zero-config design doc (issue #141); ratatoskr preset work landed externally |
 | 11 | done | eeb1195, 382db41 | zero-config §1–5 (optional config fields + context_window) and §6–9 (ModelMetadata cleanup, api_key, docs) |
 | 12 | skipped | 7df3ecd | output discipline done; json-ification deferred to chibi-json extraction |
-| 13 | pending | | chibi-json crate extraction (next) |
+| 13 | done | d1c7ebb | chibi-json crate extraction (see docs/plans/2026-02-14-chibi-json-extraction.md) |
 | 14 | pending | | plugin audit |
 
 **Deviations from plan:**

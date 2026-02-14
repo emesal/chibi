@@ -728,13 +728,9 @@ async fn execute_from_input(
                 let fallback = chibi_core::tools::HandoffTarget::Agent {
                     prompt: String::new(),
                 };
-                let options = PromptOptions::new(
-                    verbose,
-                    use_reflection,
-                    &input.flags.debug,
-                    force_markdown,
-                )
-                .with_fallback(fallback);
+                let options =
+                    PromptOptions::new(verbose, use_reflection, &input.flags.debug, force_markdown)
+                        .with_fallback(fallback);
 
                 let md_config = if resolved.render_markdown && !input.raw {
                     Some(md_config_from_resolved(
@@ -813,12 +809,8 @@ async fn execute_from_input(
                 chibi.app.config.lock_heartbeat_seconds,
             )?;
 
-            let options = PromptOptions::new(
-                verbose,
-                use_reflection,
-                &input.flags.debug,
-                force_markdown,
-            );
+            let options =
+                PromptOptions::new(verbose, use_reflection, &input.flags.debug, force_markdown);
 
             // Create markdown config if enabled
             let md_config = if resolved.render_markdown && !input.raw {
@@ -892,12 +884,8 @@ async fn execute_from_input(
                     chibi.app.config.lock_heartbeat_seconds,
                 )?;
 
-                let options = PromptOptions::new(
-                    verbose,
-                    use_reflection,
-                    &input.flags.debug,
-                    force_markdown,
-                );
+                let options =
+                    PromptOptions::new(verbose, use_reflection, &input.flags.debug, force_markdown);
 
                 // Create markdown stream if enabled
                 let md_config = if resolved.render_markdown && !input.raw {
@@ -966,12 +954,8 @@ async fn execute_from_input(
                     chibi.app.config.lock_heartbeat_seconds,
                 )?;
 
-                let options = PromptOptions::new(
-                    verbose,
-                    use_reflection,
-                    &input.flags.debug,
-                    force_markdown,
-                );
+                let options =
+                    PromptOptions::new(verbose, use_reflection, &input.flags.debug, force_markdown);
 
                 // Create markdown stream if enabled
                 let md_config = if resolved.render_markdown && !input.raw {

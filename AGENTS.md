@@ -26,7 +26,13 @@ Git dependencies: [ratatoskr](https://github.com/emesal/ratatoskr) (LLM API clie
 
 ## Architecture
 
-Cargo workspace with two crates:
+Cargo workspace with three crates:
+
+```
+chibi-core (library)
+    ↑               ↑
+chibi-cli (binary)   chibi-json (binary)
+```
 
 **`crates/chibi-core/`** — Library crate (reusable logic)
 - `chibi.rs` — Main `Chibi` struct, tool execution
@@ -47,7 +53,15 @@ Cargo workspace with two crates:
 - `session.rs` — CLI session state (implied context)
 - `config.rs` — CLI-specific config (markdown, images)
 
-**Data flow:** CLI args → `parse()` → `ChibiInput` → `execute_from_input()` → core APIs
+**`crates/chibi-json/`** — Binary crate (JSON-mode, programmatic)
+- `main.rs` — Entry point, command dispatch
+- `input.rs` — `JsonInput` (stdin JSON, stateless per invocation)
+- `output.rs` — `JsonOutputSink` (JSONL `OutputSink` impl)
+- `sink.rs` — `JsonResponseSink` (JSONL `ResponseSink` impl)
+
+**Data flow:**
+- CLI: args → `parse()` → `ChibiInput` → `execute_from_input()` → core APIs
+- JSON: stdin → `JsonInput` → `execute_json_command()` → core APIs
 
 ## Storage Layout
 

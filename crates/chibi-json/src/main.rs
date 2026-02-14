@@ -83,13 +83,7 @@ async fn main() -> io::Result<()> {
         DebugKey::DestroyAfterSecondsInactive(secs) => Some(*secs),
         _ => None,
     });
-    if !chibi
-        .app
-        .state
-        .contexts
-        .iter()
-        .any(|e| e.name == *context)
-    {
+    if !chibi.app.state.contexts.iter().any(|e| e.name == *context) {
         chibi.app.state.contexts.push(ContextEntry::with_created_at(
             context.clone(),
             now_timestamp(),
@@ -103,10 +97,7 @@ async fn main() -> io::Result<()> {
         chibi.save()?;
     }
 
-    output.diagnostic(
-        &format!("[Loaded {} tool(s)]", chibi.tool_count()),
-        verbose,
-    );
+    output.diagnostic(&format!("[Loaded {} tool(s)]", chibi.tool_count()), verbose);
 
     // SYNC: chibi-cli also dispatches commands — check crates/chibi-cli/src/main.rs
     execute_json_command(&mut chibi, &json_input, &output).await?;
@@ -208,13 +199,8 @@ async fn execute_json_command(
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
                 let resolved = chibi.resolve_config(context, None)?;
-                api::compact_context_with_llm_manual(
-                    &chibi.app,
-                    context,
-                    &resolved,
-                    verbose,
-                )
-                .await?;
+                api::compact_context_with_llm_manual(&chibi.app, context, &resolved, verbose)
+                    .await?;
                 output.emit_result(&format!("Context '{}' compacted", context));
             }
         }
@@ -223,7 +209,10 @@ async fn execute_json_command(
             chibi.app.rename_context(old_name, new)?;
             output.emit_result(&format!("Renamed context '{}' to '{}'", old_name, new));
         }
-        Command::ShowLog { context: ctx, count } => {
+        Command::ShowLog {
+            context: ctx,
+            count,
+        } => {
             let ctx_name = ctx.as_deref().unwrap_or(context);
             let entries = chibi.app.read_jsonl_transcript(ctx_name)?;
             let selected: Vec<_> = if *count == 0 {
@@ -246,17 +235,14 @@ async fn execute_json_command(
                 output.emit_entry(entry)?;
             }
         }
-        Command::Inspect { context: ctx, thing } => {
+        Command::Inspect {
+            context: ctx,
+            thing,
+        } => {
             let ctx_name = ctx.as_deref().unwrap_or(context);
             match thing {
                 Inspectable::List => {
-                    let names = [
-                        "system_prompt",
-                        "reflection",
-                        "todos",
-                        "goals",
-                        "home",
-                    ];
+                    let names = ["system_prompt", "reflection", "todos", "goals", "home"];
                     for name in &names {
                         output.emit_result(name);
                     }
@@ -298,8 +284,7 @@ async fn execute_json_command(
                     output.emit_result(&chibi.home_dir().display().to_string());
                 }
                 Inspectable::ConfigField(field_path) => {
-                    let resolved =
-                        chibi.resolve_config(ctx_name, input.username.as_deref())?;
+                    let resolved = chibi.resolve_config(ctx_name, input.username.as_deref())?;
                     match resolved.get_field(field_path) {
                         Some(value) => output.emit_result(&value),
                         None => output.emit_result("(not set)"),
@@ -307,7 +292,10 @@ async fn execute_json_command(
                 }
             }
         }
-        Command::SetSystemPrompt { context: ctx, prompt } => {
+        Command::SetSystemPrompt {
+            context: ctx,
+            prompt,
+        } => {
             let ctx_name = ctx.as_deref().unwrap_or(context);
             let content = if std::path::Path::new(prompt).is_file() {
                 std::fs::read_to_string(prompt)?
@@ -315,10 +303,7 @@ async fn execute_json_command(
                 prompt.clone()
             };
             chibi.app.set_system_prompt_for(ctx_name, &content)?;
-            output.emit_result(&format!(
-                "System prompt set for context '{}'",
-                ctx_name
-            ));
+            output.emit_result(&format!("System prompt set for context '{}'", ctx_name));
         }
         Command::RunPlugin { name, args } => {
             let tool = tools::find_tool(&chibi.tools, name).ok_or_else(|| {
@@ -350,8 +335,7 @@ async fn execute_json_command(
                     "[User initiated tool call: {}]\n[Arguments: {}]\n[Result: {}]",
                     name, args_json, result
                 );
-                let mut resolved =
-                    chibi.resolve_config(context, input.username.as_deref())?;
+                let mut resolved = chibi.resolve_config(context, input.username.as_deref())?;
                 if input.flags.no_tool_calls {
                     resolved.no_tool_calls = true;
                 }
@@ -364,13 +348,9 @@ async fn execute_json_command(
                 let fallback = chibi_core::tools::HandoffTarget::Agent {
                     prompt: String::new(),
                 };
-                let options = PromptOptions::new(
-                    verbose,
-                    use_reflection,
-                    &input.flags.debug,
-                    false,
-                )
-                .with_fallback(fallback);
+                let options =
+                    PromptOptions::new(verbose, use_reflection, &input.flags.debug, false)
+                        .with_fallback(fallback);
                 let mut response_sink = sink::JsonResponseSink::new();
                 chibi
                     .send_prompt_streaming(
@@ -388,10 +368,7 @@ async fn execute_json_command(
         Command::ClearCache { name } => {
             let ctx_name = name.as_deref().unwrap_or(context);
             chibi.app.clear_tool_cache(ctx_name)?;
-            output.emit_result(&format!(
-                "Cleared tool cache for context '{}'",
-                ctx_name
-            ));
+            output.emit_result(&format!("Cleared tool cache for context '{}'", ctx_name));
         }
         Command::CleanupCache => {
             let resolved = chibi.resolve_config(context, None)?;
@@ -408,8 +385,7 @@ async fn execute_json_command(
                 let new_context = Context::new(context.clone());
                 chibi.app.save_and_register_context(&new_context)?;
             }
-            let mut resolved =
-                chibi.resolve_config(context, input.username.as_deref())?;
+            let mut resolved = chibi.resolve_config(context, input.username.as_deref())?;
             if input.flags.no_tool_calls {
                 resolved.no_tool_calls = true;
             }
@@ -419,30 +395,16 @@ async fn execute_json_command(
                 &context_dir,
                 chibi.app.config.lock_heartbeat_seconds,
             )?;
-            let options = PromptOptions::new(
-                verbose,
-                use_reflection,
-                &input.flags.debug,
-                false,
-            );
+            let options = PromptOptions::new(verbose, use_reflection, &input.flags.debug, false);
             let mut response_sink = sink::JsonResponseSink::new();
             chibi
-                .send_prompt_streaming(
-                    context,
-                    prompt,
-                    &resolved,
-                    &options,
-                    &mut response_sink,
-                )
+                .send_prompt_streaming(context, prompt, &resolved, &options, &mut response_sink)
                 .await?;
         }
         Command::CheckInbox { context: ctx } => {
             let messages = chibi.app.peek_inbox(ctx)?;
             if messages.is_empty() {
-                output.diagnostic(
-                    &format!("[No messages in inbox for '{}']", ctx),
-                    verbose,
-                );
+                output.diagnostic(&format!("[No messages in inbox for '{}']", ctx), verbose);
             } else {
                 output.diagnostic(
                     &format!(
@@ -466,12 +428,8 @@ async fn execute_json_command(
                     &context_dir,
                     chibi.app.config.lock_heartbeat_seconds,
                 )?;
-                let options = PromptOptions::new(
-                    verbose,
-                    use_reflection,
-                    &input.flags.debug,
-                    false,
-                );
+                let options =
+                    PromptOptions::new(verbose, use_reflection, &input.flags.debug, false);
                 let mut response_sink = sink::JsonResponseSink::new();
                 chibi
                     .send_prompt_streaming(
@@ -510,12 +468,8 @@ async fn execute_json_command(
                     &context_dir,
                     chibi.app.config.lock_heartbeat_seconds,
                 )?;
-                let options = PromptOptions::new(
-                    verbose,
-                    use_reflection,
-                    &input.flags.debug,
-                    false,
-                );
+                let options =
+                    PromptOptions::new(verbose, use_reflection, &input.flags.debug, false);
                 let mut response_sink = sink::JsonResponseSink::new();
                 chibi
                     .send_prompt_streaming(
@@ -532,10 +486,7 @@ async fn execute_json_command(
                 output.diagnostic("[No messages in any inbox.]", verbose);
             } else {
                 output.diagnostic(
-                    &format!(
-                        "[Processed inboxes for {} context(s).]",
-                        processed_count
-                    ),
+                    &format!("[Processed inboxes for {} context(s).]", processed_count),
                     verbose,
                 );
             }
@@ -543,11 +494,9 @@ async fn execute_json_command(
         Command::ModelMetadata { model, full } => {
             let resolved = chibi.resolve_config(context, None)?;
             let gateway = chibi_core::gateway::build_gateway(&resolved)?;
-            let metadata =
-                chibi_core::model_info::fetch_metadata(&gateway, model).await?;
+            let metadata = chibi_core::model_info::fetch_metadata(&gateway, model).await?;
             output.emit_result(
-                chibi_core::model_info::format_model_toml(&metadata, *full)
-                    .trim_end(),
+                chibi_core::model_info::format_model_toml(&metadata, *full).trim_end(),
             );
         }
         Command::NoOp => {}

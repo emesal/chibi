@@ -1,5 +1,5 @@
-use chibi_core::context::TranscriptEntry;
 use chibi_core::OutputSink;
+use chibi_core::context::TranscriptEntry;
 use std::io::{self, Write};
 
 /// JSONL output sink for chibi-json.

@@ -27,7 +27,7 @@
 | 9 | Remove JSON paths from chibi-cli | **done** |
 | 10 | Add SYNC comments | **done** |
 | 11 | Remove `Flags::json_output` and `Flags::raw` from core | **done** |
-| 12 | Update docs and file GH issue | pending |
+| 12 | Update docs and file GH issue | **done** |
 
 ### Session Notes (for next session)
 

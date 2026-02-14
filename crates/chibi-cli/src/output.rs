@@ -4,8 +4,8 @@
 //! text results and diagnostics for the terminal.
 //! Implements `OutputSink` directly — all output goes through trait methods.
 
-use chibi_core::context::TranscriptEntry;
 use chibi_core::OutputSink;
+use chibi_core::context::TranscriptEntry;
 use std::io;
 
 /// CLI output handler — text to stdout, diagnostics to stderr.
@@ -13,6 +13,12 @@ use std::io;
 /// Implements `OutputSink` directly; all output goes through trait methods.
 /// Always operates in text mode — JSON output belongs to chibi-json.
 pub struct OutputHandler;
+
+impl Default for OutputHandler {
+    fn default() -> Self {
+        Self
+    }
+}
 
 impl OutputHandler {
     /// Create a new output handler.
