@@ -5,7 +5,6 @@ mod cli;
 mod config;
 mod image_cache;
 mod input;
-mod json_input;
 mod markdown;
 mod output;
 mod session;
@@ -17,7 +16,6 @@ pub use config::{
     ConfigImageRenderMode, ImageAlignment, ImageConfig, ImageConfigOverride, MarkdownStyle,
     ResolvedConfig, default_markdown_style, load_cli_config,
 };
-pub use json_input::from_str as parse_json_input;
 pub use markdown::{MarkdownConfig, MarkdownStream};
 pub use output::OutputHandler;
 pub use session::Session;
@@ -31,9 +29,10 @@ use chibi_core::input::{Command, DebugKey};
 
 use crate::input::{ChibiInput, ContextSelection, UsernameOverride};
 use chibi_core::{
-    Chibi, Inspectable, LoadOptions, PermissionHandler, PromptOptions, StatePaths, api, tools,
+    Chibi, Inspectable, LoadOptions, OutputSink, PermissionHandler, PromptOptions, StatePaths, api,
+    tools,
 };
-use std::io::{self, ErrorKind, IsTerminal, Read, Write};
+use std::io::{self, ErrorKind, IsTerminal, Write};
 use std::path::PathBuf;
 
 /// Prompt user for confirmation (y/N). Returns true if user confirms.
@@ -219,7 +218,7 @@ fn inspect_context(
     thing: &Inspectable,
     resolved_config: Option<&ResolvedConfig>,
     force_markdown: bool,
-    output: &OutputHandler,
+    output: &dyn OutputSink,
 ) -> io::Result<()> {
     // Resolve config if not provided
     let config_holder;
@@ -296,7 +295,7 @@ fn show_log(
     verbose: bool,
     resolved_config: &ResolvedConfig,
     force_markdown: bool,
-    output: &OutputHandler,
+    output: &dyn OutputSink,
 ) -> io::Result<()> {
     let entries = chibi.app.read_jsonl_transcript(context_name)?;
 
@@ -398,14 +397,12 @@ async fn execute_from_input(
     input: ChibiInput,
     chibi: &mut Chibi,
     session: &mut Session,
-    output: &OutputHandler,
+    output: &dyn OutputSink,
     force_markdown: bool,
 ) -> io::Result<()> {
     let verbose = input.flags.verbose;
     let show_tool_calls = !input.flags.hide_tool_calls || verbose;
     let show_thinking_flag = input.flags.show_thinking || verbose;
-    let json_output = input.flags.json_output;
-
     // Initialize session (executes OnStart hooks)
     let _ = chibi.init();
 
@@ -516,7 +513,7 @@ async fn execute_from_input(
         None => None,
     };
 
-    // Execute command
+    // SYNC: chibi-json also dispatches commands — check crates/chibi-json/src/main.rs
     match &input.command {
         Command::ShowHelp => {
             Cli::print_help();
@@ -569,7 +566,7 @@ async fn execute_from_input(
 
             if !chibi.app.context_dir(&ctx_name).exists() {
                 output.emit_result(&format!("Context '{}' not found", ctx_name));
-            } else if !confirm_action(&format!("Destroy context '{}'?", ctx_name)) {
+            } else if !output.confirm(&format!("Destroy context '{}'?", ctx_name)) {
                 output.emit_result("Aborted");
             } else {
                 // Handle session fallback if destroying current context
@@ -714,7 +711,7 @@ async fn execute_from_input(
                 );
 
                 let mut resolved = resolve_cli_config(chibi, &working_context, ephemeral_username)?;
-                if input.flags.raw {
+                if input.raw {
                     resolved.render_markdown = false;
                 }
                 if input.flags.no_tool_calls {
@@ -734,13 +731,12 @@ async fn execute_from_input(
                 let options = PromptOptions::new(
                     verbose,
                     use_reflection,
-                    json_output,
                     &input.flags.debug,
                     force_markdown,
                 )
                 .with_fallback(fallback);
 
-                let md_config = if resolved.render_markdown && !input.flags.raw {
+                let md_config = if resolved.render_markdown && !input.raw {
                     Some(md_config_from_resolved(
                         &resolved,
                         chibi.home_dir(),
@@ -802,7 +798,7 @@ async fn execute_from_input(
 
             // Resolve config with runtime override (ephemeral username extracted earlier)
             let mut resolved = resolve_cli_config(chibi, &ctx_name, ephemeral_username)?;
-            if input.flags.raw {
+            if input.raw {
                 resolved.render_markdown = false;
             }
             if input.flags.no_tool_calls {
@@ -820,13 +816,12 @@ async fn execute_from_input(
             let options = PromptOptions::new(
                 verbose,
                 use_reflection,
-                json_output,
                 &input.flags.debug,
                 force_markdown,
             );
 
             // Create markdown config if enabled
-            let md_config = if resolved.render_markdown && !input.flags.raw {
+            let md_config = if resolved.render_markdown && !input.raw {
                 Some(md_config_from_resolved(
                     &resolved,
                     chibi.home_dir(),
@@ -882,7 +877,7 @@ async fn execute_from_input(
 
                 // Resolve config for this context
                 let mut resolved = resolve_cli_config(chibi, &ctx_name, None)?;
-                if input.flags.raw {
+                if input.raw {
                     resolved.render_markdown = false;
                 }
                 if input.flags.no_tool_calls {
@@ -900,13 +895,12 @@ async fn execute_from_input(
                 let options = PromptOptions::new(
                     verbose,
                     use_reflection,
-                    json_output,
                     &input.flags.debug,
                     force_markdown,
                 );
 
                 // Create markdown stream if enabled
-                let md_config = if resolved.render_markdown && !input.flags.raw {
+                let md_config = if resolved.render_markdown && !input.raw {
                     Some(md_config_from_resolved(
                         &resolved,
                         chibi.home_dir(),
@@ -957,7 +951,7 @@ async fn execute_from_input(
 
                 // Resolve config for this context
                 let mut resolved = resolve_cli_config(chibi, &ctx_name, None)?;
-                if input.flags.raw {
+                if input.raw {
                     resolved.render_markdown = false;
                 }
                 if input.flags.no_tool_calls {
@@ -975,13 +969,12 @@ async fn execute_from_input(
                 let options = PromptOptions::new(
                     verbose,
                     use_reflection,
-                    json_output,
                     &input.flags.debug,
                     force_markdown,
                 );
 
                 // Create markdown stream if enabled
-                let md_config = if resolved.render_markdown && !input.flags.raw {
+                let md_config = if resolved.render_markdown && !input.raw {
                     Some(md_config_from_resolved(
                         &resolved,
                         chibi.home_dir(),
@@ -1124,68 +1117,11 @@ async fn main() -> io::Result<()> {
     // Check for early flags (before full CLI parsing)
     let args: Vec<String> = std::env::args().collect();
 
-    // --json-schema: print the JSON schema for --json-config input and exit immediately
-    if args.iter().any(|a| a == "--json-schema") {
-        let schema = schemars::schema_for!(ChibiInput);
-        println!("{}", serde_json::to_string_pretty(&schema).unwrap());
-        return Ok(());
-    }
-
-    let is_json_config = args.iter().any(|a| a == "--json-config");
-    let cli_json_output = args.iter().any(|a| a == "--json-output");
     let trust_mode = args.iter().any(|a| a == "--trust" || a == "-t");
     let home_override = extract_home_override(&args);
     let project_root_override = extract_project_root_override(&args);
 
-    if is_json_config {
-        // JSON mode: read from stdin and parse directly to ChibiInput
-        let mut json_str = String::new();
-        io::stdin().read_to_string(&mut json_str)?;
-
-        let mut input = json_input::from_str(&json_str)?;
-
-        // Handle help and version early
-        if matches!(input.command, Command::ShowHelp) {
-            Cli::print_help();
-            return Ok(());
-        }
-        if matches!(input.command, Command::ShowVersion) {
-            println!(
-                "chibi v{}-{}",
-                env!("CARGO_PKG_VERSION"),
-                option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown")
-            );
-            return Ok(());
-        }
-
-        // CLI --json-output flag also sets json_output mode
-        if cli_json_output {
-            input.flags.json_output = true;
-        }
-
-        let output = OutputHandler::new(input.flags.json_output);
-        let mut chibi = Chibi::load_with_options(LoadOptions {
-            verbose: input.flags.verbose,
-            home: home_override,
-            project_root: project_root_override.clone(),
-        })?;
-        chibi.set_permission_handler(select_permission_handler(trust_mode));
-        // CLI flags override config settings
-        input.flags.verbose = input.flags.verbose || chibi.app.config.verbose;
-        input.flags.hide_tool_calls =
-            input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
-        input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
-        let mut session = Session::load(chibi.home_dir())?;
-
-        output.diagnostic(
-            &format!("[Loaded {} tool(s)]", chibi.tool_count()),
-            input.flags.verbose,
-        );
-
-        return execute_from_input(input, &mut chibi, &mut session, &output, false).await;
-    }
-
-    // CLI mode: parse to ChibiInput and use unified execution
+    // Parse CLI arguments to ChibiInput
     let mut input = cli::parse()?;
 
     // Handle --debug md=<FILENAME> early (renders markdown and quits, implies -x)
@@ -1229,7 +1165,7 @@ async fn main() -> io::Result<()> {
     input.flags.hide_tool_calls = input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
     input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
     let mut session = Session::load(chibi.home_dir())?;
-    let output = OutputHandler::new(input.flags.json_output);
+    let output = OutputHandler::new();
 
     // Print tool lists if verbose
     if verbose {

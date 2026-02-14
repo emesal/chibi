@@ -1002,7 +1002,6 @@ dependencies = [
  "imgcatr",
  "regex",
  "reqwest 0.13.2",
- "schemars",
  "serde",
  "serde_json",
  "sha2",
@@ -1040,6 +1039,17 @@ dependencies = [
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "uuid",
+]
+
+[[package]]
+name = "chibi-json"
+version = "0.7.1"
+dependencies = [
+ "chibi-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

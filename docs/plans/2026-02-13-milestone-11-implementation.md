@@ -24,7 +24,11 @@
 | 8a | done | dca75b0 | -t/--trust flag, Y/n default-allow, select_permission_handler |
 | 8b | done | dca75b0 | docs in docs/configuration.md, not AGENTS.md |
 | 9 | done | — | research task; audit in docs/plans/2026-02-13-twelve-factor-audit.md; filed #140 |
-| 10–14 | pending | | phases 3–5 |
+| 10 | done | 967463d | zero-config design doc (issue #141); ratatoskr preset work landed externally |
+| 11 | done | eeb1195, 382db41 | zero-config §1–5 (optional config fields + context_window) and §6–9 (ModelMetadata cleanup, api_key, docs) |
+| 12 | skipped | 7df3ecd | output discipline done; json-ification deferred to chibi-json extraction |
+| 13 | pending | | chibi-json crate extraction (next) |
+| 14 | pending | | plugin audit |
 
 **Deviations from plan:**
 - Tasks 1–3 committed together (single logical feature, all #125).
@@ -922,18 +926,13 @@ Expected work:
 
 ## Phase 4: JSON Modes (#14, #133)
 
-### Task 12: Audit and fix --json-output coverage (#14)
+### Task 12: ~~Audit and fix --json-output coverage~~ (#14) — SKIPPED
 
-**Detail this plan when Phase 1 is complete.** The work involves:
-
-1. Audit every output path in chibi-cli (grep for `println!`, `eprintln!`, `print!`, and any direct stdout writes)
-2. Inventory which should be JSON-ified vs which are incompatible
-3. Route all JSON-eligible output through `OutputHandler`
-4. Add `--json-output` incompatibility checks (error if combined with incompatible flags)
+Output discipline refactor (commit 7df3ecd) routed all chibi-cli output through `OutputHandler`. The actual JSON-ification of that output is deferred to the chibi-json extraction (task 13), since there's no point adding JSON paths to chibi-cli only to rip them out into a separate crate.
 
 ### Task 13: Extract chibi-json crate (#133)
 
-**Detail this plan after Task 12.** High-level:
+**Next up.** High-level:
 
 1. Create `crates/chibi-json/` workspace member
 2. Move JSON input parsing (`ChibiInput`, `json_input.rs`) to chibi-json

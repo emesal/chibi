@@ -16,13 +16,12 @@
 //! - `Ephemeral` — use username for this invocation only
 
 use chibi_core::input::{Command, Flags};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Context selection mode.
 ///
 /// Determines how the CLI selects which context to operate on.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextSelection {
     /// Use the implied context from session.json (no switch)
@@ -46,7 +45,7 @@ fn default_true() -> bool {
 /// Username override mode.
 ///
 /// Determines how the CLI handles username overrides.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsernameOverride {
     /// Persistent username (-u): saves to local.toml
@@ -55,11 +54,11 @@ pub enum UsernameOverride {
     Ephemeral(String),
 }
 
-/// Unified input from CLI or JSON.
+/// Unified input from CLI.
 ///
 /// This is the main type that represents a fully parsed user request.
 /// It combines a command from chibi-core with CLI-specific selection modes.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChibiInput {
     /// The command to execute
     pub command: Command,
@@ -72,6 +71,9 @@ pub struct ChibiInput {
     /// Optional username override
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username_override: Option<UsernameOverride>,
+    /// Disable markdown rendering (CLI-only presentation concern)
+    #[serde(default)]
+    pub raw: bool,
 }
 
 impl Default for ChibiInput {
@@ -81,6 +83,7 @@ impl Default for ChibiInput {
             flags: Flags::default(),
             context: ContextSelection::Current,
             username_override: None,
+            raw: false,
         }
     }
 }
@@ -97,7 +100,7 @@ mod tests {
         let input = ChibiInput::default();
         assert!(matches!(input.command, Command::NoOp));
         assert!(!input.flags.verbose);
-        assert!(!input.flags.json_output);
+        assert!(!input.raw);
         assert!(matches!(input.context, ContextSelection::Current));
     }
 
@@ -203,10 +206,8 @@ mod tests {
                 hide_tool_calls: false,
                 show_thinking: false,
                 no_tool_calls: false,
-                json_output: true,
                 force_call_user: true,
                 force_call_agent: false,
-                raw: false,
                 debug: vec![DebugKey::All],
             },
             context: ContextSelection::Switch {
@@ -214,6 +215,7 @@ mod tests {
                 persistent: false,
             },
             username_override: Some(UsernameOverride::Ephemeral("alice".to_string())),
+            raw: true,
         };
 
         let json = serde_json::to_string(&input).unwrap();
@@ -223,9 +225,9 @@ mod tests {
             matches!(deserialized.command, Command::Inspect { context: Some(ref c), thing: Inspectable::SystemPrompt } if c == "test")
         );
         assert!(deserialized.flags.verbose);
-        assert!(deserialized.flags.json_output);
         assert!(deserialized.flags.force_call_user);
         assert_eq!(deserialized.flags.debug, vec![DebugKey::All]);
+        assert!(deserialized.raw);
         assert!(
             matches!(deserialized.context, ContextSelection::Switch { ref name, persistent: false } if name == "coding")
         );
@@ -241,6 +243,7 @@ mod tests {
             flags: Flags::default(),
             context: ContextSelection::Current,
             username_override: None,
+            raw: false,
         };
 
         let json = serde_json::to_string(&input).unwrap();

@@ -19,7 +19,7 @@
 //!     let config = chibi.resolve_config("default", None)?;
 //!
 //!     // Create options and a sink to collect the response
-//!     let options = PromptOptions::new(false, false, false, &[], false);
+//!     let options = PromptOptions::new(false, false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
 //!     // Send a prompt to the default context
@@ -270,7 +270,7 @@ impl Chibi {
     /// # async fn example() -> std::io::Result<()> {
     /// # let chibi = Chibi::load()?;
     /// # let config = chibi.resolve_config("default", None)?;
-    /// # let options = PromptOptions::new(false, false, false, &[], false);
+    /// # let options = PromptOptions::new(false, false, &[], false);
     /// let mut sink = CollectingSink::new();
     /// chibi.send_prompt_streaming("default", "Hello", &config, &options, &mut sink).await?;
     /// println!("Got response: {}", sink.text);

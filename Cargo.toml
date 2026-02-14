@@ -2,6 +2,7 @@
 members = [
     "crates/chibi-core",
     "crates/chibi-cli",
+    "crates/chibi-json",
 ]
 resolver = "3"
 
