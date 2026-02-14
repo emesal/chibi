@@ -5,6 +5,7 @@
 use crate::config::{ApiParams, ConfigDefaults, LocalConfig, ResolvedConfig};
 use std::fs;
 use std::io::{self, ErrorKind};
+use std::env;
 
 use super::{AppState, StatePaths};
 
@@ -52,11 +53,12 @@ impl AppState {
     }
 
     /// Resolve the full configuration, applying overrides in order:
-    /// 1. Runtime override (passed as parameter)
+    /// 1. Runtime override (passed as parameter, highest priority)
     /// 2. Context-local config (local.toml)
-    /// 3. Global config (config.toml)
-    /// 4. Models.toml (for model expansion)
-    /// 5. Defaults
+    /// 3. Models.toml (per-model API params)
+    /// 4. Environment variables (`CHIBI_API_KEY`, `CHIBI_MODEL`)
+    /// 5. Global config (config.toml)
+    /// 6. Defaults
     pub fn resolve_config(
         &self,
         context_name: &str,
@@ -102,6 +104,9 @@ impl AppState {
             fallback_tool: self.config.fallback_tool.clone(),
             storage: self.config.storage.clone(),
         };
+
+        // Apply environment variable overrides (between global config and local.toml)
+        apply_env_overrides(&mut resolved);
 
         // Apply local config overrides (simple fields via macro, see LocalConfig::apply_overrides)
         local.apply_overrides(&mut resolved);
@@ -182,5 +187,21 @@ impl AppState {
         }
 
         Ok(())
+    }
+}
+
+/// Environment variable names for config overrides.
+pub const ENV_API_KEY: &str = "CHIBI_API_KEY";
+pub const ENV_MODEL: &str = "CHIBI_MODEL";
+
+/// Apply environment variable overrides onto a resolved config.
+///
+/// Priority: global config.toml < **env vars** < context local.toml.
+fn apply_env_overrides(resolved: &mut ResolvedConfig) {
+    if let Ok(key) = env::var(ENV_API_KEY) {
+        resolved.api_key = Some(key);
+    }
+    if let Ok(model) = env::var(ENV_MODEL) {
+        resolved.model = model;
     }
 }
