@@ -26,6 +26,7 @@ use futures_util::stream::StreamExt;
 use ratatoskr::{ChatEvent, ModelGateway};
 use serde_json::json;
 use std::io::{self, ErrorKind};
+use std::path::Path;
 use uuid::Uuid;
 
 /// Maximum number of simultaneous tool calls allowed (prevents memory exhaustion from malicious responses)
@@ -199,7 +200,7 @@ fn annotate_fallback_tool(tools: &mut [serde_json::Value], fallback_name: &str) 
     }
 }
 
-/// Filter tools based on config include/exclude lists
+/// Filter tools based on config include/exclude/exclude_categories lists
 fn filter_tools_by_config(
     tools: Vec<serde_json::Value>,
     config: &ToolsConfig,
@@ -223,6 +224,20 @@ fn filter_tools_by_config(
                 .and_then(|f| f.get("name"))
                 .and_then(|n| n.as_str())
                 .is_some_and(|name| !exclude.contains(&name.to_string()))
+        });
+    }
+
+    // Apply category exclusion (remove tools whose category is excluded)
+    if let Some(ref categories) = config.exclude_categories {
+        result.retain(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|name| {
+                    let tool_type = classify_tool_type(name, &[]);
+                    !categories.contains(&tool_type.as_str().to_string())
+                })
+                .unwrap_or(true)
         });
     }
 
@@ -439,6 +454,8 @@ pub async fn send_prompt<S: ResponseSink>(
     options: &PromptOptions<'_>,
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
+    home_dir: &Path,
+    project_root: &Path,
 ) -> io::Result<()> {
     send_prompt_loop(
         app,
@@ -449,6 +466,8 @@ pub async fn send_prompt<S: ResponseSink>(
         options,
         sink,
         permission_handler,
+        home_dir,
+        project_root,
     )
     .await
 }
@@ -471,6 +490,8 @@ fn build_full_system_prompt<S: ResponseSink>(
     resolved_config: &ResolvedConfig,
     verbose: bool,
     sink: &mut S,
+    home_dir: &Path,
+    project_root: &Path,
 ) -> io::Result<String> {
     // Load base prompts
     let system_prompt = app.load_system_prompt_for(context_name)?;
@@ -513,6 +534,18 @@ fn build_full_system_prompt<S: ResponseSink>(
             }
             full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
         }
+    }
+
+    // Load AGENTS.md instructions from standard locations
+    let agents_md = crate::agents_md::load_agents_md(
+        home_dir,
+        &app.chibi_dir,
+        project_root,
+        &std::env::current_dir().unwrap_or_default(),
+    );
+    if !agents_md.is_empty() {
+        full_system_prompt.push_str("\n\n--- AGENT INSTRUCTIONS ---\n");
+        full_system_prompt.push_str(&agents_md);
     }
 
     // Add username info at the start if not "user"
@@ -1557,6 +1590,8 @@ async fn send_prompt_loop<S: ResponseSink>(
     options: &PromptOptions<'_>,
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
+    home_dir: &Path,
+    project_root: &Path,
 ) -> io::Result<()> {
     let fuel_total = resolved_config.fuel;
     let mut fuel_remaining = fuel_total;
@@ -1659,6 +1694,8 @@ async fn send_prompt_loop<S: ResponseSink>(
             resolved_config,
             verbose,
             sink,
+            home_dir,
+            project_root,
         )?;
 
         // === Prepare Messages ===
@@ -1988,6 +2025,7 @@ mod tests {
         let config = ToolsConfig {
             include: Some(vec!["tool1".to_string(), "tool3".to_string()]),
             exclude: None,
+            exclude_categories: None,
         };
         let result = filter_tools_by_config(tools, &config);
         assert_eq!(result.len(), 2);
@@ -2003,9 +2041,70 @@ mod tests {
         let config = ToolsConfig {
             include: None,
             exclude: Some(vec!["tool2".to_string()]),
+            exclude_categories: None,
         };
         let result = filter_tools_by_config(tools, &config);
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_tools_by_category_exclude() {
+        // shell_exec and dir_list are "coding" category tools
+        // file_head is a "file" category tool
+        // update_todos is a "builtin" category tool
+        // spawn_agent is an "agent" category tool
+        let tools = vec![
+            json!({"function": {"name": "shell_exec"}}),
+            json!({"function": {"name": "dir_list"}}),
+            json!({"function": {"name": "file_head"}}),
+            json!({"function": {"name": "update_todos"}}),
+            json!({"function": {"name": "spawn_agent"}}),
+        ];
+        let config = ToolsConfig {
+            include: None,
+            exclude: None,
+            exclude_categories: Some(vec!["coding".to_string()]),
+        };
+        let result = filter_tools_by_config(tools, &config);
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| t.get("function")?.get("name")?.as_str())
+            .collect();
+        assert!(
+            !names.contains(&"shell_exec"),
+            "coding tool should be excluded"
+        );
+        assert!(
+            !names.contains(&"dir_list"),
+            "coding tool should be excluded"
+        );
+        assert!(names.contains(&"file_head"), "file tool should remain");
+        assert!(
+            names.contains(&"update_todos"),
+            "builtin tool should remain"
+        );
+        assert!(names.contains(&"spawn_agent"), "agent tool should remain");
+    }
+
+    #[test]
+    fn test_filter_tools_by_multiple_categories() {
+        let tools = vec![
+            json!({"function": {"name": "shell_exec"}}),
+            json!({"function": {"name": "file_head"}}),
+            json!({"function": {"name": "spawn_agent"}}),
+            json!({"function": {"name": "update_todos"}}),
+        ];
+        let config = ToolsConfig {
+            include: None,
+            exclude: None,
+            exclude_categories: Some(vec!["coding".to_string(), "agent".to_string()]),
+        };
+        let result = filter_tools_by_config(tools, &config);
+        let names: Vec<&str> = result
+            .iter()
+            .filter_map(|t| t.get("function")?.get("name")?.as_str())
+            .collect();
+        assert_eq!(names, vec!["file_head", "update_todos"]);
     }
 
     #[test]

@@ -281,6 +281,10 @@ pub struct Cli {
     #[arg(long = "no-tool-calls")]
     pub no_tool_calls: bool,
 
+    /// Trust mode: auto-approve all permission checks (for automation/piping)
+    #[arg(short = 't', long = "trust")]
+    pub trust: bool,
+
     /// Force handoff to user (-x)
     #[arg(short = 'x', long = "force-call-user")]
     pub force_call_user: bool,
@@ -288,18 +292,6 @@ pub struct Cli {
     /// Force handoff to agent (-X)
     #[arg(short = 'X', long = "force-call-agent")]
     pub force_call_agent: bool,
-
-    // === JSON modes ===
-    /// Read input as JSON from stdin (exclusive with config flags).
-    /// Note: consumed via raw arg scanning before clap parsing (see main.rs),
-    /// so this field is never read from the struct. It exists here solely for
-    /// --help output and to prevent "unexpected argument" errors from clap.
-    #[arg(long = "json-config")]
-    pub json_config: bool,
-
-    /// Output in JSONL format
-    #[arg(long = "json-output")]
-    pub json_output: bool,
 
     /// Disable markdown rendering (raw output)
     #[arg(long = "raw")]
@@ -352,7 +344,6 @@ const CLI_AFTER_HELP: &str = r#"EXAMPLES:
   chibi -p myplugin "arg1 arg2"   Run plugin with args (shell-style split)
   chibi -P mytool '{}'            Call tool with empty JSON args
   chibi -P send '{"to":"x"}'      Call tool with JSON args
-  chibi --json-schema             Print JSON schema for --json-config
 
 FLAG BEHAVIOR:
   Some flags imply --no-chibi (operations that produce output or
@@ -657,10 +648,8 @@ impl Cli {
             hide_tool_calls: self.hide_tool_calls,
             show_thinking: self.show_thinking,
             no_tool_calls: self.no_tool_calls,
-            json_output: self.json_output,
             force_call_user,
             force_call_agent: self.force_call_agent,
-            raw: self.raw,
             debug: debug_keys,
         };
 
@@ -669,6 +658,7 @@ impl Cli {
             flags,
             context,
             username_override,
+            raw: self.raw,
         })
     }
 

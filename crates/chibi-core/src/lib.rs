@@ -16,7 +16,7 @@
 //! async fn main() -> std::io::Result<()> {
 //!     let chibi = Chibi::load()?;
 //!     let config = chibi.resolve_config("default", None)?;
-//!     let options = PromptOptions::new(false, false, false, &[], false);
+//!     let options = PromptOptions::new(false, false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
 //!     chibi.send_prompt_streaming("default", "Hello!", &config, &options, &mut sink).await?;
@@ -27,11 +27,13 @@
 //!
 //! For lower-level access, use the individual modules directly.
 
+pub mod agents_md;
 pub mod api;
 pub mod cache;
 mod chibi;
 pub mod config;
 pub mod context;
+pub mod execution;
 pub mod gateway;
 mod inbox;
 pub mod index;
@@ -40,10 +42,12 @@ pub mod json_ext;
 pub mod jsonl;
 pub mod lock;
 pub mod model_info;
+pub mod output;
 pub mod partition;
 pub mod safe_io;
 pub mod state;
 pub mod tools;
+pub mod vcs;
 
 /// System prompt used when processing inbox messages via -b/-B flags.
 pub const INBOX_CHECK_PROMPT: &str = "[System: You have received new message(s) above. Review and take appropriate action now — you may not be reactivated soon, so handle anything urgent immediately.]";
@@ -55,7 +59,9 @@ pub use chibi::{Chibi, LoadOptions, PermissionHandler, project_chibi_dir, projec
 pub use api::{CollectingSink, PromptOptions, ResponseEvent, ResponseSink};
 pub use config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
 pub use context::{Context, ContextEntry, TranscriptEntry};
-pub use input::{Command, Flags, Inspectable};
+pub use execution::ExecutionRequest;
+pub use input::{Command, ExecutionFlags, Flags, Inspectable};
+pub use output::OutputSink;
 pub use partition::StorageConfig;
 pub use state::{AppState, StatePaths};
 pub use tools::{HookPoint, SpawnOptions, Tool, spawn_agent};

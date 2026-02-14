@@ -36,6 +36,9 @@ pub const CALL_USER_TOOL_NAME: &str = "call_user";
 /// Name of the built-in model_info tool for metadata lookup
 pub const MODEL_INFO_TOOL_NAME: &str = "model_info";
 
+/// Name of the built-in read_context tool for cross-context inspection
+pub const READ_CONTEXT_TOOL_NAME: &str = "read_context";
+
 // === Tool Definition Registry ===
 
 /// Property definition for a tool parameter
@@ -186,6 +189,32 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
         }],
         required: &["model"],
         summary_params: &["model"],
+    },
+    BuiltinToolDef {
+        name: READ_CONTEXT_TOOL_NAME,
+        description: "Read the state of another context (read-only). Returns summary, todos, goals, and recent messages. Useful for inspecting sub-agents or coordinating with related contexts.",
+        properties: &[
+            ToolPropertyDef {
+                name: "context_name",
+                prop_type: "string",
+                description: "Name of the context to read",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "include_messages",
+                prop_type: "string",
+                description: "Include recent messages (\"true\"/\"false\", default: \"true\")",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "num_messages",
+                prop_type: "integer",
+                description: "Number of recent messages to include (default: 5)",
+                default: Some(5),
+            },
+        ],
+        required: &["context_name"],
+        summary_params: &["context_name"],
     },
 ];
 
@@ -377,8 +406,107 @@ pub fn execute_builtin_tool(
                     .map(|_| format!("Message sent to '{}'", to)),
             )
         }
+        READ_CONTEXT_TOOL_NAME => {
+            let target = args.get("context_name").and_then(|v| v.as_str())?;
+            Some(execute_read_context(app, target, args))
+        }
         _ => None,
     }
+}
+
+/// Execute read_context: read the state of another context (read-only).
+///
+/// Returns a JSON object with the context's summary, todos, goals, and
+/// optionally recent messages from context.jsonl.
+fn execute_read_context(
+    app: &AppState,
+    context_name: &str,
+    args: &serde_json::Value,
+) -> io::Result<String> {
+    use crate::StatePaths;
+    use crate::json_ext::JsonExt;
+
+    // Validate context name (alphanumeric, dash, underscore only)
+    if !context_name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Invalid context name. Must be alphanumeric with dashes and underscores only.",
+        ));
+    }
+
+    // Check context exists
+    if !app.list_contexts().contains(&context_name.to_string()) {
+        return Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("Context '{}' does not exist", context_name),
+        ));
+    }
+
+    let include_messages = args.get_str_or("include_messages", "true") == "true";
+    let num_messages = args.get_u64_or("num_messages", 5) as usize;
+
+    let mut result = serde_json::Map::new();
+    result.insert(
+        "name".to_string(),
+        serde_json::Value::String(context_name.to_string()),
+    );
+
+    // Read summary
+    let summary = std::fs::read_to_string(app.summary_file(context_name)).unwrap_or_default();
+    result.insert("summary".to_string(), serde_json::Value::String(summary));
+
+    // Read todos
+    let todos = app.load_todos_for(context_name).unwrap_or_default();
+    result.insert("todos".to_string(), serde_json::Value::String(todos));
+
+    // Read goals
+    let goals = app.load_goals_for(context_name).unwrap_or_default();
+    result.insert("goals".to_string(), serde_json::Value::String(goals));
+
+    // Read recent messages
+    if include_messages {
+        match app.read_context_entries(context_name) {
+            Ok(entries) => {
+                let total = entries.len();
+                let recent: Vec<_> = entries.into_iter().rev().take(num_messages).collect();
+                let recent: Vec<_> = recent.into_iter().rev().collect();
+                let messages: Vec<serde_json::Value> = recent
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "from": e.from,
+                            "content": e.content,
+                            "type": e.entry_type,
+                        })
+                    })
+                    .collect();
+                result.insert(
+                    "message_count".to_string(),
+                    serde_json::Value::Number(total.into()),
+                );
+                result.insert(
+                    "recent_messages".to_string(),
+                    serde_json::Value::Array(messages),
+                );
+            }
+            Err(_) => {
+                result.insert(
+                    "message_count".to_string(),
+                    serde_json::Value::Number(0.into()),
+                );
+                result.insert(
+                    "recent_messages".to_string(),
+                    serde_json::Value::Array(vec![]),
+                );
+            }
+        }
+    }
+
+    serde_json::to_string_pretty(&result)
+        .map_err(|e| io::Error::other(format!("Failed to serialize context state: {}", e)))
 }
 
 #[cfg(test)]
@@ -663,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_registry_contains_all_tools() {
-        assert_eq!(BUILTIN_TOOL_DEFS.len(), 7);
+        assert_eq!(BUILTIN_TOOL_DEFS.len(), 8);
         let names: Vec<_> = BUILTIN_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&REFLECTION_TOOL_NAME));
         assert!(names.contains(&TODOS_TOOL_NAME));
@@ -672,12 +800,13 @@ mod tests {
         assert!(names.contains(&CALL_AGENT_TOOL_NAME));
         assert!(names.contains(&CALL_USER_TOOL_NAME));
         assert!(names.contains(&MODEL_INFO_TOOL_NAME));
+        assert!(names.contains(&READ_CONTEXT_TOOL_NAME));
     }
 
     #[test]
     fn test_all_builtin_tools_to_api_format() {
         let tools = all_builtin_tools_to_api_format();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
         for tool in &tools {
             assert_eq!(tool["type"], "function");
             assert!(tool["function"]["name"].as_str().is_some());
@@ -688,13 +817,13 @@ mod tests {
     #[test]
     fn test_builtin_tools_to_api_format_with_reflection() {
         let tools = builtin_tools_to_api_format(true);
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
     }
 
     #[test]
     fn test_builtin_tools_to_api_format_without_reflection() {
         let tools = builtin_tools_to_api_format(false);
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
         for tool in &tools {
             assert_ne!(tool["function"]["name"], REFLECTION_TOOL_NAME);
         }

@@ -12,7 +12,6 @@ path = "src/main.rs"
 chibi-core = { path = "../chibi-core" }
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
-schemars = "0.8"
 streamdown-parser.workspace = true
 streamdown-render.workspace = true
 image = "0.24"

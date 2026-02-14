@@ -535,7 +535,7 @@ mod tests {
     fn make_test_config() -> ResolvedConfig {
         use crate::config::{ApiParams, ToolsConfig};
         ResolvedConfig {
-            api_key: "test-key".to_string(),
+            api_key: Some("test-key".to_string()),
             model: "test-model".to_string(),
             context_window_limit: 128000,
             warn_threshold_percent: 0.8,

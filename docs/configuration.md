@@ -29,27 +29,67 @@ By default, chibi stores all data in `~/.chibi`. This can be overridden:
 
 Use `-n home` to see the resolved path.
 
+## Project Root
+
+Chibi auto-detects the project root for context-aware features (AGENTS.md loading, codebase indexing). Resolution order:
+
+1. `--project-root` CLI flag (highest priority)
+2. `CHIBI_PROJECT_ROOT` environment variable
+3. VCS root detection (walk up from cwd)
+4. Current working directory (fallback)
+
+**Supported VCS markers** (checked in order, nearest match wins):
+
+| Marker | VCS |
+|--------|-----|
+| `.git` (dir or file) | Git (incl. worktrees, submodules) |
+| `.hg/` | Mercurial |
+| `.svn/` | Subversion |
+| `.bzr/` | Bazaar |
+| `.pijul/` | Pijul |
+| `.jj/` | Jujutsu |
+| `.fslckout` (file) | Fossil |
+| `_FOSSIL_` (file) | Fossil (alt) |
+| `CVS/` | CVS (walks up to highest containing dir) |
+
+## AGENTS.md
+
+Chibi loads instruction files from standard locations and injects them into the system prompt. Files are concatenated in order; later entries appear later in the prompt and can effectively override earlier guidance.
+
+**Discovery locations** (in order):
+
+1. `~/AGENTS.md` — user-global, tool-independent instructions
+2. `~/.chibi/AGENTS.md` — chibi-global instructions
+3. `<project_root>/AGENTS.md` — project root
+4. Each directory from project root down to cwd (e.g. `<project_root>/packages/frontend/AGENTS.md`)
+
+Empty files are skipped. When cwd equals project root, the root file appears only once.
+
+Content appears in the system prompt under `--- AGENT INSTRUCTIONS ---`, after the base prompt and before context metadata.
+
 ## Global Configuration (config.toml)
 
 Create `~/.chibi/config.toml` (or `<CHIBI_HOME>/config.toml` if overridden):
 
+All fields are optional. chibi works with no config file at all (free-tier OpenRouter, default model).
+
 ```toml
 # =============================================================================
-# Required Settings
+# Core Settings (all optional)
 # =============================================================================
 
-# API key for your LLM provider
-# Currently chibi uses OpenRouter (https://openrouter.ai/settings/keys)
-api_key = "your-api-key-here"
+# API key for OpenRouter (https://openrouter.ai/settings/keys)
+# Omit for free-tier access (no key needed)
+# api_key = "your-api-key-here"
 
-# Model to use (see https://openrouter.ai/models for available models)
-model = "anthropic/claude-sonnet-4"
+# Model to use (default: ratatoskr:free/agentic)
+# model = "anthropic/claude-sonnet-4"
 
-# Context window limit (tokens) - used for warning calculations
-context_window_limit = 200000
+# Context window limit in tokens (default: fetched from ratatoskr registry)
+# context_window_limit = 200000
 
-# Warning threshold (0-100) - warn when context exceeds this percentage
-warn_threshold_percent = 80.0
+# Warning threshold percentage (default: 80.0)
+# warn_threshold_percent = 80.0
 
 # =============================================================================
 # Optional Settings
@@ -140,6 +180,15 @@ tool_cache_preview_chars = 500
 # file_tools_allowed_paths = ["~", "/tmp"]
 
 # =============================================================================
+# Tool Filtering (global baseline, per-context local.toml merges on top)
+# =============================================================================
+
+# [tools]
+# include = ["update_todos", "shell_exec"]  # allowlist (local overrides entirely)
+# exclude = ["file_grep"]                    # blocklist (local appends)
+# exclude_categories = ["agent"]             # category blocklist (local appends)
+
+# =============================================================================
 # API Parameters
 # =============================================================================
 
@@ -201,41 +250,30 @@ effort = "medium"
 
 ## Model Metadata (models.toml)
 
-Define per-model settings in `~/.chibi/models.toml`:
+Per-model API parameter overrides in `~/.chibi/models.toml`. Model capabilities (context window, tool call support) come from ratatoskr's registry automatically — no need to configure them here.
+
+Use `chibi -M` to see what parameters a model supports.
 
 ```toml
 # Each key should match the model name used in config.toml or local.toml
 
-[models."anthropic/claude-sonnet-4"]
-context_window = 200000
+# Claude with extended thinking (token-based reasoning)
+[models."anthropic/claude-sonnet-4".api.reasoning]
+max_tokens = 32000
 
-[models."anthropic/claude-3.5-haiku"]
-context_window = 200000
-
-[models."openai/gpt-4o"]
-context_window = 128000
-
-[models."openai/o3"]
-context_window = 200000
-
+# OpenAI reasoning models (effort-based reasoning)
 [models."openai/o3".api]
 max_tokens = 100000
 
 [models."openai/o3".api.reasoning]
 effort = "high"
 
-[models."google/gemini-2.0-flash-thinking-exp:free"]
-context_window = 1048576
-
+# Gemini thinking model (token-based reasoning)
 [models."google/gemini-2.0-flash-thinking-exp:free".api.reasoning]
 max_tokens = 16000
-
-[models."anthropic/claude-sonnet-4".api.reasoning]
-max_tokens = 32000
 ```
 
 When you use a model, chibi checks for a matching entry and applies:
-- `context_window` - Overrides `context_window_limit` from config.toml
 - `api.*` - Model-specific API parameters (merged with global settings)
 
 ## Per-Context Configuration (local.toml)
@@ -291,13 +329,16 @@ max_tokens = 8000
 [api.reasoning]
 effort = "high"
 
-# Tool filtering (allowlist or blocklist)
+# Tool filtering (merges with global [tools] config)
 [tools]
-# Allowlist mode - only these tools are available
+# Allowlist mode - only these tools are available (overrides global include)
 # include = ["update_todos", "update_goals", "send_message"]
 
-# Or blocklist mode - these tools are excluded
+# Blocklist mode - these tools are excluded (appends to global exclude)
 exclude = ["file_grep"]
+
+# Exclude entire categories (appends to global exclude_categories)
+# exclude_categories = ["coding"]
 ```
 
 Set username via CLI (automatically saves to local.toml):
@@ -466,9 +507,42 @@ Plugins receive these environment variables:
 
 Plugin input is passed via stdin as JSON (tool arguments for tool calls, hook data for hooks).
 
+## Coding Tools & Permissions
+
+Chibi includes built-in coding tools that work out of the box — no plugins needed. These tools are automatically included in every API request (unless filtered out via [tool filtering](#tool-filtering-configuration) or `--no-tool-calls`).
+
+**Permission-gated tools** prompt for confirmation before executing:
+
+| Tool | Hook | What it does |
+|------|------|-------------|
+| `shell_exec` | `PreShellExec` | Execute shell commands |
+| `file_edit` | `PreFileWrite` | Patch files (search/replace) |
+| `write_file` | `PreFileWrite` | Create or overwrite files |
+
+The interactive prompt defaults to **allow** (`[Y/n]`) — press Enter to approve, or type `n` to deny. This makes sense because if you gave the LLM tools, you probably want it to use them.
+
+**Read-only tools** execute without prompting: `dir_list`, `glob_files`, `grep_files`, `file_head`, `file_tail`, `file_lines`, `file_grep`, `cache_list`, `index_query`, `index_status`, `index_update`.
+
+### Headless / Automation Mode
+
+When no TTY is available (piped input, CI, parent process), the permission handler cannot prompt and **fails safe by denying** all gated operations. Read-only tools still work.
+
+To allow gated tools in headless mode, use trust mode:
+
+```bash
+echo '{"message": "list files"}' | chibi --json-config --trust
+chibi -t "refactor this module"
+```
+
+`-t` / `--trust` auto-approves all permission checks. Use with caution — the LLM will be able to execute arbitrary shell commands and write files without confirmation.
+
+### Plugin Permission Policies
+
+Plugins can implement custom permission logic via the `PreFileWrite` and `PreShellExec` hooks. A plugin that returns `{"denied": true}` overrides all other approvals (deny wins). See [hooks documentation](hooks.md) for details.
+
 ## Tool Filtering Configuration
 
-Control which tools are available to the LLM in `~/.chibi/contexts/<name>/local.toml`:
+Control which tools are available to the LLM. Tool filtering can be configured globally in `config.toml` and per-context in `local.toml`.
 
 ```toml
 [tools]
@@ -479,19 +553,35 @@ include = ["update_todos", "update_goals", "update_reflection"]
 # OR blocklist mode - these tools are excluded
 # When set, listed tools are removed from available tools
 # exclude = ["file_grep", "file_head", "file_tail"]
+
+# Exclude entire tool categories
+# exclude_categories = ["coding", "agent"]
 ```
 
-**Tool Types:**
-- `builtin`: update_todos, update_goals, update_reflection, send_message, call_user, call_agent
-- `file`: file_head, file_tail, file_lines, file_grep, cache_list, write_file
-- `agent`: spawn_agent, retrieve_content
-- `plugin`: Tools loaded from the plugins directory
+**Tool Categories:**
+
+| Category | Tools |
+|----------|-------|
+| `builtin` | update_todos, update_goals, update_reflection, send_message |
+| `file` | file_head, file_tail, file_lines, file_grep, cache_list |
+| `agent` | spawn_agent, retrieve_content |
+| `coding` | shell_exec, dir_list, glob_files, grep_files, file_edit, index_update, index_query, index_status |
+| `plugin` | Tools loaded from the plugins directory |
+
+**Global vs. per-context:**
+
+- `[tools]` in `config.toml` sets the global baseline
+- `[tools]` in `local.toml` merges on top:
+  - `include`: local **overrides** global entirely (if set)
+  - `exclude`: local **appends** to global
+  - `exclude_categories`: local **appends** to global
 
 **Filter Precedence:**
 1. Config `include` (if set, only these tools considered)
 2. Config `exclude` (remove from remaining)
-3. Hook `include` (intersect with remaining) - via `pre_api_tools` hook
-4. Hook `exclude` (remove from remaining) - via `pre_api_tools` hook
+3. Config `exclude_categories` (remove matching categories)
+4. Hook `include` (intersect with remaining) — via `pre_api_tools` hook
+5. Hook `exclude` (remove from remaining) — via `pre_api_tools` hook
 
 For dynamic tool filtering based on context or other conditions, use the `pre_api_tools` hook. See [Hooks documentation](hooks.md).
 

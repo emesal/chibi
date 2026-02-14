@@ -19,7 +19,7 @@
 //!     let config = chibi.resolve_config("default", None)?;
 //!
 //!     // Create options and a sink to collect the response
-//!     let options = PromptOptions::new(false, false, false, &[], false);
+//!     let options = PromptOptions::new(false, false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
 //!     // Send a prompt to the default context
@@ -270,7 +270,7 @@ impl Chibi {
     /// # async fn example() -> std::io::Result<()> {
     /// # let chibi = Chibi::load()?;
     /// # let config = chibi.resolve_config("default", None)?;
-    /// # let options = PromptOptions::new(false, false, false, &[], false);
+    /// # let options = PromptOptions::new(false, false, &[], false);
     /// let mut sink = CollectingSink::new();
     /// chibi.send_prompt_streaming("default", "Hello", &config, &options, &mut sink).await?;
     /// println!("Got response: {}", sink.text);
@@ -294,6 +294,8 @@ impl Chibi {
             options,
             sink,
             self.permission_handler.as_ref(),
+            self.home_dir(),
+            &self.project_root,
         )
         .await
     }
@@ -396,7 +398,7 @@ impl Chibi {
     }
 }
 
-/// Resolve project root: explicit path > `CHIBI_PROJECT_ROOT` env > current working directory.
+/// Resolve project root: explicit path > `CHIBI_PROJECT_ROOT` env > VCS root > cwd.
 fn resolve_project_root(explicit: Option<PathBuf>) -> io::Result<PathBuf> {
     if let Some(root) = explicit {
         return Ok(root);
@@ -406,7 +408,8 @@ fn resolve_project_root(explicit: Option<PathBuf>) -> io::Result<PathBuf> {
     {
         return Ok(PathBuf::from(env_root));
     }
-    std::env::current_dir()
+    let cwd = std::env::current_dir()?;
+    Ok(crate::vcs::detect_project_root(&cwd).unwrap_or(cwd))
 }
 
 /// Return the project-local chibi directory (`<project_root>/.chibi/`), creating it if absent.
@@ -499,13 +502,16 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_project_root_falls_back_to_cwd() {
+    fn test_resolve_project_root_falls_back_to_vcs_or_cwd() {
         // SAFETY: Test runs in single-threaded context
         unsafe {
             std::env::remove_var("CHIBI_PROJECT_ROOT");
         }
         let root = resolve_project_root(None).unwrap();
-        assert_eq!(root, std::env::current_dir().unwrap());
+        let cwd = std::env::current_dir().unwrap();
+        // Should find VCS root (if running inside a repo) or fall back to cwd
+        let expected = crate::vcs::detect_project_root(&cwd).unwrap_or(cwd);
+        assert_eq!(root, expected);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //!
 //! Methods for loading, saving, and resolving local configs and model names.
 
-use crate::config::{ApiParams, LocalConfig, ResolvedConfig, ToolsConfig};
+use crate::config::{ApiParams, ConfigDefaults, LocalConfig, ResolvedConfig};
 use std::fs;
 use std::io::{self, ErrorKind};
 
@@ -68,11 +68,18 @@ impl AppState {
         let mut api_params = ApiParams::defaults();
         api_params = api_params.merge_with(&self.config.api);
 
-        // Start with global config values
+        // Start with global config values, applying defaults for optional fields
         let mut resolved = ResolvedConfig {
             api_key: self.config.api_key.clone(),
-            model: self.config.model.clone(),
-            context_window_limit: self.config.context_window_limit,
+            model: self
+                .config
+                .model
+                .clone()
+                .unwrap_or_else(|| ConfigDefaults::MODEL.to_string()),
+            context_window_limit: self
+                .config
+                .context_window_limit
+                .unwrap_or(ConfigDefaults::CONTEXT_WINDOW_LIMIT),
             warn_threshold_percent: self.config.warn_threshold_percent,
             verbose: self.config.verbose,
             hide_tool_calls: self.config.hide_tool_calls,
@@ -91,14 +98,14 @@ impl AppState {
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             api: api_params,
-            tools: ToolsConfig::default(),
+            tools: self.config.tools.clone(),
             fallback_tool: self.config.fallback_tool.clone(),
             storage: self.config.storage.clone(),
         };
 
         // Apply local config overrides
         if let Some(ref api_key) = local.api_key {
-            resolved.api_key = api_key.clone();
+            resolved.api_key = Some(api_key.clone());
         }
         if let Some(ref model) = local.model {
             resolved.model = model.clone();
@@ -169,9 +176,9 @@ impl AppState {
             resolved.api = resolved.api.merge_with(local_api);
         }
 
-        // Apply context-level tool filtering config
+        // Apply context-level tool filtering config (merge local on top of global)
         if let Some(ref local_tools) = local.tools {
-            resolved.tools = local_tools.clone();
+            resolved.tools = resolved.tools.merge_local(local_tools);
         }
 
         // Apply runtime username override (highest priority)
@@ -193,16 +200,6 @@ impl AppState {
             } else {
                 model_api
             };
-
-            if let Some(context_window) = model_meta.context_window {
-                resolved.context_window_limit = context_window;
-            }
-
-            // Model capability constraint: if the model doesn't support tool calls,
-            // unconditionally disable them regardless of user config
-            if model_meta.supports_tool_calls == Some(false) {
-                resolved.no_tool_calls = true;
-            }
         }
 
         Ok(resolved)

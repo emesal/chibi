@@ -10,7 +10,7 @@ Chibi is a minimal, composable building block for LLM interactions — not an ag
 - Backwards compatibility not a priority, legacy code unwanted. (Pre-alpha.)
 - Focused, secure core. Protect file operations from corruption and race conditions.
 - Self-documenting code; keep symbols, comments, and docs consistent.
-- Missing or incorrent documentation including code comments are critical bugs.
+- Missing or incorrect documentation including code comments are critical bugs.
 - Comprehensive tests including edge cases.
 - Remind user about `just pre-push` before pushing and `just merge-to-dev` when merging feature branches.
 
@@ -26,7 +26,13 @@ Git dependencies: [ratatoskr](https://github.com/emesal/ratatoskr) (LLM API clie
 
 ## Architecture
 
-Cargo workspace with two crates:
+Cargo workspace with three crates:
+
+```
+chibi-core (library)
+    ↑               ↑
+chibi-cli (binary)   chibi-json (binary)
+```
 
 **`crates/chibi-core/`** — Library crate (reusable logic)
 - `chibi.rs` — Main `Chibi` struct, tool execution
@@ -47,7 +53,15 @@ Cargo workspace with two crates:
 - `session.rs` — CLI session state (implied context)
 - `config.rs` — CLI-specific config (markdown, images)
 
-**Data flow:** CLI args → `parse()` → `ChibiInput` → `execute_from_input()` → core APIs
+**`crates/chibi-json/`** — Binary crate (JSON-mode, programmatic)
+- `main.rs` — Entry point, command dispatch
+- `input.rs` — `JsonInput` (stdin JSON, stateless per invocation)
+- `output.rs` — `JsonOutputSink` (JSONL `OutputSink` impl)
+- `sink.rs` — `JsonResponseSink` (JSONL `ResponseSink` impl)
+
+**Data flow:**
+- CLI: args → `parse()` → `ChibiInput` → `execute_from_input()` → core APIs
+- JSON: stdin → `JsonInput` → `execute_json_command()` → core APIs
 
 ## Storage Layout
 
@@ -69,7 +83,9 @@ Home directory: `--home` flag > `CHIBI_HOME` env > `~/.chibi`
 
 ## Plugins
 
-Executable scripts in `~/.chibi/plugins/`. Schema via `--schema`, args via stdin (JSON).
+Executable scripts in `~/.chibi/plugins/`. Available plugins live in the separate [chibi-plugins](https://github.com/emesal/chibi-plugins) repo — install individually by symlinking or copying. Several former plugins are now built-in tools: `fetch_url` (coding tool), `read_context` (builtin), `shell_exec` (replaces `run_command`), `file_head`/`file_lines` (replaces `read_file`), `call_agent` (replaces `recurse`).
+
+Schema via `--schema`, args via stdin (JSON).
 
 ```python
 #!/usr/bin/env -S uv run --quiet --script

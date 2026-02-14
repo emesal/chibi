@@ -23,6 +23,7 @@ pub const FILE_EDIT_TOOL_NAME: &str = "file_edit";
 pub const INDEX_UPDATE_TOOL_NAME: &str = "index_update";
 pub const INDEX_QUERY_TOOL_NAME: &str = "index_query";
 pub const INDEX_STATUS_TOOL_NAME: &str = "index_status";
+pub const FETCH_URL_TOOL_NAME: &str = "fetch_url";
 
 // === Tool Definition Registry ===
 
@@ -245,6 +246,32 @@ pub static CODING_TOOL_DEFS: &[BuiltinToolDef] = &[
         required: &[],
         summary_params: &[],
     },
+    BuiltinToolDef {
+        name: FETCH_URL_TOOL_NAME,
+        description: "Fetch content from a URL via HTTP GET and return the response body. Follows redirects. Use for retrieving web pages, API responses, or raw file content.",
+        properties: &[
+            ToolPropertyDef {
+                name: "url",
+                prop_type: "string",
+                description: "URL to fetch (must start with http:// or https://)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "max_bytes",
+                prop_type: "integer",
+                description: "Maximum response body size in bytes (default: 1048576 = 1MB)",
+                default: Some(1_048_576),
+            },
+            ToolPropertyDef {
+                name: "timeout_secs",
+                prop_type: "integer",
+                description: "Request timeout in seconds (default: 30)",
+                default: Some(30),
+            },
+        ],
+        required: &["url"],
+        summary_params: &["url"],
+    },
 ];
 
 // === Registry Helpers ===
@@ -269,6 +296,7 @@ pub fn is_coding_tool(name: &str) -> bool {
             | INDEX_UPDATE_TOOL_NAME
             | INDEX_QUERY_TOOL_NAME
             | INDEX_STATUS_TOOL_NAME
+            | FETCH_URL_TOOL_NAME
     )
 }
 
@@ -321,6 +349,7 @@ pub async fn execute_coding_tool(
         INDEX_UPDATE_TOOL_NAME => Some(execute_index_update(args, project_root, tools)),
         INDEX_QUERY_TOOL_NAME => Some(execute_index_query(args, project_root)),
         INDEX_STATUS_TOOL_NAME => Some(execute_index_status(project_root)),
+        FETCH_URL_TOOL_NAME => Some(execute_fetch_url(args).await),
         _ => None,
     }
 }
@@ -987,6 +1016,65 @@ fn execute_index_status(project_root: &Path) -> io::Result<String> {
     Ok(index_status(&conn, project_root))
 }
 
+// --- fetch_url ---
+
+/// Execute fetch_url: HTTP GET a URL and return the response body.
+///
+/// Follows redirects (up to 10). Validates URL scheme (http/https only).
+/// Limits response body to `max_bytes` to prevent unbounded memory usage.
+async fn execute_fetch_url(args: &serde_json::Value) -> io::Result<String> {
+    let url = require_str_param(args, "url")?;
+    let max_bytes = args.get_u64_or("max_bytes", 1_048_576) as usize;
+    let timeout_secs = args.get_u64_or("timeout_secs", 30);
+
+    // Validate URL scheme
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("URL must start with http:// or https://, got: {}", url),
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| io::Error::other(format!("Failed to create HTTP client: {}", e)))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| io::Error::other(format!("Request failed: {}", e)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(io::Error::other(format!(
+            "HTTP {} {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("Unknown"),
+        )));
+    }
+
+    // Read body with size limit
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| io::Error::other(format!("Failed to read response body: {}", e)))?;
+
+    if bytes.len() > max_bytes {
+        let truncated = String::from_utf8_lossy(&bytes[..max_bytes]);
+        Ok(format!(
+            "{}\n\n[Truncated: response was {} bytes, limit is {} bytes]",
+            truncated,
+            bytes.len(),
+            max_bytes,
+        ))
+    } else {
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
 // === Tests ===
 
 #[cfg(test)]
@@ -1034,13 +1122,14 @@ mod tests {
         assert!(is_coding_tool(INDEX_UPDATE_TOOL_NAME));
         assert!(is_coding_tool(INDEX_QUERY_TOOL_NAME));
         assert!(is_coding_tool(INDEX_STATUS_TOOL_NAME));
+        assert!(is_coding_tool(FETCH_URL_TOOL_NAME));
         assert!(!is_coding_tool("file_head"));
         assert!(!is_coding_tool("unknown_tool"));
     }
 
     #[test]
     fn test_coding_tool_registry_contains_all_tools() {
-        assert_eq!(CODING_TOOL_DEFS.len(), 8);
+        assert_eq!(CODING_TOOL_DEFS.len(), 9);
         let names: Vec<_> = CODING_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&SHELL_EXEC_TOOL_NAME));
         assert!(names.contains(&DIR_LIST_TOOL_NAME));
@@ -1050,6 +1139,7 @@ mod tests {
         assert!(names.contains(&INDEX_UPDATE_TOOL_NAME));
         assert!(names.contains(&INDEX_QUERY_TOOL_NAME));
         assert!(names.contains(&INDEX_STATUS_TOOL_NAME));
+        assert!(names.contains(&FETCH_URL_TOOL_NAME));
     }
 
     // --- Path Resolution ---
@@ -1467,6 +1557,24 @@ mod tests {
         let q = args(&[("refs_to", serde_json::json!("nonexistent"))]);
         let result = execute_index_query(&q, dir.path()).unwrap();
         assert!(result.contains("No references found"));
+    }
+
+    // --- fetch_url ---
+
+    #[tokio::test]
+    async fn test_fetch_url_invalid_scheme() {
+        let a = args(&[("url", serde_json::json!("ftp://example.com"))]);
+        let result = execute_fetch_url(&a).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("http://"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_url_missing_param() {
+        let a = args(&[]);
+        let result = execute_fetch_url(&a).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Missing"));
     }
 
     #[test]

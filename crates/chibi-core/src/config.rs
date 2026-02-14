@@ -305,6 +305,60 @@ pub struct ToolsConfig {
     /// Blocklist - these tools are excluded
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
+    /// Exclude entire tool categories: "builtin", "file", "agent", "coding"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_categories: Option<Vec<String>>,
+}
+
+impl ToolsConfig {
+    /// Merge a local (per-context) tools config on top of this (global) config.
+    ///
+    /// - `include`: local overrides global entirely if set
+    /// - `exclude`: local appends to global
+    /// - `exclude_categories`: local appends to global
+    pub fn merge_local(&self, local: &ToolsConfig) -> ToolsConfig {
+        let include = if local.include.is_some() {
+            local.include.clone()
+        } else {
+            self.include.clone()
+        };
+
+        let exclude = match (&self.exclude, &local.exclude) {
+            (Some(g), Some(l)) => {
+                let mut merged = g.clone();
+                for item in l {
+                    if !merged.contains(item) {
+                        merged.push(item.clone());
+                    }
+                }
+                Some(merged)
+            }
+            (None, Some(l)) => Some(l.clone()),
+            (Some(g), None) => Some(g.clone()),
+            (None, None) => None,
+        };
+
+        let exclude_categories = match (&self.exclude_categories, &local.exclude_categories) {
+            (Some(g), Some(l)) => {
+                let mut merged = g.clone();
+                for item in l {
+                    if !merged.contains(item) {
+                        merged.push(item.clone());
+                    }
+                }
+                Some(merged)
+            }
+            (None, Some(l)) => Some(l.clone()),
+            (Some(g), None) => Some(g.clone()),
+            (None, None) => None,
+        };
+
+        ToolsConfig {
+            include,
+            exclude,
+            exclude_categories,
+        }
+    }
 }
 
 // ============================================================================
@@ -325,6 +379,9 @@ impl ConfigDefaults {
 
     // Numeric defaults
     pub const AUTO_COMPACT_THRESHOLD: f32 = 80.0;
+    pub const WARN_THRESHOLD_PERCENT: f32 = 80.0;
+    /// Sentinel: 0 = fetch from ratatoskr at runtime
+    pub const CONTEXT_WINDOW_LIMIT: usize = 0;
     pub const REFLECTION_CHARACTER_LIMIT: usize = 10_000;
     pub const FUEL: usize = 30;
     pub const FUEL_EMPTY_RESPONSE_COST: usize = 15;
@@ -337,6 +394,8 @@ impl ConfigDefaults {
     // String defaults
     pub const USERNAME: &'static str = "user";
     pub const FALLBACK_TOOL: &'static str = "call_user";
+    /// Default model: ratatoskr free-tier agentic preset
+    pub const MODEL: &'static str = "ratatoskr:free/agentic";
 }
 
 // Thin wrappers for serde's #[serde(default = "...")] requirement
@@ -391,6 +450,9 @@ fn default_tool_cache_preview_chars() -> usize {
 fn default_fallback_tool() -> String {
     ConfigDefaults::FALLBACK_TOOL.to_string()
 }
+fn default_warn_threshold_percent() -> f32 {
+    ConfigDefaults::WARN_THRESHOLD_PERCENT
+}
 
 // ============================================================================
 // Configuration Structs
@@ -399,11 +461,16 @@ fn default_fallback_tool() -> String {
 /// Global config from ~/.chibi/config.toml
 /// Note: This is the core config. Presentation fields (image, markdown_style,
 /// render_markdown) are handled by the CLI layer.
-#[derive(Debug, Serialize, Deserialize)]
+/// All fields are optional with sensible defaults — config.toml itself is optional.
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
-    pub api_key: String,
-    pub model: String,
-    pub context_window_limit: usize,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub context_window_limit: Option<usize>,
+    #[serde(default = "default_warn_threshold_percent")]
     pub warn_threshold_percent: f32,
     /// Enable verbose output (equivalent to -v flag)
     #[serde(default = "default_verbose")]
@@ -461,6 +528,9 @@ pub struct Config {
     /// Fallback tool when LLM doesn't call call_agent/call_user explicitly
     #[serde(default = "default_fallback_tool")]
     pub fallback_tool: String,
+    /// Global tool filtering configuration (include/exclude/exclude_categories)
+    #[serde(default)]
+    pub tools: ToolsConfig,
 }
 
 /// Per-context config from `~/.chibi/contexts/<name>/local.toml`
@@ -510,16 +580,12 @@ pub struct LocalConfig {
     pub fallback_tool: Option<String>,
 }
 
-/// Model metadata from ~/.chibi/models.toml
+/// Model metadata from ~/.chibi/models.toml.
+///
+/// Contains only per-model API parameter overrides. Model capabilities
+/// (context window, tool call support) come from ratatoskr's registry.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelMetadata {
-    #[serde(default)]
-    pub context_window: Option<usize>,
-    /// Whether this model supports tool/function calling.
-    /// When `false`, `no_tool_calls` is automatically set to `true` during
-    /// config resolution — this is a hard capability constraint, not a preference.
-    #[serde(default)]
-    pub supports_tool_calls: Option<bool>,
     /// API parameters for this specific model
     #[serde(default)]
     pub api: ApiParams,
@@ -536,7 +602,8 @@ pub struct ModelsConfig {
 /// Note: This is the core resolved config. CLI extends this with presentation fields.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
-    pub api_key: String,
+    /// API key for the provider. `None` = keyless (free-tier openrouter).
+    pub api_key: Option<String>,
     pub model: String,
     pub context_window_limit: usize,
     pub warn_threshold_percent: f32,
@@ -581,10 +648,18 @@ pub struct ResolvedConfig {
 impl ResolvedConfig {
     /// Get a config field value by path (e.g., "model", "api.temperature", "api.reasoning.effort").
     /// Returns None if the field doesn't exist or has no value set.
-    /// Note: api_key is intentionally excluded for security.
+    /// Note: api_key shows presence only ("(set)"/"(unset)"), never the actual value.
     pub fn get_field(&self, path: &str) -> Option<String> {
         match path {
-            // Top-level fields (excluding api_key for security)
+            "api_key" => Some(
+                if self.api_key.is_some() {
+                    "(set)"
+                } else {
+                    "(unset)"
+                }
+                .to_string(),
+            ),
+            // Top-level fields
             "verbose" => Some(self.verbose.to_string()),
             "hide_tool_calls" => Some(self.hide_tool_calls.to_string()),
             "no_tool_calls" => Some(self.no_tool_calls.to_string()),
@@ -652,10 +727,11 @@ impl ResolvedConfig {
     }
 
     /// List all inspectable config field paths.
-    /// Note: api_key is intentionally excluded for security.
+    /// Note: api_key shows presence only, not the actual value.
     pub fn list_fields() -> &'static [&'static str] {
         &[
             // Top-level fields
+            "api_key",
             "verbose",
             "hide_tool_calls",
             "no_tool_calls",
@@ -770,7 +846,7 @@ mod tests {
     #[test]
     fn test_resolved_config_get_field() {
         let config = ResolvedConfig {
-            api_key: "secret".to_string(),
+            api_key: Some("secret".to_string()),
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,
@@ -802,7 +878,7 @@ mod tests {
 
         assert_eq!(config.get_field("model"), Some("test-model".to_string()));
         assert_eq!(config.get_field("username"), Some("testuser".to_string()));
-        assert_eq!(config.get_field("api_key"), None); // Excluded for security
+        assert_eq!(config.get_field("api_key"), Some("(set)".to_string()));
         assert_eq!(
             config.get_field("file_tools_allowed_paths"),
             Some("/tmp".to_string())
@@ -819,5 +895,79 @@ mod tests {
         );
         assert_eq!(config.get_field("storage.bytes_per_token"), None); // Not set
         assert_eq!(config.get_field("storage.enable_bloom_filters"), None); // Not set
+    }
+
+    #[test]
+    fn test_tools_config_deserialize_with_categories() {
+        let toml_str = r#"
+            include = ["shell_exec", "file_edit"]
+            exclude = ["spawn_agent"]
+            exclude_categories = ["builtin"]
+        "#;
+        let config: ToolsConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.include,
+            Some(vec!["shell_exec".to_string(), "file_edit".to_string()])
+        );
+        assert_eq!(config.exclude, Some(vec!["spawn_agent".to_string()]));
+        assert_eq!(config.exclude_categories, Some(vec!["builtin".to_string()]));
+    }
+
+    #[test]
+    fn test_tools_config_merge_local_appends_exclude() {
+        let global = ToolsConfig {
+            include: None,
+            exclude: Some(vec!["tool_a".to_string()]),
+            exclude_categories: Some(vec!["builtin".to_string()]),
+        };
+        let local = ToolsConfig {
+            include: None,
+            exclude: Some(vec!["tool_b".to_string()]),
+            exclude_categories: Some(vec!["agent".to_string()]),
+        };
+        let merged = global.merge_local(&local);
+        assert_eq!(
+            merged.exclude,
+            Some(vec!["tool_a".to_string(), "tool_b".to_string()])
+        );
+        assert_eq!(
+            merged.exclude_categories,
+            Some(vec!["builtin".to_string(), "agent".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_tools_config_merge_local_include_overrides() {
+        let global = ToolsConfig {
+            include: Some(vec!["tool_a".to_string(), "tool_b".to_string()]),
+            exclude: None,
+            exclude_categories: None,
+        };
+        let local = ToolsConfig {
+            include: Some(vec!["tool_c".to_string()]),
+            exclude: None,
+            exclude_categories: None,
+        };
+        let merged = global.merge_local(&local);
+        assert_eq!(merged.include, Some(vec!["tool_c".to_string()]));
+    }
+
+    #[test]
+    fn test_tools_config_merge_local_deduplicates() {
+        let global = ToolsConfig {
+            include: None,
+            exclude: Some(vec!["tool_a".to_string()]),
+            exclude_categories: None,
+        };
+        let local = ToolsConfig {
+            include: None,
+            exclude: Some(vec!["tool_a".to_string(), "tool_b".to_string()]),
+            exclude_categories: None,
+        };
+        let merged = global.merge_local(&local);
+        assert_eq!(
+            merged.exclude,
+            Some(vec!["tool_a".to_string(), "tool_b".to_string()])
+        );
     }
 }
