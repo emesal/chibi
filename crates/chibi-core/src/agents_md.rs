@@ -37,21 +37,22 @@ pub fn load_agents_md(
 
     // 3. Walk from project root down to cwd
     if let Ok(project_root) = project_root.canonicalize()
-        && let Ok(cwd) = cwd.canonicalize() {
-            if let Ok(rel) = cwd.strip_prefix(&project_root) {
-                // Project root itself
-                try_load(project_root.join("AGENTS.md"), &mut sections);
-                // Each intermediate directory down to cwd
-                let mut walk = project_root.clone();
-                for component in rel.components() {
-                    walk = walk.join(component);
-                    try_load(walk.join("AGENTS.md"), &mut sections);
-                }
-            } else {
-                // cwd is not under project_root (unusual); just check project root
-                try_load(project_root.join("AGENTS.md"), &mut sections);
+        && let Ok(cwd) = cwd.canonicalize()
+    {
+        if let Ok(rel) = cwd.strip_prefix(&project_root) {
+            // Project root itself
+            try_load(project_root.join("AGENTS.md"), &mut sections);
+            // Each intermediate directory down to cwd
+            let mut walk = project_root.clone();
+            for component in rel.components() {
+                walk = walk.join(component);
+                try_load(walk.join("AGENTS.md"), &mut sections);
             }
+        } else {
+            // cwd is not under project_root (unusual); just check project root
+            try_load(project_root.join("AGENTS.md"), &mut sections);
         }
+    }
 
     sections.join("\n\n")
 }
