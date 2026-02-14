@@ -36,7 +36,6 @@ use std::path::Path;
 use crate::api::sink::ResponseSink;
 use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
-use crate::context::ContextEntry;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 
@@ -314,7 +313,7 @@ impl Chibi {
     ///
     /// The tool's output as a string, or an error if the tool wasn't found
     /// or execution failed.
-    pub fn execute_tool(
+    pub async fn execute_tool(
         &self,
         context_name: &str,
         name: &str,
@@ -335,6 +334,24 @@ impl Chibi {
             {
                 return result;
             }
+        }
+
+        // Try coding tools
+        if tools::is_coding_tool(name) {
+            let project_root = std::env::var("CHIBI_PROJECT_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+            if let Some(result) =
+                tools::execute_coding_tool(name, &args, &project_root, &self.tools).await
+            {
+                return result;
+            }
+        }
+
+        // Try agent tools
+        if tools::is_agent_tool(name) {
+            let config = self.app.resolve_config(context_name, None)?;
+            return tools::execute_agent_tool(&config, name, &args, &self.tools).await;
         }
 
         // Try plugins
@@ -359,11 +376,6 @@ impl Chibi {
     /// List all available context names.
     pub fn list_contexts(&self) -> Vec<String> {
         self.app.list_contexts()
-    }
-
-    /// List all available contexts with metadata.
-    pub fn list_context_entries(&self) -> &[ContextEntry] {
-        &self.app.state.contexts
     }
 
     /// Resolve configuration for the current context.

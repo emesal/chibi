@@ -705,6 +705,67 @@ fn test_resolve_config_all_local_overrides() {
     assert!(!resolved.reflection_enabled);
 }
 
+// === Environment variable override tests ===
+// These tests mutate process-global state (env vars) and must not run in parallel.
+// Run with: cargo test -- --test-threads=1   (or accept the race risk in CI)
+
+#[test]
+fn test_resolve_config_env_model_override() {
+    let (app, _temp) = create_test_app();
+
+    // SAFETY: env::set_var is unsafe in edition 2024 due to potential data races
+    // in multithreaded programs. test-only, and env vars are restored after use.
+    unsafe {
+        std::env::set_var(super::config_resolution::ENV_MODEL, "env-model");
+    }
+    let resolved = app.resolve_config("default", None).unwrap();
+    unsafe {
+        std::env::remove_var(super::config_resolution::ENV_MODEL);
+    }
+
+    assert_eq!(resolved.model, "env-model");
+}
+
+#[test]
+fn test_resolve_config_env_api_key_override() {
+    let (app, _temp) = create_test_app();
+
+    unsafe {
+        std::env::set_var(super::config_resolution::ENV_API_KEY, "env-secret");
+    }
+    let resolved = app.resolve_config("default", None).unwrap();
+    unsafe {
+        std::env::remove_var(super::config_resolution::ENV_API_KEY);
+    }
+
+    assert_eq!(resolved.api_key, Some("env-secret".to_string()));
+}
+
+#[test]
+fn test_resolve_config_local_overrides_env() {
+    let (app, _temp) = create_test_app();
+
+    // Set env var
+    unsafe {
+        std::env::set_var(super::config_resolution::ENV_MODEL, "env-model");
+    }
+
+    // Set local config with higher priority
+    let local = LocalConfig {
+        model: Some("local-model".to_string()),
+        ..Default::default()
+    };
+    app.save_local_config("default", &local).unwrap();
+
+    let resolved = app.resolve_config("default", None).unwrap();
+    unsafe {
+        std::env::remove_var(super::config_resolution::ENV_MODEL);
+    }
+
+    // local.toml should win over env var
+    assert_eq!(resolved.model, "local-model");
+}
+
 // Note: supports_tool_calls tests removed — capability detection now from ratatoskr registry
 // Note: Image config tests removed — image presentation is handled by CLI layer
 

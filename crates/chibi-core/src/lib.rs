@@ -59,8 +59,8 @@ pub use chibi::{Chibi, LoadOptions, PermissionHandler, project_chibi_dir, projec
 pub use api::{CollectingSink, PromptOptions, ResponseEvent, ResponseSink};
 pub use config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
 pub use context::{Context, ContextEntry, TranscriptEntry};
-pub use execution::ExecutionRequest;
-pub use input::{Command, ExecutionFlags, Flags, Inspectable};
+pub use execution::{CommandEffect, execute_command};
+pub use input::{Command, ExecutionFlags, Inspectable};
 pub use output::OutputSink;
 pub use partition::StorageConfig;
 pub use state::{AppState, StatePaths};

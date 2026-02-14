@@ -8,9 +8,10 @@ Settings are resolved in this order (later overrides earlier):
 
 1. **Defaults** - Built-in default values
 2. **Global config** (`~/.chibi/config.toml`) - User's base configuration
-3. **Model metadata** (`~/.chibi/models.toml`) - Per-model settings
-4. **Context config** (`~/.chibi/contexts/<name>/local.toml`) - Per-context overrides
-5. **CLI flags** - Command-line arguments (highest priority)
+3. **Environment variables** - `CHIBI_API_KEY`, `CHIBI_MODEL` (see [below](#environment-variables))
+4. **Model metadata** (`~/.chibi/models.toml`) - Per-model settings
+5. **Context config** (`~/.chibi/contexts/<name>/local.toml`) - Per-context overrides
+6. **CLI flags** - Command-line arguments (highest priority)
 
 ## CLI Presentation Configuration
 
@@ -494,7 +495,14 @@ Each layer can override specific values while inheriting others.
 
 ## Environment Variables
 
-Chibi does not use environment variables for configuration. All settings come from the config files described above.
+Two config fields can be set via environment variables, useful for CI/CD secret injection, container deployments, and quick model switching:
+
+| Variable | Overrides | Example |
+|----------|-----------|---------|
+| `CHIBI_API_KEY` | `api_key` in config.toml | `CHIBI_API_KEY=sk-... chibi "hello"` |
+| `CHIBI_MODEL` | `model` in config.toml | `CHIBI_MODEL=openai/o3 chibi "solve this"` |
+
+**Priority:** env vars override `config.toml` but are overridden by `local.toml` and CLI flags. See [resolution order](#core-configuration) for the full hierarchy.
 
 Chibi reads these environment variables for feature detection:
 - `COLORTERM` - Checked for truecolor support (`truecolor` or `24bit`)

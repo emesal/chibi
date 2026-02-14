@@ -54,47 +54,18 @@ impl ToolType {
     }
 }
 
-/// Built-in tool names (todos, goals, reflection, send_message)
-const BUILTIN_TOOL_NAMES: &[&str] = &[
-    "update_todos",
-    "update_goals",
-    "update_reflection",
-    "send_message",
-];
-
-/// File tool names (file_head, file_tail, file_lines, file_grep, cache_list)
-const FILE_TOOL_NAMES: &[&str] = &[
-    "file_head",
-    "file_tail",
-    "file_lines",
-    "file_grep",
-    "cache_list",
-];
-
-/// Agent tool names (spawn_agent, retrieve_content)
-const AGENT_TOOL_NAMES: &[&str] = &["spawn_agent", "retrieve_content"];
-
-/// Coding tool names (shell_exec, dir_list, glob_files, grep_files, file_edit, index_*)
-const CODING_TOOL_NAMES: &[&str] = &[
-    "shell_exec",
-    "dir_list",
-    "glob_files",
-    "grep_files",
-    "file_edit",
-    "index_update",
-    "index_query",
-    "index_status",
-];
-
-/// Classify a tool's type based on its name
+/// Classify a tool's type based on its name.
+///
+/// Delegates to the authoritative `is_*_tool()` functions in each tool module,
+/// ensuring classification stays in sync with tool registration automatically.
 fn classify_tool_type(name: &str, plugin_names: &[&str]) -> ToolType {
-    if BUILTIN_TOOL_NAMES.contains(&name) {
+    if tools::is_builtin_tool(name) {
         ToolType::Builtin
-    } else if FILE_TOOL_NAMES.contains(&name) {
+    } else if tools::is_file_tool(name) {
         ToolType::File
-    } else if AGENT_TOOL_NAMES.contains(&name) {
+    } else if tools::is_agent_tool(name) {
         ToolType::Agent
-    } else if CODING_TOOL_NAMES.contains(&name) {
+    } else if tools::is_coding_tool(name) {
         ToolType::Coding
     } else if plugin_names.contains(&name) {
         ToolType::Plugin
@@ -432,48 +403,8 @@ fn apply_hook_overrides<S: ResponseSink>(
     Ok(())
 }
 
-/// Send a prompt to the LLM with streaming response via ResponseSink.
-///
-/// This is the main entry point for sending prompts. It handles:
-/// - Hook execution (pre_message, post_message, etc.)
-/// - Inbox message injection
-/// - Tool execution loop with fuel budget
-/// - Context management
-/// - Auto-compaction
-///
-/// # Arguments
-///
-/// * `context_name` - The name of the context to use for this prompt
-#[allow(clippy::too_many_arguments)]
-pub async fn send_prompt<S: ResponseSink>(
-    app: &AppState,
-    context_name: &str,
-    prompt: String,
-    tools: &[Tool],
-    resolved_config: &ResolvedConfig,
-    options: &PromptOptions<'_>,
-    sink: &mut S,
-    permission_handler: Option<&PermissionHandler>,
-    home_dir: &Path,
-    project_root: &Path,
-) -> io::Result<()> {
-    send_prompt_loop(
-        app,
-        context_name,
-        prompt,
-        tools,
-        resolved_config,
-        options,
-        sink,
-        permission_handler,
-        home_dir,
-        project_root,
-    )
-    .await
-}
-
 // ============================================================================
-// Helper Functions (extracted from send_prompt_with_depth)
+// Helper Functions (extracted from send_prompt)
 // ============================================================================
 
 /// Build the full system prompt with all components.
@@ -792,6 +723,7 @@ async fn execute_tool_pure(
     resolved_config: &ResolvedConfig,
     verbose: bool,
     permission_handler: Option<&PermissionHandler>,
+    project_root: &Path,
 ) -> io::Result<ToolExecutionResult> {
     let mut args: serde_json::Value =
         serde_json::from_str(&tool_call.arguments).unwrap_or(serde_json::json!({}));
@@ -932,6 +864,36 @@ async fn execute_tool_pure(
             }
         }
     } else if tools::is_agent_tool(&tool_call.name) {
+        // URL permission check for retrieve_content with sensitive URLs
+        if tool_call.name == tools::RETRIEVE_CONTENT_TOOL_NAME
+            && let Some(source) = args.get_str("source")
+            && tools::agent_tools::is_url(source)
+            && let tools::UrlSafety::Sensitive(reason) = tools::classify_url(source)
+        {
+            let hook_data = json!({
+                "tool_name": tool_call.name,
+                "url": source,
+                "safety": "sensitive",
+                "reason": reason,
+            });
+            match check_permission(
+                tools,
+                tools::HookPoint::PreFetchUrl,
+                &hook_data,
+                permission_handler,
+            )? {
+                Ok(()) => {} // approved, continue to execute
+                Err(reason) => {
+                    let msg = format!("Permission denied: {}", reason);
+                    return Ok(ToolExecutionResult {
+                        final_result: msg.clone(),
+                        original_result: msg,
+                        was_cached: false,
+                        diagnostics,
+                    });
+                }
+            }
+        }
         match tools::execute_agent_tool(resolved_config, &tool_call.name, &args, tools).await {
             Ok(r) => r,
             Err(e) => format!("Error: {}", e),
@@ -950,10 +912,7 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    let project_root = std::env::var("CHIBI_PROJECT_ROOT")
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                    match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools)
+                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools)
                         .await
                     {
                         Some(Ok(r)) => r,
@@ -977,10 +936,7 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    let project_root = std::env::var("CHIBI_PROJECT_ROOT")
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                    match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools)
+                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools)
                         .await
                     {
                         Some(Ok(r)) => r,
@@ -992,10 +948,7 @@ async fn execute_tool_pure(
             }
         } else {
             // Read-only coding tools (dir_list, glob_files, grep_files) don't need permission
-            let project_root = std::env::var("CHIBI_PROJECT_ROOT")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-            match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await {
+            match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools).await {
                 Some(Ok(r)) => r,
                 Some(Err(e)) => format!("Error: {}", e),
                 None => format!("Error: Unknown coding tool '{}'", tool_call.name),
@@ -1159,6 +1112,7 @@ async fn execute_single_tool<S: ResponseSink>(
     permission_handler: Option<&PermissionHandler>,
     verbose: bool,
     sink: &mut S,
+    project_root: &Path,
 ) -> io::Result<ToolExecutionResult> {
     // Apply handoff if this is a flow control tool
     let args: serde_json::Value =
@@ -1181,6 +1135,7 @@ async fn execute_single_tool<S: ResponseSink>(
         resolved_config,
         verbose,
         permission_handler,
+        project_root,
     )
     .await?;
 
@@ -1292,6 +1247,7 @@ async fn process_tool_calls<S: ResponseSink>(
     verbose: bool,
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
+    project_root: &Path,
 ) -> io::Result<()> {
     // Convert tool calls to JSON format for the assistant message
     let tool_calls_json: Vec<serde_json::Value> = tool_calls
@@ -1347,6 +1303,7 @@ async fn process_tool_calls<S: ResponseSink>(
                     resolved_config,
                     verbose,
                     permission_handler,
+                    project_root,
                 )
             })
             .collect();
@@ -1371,6 +1328,7 @@ async fn process_tool_calls<S: ResponseSink>(
             permission_handler,
             verbose,
             sink,
+            project_root,
         )
         .await?;
         results[*idx] = Some(result);
@@ -1580,8 +1538,20 @@ fn handle_final_response<S: ResponseSink>(
     }
 }
 
+/// Send a prompt to the LLM with streaming response via ResponseSink.
+///
+/// This is the main entry point for sending prompts. It handles:
+/// - Hook execution (pre_message, post_message, etc.)
+/// - Inbox message injection
+/// - Tool execution loop with fuel budget
+/// - Context management
+/// - Auto-compaction
+///
+/// # Arguments
+///
+/// * `context_name` - The name of the context to use for this prompt
 #[allow(clippy::too_many_arguments)]
-async fn send_prompt_loop<S: ResponseSink>(
+pub async fn send_prompt<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
     initial_prompt: String,
@@ -1828,6 +1798,7 @@ async fn send_prompt_loop<S: ResponseSink>(
                     verbose,
                     sink,
                     permission_handler,
+                    project_root,
                 )
                 .await?;
 
@@ -1942,57 +1913,86 @@ mod tests {
 
     #[test]
     fn test_classify_tool_type_builtin() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
-        assert_eq!(
-            classify_tool_type("update_todos", &plugin_names),
-            ToolType::Builtin
-        );
-        assert_eq!(
-            classify_tool_type("update_goals", &plugin_names),
-            ToolType::Builtin
-        );
+        let plugins: Vec<&str> = vec![];
+        // Core builtins
+        for name in [
+            "update_todos",
+            "update_goals",
+            "update_reflection",
+            "send_message",
+            "call_agent",
+            "call_user",
+            "model_info",
+            "read_context",
+        ] {
+            assert_eq!(
+                classify_tool_type(name, &plugins),
+                ToolType::Builtin,
+                "{name}"
+            );
+        }
     }
 
     #[test]
     fn test_classify_tool_type_file() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
-        assert_eq!(
-            classify_tool_type("file_head", &plugin_names),
-            ToolType::File
-        );
-        assert_eq!(
-            classify_tool_type("cache_list", &plugin_names),
-            ToolType::File
-        );
+        let plugins: Vec<&str> = vec![];
+        for name in [
+            "file_head",
+            "file_tail",
+            "file_lines",
+            "file_grep",
+            "cache_list",
+            "write_file",
+        ] {
+            assert_eq!(classify_tool_type(name, &plugins), ToolType::File, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_classify_tool_type_coding() {
+        let plugins: Vec<&str> = vec![];
+        for name in [
+            "shell_exec",
+            "dir_list",
+            "glob_files",
+            "grep_files",
+            "file_edit",
+            "fetch_url",
+            "index_update",
+            "index_query",
+            "index_status",
+        ] {
+            assert_eq!(
+                classify_tool_type(name, &plugins),
+                ToolType::Coding,
+                "{name}"
+            );
+        }
     }
 
     #[test]
     fn test_classify_tool_type_agent() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
-        assert_eq!(
-            classify_tool_type("spawn_agent", &plugin_names),
-            ToolType::Agent
-        );
-        assert_eq!(
-            classify_tool_type("retrieve_content", &plugin_names),
-            ToolType::Agent
-        );
+        let plugins: Vec<&str> = vec![];
+        for name in ["spawn_agent", "retrieve_content"] {
+            assert_eq!(
+                classify_tool_type(name, &plugins),
+                ToolType::Agent,
+                "{name}"
+            );
+        }
     }
 
     #[test]
     fn test_classify_tool_type_plugin() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
-        assert_eq!(
-            classify_tool_type("my_plugin", &plugin_names),
-            ToolType::Plugin
-        );
+        let plugins: Vec<&str> = vec!["my_plugin"];
+        assert_eq!(classify_tool_type("my_plugin", &plugins), ToolType::Plugin);
     }
 
     #[test]
     fn test_classify_tool_type_unknown_defaults_to_plugin() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
+        let plugins: Vec<&str> = vec![];
         assert_eq!(
-            classify_tool_type("unknown_tool", &plugin_names),
+            classify_tool_type("unknown_tool", &plugins),
             ToolType::Plugin
         );
     }
@@ -2001,6 +2001,8 @@ mod tests {
     fn test_tool_type_as_str() {
         assert_eq!(ToolType::Builtin.as_str(), "builtin");
         assert_eq!(ToolType::File.as_str(), "file");
+        assert_eq!(ToolType::Agent.as_str(), "agent");
+        assert_eq!(ToolType::Coding.as_str(), "coding");
         assert_eq!(ToolType::Plugin.as_str(), "plugin");
     }
 

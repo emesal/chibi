@@ -12,6 +12,7 @@ pub mod coding_tools;
 pub mod file_tools;
 mod hooks;
 mod plugins;
+pub mod security;
 
 use std::path::PathBuf;
 
@@ -33,7 +34,7 @@ pub use builtin::{
 pub use builtin::{Handoff, HandoffTarget};
 
 // Re-export builtin tool registry lookup
-pub use builtin::get_builtin_tool_def;
+pub use builtin::{get_builtin_tool_def, is_builtin_tool};
 
 // Re-export registry-based tool generation
 pub use builtin::{all_builtin_tools_to_api_format, builtin_tools_to_api_format};
@@ -74,6 +75,9 @@ pub use agent_tools::{execute_agent_tool, is_agent_tool, spawn_agent};
 
 // Re-export agent tool types and constants
 pub use agent_tools::{RETRIEVE_CONTENT_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SpawnOptions};
+
+// Re-export security utilities
+pub use security::{UrlSafety, classify_url, validate_file_path};
 
 /// Metadata for tool behavior in the agentic loop
 #[derive(Debug, Clone, Default)]
@@ -169,6 +173,21 @@ pub fn tool_call_summary(tools: &[Tool], name: &str, args_json: &str) -> Option<
     } else {
         Some(parts.join(" "))
     }
+}
+
+/// Shared HTTP client for URL fetching (agent_tools, coding_tools).
+///
+/// Reuses a single connection pool across all fetch_url calls within a process.
+/// Per-request timeouts can be set via `RequestBuilder::timeout()`.
+pub(crate) fn http_client() -> &'static reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
+            .expect("failed to build HTTP client")
+    })
 }
 
 // Tests for Tool struct are in plugins.rs

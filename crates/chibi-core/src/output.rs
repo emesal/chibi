@@ -27,4 +27,13 @@ pub trait OutputSink {
     /// Prompt the user for confirmation. Returns true if confirmed.
     /// JSON-mode implementations should auto-approve (return true).
     fn confirm(&self, prompt: &str) -> bool;
+
+    /// Emit content that may contain markdown.
+    ///
+    /// CLI renders this via streamdown; JSON emits raw text.
+    /// The default implementation falls back to `emit_result()`.
+    fn emit_markdown(&self, content: &str) -> io::Result<()> {
+        self.emit_result(content);
+        Ok(())
+    }
 }

@@ -3,25 +3,22 @@ use std::io::{self, Write};
 
 /// JSONL response sink for chibi-json.
 ///
-/// Accumulates text chunks and emits complete transcript entries as JSONL.
-/// No streaming partial text -- programmatic consumers want complete records.
-pub struct JsonResponseSink {
-    accumulated_text: String,
-}
+/// Emits complete transcript entries and diagnostics as JSONL.
+/// No streaming partial text — programmatic consumers want complete records.
+pub struct JsonResponseSink;
 
 impl JsonResponseSink {
     pub fn new() -> Self {
-        Self {
-            accumulated_text: String::new(),
-        }
+        Self
     }
 }
 
 impl ResponseSink for JsonResponseSink {
     fn handle(&mut self, event: ResponseEvent<'_>) -> io::Result<()> {
         match event {
-            ResponseEvent::TextChunk(text) => {
-                self.accumulated_text.push_str(text);
+            ResponseEvent::TextChunk(_) => {
+                // Text chunks are not emitted — the complete response arrives
+                // via TranscriptEntry, which is the authoritative record.
             }
             ResponseEvent::Reasoning(_) => {
                 // Reasoning not emitted in JSON mode
@@ -31,17 +28,19 @@ impl ResponseSink for JsonResponseSink {
                 println!("{}", json);
                 io::stdout().flush()?;
             }
-            ResponseEvent::Finished => {
-                self.accumulated_text.clear();
-            }
+            ResponseEvent::Finished => {}
             ResponseEvent::Diagnostic {
                 message,
                 verbose_only,
             } => {
-                if !verbose_only {
-                    let json = serde_json::json!({"type": "diagnostic", "content": message});
-                    eprintln!("{}", json);
-                }
+                // Always emit diagnostics in JSON mode — programmatic consumers can filter
+                // on the `verbose_only` field. Silently dropping them loses information.
+                let json = serde_json::json!({
+                    "type": "diagnostic",
+                    "content": message,
+                    "verbose_only": verbose_only,
+                });
+                eprintln!("{}", json);
             }
             ResponseEvent::ToolStart { name, summary } => {
                 let json = serde_json::json!({

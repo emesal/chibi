@@ -196,6 +196,19 @@ pub fn resolve_context_window(config: &mut ResolvedConfig, gateway: &EmbeddedGat
     }
 }
 
+/// Ensure `context_window_limit` is populated in the config.
+///
+/// Convenience wrapper: builds a gateway and calls `resolve_context_window`.
+/// Safe to call even when the limit is already set (no-op) or the model
+/// isn't in the registry (limit stays 0, compaction/warnings remain guarded).
+pub fn ensure_context_window(config: &mut ResolvedConfig) {
+    if config.context_window_limit == 0
+        && let Ok(gateway) = build_gateway(config)
+    {
+        resolve_context_window(config, &gateway);
+    }
+}
+
 /// Simple non-streaming chat completion.
 ///
 /// Converts JSON messages to ratatoskr format, sends request, returns content string.

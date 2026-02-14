@@ -38,6 +38,7 @@ pub enum HookPoint {
     PostToolBatch,    // After processing a batch of tool calls (can override fallback)
     PreFileWrite,     // Before file write/patch (can approve/deny/modify operation)
     PreShellExec,     // Before shell command execution (can approve/deny, fail-safe deny)
+    PreFetchUrl,      // Before fetching a sensitive URL (can approve/deny, fail-safe deny)
     PreSpawnAgent, // Before sub-agent call (can intercept/replace with {"response": "..."} or block)
     PostSpawnAgent, // After sub-agent call (observe only)
     PostIndexFile, // After a file is indexed (observe: path, lang, symbol_count, ref_count)
@@ -119,7 +120,7 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
-    // All 26 hook points for testing
+    // All 30 hook points for testing
     const ALL_HOOKS: &[(&str, HookPoint)] = &[
         ("pre_message", HookPoint::PreMessage),
         ("post_message", HookPoint::PostMessage),
@@ -147,6 +148,7 @@ mod tests {
         ("post_tool_batch", HookPoint::PostToolBatch),
         ("pre_file_write", HookPoint::PreFileWrite),
         ("pre_shell_exec", HookPoint::PreShellExec),
+        ("pre_fetch_url", HookPoint::PreFetchUrl),
         ("pre_spawn_agent", HookPoint::PreSpawnAgent),
         ("post_spawn_agent", HookPoint::PostSpawnAgent),
         ("post_index_file", HookPoint::PostIndexFile),

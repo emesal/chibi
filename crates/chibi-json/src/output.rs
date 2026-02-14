@@ -44,4 +44,9 @@ impl OutputSink for JsonOutputSink {
     fn confirm(&self, _prompt: &str) -> bool {
         true // trust mode -- programmatic callers have already decided
     }
+
+    fn emit_markdown(&self, content: &str) -> io::Result<()> {
+        self.emit_result(content);
+        Ok(())
+    }
 }

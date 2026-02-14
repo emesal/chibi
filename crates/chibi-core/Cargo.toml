@@ -23,6 +23,7 @@ fs2 = "0.4"
 base64 = "0.22"
 ignore = "0.4"
 ratatoskr.workspace = true
+url = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [lints.rust]

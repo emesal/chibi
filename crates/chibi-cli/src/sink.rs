@@ -1,7 +1,7 @@
 //! CLI-specific response sink for terminal output.
 //!
 //! This module implements `ResponseSink` for the CLI, handling markdown
-//! rendering, diagnostic output, and JSON mode.
+//! rendering and diagnostic output.
 
 use chibi_core::api::sink::{ResponseEvent, ResponseSink};
 use std::io;
@@ -15,7 +15,6 @@ use crate::markdown::{MarkdownConfig, MarkdownStream};
 /// Connects the core API's event system to CLI presentation concerns:
 /// - Renders text chunks through `MarkdownStream` when enabled
 /// - Handles diagnostic messages through `OutputHandler`
-/// - Emits transcript entries in JSON mode
 /// - Manages stream lifecycle (finish, newlines)
 pub struct CliResponseSink<'a> {
     output: &'a dyn OutputSink,

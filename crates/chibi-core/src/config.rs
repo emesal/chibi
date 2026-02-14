@@ -9,6 +9,60 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ============================================================================
+// Config Macros
+// ============================================================================
+
+/// Apply `Option`-field overrides from a source struct to a target struct.
+///
+/// For each field name, if `$src.field` is `Some(v)`, sets `$dst.field = v`
+/// (cloning as needed). This eliminates the repetitive `if let Some` blocks
+/// in config resolution.
+macro_rules! apply_option_overrides {
+    ($src:expr, $dst:expr, $($field:ident),+ $(,)?) => {
+        $(
+            if let Some(ref v) = $src.$field {
+                $dst.$field = v.clone();
+            }
+        )+
+    };
+}
+
+/// Early-return from `get_field` for simple config fields.
+///
+/// Call at the top of `get_field` — handles standard fields and returns,
+/// falling through for special cases handled by the caller's match block.
+///
+/// Display modes:
+/// - `display`: uses `to_string()` (bool, usize, u64)
+/// - `clone`: returns `.clone()` (String fields)
+/// - `int`: casts f32 to i32 before display (no decimals)
+/// - `fmt`: uses `format!("{}", v)` (f32 with decimals)
+macro_rules! config_get_field {
+    ($self:expr, $path:expr,
+     $(display: $($d_field:ident),* ;)?
+     $(clone: $($c_field:ident),* ;)?
+     $(int: $($i_field:ident),* ;)?
+     $(fmt: $($f_field:ident),* ;)?
+    ) => {
+        match $path {
+            $($(
+                stringify!($d_field) => return Some($self.$d_field.to_string()),
+            )*)?
+            $($(
+                stringify!($c_field) => return Some($self.$c_field.clone()),
+            )*)?
+            $($(
+                stringify!($i_field) => return Some(format!("{}", $self.$i_field as i32)),
+            )*)?
+            $($(
+                stringify!($f_field) => return Some(format!("{}", $self.$f_field)),
+            )*)?
+            _ => {} // fall through to caller's match
+        }
+    };
+}
+
+// ============================================================================
 // API Parameters Types
 // ============================================================================
 
@@ -580,6 +634,54 @@ pub struct LocalConfig {
     pub fallback_tool: Option<String>,
 }
 
+impl LocalConfig {
+    /// Apply all simple-override fields from this local config onto a resolved config.
+    ///
+    /// Fields with custom merge semantics (api, storage, tools) are NOT handled here —
+    /// those are applied separately in `resolve_config`.
+    ///
+    /// ## Adding a new config field
+    ///
+    /// 1. Add the field to `Config` (with `#[serde(default = "...")]`)
+    /// 2. Add `Option<T>` field to `LocalConfig`
+    /// 3. Add the concrete field to `ResolvedConfig`
+    /// 4. Add the field name to the `apply_option_overrides!` list below
+    /// 5. Add to `ResolvedConfig::get_field()` (macro or hand-written match arm)
+    /// 6. Add to `ResolvedConfig::list_fields()`
+    /// 7. Initialise from `self.config` in `resolve_config()` struct literal
+    pub fn apply_overrides(&self, resolved: &mut ResolvedConfig) {
+        // api_key is Option<String> on both sides, needs special handling
+        if let Some(ref api_key) = self.api_key {
+            resolved.api_key = Some(api_key.clone());
+        }
+        // All other simple fields: local Some(v) overrides resolved value
+        apply_option_overrides!(
+            self,
+            resolved,
+            model,
+            username,
+            fallback_tool,
+            file_tools_allowed_paths,
+            verbose,
+            hide_tool_calls,
+            no_tool_calls,
+            auto_compact,
+            auto_compact_threshold,
+            fuel,
+            fuel_empty_response_cost,
+            warn_threshold_percent,
+            context_window_limit,
+            reflection_enabled,
+            reflection_character_limit,
+            rolling_compact_drop_percentage,
+            tool_output_cache_threshold,
+            tool_cache_max_age_days,
+            auto_cleanup_cache,
+            tool_cache_preview_chars,
+        );
+    }
+}
+
 /// Model metadata from ~/.chibi/models.toml.
 ///
 /// Contains only per-model API parameter overrides. Model capabilities
@@ -650,6 +752,20 @@ impl ResolvedConfig {
     /// Returns None if the field doesn't exist or has no value set.
     /// Note: api_key shows presence only ("(set)"/"(unset)"), never the actual value.
     pub fn get_field(&self, path: &str) -> Option<String> {
+        // Macro handles standard fields with uniform display logic
+        config_get_field!(self, path,
+            display: verbose, hide_tool_calls, no_tool_calls, auto_compact,
+                     reflection_enabled, auto_cleanup_cache,
+                     context_window_limit, reflection_character_limit,
+                     fuel, fuel_empty_response_cost,
+                     tool_output_cache_threshold, tool_cache_preview_chars,
+                     tool_cache_max_age_days;
+            clone: model, username, fallback_tool;
+            int: warn_threshold_percent, auto_compact_threshold;
+            fmt: rolling_compact_drop_percentage;
+        );
+
+        // Fields with custom display logic
         match path {
             "api_key" => Some(
                 if self.api_key.is_some() {
@@ -659,28 +775,6 @@ impl ResolvedConfig {
                 }
                 .to_string(),
             ),
-            // Top-level fields
-            "verbose" => Some(self.verbose.to_string()),
-            "hide_tool_calls" => Some(self.hide_tool_calls.to_string()),
-            "no_tool_calls" => Some(self.no_tool_calls.to_string()),
-            "model" => Some(self.model.clone()),
-            "username" => Some(self.username.clone()),
-            "context_window_limit" => Some(self.context_window_limit.to_string()),
-            "warn_threshold_percent" => Some(format!("{}", self.warn_threshold_percent as i32)),
-            "auto_compact" => Some(self.auto_compact.to_string()),
-            "auto_compact_threshold" => Some(format!("{}", self.auto_compact_threshold as i32)),
-            "fuel" => Some(self.fuel.to_string()),
-            "fuel_empty_response_cost" => Some(self.fuel_empty_response_cost.to_string()),
-            "reflection_enabled" => Some(self.reflection_enabled.to_string()),
-            "reflection_character_limit" => Some(self.reflection_character_limit.to_string()),
-            "rolling_compact_drop_percentage" => {
-                Some(format!("{}", self.rolling_compact_drop_percentage))
-            }
-            "fallback_tool" => Some(self.fallback_tool.clone()),
-            "tool_output_cache_threshold" => Some(self.tool_output_cache_threshold.to_string()),
-            "tool_cache_max_age_days" => Some(self.tool_cache_max_age_days.to_string()),
-            "auto_cleanup_cache" => Some(self.auto_cleanup_cache.to_string()),
-            "tool_cache_preview_chars" => Some(self.tool_cache_preview_chars.to_string()),
             "file_tools_allowed_paths" => {
                 if self.file_tools_allowed_paths.is_empty() {
                     Some("(empty)".to_string())

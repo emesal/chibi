@@ -209,7 +209,7 @@ fn resolve_file_path(
         }
         (None, Some(p)) => {
             // Validate path against allowed paths
-            let resolved = resolve_and_validate_path(p, config)?;
+            let resolved = super::security::validate_file_path(p, config)?;
             Ok(resolved)
         }
         (Some(_), Some(_)) => Err(io::Error::new(
@@ -221,67 +221,6 @@ fn resolve_file_path(
             "Must provide either cache_id or path",
         )),
     }
-}
-
-/// Resolve and validate a file path against allowed paths
-fn resolve_and_validate_path(path: &str, config: &ResolvedConfig) -> io::Result<PathBuf> {
-    let resolved = if let Some(rest) = path.strip_prefix("~/") {
-        // Expand home directory with path suffix
-        let home = dirs_next::home_dir().ok_or_else(|| {
-            io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
-        })?;
-        home.join(rest)
-    } else if path == "~" {
-        // Bare ~ means home directory itself
-        dirs_next::home_dir().ok_or_else(|| {
-            io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
-        })?
-    } else {
-        PathBuf::from(path)
-    };
-
-    let canonical = resolved.canonicalize().map_err(|e| {
-        io::Error::new(
-            ErrorKind::NotFound,
-            format!("Could not resolve path '{}': {}", path, e),
-        )
-    })?;
-
-    // If file_tools_allowed_paths is empty, reject all file paths
-    // (only cache_id is allowed)
-    if config.file_tools_allowed_paths.is_empty() {
-        return Err(io::Error::new(
-            ErrorKind::PermissionDenied,
-            "File path access is not allowed. Use cache_id to access cached tool outputs, or configure file_tools_allowed_paths.",
-        ));
-    }
-
-    // Check if path is under any allowed path
-    let allowed = config.file_tools_allowed_paths.iter().any(|allowed_path| {
-        let allowed_resolved = if let Some(rest) = allowed_path.strip_prefix("~/") {
-            dirs_next::home_dir().map(|home| home.join(rest))
-        } else if allowed_path == "~" {
-            dirs_next::home_dir()
-        } else {
-            Some(PathBuf::from(allowed_path))
-        };
-
-        allowed_resolved
-            .and_then(|p| p.canonicalize().ok())
-            .is_some_and(|allowed_canonical| canonical.starts_with(&allowed_canonical))
-    });
-
-    if !allowed {
-        return Err(io::Error::new(
-            ErrorKind::PermissionDenied,
-            format!(
-                "Path '{}' is not under any allowed path. Allowed: {:?}",
-                path, config.file_tools_allowed_paths
-            ),
-        ));
-    }
-
-    Ok(canonical)
 }
 
 // === Tool Execution ===
