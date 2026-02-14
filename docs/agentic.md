@@ -135,11 +135,11 @@ This is useful for scheduled tasks (e.g., cron jobs) that periodically wake up c
 chibi -B work-assistant
 ```
 
-These commands work with `--json-config`:
+These commands work with `chibi-json`:
 
-```json
-{"command": "check_all_inboxes"}
-{"command": {"check_inbox": {"context": "work"}}}
+```bash
+echo '{"command": "check_all_inboxes"}' | chibi-json
+echo '{"command": {"check_inbox": {"context": "work"}}}' | chibi-json
 ```
 
 ### Sending Messages from External Programs
@@ -154,10 +154,10 @@ chibi -P send_message '{"to": "work-assistant", "content": "New task: review PR 
 chibi -P send_message '{"to": "work-assistant", "content": "Build failed", "from": "ci-bot"}'
 ```
 
-This also works with `--json-config` for programmatic use:
+This also works with `chibi-json` for programmatic use:
 
 ```bash
-echo '{"command": {"call_tool": {"name": "send_message", "args": ["{\"to\": \"work-assistant\", \"content\": \"Hello!\"}"]}}}' | chibi --json-config
+echo '{"command": {"call_tool": {"name": "send_message", "args": ["{\"to\": \"work-assistant\", \"content\": \"Hello!\"}"]}}}' | chibi-json
 ```
 
 The `from` field defaults to the current context name if not specified.

@@ -131,7 +131,7 @@ All JSONL entries share this structure:
   "id": "550e8400-e29b-41d4-a716-446655440002",
   "timestamp": 1705123465,
   "from": "default",
-  "to": "read_file",
+  "to": "file_head",
   "content": "{\"path\":\"Cargo.toml\"}",
   "entry_type": "tool_call"
 }
@@ -143,7 +143,7 @@ All JSONL entries share this structure:
 {
   "id": "550e8400-e29b-41d4-a716-446655440003",
   "timestamp": 1705123466,
-  "from": "read_file",
+  "from": "file_head",
   "to": "default",
   "content": "[package]\nname = \"chibi\"...",
   "entry_type": "tool_result"

@@ -36,22 +36,32 @@ chibi-cli (binary)   chibi-json (binary)
 
 **`crates/chibi-core/`** — Library crate (reusable logic)
 - `chibi.rs` — Main `Chibi` struct, tool execution
-- `context.rs`, `state/` — Context management, file I/O
-- `api/` — Request building, streaming, tool execution loop
-- `gateway.rs` — Type conversions between chibi and ratatoskr
+- `context.rs`, `state/` — Context management, file I/O, config resolution
+- `api/` — Request building, streaming, agentic loop (`send.rs`), compaction
+- `gateway.rs` — Type conversions between chibi and ratatoskr; context window auto-resolution
 - `model_info.rs` — Model metadata retrieval and formatting
-- `tools/` — Plugins, hooks, built-in tools
+- `tools/` — Plugins, hooks, built-in tools (builtin, coding, file, agent categories)
 - `partition.rs` — Partitioned transcript storage with bloom filters
-- `config.rs` — Core configuration types
+- `config.rs` — Core configuration types (`Config`, `LocalConfig`, `ResolvedConfig`)
+- `agents_md.rs` — AGENTS.md discovery and loading (VCS-aware hierarchy)
+- `vcs.rs` — VCS root detection (`.git`, `.hg`, etc.)
+- `index/` — Codebase indexing (SQLite WAL, symbol extraction, language plugin interface)
+- `execution.rs` — `ExecutionRequest` abstraction (shared CLI/JSON entry point)
+- `input.rs` — Core input types (`Command`, `ExecutionFlags`, `Inspectable`)
+- `output.rs` — `OutputSink` trait (abstraction over CLI text / JSON output)
 
 **LLM Communication:** Delegated to the [ratatoskr](https://github.com/emesal/ratatoskr) crate, which handles HTTP requests, SSE streaming, and response parsing. Chibi's `gateway.rs` converts between internal types and ratatoskr's `ModelGateway` interface. This abstraction keeps HTTP/networking concerns out of chibi's core logic.
 
 **`crates/chibi-cli/`** — Binary crate (CLI-specific)
 - `main.rs` — Entry point, command dispatch
 - `cli.rs` — Argument parsing (clap)
-- `input.rs` — Input types (`ChibiInput`, `Command`, `Flags`)
+- `input.rs` — Input types (`ChibiInput`, `ContextSelection`, `UsernameOverride`)
 - `session.rs` — CLI session state (implied context)
 - `config.rs` — CLI-specific config (markdown, images)
+- `output.rs` — `OutputHandler` (`OutputSink` impl for terminal)
+- `sink.rs` — `CliResponseSink` (`ResponseSink` impl, markdown streaming)
+- `markdown.rs` — Markdown rendering pipeline (streamdown-rs integration)
+- `image_cache.rs` — Image caching for terminal output
 
 **`crates/chibi-json/`** — Binary crate (JSON-mode, programmatic)
 - `main.rs` — Entry point, command dispatch

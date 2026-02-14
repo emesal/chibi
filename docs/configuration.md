@@ -530,7 +530,7 @@ When no TTY is available (piped input, CI, parent process), the permission handl
 To allow gated tools in headless mode, use trust mode:
 
 ```bash
-echo '{"message": "list files"}' | chibi --json-config --trust
+echo '{"command": {"send_prompt": {"prompt": "list files"}}}' | chibi-json
 chibi -t "refactor this module"
 ```
 
@@ -538,7 +538,7 @@ chibi -t "refactor this module"
 
 ### Plugin Permission Policies
 
-Plugins can implement custom permission logic via the `PreFileWrite` and `PreShellExec` hooks. A plugin that returns `{"denied": true}` overrides all other approvals (deny wins). See [hooks documentation](hooks.md) for details.
+Plugins can implement custom permission logic via the `pre_file_write` and `pre_shell_exec` hooks. A plugin that returns `{"denied": true}` overrides all other approvals (deny wins). See [hooks documentation](hooks.md) for details.
 
 ## Tool Filtering Configuration
 

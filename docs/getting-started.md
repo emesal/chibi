@@ -96,8 +96,7 @@ Plugins provide tools that the LLM can call. With verbose mode you can see tool 
 
 ```bash
 chibi -v "Read my package.json and list the dependencies"
-# stderr: [Loaded 1 tool(s): read_file]
-# stderr: [Tool: read_file]
+# stderr: [Tool: file_head(path: package.json)]
 # stdout: <LLM response about the file>
 ```
 
