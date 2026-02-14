@@ -25,7 +25,9 @@ pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
 
 // Re-export built-in tool constants (used by api module)
 pub use builtin::{CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME};
-pub use builtin::{MODEL_INFO_TOOL_NAME, REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
+pub use builtin::{
+    MODEL_INFO_TOOL_NAME, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME,
+};
 
 // Re-export handoff types for control flow
 pub use builtin::{Handoff, HandoffTarget};
@@ -50,8 +52,9 @@ pub use coding_tools::{
     CODING_TOOL_DEFS, all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool,
 };
 pub use coding_tools::{
-    DIR_LIST_TOOL_NAME, FILE_EDIT_TOOL_NAME, GLOB_FILES_TOOL_NAME, GREP_FILES_TOOL_NAME,
-    INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_UPDATE_TOOL_NAME, SHELL_EXEC_TOOL_NAME,
+    DIR_LIST_TOOL_NAME, FETCH_URL_TOOL_NAME, FILE_EDIT_TOOL_NAME, GLOB_FILES_TOOL_NAME,
+    GREP_FILES_TOOL_NAME, INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_UPDATE_TOOL_NAME,
+    SHELL_EXEC_TOOL_NAME,
 };
 
 // Re-export file tool registry functions

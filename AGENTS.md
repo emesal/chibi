@@ -83,7 +83,9 @@ Home directory: `--home` flag > `CHIBI_HOME` env > `~/.chibi`
 
 ## Plugins
 
-Executable scripts in `~/.chibi/plugins/`. Schema via `--schema`, args via stdin (JSON).
+Executable scripts in `~/.chibi/plugins/`. Available plugins live in the separate [chibi-plugins](https://github.com/emesal/chibi-plugins) repo — install individually by symlinking or copying. Several former plugins are now built-in tools: `fetch_url` (coding tool), `read_context` (builtin), `shell_exec` (replaces `run_command`), `file_head`/`file_lines` (replaces `read_file`), `call_agent` (replaces `recurse`).
+
+Schema via `--schema`, args via stdin (JSON).
 
 ```python
 #!/usr/bin/env -S uv run --quiet --script
