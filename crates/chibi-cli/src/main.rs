@@ -27,27 +27,8 @@ use chibi_core::{
     Chibi, Inspectable, LoadOptions, OutputSink, PermissionHandler, PromptOptions, StatePaths, api,
     tools,
 };
-use std::io::{self, ErrorKind, IsTerminal, Write};
+use std::io::{self, ErrorKind, Write};
 use std::path::PathBuf;
-
-/// Prompt user for confirmation (y/N). Returns true if user confirms.
-/// If stdin is not a terminal (piped input), returns false.
-fn confirm_action(prompt: &str) -> bool {
-    let stdin = io::stdin();
-    if !stdin.is_terminal() {
-        return false;
-    }
-
-    eprint!("{} [y/N] ", prompt);
-    io::stderr().flush().ok();
-
-    let mut input = String::new();
-    if stdin.read_line(&mut input).is_err() {
-        return false;
-    }
-
-    matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
-}
 
 /// Build the interactive permission handler for gated operations.
 ///
@@ -1042,33 +1023,21 @@ async fn main() -> io::Result<()> {
     let mut input = cli::parse()?;
 
     // Handle --debug md=<FILENAME> early (renders markdown and quits, implies -x)
-    if let Some(path) = input.flags.debug.iter().find_map(|k| match k {
-        DebugKey::Md(p) => Some(p),
-        _ => None,
-    }) {
+    if let Some(path) = &input.md_file {
         let content = std::fs::read_to_string(path).map_err(|e| {
             io::Error::new(
                 ErrorKind::NotFound,
                 format!("Failed to read file '{}': {}", path, e),
             )
         })?;
-        let force_render = input
-            .flags
-            .debug
-            .iter()
-            .any(|k| matches!(k, DebugKey::ForceMarkdown));
         let mut md_cfg = md_config_defaults(true);
-        md_cfg.force_render = force_render;
+        md_cfg.force_render = input.force_markdown;
         render_markdown_output(&content, md_cfg)?;
         return Ok(());
     }
 
     // Handle --debug force-markdown
-    let force_markdown = input
-        .flags
-        .debug
-        .iter()
-        .any(|k| matches!(k, DebugKey::ForceMarkdown));
+    let force_markdown = input.force_markdown;
 
     let mut chibi = Chibi::load_with_options(LoadOptions {
         verbose: input.flags.verbose,

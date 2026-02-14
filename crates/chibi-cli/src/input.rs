@@ -74,6 +74,12 @@ pub struct ChibiInput {
     /// Disable markdown rendering (CLI-only presentation concern)
     #[serde(default)]
     pub raw: bool,
+    /// Debug: render a markdown file and quit (CLI-only, from --debug md=<FILE>)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub md_file: Option<String>,
+    /// Debug: force markdown rendering even when stdout is not a TTY (CLI-only)
+    #[serde(default)]
+    pub force_markdown: bool,
 }
 
 impl Default for ChibiInput {
@@ -84,6 +90,8 @@ impl Default for ChibiInput {
             context: ContextSelection::Current,
             username_override: None,
             raw: false,
+            md_file: None,
+            force_markdown: false,
         }
     }
 }
@@ -216,6 +224,8 @@ mod tests {
             },
             username_override: Some(UsernameOverride::Ephemeral("alice".to_string())),
             raw: true,
+            md_file: None,
+            force_markdown: false,
         };
 
         let json = serde_json::to_string(&input).unwrap();
@@ -244,6 +254,8 @@ mod tests {
             context: ContextSelection::Current,
             username_override: None,
             raw: false,
+            md_file: None,
+            force_markdown: false,
         };
 
         let json = serde_json::to_string(&input).unwrap();

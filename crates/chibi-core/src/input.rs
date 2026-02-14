@@ -93,10 +93,6 @@ pub enum DebugKey {
     DestroyAt(u64),
     /// Set destroy_after_seconds_inactive on the current context (e.g., "destroy_after_seconds_inactive=60")
     DestroyAfterSecondsInactive(u64),
-    /// Render a markdown file and quit (e.g., "md=README.md")
-    Md(String),
-    /// Force markdown rendering even when stdout is not a TTY
-    ForceMarkdown,
     /// Enable all debug features (request_log, response_meta)
     All,
 }
@@ -119,16 +115,10 @@ impl DebugKey {
                 .ok()
                 .map(DebugKey::DestroyAfterSecondsInactive);
         }
-        if let Some(path) = s.strip_prefix("md=")
-            && !path.is_empty()
-        {
-            return Some(DebugKey::Md(path.to_string()));
-        }
 
         match s {
             "request-log" | "request_log" => Some(DebugKey::RequestLog),
             "response-meta" | "response_meta" => Some(DebugKey::ResponseMeta),
-            "force-markdown" | "force_markdown" => Some(DebugKey::ForceMarkdown),
             "all" => Some(DebugKey::All),
             _ => None,
         }
@@ -273,17 +263,11 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_key_from_str_md() {
-        assert_eq!(
-            DebugKey::parse("md=README.md"),
-            Some(DebugKey::Md("README.md".to_string()))
-        );
-        assert_eq!(
-            DebugKey::parse("md=docs/guide.md"),
-            Some(DebugKey::Md("docs/guide.md".to_string()))
-        );
-        // Empty path should return None
-        assert_eq!(DebugKey::parse("md="), None);
+    fn test_debug_key_cli_only_keys_not_parsed_by_core() {
+        // md= and force-markdown are CLI-only keys, not recognized by core
+        assert_eq!(DebugKey::parse("md=README.md"), None);
+        assert_eq!(DebugKey::parse("force-markdown"), None);
+        assert_eq!(DebugKey::parse("force_markdown"), None);
     }
 
     #[test]
@@ -304,27 +288,24 @@ mod tests {
     #[test]
     fn test_debug_key_parse_list_multiple() {
         assert_eq!(
-            DebugKey::parse_list("request-log,force-markdown"),
-            vec![DebugKey::RequestLog, DebugKey::ForceMarkdown]
+            DebugKey::parse_list("request-log,response-meta"),
+            vec![DebugKey::RequestLog, DebugKey::ResponseMeta]
         );
     }
 
     #[test]
     fn test_debug_key_parse_list_with_parameterized() {
         assert_eq!(
-            DebugKey::parse_list("force-markdown,md=README.md"),
-            vec![
-                DebugKey::ForceMarkdown,
-                DebugKey::Md("README.md".to_string())
-            ]
+            DebugKey::parse_list("request-log,destroy_at=1234567890"),
+            vec![DebugKey::RequestLog, DebugKey::DestroyAt(1234567890)]
         );
     }
 
     #[test]
     fn test_debug_key_parse_list_ignores_invalid() {
         assert_eq!(
-            DebugKey::parse_list("request-log,invalid,force-markdown"),
-            vec![DebugKey::RequestLog, DebugKey::ForceMarkdown]
+            DebugKey::parse_list("request-log,invalid,response-meta"),
+            vec![DebugKey::RequestLog, DebugKey::ResponseMeta]
         );
     }
 

@@ -175,6 +175,21 @@ pub fn tool_call_summary(tools: &[Tool], name: &str, args_json: &str) -> Option<
     }
 }
 
+/// Shared HTTP client for URL fetching (agent_tools, coding_tools).
+///
+/// Reuses a single connection pool across all fetch_url calls within a process.
+/// Per-request timeouts can be set via `RequestBuilder::timeout()`.
+pub(crate) fn http_client() -> &'static reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
+            .expect("failed to build HTTP client")
+    })
+}
+
 // Tests for Tool struct are in plugins.rs
 
 #[cfg(test)]

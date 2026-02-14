@@ -102,12 +102,12 @@ chibi-cli resolves `context_window_limit` from ratatoskr's model registry when u
 
 ## Design notes (non-blocking, future consideration)
 
-- `is_json_mode()` on `OutputSink` trait is architecturally questionable post-split — CLI always returns false, JSON always returns true. consider removing and using the type system instead.
-- `DebugKey::Md` and `DebugKey::ForceMarkdown` are CLI-only concerns living in core's `input.rs`.
-- `project_root` is re-derived from env var 3 times in `send.rs` instead of being threaded through.
-- `reqwest::Client` created per `fetch_url` call in agent_tools — fine for now, wasteful if batched.
-- error output from chibi-json is plain text, not structured JSON — programmatic consumers can't parse failures.
+- [#148] `is_json_mode()` on `OutputSink` trait is architecturally questionable post-split — CLI always returns false, JSON always returns true. consider removing and using the type system instead.
+- [DONE] `DebugKey::Md` and `DebugKey::ForceMarkdown` moved to CLI — core no longer owns CLI rendering concerns. CLI parses these from `--debug` string directly, filters them out before `ExecutionFlags`.
+- [DONE] `project_root` threaded through `execute_tool_pure` → `execute_single_tool` → `process_tool_calls` instead of re-deriving from env var 3 times.
+- [DONE] `reqwest::Client` shared via `OnceLock` in `tools/mod.rs::http_client()` — reused across agent_tools and coding_tools fetch_url calls.
+- [#149] error output from chibi-json is plain text, not structured JSON — programmatic consumers can't parse failures.
 - [DONE] `off-by-one in auto-cleanup diagnostic` — the `+ 1` is intentional: `max_age_days` means "keep for N full days" (chibi exits after each response, so 0 must not purge same-session entries). fixed `CleanupCache` handler to also show `+ 1`, clarified `cache.rs` doc comments.
-- `confirm_action` is a free function only called from `OutputHandler::confirm` — could be inlined as a method.
-- test coverage gaps in chibi-json (only 5 integration tests, no JSONL format validation).
-- test coverage thin for `Chibi` struct methods (`execute_tool`, `clear_context`, `init`, `shutdown`).
+- [DONE] `confirm_action` inlined into `OutputHandler::confirm` — removed free function from `main.rs`.
+- [#150] test coverage gaps in chibi-json (only 5 integration tests, no JSONL format validation).
+- [#150] test coverage thin for `Chibi` struct methods (`execute_tool`, `clear_context`, `init`, `shutdown`).

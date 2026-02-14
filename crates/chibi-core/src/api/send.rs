@@ -723,6 +723,7 @@ async fn execute_tool_pure(
     resolved_config: &ResolvedConfig,
     verbose: bool,
     permission_handler: Option<&PermissionHandler>,
+    project_root: &Path,
 ) -> io::Result<ToolExecutionResult> {
     let mut args: serde_json::Value =
         serde_json::from_str(&tool_call.arguments).unwrap_or(serde_json::json!({}));
@@ -911,10 +912,7 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    let project_root = std::env::var("CHIBI_PROJECT_ROOT")
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                    match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools)
+                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools)
                         .await
                     {
                         Some(Ok(r)) => r,
@@ -938,10 +936,7 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    let project_root = std::env::var("CHIBI_PROJECT_ROOT")
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                    match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools)
+                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools)
                         .await
                     {
                         Some(Ok(r)) => r,
@@ -953,10 +948,7 @@ async fn execute_tool_pure(
             }
         } else {
             // Read-only coding tools (dir_list, glob_files, grep_files) don't need permission
-            let project_root = std::env::var("CHIBI_PROJECT_ROOT")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-            match tools::execute_coding_tool(&tool_call.name, &args, &project_root, tools).await {
+            match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools).await {
                 Some(Ok(r)) => r,
                 Some(Err(e)) => format!("Error: {}", e),
                 None => format!("Error: Unknown coding tool '{}'", tool_call.name),
@@ -1120,6 +1112,7 @@ async fn execute_single_tool<S: ResponseSink>(
     permission_handler: Option<&PermissionHandler>,
     verbose: bool,
     sink: &mut S,
+    project_root: &Path,
 ) -> io::Result<ToolExecutionResult> {
     // Apply handoff if this is a flow control tool
     let args: serde_json::Value =
@@ -1142,6 +1135,7 @@ async fn execute_single_tool<S: ResponseSink>(
         resolved_config,
         verbose,
         permission_handler,
+        project_root,
     )
     .await?;
 
@@ -1253,6 +1247,7 @@ async fn process_tool_calls<S: ResponseSink>(
     verbose: bool,
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
+    project_root: &Path,
 ) -> io::Result<()> {
     // Convert tool calls to JSON format for the assistant message
     let tool_calls_json: Vec<serde_json::Value> = tool_calls
@@ -1308,6 +1303,7 @@ async fn process_tool_calls<S: ResponseSink>(
                     resolved_config,
                     verbose,
                     permission_handler,
+                    project_root,
                 )
             })
             .collect();
@@ -1332,6 +1328,7 @@ async fn process_tool_calls<S: ResponseSink>(
             permission_handler,
             verbose,
             sink,
+            project_root,
         )
         .await?;
         results[*idx] = Some(result);
@@ -1801,6 +1798,7 @@ pub async fn send_prompt<S: ResponseSink>(
                     verbose,
                     sink,
                     permission_handler,
+                    project_root,
                 )
                 .await?;
 

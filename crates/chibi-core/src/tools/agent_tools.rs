@@ -159,13 +159,9 @@ fn read_file(path: &str, config: &ResolvedConfig) -> io::Result<String> {
 
 /// Fetch content from a URL with a 30-second timeout.
 async fn fetch_url(url: &str) -> io::Result<String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| io::Error::other(format!("Failed to build HTTP client: {}", e)))?;
-
-    let response = client
+    let response = super::http_client()
         .get(url)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| io::Error::other(format!("Failed to fetch '{}': {}", url, e)))?;

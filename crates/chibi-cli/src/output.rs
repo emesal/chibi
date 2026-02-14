@@ -6,7 +6,7 @@
 
 use chibi_core::OutputSink;
 use chibi_core::context::TranscriptEntry;
-use std::io;
+use std::io::{self, IsTerminal, Write};
 
 /// CLI output handler — text to stdout, diagnostics to stderr.
 ///
@@ -57,7 +57,20 @@ impl OutputSink for OutputHandler {
     }
 
     fn confirm(&self, prompt: &str) -> bool {
-        crate::confirm_action(prompt)
+        let stdin = io::stdin();
+        if !stdin.is_terminal() {
+            return false;
+        }
+
+        eprint!("{} [y/N] ", prompt);
+        io::stderr().flush().ok();
+
+        let mut input = String::new();
+        if stdin.read_line(&mut input).is_err() {
+            return false;
+        }
+
+        matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
     }
 }
 

@@ -483,13 +483,28 @@ impl Cli {
             args: v.get(1).cloned().into_iter().collect(),
         });
 
-        // Parse debug keys (comma-separated) to check for md=<file>
-        let debug_keys = self
+        // Parse debug keys (comma-separated), separating CLI-only keys from core keys.
+        // CLI-only keys (md=<file>, force-markdown) are extracted here and never
+        // enter ExecutionFlags — core doesn't need to know about them.
+        let debug_segments: Vec<&str> = self
             .debug
-            .as_ref()
-            .map(|s| DebugKey::parse_list(s))
+            .as_deref()
+            .map(|s| s.split(',').map(str::trim).collect())
             .unwrap_or_default();
-        let debug_implies_force_call_user = debug_keys.iter().any(|k| matches!(k, DebugKey::Md(_)));
+        let md_file = debug_segments.iter().find_map(|s| {
+            s.strip_prefix("md=")
+                .filter(|p| !p.is_empty())
+                .map(String::from)
+        });
+        let force_markdown = debug_segments
+            .iter()
+            .any(|s| *s == "force-markdown" || *s == "force_markdown");
+        let debug_keys: Vec<DebugKey> = debug_segments
+            .iter()
+            .filter(|s| !s.starts_with("md=") && **s != "force-markdown" && **s != "force_markdown")
+            .filter_map(|s| DebugKey::parse(s))
+            .collect();
+        let debug_implies_force_call_user = md_file.is_some();
 
         // Compute implied force_call_user based on flags
         let implies_force_call_user = self.list_current_context
@@ -659,6 +674,8 @@ impl Cli {
             context,
             username_override,
             raw: self.raw,
+            md_file,
+            force_markdown,
         })
     }
 
@@ -1664,13 +1681,9 @@ mod tests {
     fn test_debug_md_implies_force_call_user() {
         let input = parse_input("--debug md=README.md").unwrap();
         assert!(input.flags.force_call_user); // should imply -x
-        assert!(
-            input
-                .flags
-                .debug
-                .iter()
-                .any(|k| matches!(k, DebugKey::Md(path) if path == "README.md"))
-        );
+        assert_eq!(input.md_file.as_deref(), Some("README.md"));
+        // md= should not leak into core debug keys
+        assert!(input.flags.debug.is_empty());
     }
 
     #[test]
@@ -1678,13 +1691,7 @@ mod tests {
         let input = parse_input("-X --debug md=README.md").unwrap();
         assert!(!input.flags.force_call_user); // -X should override
         assert!(input.flags.force_call_agent);
-        assert!(
-            input
-                .flags
-                .debug
-                .iter()
-                .any(|k| matches!(k, DebugKey::Md(path) if path == "README.md"))
-        );
+        assert_eq!(input.md_file.as_deref(), Some("README.md"));
     }
 
     #[test]
@@ -1755,7 +1762,8 @@ mod tests {
     #[test]
     fn test_debug_comma_separated() {
         let input = parse_input("--debug request-log,force-markdown").unwrap();
-        assert_eq!(input.flags.debug.len(), 2);
+        // force-markdown is CLI-only, extracted into its own field
+        assert_eq!(input.flags.debug.len(), 1);
         assert!(
             input
                 .flags
@@ -1763,12 +1771,6 @@ mod tests {
                 .iter()
                 .any(|k| matches!(k, DebugKey::RequestLog))
         );
-        assert!(
-            input
-                .flags
-                .debug
-                .iter()
-                .any(|k| matches!(k, DebugKey::ForceMarkdown))
-        );
+        assert!(input.force_markdown);
     }
 }

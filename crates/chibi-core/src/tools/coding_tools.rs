@@ -1035,14 +1035,9 @@ async fn execute_fetch_url(args: &serde_json::Value) -> io::Result<String> {
         ));
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| io::Error::other(format!("Failed to create HTTP client: {}", e)))?;
-
-    let response = client
+    let response = super::http_client()
         .get(&url)
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .send()
         .await
         .map_err(|e| io::Error::other(format!("Request failed: {}", e)))?;
