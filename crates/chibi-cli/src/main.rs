@@ -186,13 +186,23 @@ fn resolve_context_name(chibi: &Chibi, session: &Session, name: &str) -> io::Res
 
 /// Build CLI ResolvedConfig from Chibi facade.
 /// Combines core config with presentation settings from cli.toml.
+///
+/// When `context_window_limit` is unset (0), resolves it from ratatoskr's
+/// model registry via a synchronous (no-network) lookup.
 fn resolve_cli_config(
     chibi: &Chibi,
     context_name: &str,
     username_override: Option<&str>,
 ) -> io::Result<ResolvedConfig> {
-    let core = chibi.resolve_config(context_name, username_override)?;
+    let mut core = chibi.resolve_config(context_name, username_override)?;
     let cli = load_cli_config(chibi.home_dir(), Some(context_name))?;
+
+    // Resolve context_window_limit from ratatoskr registry if still unknown
+    if core.context_window_limit == 0
+        && let Ok(gateway) = chibi_core::gateway::build_gateway(&core)
+    {
+        chibi_core::gateway::resolve_context_window(&mut core, &gateway);
+    }
 
     Ok(ResolvedConfig {
         core,

@@ -11,9 +11,9 @@ use tempfile::TempDir;
 fn create_test_app() -> (AppState, TempDir) {
     let temp_dir = TempDir::new().unwrap();
     let config = Config {
-        api_key: "test-key".to_string(),
-        model: "test-model".to_string(),
-        context_window_limit: 8000,
+        api_key: Some("test-key".to_string()),
+        model: Some("test-model".to_string()),
+        context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
         verbose: false,
         hide_tool_calls: false,
@@ -452,7 +452,7 @@ fn test_resolve_config_defaults() {
     let (app, _temp) = create_test_app();
     let resolved = app.resolve_config("default", None).unwrap();
 
-    assert_eq!(resolved.api_key, "test-key");
+    assert_eq!(resolved.api_key, Some("test-key".to_string()));
     assert_eq!(resolved.model, "test-model");
     assert_eq!(resolved.username, "testuser");
 }
@@ -535,9 +535,9 @@ fn test_resolve_config_model_level_api_params() {
     // Create test app with models config
     let temp_dir = TempDir::new().unwrap();
     let config = Config {
-        api_key: "test-key".to_string(),
-        model: "test-model".to_string(),
-        context_window_limit: 8000,
+        api_key: Some("test-key".to_string()),
+        model: Some("test-model".to_string()),
+        context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
         verbose: false,
         hide_tool_calls: false,
@@ -598,9 +598,9 @@ fn test_resolve_config_hierarchy_context_over_model() {
     // Test that context-level API params override model-level
     let temp_dir = TempDir::new().unwrap();
     let config = Config {
-        api_key: "test-key".to_string(),
-        model: "test-model".to_string(),
-        context_window_limit: 8000,
+        api_key: Some("test-key".to_string()),
+        model: Some("test-model".to_string()),
+        context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
         verbose: false,
         hide_tool_calls: false,
@@ -701,7 +701,7 @@ fn test_resolve_config_all_local_overrides() {
     let resolved = app.resolve_config("default", None).unwrap();
 
     assert_eq!(resolved.model, "local-model");
-    assert_eq!(resolved.api_key, "local-key");
+    assert_eq!(resolved.api_key, Some("local-key".to_string()));
     assert_eq!(resolved.username, "localuser");
     assert!(resolved.auto_compact);
     assert!((resolved.auto_compact_threshold - 90.0).abs() < f32::EPSILON);
@@ -715,9 +715,9 @@ fn test_resolve_config_all_local_overrides() {
 fn test_resolve_config_supports_tool_calls_false_disables_tools() {
     let temp_dir = TempDir::new().unwrap();
     let config = Config {
-        api_key: "test-key".to_string(),
-        model: "no-tools-model".to_string(),
-        context_window_limit: 8000,
+        api_key: Some("test-key".to_string()),
+        model: Some("no-tools-model".to_string()),
+        context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
         verbose: false,
         hide_tool_calls: false,
@@ -764,9 +764,9 @@ fn test_resolve_config_supports_tool_calls_false_disables_tools() {
 fn test_resolve_config_supports_tool_calls_overrides_user_config() {
     let temp_dir = TempDir::new().unwrap();
     let config = Config {
-        api_key: "test-key".to_string(),
-        model: "no-tools-model".to_string(),
-        context_window_limit: 8000,
+        api_key: Some("test-key".to_string()),
+        model: Some("no-tools-model".to_string()),
+        context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
         verbose: false,
         hide_tool_calls: false,
@@ -821,9 +821,9 @@ fn test_resolve_config_supports_tool_calls_overrides_user_config() {
 fn test_resolve_config_supports_tool_calls_none_preserves_default() {
     let temp_dir = TempDir::new().unwrap();
     let config = Config {
-        api_key: "test-key".to_string(),
-        model: "normal-model".to_string(),
-        context_window_limit: 8000,
+        api_key: Some("test-key".to_string()),
+        model: Some("normal-model".to_string()),
+        context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
         verbose: false,
         hide_tool_calls: false,

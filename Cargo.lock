@@ -855,7 +855,7 @@ version = "3.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89ec27229c38ed0eb3c0feee3d2c1d6a4379ae44f418a29a658890e062d8f365"
 dependencies = [
- "darling 0.20.11",
+ "darling 0.23.0",
  "ident_case",
  "prettyplease",
  "proc-macro2",
@@ -3641,8 +3641,8 @@ dependencies = [
 
 [[package]]
 name = "ratatoskr"
-version = "0.2.0"
-source = "git+https://github.com/emesal/ratatoskr.git?branch=main#7499f1b9541d271a25768f2a4aed5bbabc7a2de2"
+version = "0.2.3"
+source = "git+https://github.com/emesal/ratatoskr.git?branch=main#afd487039ad6b7e3df48c923d8a2d25d75307e5b"
 dependencies = [
  "async-trait",
  "dirs 5.0.1",

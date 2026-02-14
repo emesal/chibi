@@ -20,7 +20,7 @@ pub use paths::StatePaths;
 
 use crate::jsonl::read_jsonl_file;
 
-use crate::config::{Config, ModelsConfig, ResolvedConfig};
+use crate::config::{Config, ConfigDefaults, ModelsConfig, ResolvedConfig};
 // Note: ImageConfig, MarkdownStyle removed - these are CLI presentation concerns
 use crate::context::{
     Context, ContextEntry, ContextMeta, ContextState, TranscriptEntry, is_valid_context_name,
@@ -126,13 +126,7 @@ impl AppState {
                 )
             })?
         } else {
-            return Err(io::Error::new(
-                ErrorKind::NotFound,
-                format!(
-                    "Config file not found at {}. Please create config.toml with api_key, model, context_window_limit, and warn_threshold_percent",
-                    config_path.display()
-                ),
-            ));
+            Config::default()
         };
 
         // Load models.toml (optional)
@@ -986,18 +980,36 @@ impl AppState {
     }
 
     pub fn should_warn(&self, messages: &[serde_json::Value]) -> bool {
+        let limit = self
+            .config
+            .context_window_limit
+            .unwrap_or(ConfigDefaults::CONTEXT_WINDOW_LIMIT);
+        if limit == 0 {
+            return false;
+        }
         let tokens = self.calculate_token_count(messages);
-        let usage_percent = (tokens as f32 / self.config.context_window_limit as f32) * 100.0;
+        let usage_percent = (tokens as f32 / limit as f32) * 100.0;
         usage_percent >= self.config.warn_threshold_percent
     }
 
     pub fn remaining_tokens(&self, messages: &[serde_json::Value]) -> usize {
+        let limit = self
+            .config
+            .context_window_limit
+            .unwrap_or(ConfigDefaults::CONTEXT_WINDOW_LIMIT);
+        if limit == 0 {
+            return usize::MAX;
+        }
         let tokens = self.calculate_token_count(messages);
-        self.config.context_window_limit.saturating_sub(tokens)
+        limit.saturating_sub(tokens)
     }
 
     pub fn should_auto_compact(&self, context: &Context, resolved_config: &ResolvedConfig) -> bool {
         if !resolved_config.auto_compact {
+            return false;
+        }
+        // Skip compaction if context window is unknown (0 = not yet resolved)
+        if resolved_config.context_window_limit == 0 {
             return false;
         }
         let tokens = self.calculate_token_count(&context.messages);

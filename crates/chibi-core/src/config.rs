@@ -379,6 +379,9 @@ impl ConfigDefaults {
 
     // Numeric defaults
     pub const AUTO_COMPACT_THRESHOLD: f32 = 80.0;
+    pub const WARN_THRESHOLD_PERCENT: f32 = 80.0;
+    /// Sentinel: 0 = fetch from ratatoskr at runtime
+    pub const CONTEXT_WINDOW_LIMIT: usize = 0;
     pub const REFLECTION_CHARACTER_LIMIT: usize = 10_000;
     pub const FUEL: usize = 30;
     pub const FUEL_EMPTY_RESPONSE_COST: usize = 15;
@@ -391,6 +394,8 @@ impl ConfigDefaults {
     // String defaults
     pub const USERNAME: &'static str = "user";
     pub const FALLBACK_TOOL: &'static str = "call_user";
+    /// Default model: ratatoskr free-tier agentic preset
+    pub const MODEL: &'static str = "ratatoskr:free/agentic";
 }
 
 // Thin wrappers for serde's #[serde(default = "...")] requirement
@@ -445,6 +450,9 @@ fn default_tool_cache_preview_chars() -> usize {
 fn default_fallback_tool() -> String {
     ConfigDefaults::FALLBACK_TOOL.to_string()
 }
+fn default_warn_threshold_percent() -> f32 {
+    ConfigDefaults::WARN_THRESHOLD_PERCENT
+}
 
 // ============================================================================
 // Configuration Structs
@@ -453,11 +461,16 @@ fn default_fallback_tool() -> String {
 /// Global config from ~/.chibi/config.toml
 /// Note: This is the core config. Presentation fields (image, markdown_style,
 /// render_markdown) are handled by the CLI layer.
-#[derive(Debug, Serialize, Deserialize)]
+/// All fields are optional with sensible defaults — config.toml itself is optional.
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
-    pub api_key: String,
-    pub model: String,
-    pub context_window_limit: usize,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub context_window_limit: Option<usize>,
+    #[serde(default = "default_warn_threshold_percent")]
     pub warn_threshold_percent: f32,
     /// Enable verbose output (equivalent to -v flag)
     #[serde(default = "default_verbose")]
@@ -593,7 +606,8 @@ pub struct ModelsConfig {
 /// Note: This is the core resolved config. CLI extends this with presentation fields.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
-    pub api_key: String,
+    /// API key for the provider. `None` = keyless (free-tier openrouter).
+    pub api_key: Option<String>,
     pub model: String,
     pub context_window_limit: usize,
     pub warn_threshold_percent: f32,
@@ -827,7 +841,7 @@ mod tests {
     #[test]
     fn test_resolved_config_get_field() {
         let config = ResolvedConfig {
-            api_key: "secret".to_string(),
+            api_key: Some("secret".to_string()),
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,

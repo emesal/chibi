@@ -325,8 +325,8 @@ impl ResolvedConfig {
 
 // Convenience accessors to forward to core fields
 impl ResolvedConfig {
-    pub fn api_key(&self) -> &str {
-        &self.core.api_key
+    pub fn api_key(&self) -> Option<&str> {
+        self.core.api_key.as_deref()
     }
     pub fn model(&self) -> &str {
         &self.core.model

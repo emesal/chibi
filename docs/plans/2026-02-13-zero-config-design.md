@@ -4,6 +4,42 @@ issue: #141
 branch: `feature/M1.5-basic-composable-agent`
 depends on: [ratatoskr#24](https://github.com/emesal/ratatoskr/issues/24) (merged in v0.2.3)
 
+## progress
+
+- [x] §1 config struct changes
+- [x] §2 config loading
+- [x] §3 config resolution
+- [x] §4 gateway building
+- [x] §5 context_window_limit resolution
+- [ ] §6 models.toml cleanup
+- [ ] §7 -m/-M output
+- [ ] §8 api_key Option propagation
+- [ ] §9 docs updates
+
+**status:** §1–5 done, 446 tests + 10 doctests passing. ratatoskr updated to v0.2.3 (Cargo.lock). §8 partially done (CLI accessor + test updates landed with §1–4).
+
+### what's already done
+
+- `Config.{api_key, model, context_window_limit}` → `Option` with `serde(default)`, `Config` derives `Default`
+- `ResolvedConfig.api_key` → `Option<String>`
+- `ConfigDefaults::{MODEL, WARN_THRESHOLD_PERCENT, CONTEXT_WINDOW_LIMIT}` added
+- `AppState::load()` returns `Config::default()` when config.toml missing
+- `resolve_config()` uses `unwrap_or`/`unwrap_or_else` with `ConfigDefaults`
+- `build_gateway()` passes `config.api_key.as_deref()` to ratatoskr `openrouter()`
+- `should_warn()`, `remaining_tokens()` guard against `context_window_limit == 0`
+- `should_auto_compact()` skips when `context_window_limit == 0`
+- CLI `api_key()` accessor returns `Option<&str>`
+- all test `Config` struct literals + assertions updated with `Some()` wrapping
+- `resolve_context_window()` in `gateway.rs` — sync registry lookup fills `context_window_limit` when 0
+- `resolve_cli_config()` calls `resolve_context_window()` after config resolution — single choke point for CLI
+
+### what remains
+
+- §6: remove `context_window` and `supports_tool_calls` from chibi's `ModelMetadata`
+- §7: update `format_model_toml()` — context_window as comment not settable field
+- §8: `get_field("api_key")` handle `None` (display "unset") — rest already done
+- §9: docs (getting-started.md, configuration.md, AGENTS.md)
+
 ## goal
 
 `cargo install chibi && chibi "hello"` just works. no config.toml, no API key, no models.toml. free-tier openrouter via ratatoskr presets.
@@ -20,7 +56,7 @@ depends on: [ratatoskr#24](https://github.com/emesal/ratatoskr/issues/24) (merge
 
 ## design
 
-### 1. Config struct changes (`config.rs`)
+### 1. Config struct changes (`config.rs`) ✅
 
 `Config` (deserialized from config.toml):
 
@@ -44,11 +80,11 @@ pub const WARN_THRESHOLD_PERCENT: f32 = 80.0;
 pub const CONTEXT_WINDOW_LIMIT: usize = 0;  // fetch from ratatoskr
 ```
 
-### 2. config loading (`state/mod.rs`)
+### 2. config loading (`state/mod.rs`) ✅
 
 `AppState::load()`: missing config.toml returns `Config::default()` instead of a hard error.
 
-### 3. config resolution (`state/config_resolution.rs`)
+### 3. config resolution (`state/config_resolution.rs`) ✅
 
 `resolve_config()`:
 
@@ -58,7 +94,7 @@ pub const CONTEXT_WINDOW_LIMIT: usize = 0;  // fetch from ratatoskr
 - `warn_threshold_percent`: already defaulted by serde, no change needed
 - local.toml override for api_key wraps in `Some()`
 
-### 4. gateway building (`gateway.rs`)
+### 4. gateway building (`gateway.rs`) ✅
 
 ```rust
 pub fn build_gateway(config: &ResolvedConfig) -> io::Result<EmbeddedGateway> {
@@ -71,21 +107,11 @@ pub fn build_gateway(config: &ResolvedConfig) -> io::Result<EmbeddedGateway> {
 
 depends on ratatoskr#24: `openrouter(Option<impl Into<String>>)`.
 
-### 5. context_window_limit resolution
+### 5. context_window_limit resolution ✅
 
-after gateway construction, before the main loop:
+`gateway::resolve_context_window(&mut config, &gateway)` — sync registry lookup, no network I/O.
 
-```rust
-if resolved.context_window_limit == 0 {
-    // sync registry lookup (no network)
-    if let Some(meta) = gateway.model_metadata(&resolved.model) {
-        resolved.context_window_limit = meta.context_window;
-    }
-    // if still 0, async fetch_metadata() fills it in later
-}
-```
-
-`should_auto_compact()` guards against `context_window_limit == 0` (skip compaction if unknown).
+called from `resolve_cli_config()` (CLI's single config choke point) when `context_window_limit == 0`. if the model isn't in the registry, limit stays 0 and existing guards (skip compaction/warnings) remain in effect.
 
 ### 6. models.toml cleanup
 

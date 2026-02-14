@@ -2,7 +2,7 @@
 //!
 //! Methods for loading, saving, and resolving local configs and model names.
 
-use crate::config::{ApiParams, LocalConfig, ResolvedConfig};
+use crate::config::{ApiParams, ConfigDefaults, LocalConfig, ResolvedConfig};
 use std::fs;
 use std::io::{self, ErrorKind};
 
@@ -68,11 +68,18 @@ impl AppState {
         let mut api_params = ApiParams::defaults();
         api_params = api_params.merge_with(&self.config.api);
 
-        // Start with global config values
+        // Start with global config values, applying defaults for optional fields
         let mut resolved = ResolvedConfig {
             api_key: self.config.api_key.clone(),
-            model: self.config.model.clone(),
-            context_window_limit: self.config.context_window_limit,
+            model: self
+                .config
+                .model
+                .clone()
+                .unwrap_or_else(|| ConfigDefaults::MODEL.to_string()),
+            context_window_limit: self
+                .config
+                .context_window_limit
+                .unwrap_or(ConfigDefaults::CONTEXT_WINDOW_LIMIT),
             warn_threshold_percent: self.config.warn_threshold_percent,
             verbose: self.config.verbose,
             hide_tool_calls: self.config.hide_tool_calls,
@@ -98,7 +105,7 @@ impl AppState {
 
         // Apply local config overrides
         if let Some(ref api_key) = local.api_key {
-            resolved.api_key = api_key.clone();
+            resolved.api_key = Some(api_key.clone());
         }
         if let Some(ref model) = local.model {
             resolved.model = model.clone();
