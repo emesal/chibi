@@ -279,7 +279,7 @@ Called after processing a batch of tool calls, before deciding whether to contin
   "fuel_total": 30,
   "current_fallback": "call_agent",
   "tool_calls": [
-    {"name": "read_file", "arguments": {"path": "Cargo.toml"}},
+    {"name": "file_head", "arguments": {"path": "Cargo.toml"}},
     {"name": "update_todos", "arguments": {"content": "..."}}
   ]
 }
@@ -307,7 +307,7 @@ Positive values add fuel (saturating), negative values consume fuel (saturating 
 
 ```json
 {
-  "tool_name": "read_file",
+  "tool_name": "file_head",
   "arguments": {"path": "/etc/passwd"}
 }
 ```
@@ -331,7 +331,7 @@ Or to block execution:
 
 ```json
 {
-  "tool_name": "read_file",
+  "tool_name": "file_head",
   "arguments": {"path": "Cargo.toml"},
   "result": "file contents...",
   "cached": false
@@ -346,7 +346,7 @@ Called immediately after a tool returns its output, before any caching decisions
 
 ```json
 {
-  "tool_name": "read_file",
+  "tool_name": "file_head",
   "arguments": {"path": "Cargo.toml"},
   "output": "raw tool output..."
 }
@@ -373,7 +373,7 @@ Called after tool output processing (including any pre_tool_output modifications
 
 ```json
 {
-  "tool_name": "read_file",
+  "tool_name": "file_head",
   "arguments": {"path": "Cargo.toml"},
   "output": "original output (after pre_tool_output modifications)",
   "final_output": "what the LLM will see (may be truncated if cached)",
@@ -670,8 +670,8 @@ if [[ "$CHIBI_HOOK" == "pre_tool" ]]; then
   data=$(cat)  # Read JSON from stdin
   tool_name=$(echo "$data" | jq -r '.tool_name')
 
-  # Block run_command for certain patterns
-  if [[ "$tool_name" == "run_command" ]]; then
+  # Block shell_exec for certain patterns
+  if [[ "$tool_name" == "shell_exec" ]]; then
     command=$(echo "$data" | jq -r '.arguments.command // ""')
     if [[ "$command" == *"rm -rf"* ]]; then
       echo '{"block": true, "message": "Blocked: rm -rf commands are not allowed"}'
@@ -790,7 +790,7 @@ if hook == "post_tool_batch":
     tool_calls = data.get("tool_calls", [])
 
     # List of tools that should require user confirmation
-    dangerous_tools = ["run_command", "write_file", "delete_file"]
+    dangerous_tools = ["shell_exec", "write_file", "delete_file"]
 
     for call in tool_calls:
         if call.get("name") in dangerous_tools:
