@@ -219,6 +219,7 @@ fn inspect_context(
     thing: &Inspectable,
     resolved_config: Option<&ResolvedConfig>,
     force_markdown: bool,
+    output: &OutputHandler,
 ) -> io::Result<()> {
     // Resolve config if not provided
     let config_holder;
@@ -231,37 +232,31 @@ fn inspect_context(
 
     match thing {
         Inspectable::List => {
-            println!("Inspectable items:");
+            output.emit_result("Inspectable items:");
             for name in <Inspectable as InspectableExt>::all_names_cli() {
-                println!("  {}", name);
+                output.emit_result(&format!("  {}", name));
             }
         }
         Inspectable::SystemPrompt => {
             let prompt = chibi.app.load_system_prompt_for(context_name)?;
             if prompt.is_empty() {
-                println!("(no system prompt set)");
+                output.emit_result("(no system prompt set)");
             } else {
-                print!("{}", prompt);
-                if !prompt.ends_with('\n') {
-                    println!();
-                }
+                output.emit_result(prompt.trim_end());
             }
         }
         Inspectable::Reflection => {
             let reflection = chibi.app.load_reflection()?;
             if reflection.is_empty() {
-                println!("(no reflection set)");
+                output.emit_result("(no reflection set)");
             } else {
-                print!("{}", reflection);
-                if !reflection.ends_with('\n') {
-                    println!();
-                }
+                output.emit_result(reflection.trim_end());
             }
         }
         Inspectable::Todos => {
             let todos = chibi.app.load_todos_for(context_name)?;
             if todos.is_empty() {
-                println!("(no todos)");
+                output.emit_result("(no todos)");
             } else {
                 let md_cfg = md_config_from_resolved(config, chibi.home_dir(), force_markdown);
                 render_markdown_output(&todos, md_cfg)?;
@@ -273,7 +268,7 @@ fn inspect_context(
         Inspectable::Goals => {
             let goals = chibi.app.load_goals_for(context_name)?;
             if goals.is_empty() {
-                println!("(no goals)");
+                output.emit_result("(no goals)");
             } else {
                 let md_cfg = md_config_from_resolved(config, chibi.home_dir(), force_markdown);
                 render_markdown_output(&goals, md_cfg)?;
@@ -283,11 +278,11 @@ fn inspect_context(
             }
         }
         Inspectable::Home => {
-            println!("{}", chibi.home_dir().display());
+            output.emit_result(&chibi.home_dir().display().to_string());
         }
         Inspectable::ConfigField(field_path) => match config.get_field(field_path) {
-            Some(value) => println!("{}", value),
-            None => println!("(not set)"),
+            Some(value) => output.emit_result(&value.to_string()),
+            None => output.emit_result("(not set)"),
         },
     }
     Ok(())
@@ -301,6 +296,7 @@ fn show_log(
     verbose: bool,
     resolved_config: &ResolvedConfig,
     force_markdown: bool,
+    output: &OutputHandler,
 ) -> io::Result<()> {
     let entries = chibi.app.read_jsonl_transcript(context_name)?;
 
@@ -325,27 +321,30 @@ fn show_log(
     for entry in selected {
         match entry.entry_type.as_str() {
             ENTRY_TYPE_MESSAGE => {
-                println!("[{}]", entry.from.to_uppercase());
+                output.emit_result(&format!("[{}]", entry.from.to_uppercase()));
                 let md_cfg =
                     md_config_from_resolved(resolved_config, chibi.home_dir(), force_markdown);
                 render_markdown_output(&entry.content, md_cfg)?;
-                println!();
+                output.newline();
             }
             ENTRY_TYPE_TOOL_CALL => {
                 if verbose {
-                    println!("[TOOL CALL: {}]\n{}\n", entry.to, entry.content);
+                    output.emit_result(&format!("[TOOL CALL: {}]\n{}\n", entry.to, entry.content));
                 } else {
                     let args_preview = if entry.content.len() > 60 {
                         format!("{}...", &entry.content[..60])
                     } else {
                         entry.content.clone()
                     };
-                    println!("[TOOL: {}] {}", entry.to, args_preview);
+                    output.emit_result(&format!("[TOOL: {}] {}", entry.to, args_preview));
                 }
             }
             ENTRY_TYPE_TOOL_RESULT => {
                 if verbose {
-                    println!("[TOOL RESULT: {}]\n{}\n", entry.from, entry.content);
+                    output.emit_result(&format!(
+                        "[TOOL RESULT: {}]\n{}\n",
+                        entry.from, entry.content
+                    ));
                 } else {
                     let size = entry.content.len();
                     let size_str = if size > 1024 {
@@ -353,17 +352,21 @@ fn show_log(
                     } else {
                         format!("{}b", size)
                     };
-                    println!("  -> {}", size_str);
+                    output.emit_result(&format!("  -> {}", size_str));
                 }
             }
             "compaction" => {
                 if verbose {
-                    println!("[COMPACTION]: {}\n", entry.content);
+                    output.emit_result(&format!("[COMPACTION]: {}\n", entry.content));
                 }
             }
             _ => {
                 if verbose {
-                    println!("[{}]: {}\n", entry.entry_type.to_uppercase(), entry.content);
+                    output.emit_result(&format!(
+                        "[{}]: {}\n",
+                        entry.entry_type.to_uppercase(),
+                        entry.content
+                    ));
                 }
             }
         }
@@ -643,7 +646,15 @@ async fn execute_from_input(
                 None => working_context.clone(),
             };
             let config = resolve_cli_config(chibi, &ctx_name, None)?;
-            show_log(chibi, &ctx_name, *count, verbose, &config, force_markdown)?;
+            show_log(
+                chibi,
+                &ctx_name,
+                *count,
+                verbose,
+                &config,
+                force_markdown,
+                output,
+            )?;
             did_action = true;
         }
         Command::Inspect { context, thing } => {
@@ -653,7 +664,14 @@ async fn execute_from_input(
             };
             // Pass ephemeral username so -U works with -n
             let config = resolve_cli_config(chibi, &ctx_name, ephemeral_username)?;
-            inspect_context(chibi, &ctx_name, thing, Some(&config), force_markdown)?;
+            inspect_context(
+                chibi,
+                &ctx_name,
+                thing,
+                Some(&config),
+                force_markdown,
+                output,
+            )?;
             did_action = true;
         }
         Command::SetSystemPrompt { context, prompt } => {
@@ -1007,9 +1025,8 @@ async fn execute_from_input(
             let resolved = chibi.resolve_config(&working_context, None)?;
             let gateway = chibi_core::gateway::build_gateway(&resolved)?;
             let metadata = chibi_core::model_info::fetch_metadata(&gateway, model).await?;
-            print!(
-                "{}",
-                chibi_core::model_info::format_model_toml(&metadata, *full)
+            output.emit_result(
+                chibi_core::model_info::format_model_toml(&metadata, *full).trim_end(),
             );
             did_action = true;
         }
@@ -1212,33 +1229,38 @@ async fn main() -> io::Result<()> {
     input.flags.hide_tool_calls = input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
     input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
     let mut session = Session::load(chibi.home_dir())?;
+    let output = OutputHandler::new(input.flags.json_output);
 
     // Print tool lists if verbose
     if verbose {
         let builtin_names = chibi_core::tools::builtin_tool_names();
-        eprintln!(
-            "[Built-in ({}): {}]",
-            builtin_names.len(),
-            builtin_names.join(", ")
+        output.diagnostic(
+            &format!(
+                "[Built-in ({}): {}]",
+                builtin_names.len(),
+                builtin_names.join(", ")
+            ),
+            true,
         );
 
         if chibi.tools.is_empty() {
-            eprintln!("[No plugins loaded]");
+            output.diagnostic("[No plugins loaded]", true);
         } else {
-            eprintln!(
-                "[Plugins ({}): {}]",
-                chibi.tool_count(),
-                chibi
-                    .tools
-                    .iter()
-                    .map(|t| t.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+            output.diagnostic(
+                &format!(
+                    "[Plugins ({}): {}]",
+                    chibi.tool_count(),
+                    chibi
+                        .tools
+                        .iter()
+                        .map(|t| t.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                true,
             );
         }
     }
-
-    let output = OutputHandler::new(input.flags.json_output);
 
     execute_from_input(input, &mut chibi, &mut session, &output, force_markdown).await
 }
