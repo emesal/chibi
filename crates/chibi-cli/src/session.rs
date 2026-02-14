@@ -81,11 +81,6 @@ impl Session {
         Ok(previous)
     }
 
-    /// Check if a context name matches the implied context.
-    pub fn is_implied(&self, name: &str) -> bool {
-        self.implied_context == name
-    }
-
     /// Get the previous context name, or error if none available
     pub fn get_previous(&self) -> io::Result<String> {
         self.previous_context
@@ -98,11 +93,6 @@ impl Session {
                     "No previous context available (use -c to switch contexts first)",
                 )
             })
-    }
-
-    /// Check if a context name matches the previous context.
-    pub fn is_previous(&self, name: &str) -> bool {
-        self.previous_context.as_deref() == Some(name)
     }
 
     /// Handle session state after a context is destroyed.
@@ -270,17 +260,6 @@ mod tests {
 
         let result = Session::load(temp_dir.path());
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_is_implied_and_previous() {
-        let mut session = Session::default();
-        session.switch_context("test".to_string());
-
-        assert!(session.is_implied("test"));
-        assert!(!session.is_implied("default"));
-        assert!(session.is_previous("default"));
-        assert!(!session.is_previous("test"));
     }
 
     #[test]

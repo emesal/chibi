@@ -10,24 +10,19 @@ mod output;
 mod session;
 mod sink;
 
-// Re-export key types for use by other modules
-pub use cli::{Cli, InspectableExt, PluginInvocation, parse};
-pub use config::{
-    ConfigImageRenderMode, ImageAlignment, ImageConfig, ImageConfigOverride, MarkdownStyle,
-    ResolvedConfig, default_markdown_style, load_cli_config,
-};
-pub use markdown::{MarkdownConfig, MarkdownStream};
-pub use output::OutputHandler;
-pub use session::Session;
-pub use sink::CliResponseSink;
-
 use chibi_core::context::{
     Context, ContextEntry, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
     now_timestamp,
 };
 use chibi_core::input::{Command, DebugKey};
 
+use crate::cli::{Cli, InspectableExt};
+use crate::config::{ImageConfig, ResolvedConfig, default_markdown_style, load_cli_config};
 use crate::input::{ChibiInput, ContextSelection, UsernameOverride};
+use crate::markdown::{MarkdownConfig, MarkdownStream};
+use crate::output::OutputHandler;
+use crate::session::Session;
+use crate::sink::CliResponseSink;
 use chibi_core::{
     Chibi, Inspectable, LoadOptions, OutputSink, PermissionHandler, PromptOptions, StatePaths, api,
     tools,
@@ -208,6 +203,20 @@ fn resolve_cli_config(
     })
 }
 
+/// CLI display and behaviour flags for the send path.
+///
+/// Groups the flags that are constant across all `send_with_cli_sink` calls
+/// within a single `execute_from_input` invocation.
+struct CliSendOptions<'a> {
+    raw: bool,
+    no_tool_calls: bool,
+    debug: &'a [DebugKey],
+    verbose: bool,
+    force_markdown: bool,
+    show_tool_calls: bool,
+    show_thinking: bool,
+}
+
 /// Resolve config, acquire lock, build sink, and send a prompt through the agentic loop.
 ///
 /// This is the shared "send prompt" path used by SendPrompt, CallTool (with
@@ -218,21 +227,15 @@ async fn send_with_cli_sink(
     ctx_name: &str,
     prompt: &str,
     ephemeral_username: Option<&str>,
-    raw: bool,
-    no_tool_calls: bool,
-    debug: &[DebugKey],
-    verbose: bool,
-    force_markdown: bool,
-    show_tool_calls: bool,
-    show_thinking_flag: bool,
+    opts: &CliSendOptions<'_>,
     fallback: Option<chibi_core::tools::HandoffTarget>,
     output: &dyn OutputSink,
 ) -> io::Result<()> {
     let mut resolved = resolve_cli_config(chibi, ctx_name, ephemeral_username)?;
-    if raw {
+    if opts.raw {
         resolved.render_markdown = false;
     }
-    if no_tool_calls {
+    if opts.no_tool_calls {
         resolved.core.no_tool_calls = true;
     }
     let use_reflection = resolved.core.reflection_enabled;
@@ -243,16 +246,21 @@ async fn send_with_cli_sink(
         chibi.app.config.lock_heartbeat_seconds,
     )?;
 
-    let mut options = PromptOptions::new(verbose, use_reflection, debug, force_markdown);
+    let mut options = PromptOptions::new(
+        opts.verbose,
+        use_reflection,
+        opts.debug,
+        opts.force_markdown,
+    );
     if let Some(fb) = fallback {
         options = options.with_fallback(fb);
     }
 
-    let md_config = if resolved.render_markdown && !raw {
+    let md_config = if resolved.render_markdown && !opts.raw {
         Some(md_config_from_resolved(
             &resolved,
             chibi.home_dir(),
-            force_markdown,
+            opts.force_markdown,
         ))
     } else {
         None
@@ -261,9 +269,9 @@ async fn send_with_cli_sink(
     let mut sink = CliResponseSink::new(
         output,
         md_config,
-        verbose,
-        show_tool_calls,
-        show_thinking_flag || resolved.show_thinking,
+        opts.verbose,
+        opts.show_tool_calls,
+        opts.show_thinking || resolved.show_thinking,
     );
     chibi
         .send_prompt_streaming(ctx_name, prompt, &resolved.core, &options, &mut sink)
@@ -461,6 +469,17 @@ async fn execute_from_input(
     let verbose = input.flags.verbose;
     let show_tool_calls = !input.flags.hide_tool_calls || verbose;
     let show_thinking_flag = input.flags.show_thinking || verbose;
+
+    let send_opts = CliSendOptions {
+        raw: input.raw,
+        no_tool_calls: input.flags.no_tool_calls,
+        debug: &input.flags.debug,
+        verbose,
+        force_markdown,
+        show_tool_calls,
+        show_thinking: show_thinking_flag,
+    };
+
     // Initialize session (executes OnStart hooks)
     let _ = chibi.init();
 
@@ -777,13 +796,7 @@ async fn execute_from_input(
                     &working_context,
                     &tool_context,
                     ephemeral_username,
-                    input.raw,
-                    input.flags.no_tool_calls,
-                    &input.flags.debug,
-                    verbose,
-                    force_markdown,
-                    show_tool_calls,
-                    show_thinking_flag,
+                    &send_opts,
                     Some(fallback),
                     output,
                 )
@@ -810,7 +823,8 @@ async fn execute_from_input(
                 .cleanup_all_tool_caches(resolved.tool_cache_max_age_days)?;
             output.emit_result(&format!(
                 "Removed {} old cache entries (older than {} days)",
-                removed, resolved.tool_cache_max_age_days
+                removed,
+                resolved.tool_cache_max_age_days + 1
             ));
             did_action = true;
         }
@@ -827,13 +841,7 @@ async fn execute_from_input(
                 &ctx_name,
                 prompt,
                 ephemeral_username,
-                input.raw,
-                input.flags.no_tool_calls,
-                &input.flags.debug,
-                verbose,
-                force_markdown,
-                show_tool_calls,
-                show_thinking_flag,
+                &send_opts,
                 None,
                 output,
             )
@@ -871,13 +879,7 @@ async fn execute_from_input(
                     &ctx_name,
                     chibi_core::INBOX_CHECK_PROMPT,
                     None,
-                    input.raw,
-                    input.flags.no_tool_calls,
-                    &input.flags.debug,
-                    verbose,
-                    force_markdown,
-                    show_tool_calls,
-                    show_thinking_flag,
+                    &send_opts,
                     None,
                     output,
                 )
@@ -910,13 +912,7 @@ async fn execute_from_input(
                     &ctx_name,
                     chibi_core::INBOX_CHECK_PROMPT,
                     None,
-                    input.raw,
-                    input.flags.no_tool_calls,
-                    &input.flags.debug,
-                    verbose,
-                    force_markdown,
-                    show_tool_calls,
-                    show_thinking_flag,
+                    &send_opts,
                     None,
                     output,
                 )

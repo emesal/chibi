@@ -36,7 +36,6 @@ use std::path::Path;
 use crate::api::sink::ResponseSink;
 use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
-use crate::context::ContextEntry;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 
@@ -377,11 +376,6 @@ impl Chibi {
     /// List all available context names.
     pub fn list_contexts(&self) -> Vec<String> {
         self.app.list_contexts()
-    }
-
-    /// List all available contexts with metadata.
-    pub fn list_context_entries(&self) -> &[ContextEntry] {
-        &self.app.state.contexts
     }
 
     /// Resolve configuration for the current context.

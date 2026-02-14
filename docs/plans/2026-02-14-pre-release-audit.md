@@ -83,18 +83,22 @@ chibi-cli resolves `context_window_limit` from ratatoskr's model registry when u
 
 | # | what | where |
 |---|------|-------|
-| 13 | `ExecutionRequest` — entirely unused, never adopted by either binary | `execution.rs` (whole file) |
-| 14 | `Flags` type alias — backward-compat shim in pre-alpha | `input.rs:176-181` |
-| 15 | `Chibi::list_context_entries()` — zero callers | `chibi.rs:364-367` |
-| 16 | 13 unused accessor methods on CLI `ResolvedConfig` | `chibi-cli/config.rs:328-375` |
-| 17 | `pub use` re-exports in CLI `main.rs` — binary crate, unreachable | `chibi-cli/main.rs:14-22` |
-| 18 | over-exported internals from `api/mod.rs` | `api/mod.rs:16-18` |
-| 19 | `accumulated_text` in `JsonResponseSink` — accumulated then cleared, never read | `chibi-json/sink.rs:8-9` |
-| 20 | `send_prompt()` — trivial passthrough wrapper to `send_prompt_loop()` | `send.rs:448-473` |
-| 21 | stale refactor note in `inbox.rs:112` | `inbox.rs:112` |
-| 22 | `Session::is_implied()` / `is_previous()` — only used in own tests | `chibi-cli/session.rs:84-87, 103-106` |
+| 13 | [DONE] `ExecutionRequest` — entirely unused, never adopted by either binary | `execution.rs` removed, re-export removed, AGENTS.md updated |
+| 14 | [DONE] `Flags` type alias — renamed to `ExecutionFlags` everywhere | alias removed from `input.rs`, all CLI code updated |
+| 15 | [DONE] `Chibi::list_context_entries()` — zero callers | removed from `chibi.rs` |
+| 16 | [DONE] 13 unused accessor methods on CLI `ResolvedConfig` | removed from `chibi-cli/config.rs` |
+| 17 | [DONE] `pub use` re-exports in CLI `main.rs` — binary crate, unreachable | replaced with direct `use crate::` imports |
+| 18 | [DONE] over-exported internals from `api/mod.rs` | removed logging/request re-exports, kept `send_prompt` |
+| 19 | [DONE] `accumulated_text` in `JsonResponseSink` — accumulated then cleared, never read | field removed, struct is now unit |
+| 20 | [DONE] `send_prompt()` — trivial passthrough wrapper to `send_prompt_loop()` | wrapper removed, `send_prompt_loop` renamed to `send_prompt` and made pub |
+| 21 | [DONE] stale refactor note in `inbox.rs:112` | comment removed |
+| 22 | [DONE] `Session::is_implied()` / `is_previous()` — only used in own tests | methods and test removed |
 
 ---
+
+## Additional fixes (not in original audit)
+
+- [DONE] clippy `too_many_arguments` on `send_with_cli_sink` — extracted `CliSendOptions` struct grouping 7 CLI display flags, reducing arg count from 13 to 7.
 
 ## Design notes (non-blocking, future consideration)
 
@@ -103,7 +107,7 @@ chibi-cli resolves `context_window_limit` from ratatoskr's model registry when u
 - `project_root` is re-derived from env var 3 times in `send.rs` instead of being threaded through.
 - `reqwest::Client` created per `fetch_url` call in agent_tools — fine for now, wasteful if batched.
 - error output from chibi-json is plain text, not structured JSON — programmatic consumers can't parse failures.
-- `off-by-one in auto-cleanup diagnostic` — `chibi-cli/main.rs:1029` adds 1 to `tool_cache_max_age_days` in the diagnostic message but the `CleanupCache` handler at line 783 doesn't. either a bug or undocumented `>` vs `>=` semantics.
+- [DONE] `off-by-one in auto-cleanup diagnostic` — the `+ 1` is intentional: `max_age_days` means "keep for N full days" (chibi exits after each response, so 0 must not purge same-session entries). fixed `CleanupCache` handler to also show `+ 1`, clarified `cache.rs` doc comments.
 - `confirm_action` is a free function only called from `OutputHandler::confirm` — could be inlined as a method.
 - test coverage gaps in chibi-json (only 5 integration tests, no JSONL format validation).
 - test coverage thin for `Chibi` struct methods (`execute_tool`, `clear_context`, `init`, `shutdown`).

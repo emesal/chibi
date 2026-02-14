@@ -260,11 +260,17 @@ pub fn list_cache_entries(cache_dir: &Path) -> io::Result<Vec<CacheMetadata>> {
     Ok(entries)
 }
 
-/// Clean up cache entries older than max_age_days
-/// Note: max_age_days is offset by 1, so:
-/// - 0 = delete after 24 hours (1 day)
-/// - 1 = delete after 48 hours (2 days)
-/// - 7 = delete after 8 days (default)
+/// Clean up cache entries older than `max_age_days` full days.
+///
+/// Entries are kept for `max_age_days` complete days, then deleted once they
+/// exceed that age. The `+ 1` in the cutoff calculation ensures that setting
+/// 0 means "keep for less than 1 day" (not "delete immediately"), which is
+/// important since chibi exits after each LLM response and would otherwise
+/// purge entries created in the same session.
+///
+/// - 0 → delete entries older than 1 day
+/// - 1 → delete entries older than 2 days
+/// - 7 → delete entries older than 8 days (default)
 pub fn cleanup_old_cache(cache_dir: &Path, max_age_days: u64) -> io::Result<usize> {
     if !cache_dir.exists() {
         return Ok(0);
@@ -274,7 +280,7 @@ pub fn cleanup_old_cache(cache_dir: &Path, max_age_days: u64) -> io::Result<usiz
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    // Add 1 to max_age_days so 0 means 1 day, 1 means 2 days, etc.
+    // +1 ensures max_age_days=0 means "keep for <1 day", not "delete immediately"
     let max_age_secs = (max_age_days + 1) * 24 * 60 * 60;
     let cutoff = now.saturating_sub(max_age_secs);
 

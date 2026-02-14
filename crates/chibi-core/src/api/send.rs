@@ -403,48 +403,8 @@ fn apply_hook_overrides<S: ResponseSink>(
     Ok(())
 }
 
-/// Send a prompt to the LLM with streaming response via ResponseSink.
-///
-/// This is the main entry point for sending prompts. It handles:
-/// - Hook execution (pre_message, post_message, etc.)
-/// - Inbox message injection
-/// - Tool execution loop with fuel budget
-/// - Context management
-/// - Auto-compaction
-///
-/// # Arguments
-///
-/// * `context_name` - The name of the context to use for this prompt
-#[allow(clippy::too_many_arguments)]
-pub async fn send_prompt<S: ResponseSink>(
-    app: &AppState,
-    context_name: &str,
-    prompt: String,
-    tools: &[Tool],
-    resolved_config: &ResolvedConfig,
-    options: &PromptOptions<'_>,
-    sink: &mut S,
-    permission_handler: Option<&PermissionHandler>,
-    home_dir: &Path,
-    project_root: &Path,
-) -> io::Result<()> {
-    send_prompt_loop(
-        app,
-        context_name,
-        prompt,
-        tools,
-        resolved_config,
-        options,
-        sink,
-        permission_handler,
-        home_dir,
-        project_root,
-    )
-    .await
-}
-
 // ============================================================================
-// Helper Functions (extracted from send_prompt_loop)
+// Helper Functions (extracted from send_prompt)
 // ============================================================================
 
 /// Build the full system prompt with all components.
@@ -1581,8 +1541,20 @@ fn handle_final_response<S: ResponseSink>(
     }
 }
 
+/// Send a prompt to the LLM with streaming response via ResponseSink.
+///
+/// This is the main entry point for sending prompts. It handles:
+/// - Hook execution (pre_message, post_message, etc.)
+/// - Inbox message injection
+/// - Tool execution loop with fuel budget
+/// - Context management
+/// - Auto-compaction
+///
+/// # Arguments
+///
+/// * `context_name` - The name of the context to use for this prompt
 #[allow(clippy::too_many_arguments)]
-async fn send_prompt_loop<S: ResponseSink>(
+pub async fn send_prompt<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
     initial_prompt: String,

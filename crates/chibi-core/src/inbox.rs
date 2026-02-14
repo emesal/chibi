@@ -109,9 +109,6 @@ impl AppState {
         Ok(entries)
     }
 
-    // NOTE: load_and_clear_current_inbox was removed in the stateless-core refactor.
-    // Use load_and_clear_inbox(context_name) instead.
-
     /// Peek at a context's inbox without clearing it.
     ///
     /// This is useful for checking if there are messages before deciding

@@ -203,9 +203,10 @@ pub fn resolve_context_window(config: &mut ResolvedConfig, gateway: &EmbeddedGat
 /// isn't in the registry (limit stays 0, compaction/warnings remain guarded).
 pub fn ensure_context_window(config: &mut ResolvedConfig) {
     if config.context_window_limit == 0
-        && let Ok(gateway) = build_gateway(config) {
-            resolve_context_window(config, &gateway);
-        }
+        && let Ok(gateway) = build_gateway(config)
+    {
+        resolve_context_window(config, &gateway);
+    }
 }
 
 /// Simple non-streaming chat completion.

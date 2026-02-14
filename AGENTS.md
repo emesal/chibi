@@ -46,7 +46,6 @@ chibi-cli (binary)   chibi-json (binary)
 - `agents_md.rs` — AGENTS.md discovery and loading (VCS-aware hierarchy)
 - `vcs.rs` — VCS root detection (`.git`, `.hg`, etc.)
 - `index/` — Codebase indexing (SQLite WAL, symbol extraction, language plugin interface)
-- `execution.rs` — `ExecutionRequest` abstraction (shared CLI/JSON entry point)
 - `input.rs` — Core input types (`Command`, `ExecutionFlags`, `Inspectable`)
 - `output.rs` — `OutputSink` trait (abstraction over CLI text / JSON output)
 

@@ -173,13 +173,6 @@ pub struct ExecutionFlags {
     pub debug: Vec<DebugKey>,
 }
 
-/// Backward-compatible alias — `Flags` and `ExecutionFlags` are now the same type.
-///
-/// Previously `Flags` also contained presentation concerns (`json_output`, `raw`)
-/// which have been moved to the binary layer (chibi-cli handles `raw` locally,
-/// chibi-json is always JSON mode).
-pub type Flags = ExecutionFlags;
-
 // CLI-specific types (ContextSelection, UsernameOverride, ChibiInput) have been
 // moved to chibi-cli/src/input.rs. chibi-core's API takes context names as
 // parameters — it doesn't care *how* the context was selected.
@@ -188,11 +181,11 @@ pub type Flags = ExecutionFlags;
 mod tests {
     use super::*;
 
-    // === Flags tests ===
+    // === ExecutionFlags tests ===
 
     #[test]
     fn test_flags_default() {
-        let flags = Flags::default();
+        let flags = ExecutionFlags::default();
         assert!(!flags.verbose);
         assert!(!flags.force_call_user);
         assert!(!flags.force_call_agent);
@@ -201,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_flags_serialization() {
-        let flags = Flags {
+        let flags = ExecutionFlags {
             verbose: true,
             hide_tool_calls: false,
             show_thinking: false,
@@ -218,7 +211,7 @@ mod tests {
     #[test]
     fn test_flags_deserialization() {
         let json = r#"{"verbose":true,"force_call_user":true}"#;
-        let flags: Flags = serde_json::from_str(json).unwrap();
+        let flags: ExecutionFlags = serde_json::from_str(json).unwrap();
         assert!(flags.verbose);
         assert!(flags.force_call_user);
     }
@@ -534,13 +527,5 @@ mod tests {
         assert_eq!(deser.verbose, flags.verbose);
         assert_eq!(deser.force_call_agent, flags.force_call_agent);
         assert_eq!(deser.debug.len(), 1);
-    }
-
-    #[test]
-    fn test_flags_is_execution_flags_alias() {
-        // Flags is now a type alias for ExecutionFlags
-        let flags: Flags = ExecutionFlags::default();
-        let exec: ExecutionFlags = flags;
-        assert!(!exec.verbose);
     }
 }

@@ -8,7 +8,7 @@ use std::io;
 use std::path::Path;
 
 // Re-export core config types for convenience
-pub use chibi_core::config::{ApiParams, ResolvedConfig as CoreResolvedConfig, ToolsConfig};
+pub use chibi_core::config::ResolvedConfig as CoreResolvedConfig;
 
 // ============================================================================
 // Presentation Default Functions
@@ -320,58 +320,6 @@ impl ResolvedConfig {
         ];
         fields.extend(CoreResolvedConfig::list_fields());
         fields
-    }
-}
-
-// Convenience accessors to forward to core fields
-impl ResolvedConfig {
-    pub fn api_key(&self) -> Option<&str> {
-        self.core.api_key.as_deref()
-    }
-    pub fn model(&self) -> &str {
-        &self.core.model
-    }
-    pub fn context_window_limit(&self) -> usize {
-        self.core.context_window_limit
-    }
-    pub fn warn_threshold_percent(&self) -> f32 {
-        self.core.warn_threshold_percent
-    }
-    pub fn auto_compact(&self) -> bool {
-        self.core.auto_compact
-    }
-    pub fn auto_compact_threshold(&self) -> f32 {
-        self.core.auto_compact_threshold
-    }
-    pub fn fuel(&self) -> usize {
-        self.core.fuel
-    }
-    pub fn username(&self) -> &str {
-        &self.core.username
-    }
-    pub fn reflection_enabled(&self) -> bool {
-        self.core.reflection_enabled
-    }
-    pub fn tool_output_cache_threshold(&self) -> usize {
-        self.core.tool_output_cache_threshold
-    }
-    pub fn tool_cache_max_age_days(&self) -> u64 {
-        self.core.tool_cache_max_age_days
-    }
-    pub fn auto_cleanup_cache(&self) -> bool {
-        self.core.auto_cleanup_cache
-    }
-    pub fn tool_cache_preview_chars(&self) -> usize {
-        self.core.tool_cache_preview_chars
-    }
-    pub fn file_tools_allowed_paths(&self) -> &[String] {
-        &self.core.file_tools_allowed_paths
-    }
-    pub fn api(&self) -> &ApiParams {
-        &self.core.api
-    }
-    pub fn tools(&self) -> &ToolsConfig {
-        &self.core.tools
     }
 }
 

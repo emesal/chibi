@@ -3,7 +3,7 @@
 //! This module handles parsing command-line arguments and converting them
 //! to the unified `ChibiInput` format.
 
-use chibi_core::input::{Command, DebugKey, Flags, Inspectable};
+use chibi_core::input::{Command, DebugKey, ExecutionFlags, Inspectable};
 
 use crate::input::{ChibiInput, ContextSelection, UsernameOverride};
 use clap::Parser;
@@ -643,7 +643,7 @@ impl Cli {
             Command::NoOp
         };
 
-        let flags = Flags {
+        let flags = ExecutionFlags {
             verbose: self.verbose,
             hide_tool_calls: self.hide_tool_calls,
             show_thinking: self.show_thinking,

@@ -15,7 +15,7 @@
 //! - `Persistent` — save username to local.toml
 //! - `Ephemeral` — use username for this invocation only
 
-use chibi_core::input::{Command, Flags};
+use chibi_core::input::{Command, ExecutionFlags};
 use serde::{Deserialize, Serialize};
 
 /// Context selection mode.
@@ -64,7 +64,7 @@ pub struct ChibiInput {
     pub command: Command,
     /// Behavioral flags
     #[serde(default)]
-    pub flags: Flags,
+    pub flags: ExecutionFlags,
     /// Context selection
     #[serde(default)]
     pub context: ContextSelection,
@@ -80,7 +80,7 @@ impl Default for ChibiInput {
     fn default() -> Self {
         Self {
             command: Command::NoOp,
-            flags: Flags::default(),
+            flags: ExecutionFlags::default(),
             context: ContextSelection::Current,
             username_override: None,
             raw: false,
@@ -201,7 +201,7 @@ mod tests {
                 context: Some("test".to_string()),
                 thing: Inspectable::SystemPrompt,
             },
-            flags: Flags {
+            flags: ExecutionFlags {
                 verbose: true,
                 hide_tool_calls: false,
                 show_thinking: false,
@@ -240,7 +240,7 @@ mod tests {
     fn test_chibi_input_minimal_round_trip() {
         let input = ChibiInput {
             command: Command::ListContexts,
-            flags: Flags::default(),
+            flags: ExecutionFlags::default(),
             context: ContextSelection::Current,
             username_override: None,
             raw: false,
