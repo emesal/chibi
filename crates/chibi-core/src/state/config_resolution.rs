@@ -103,70 +103,8 @@ impl AppState {
             storage: self.config.storage.clone(),
         };
 
-        // Apply local config overrides
-        if let Some(ref api_key) = local.api_key {
-            resolved.api_key = Some(api_key.clone());
-        }
-        if let Some(ref model) = local.model {
-            resolved.model = model.clone();
-        }
-        if let Some(context_window_limit) = local.context_window_limit {
-            resolved.context_window_limit = context_window_limit;
-        }
-        if let Some(warn_threshold_percent) = local.warn_threshold_percent {
-            resolved.warn_threshold_percent = warn_threshold_percent;
-        }
-        if let Some(verbose) = local.verbose {
-            resolved.verbose = verbose;
-        }
-        if let Some(hide_tool_calls) = local.hide_tool_calls {
-            resolved.hide_tool_calls = hide_tool_calls;
-        }
-        if let Some(no_tool_calls) = local.no_tool_calls {
-            resolved.no_tool_calls = no_tool_calls;
-        }
-        if let Some(auto_compact) = local.auto_compact {
-            resolved.auto_compact = auto_compact;
-        }
-        if let Some(auto_compact_threshold) = local.auto_compact_threshold {
-            resolved.auto_compact_threshold = auto_compact_threshold;
-        }
-        if let Some(fuel) = local.fuel {
-            resolved.fuel = fuel;
-        }
-        if let Some(fuel_empty_response_cost) = local.fuel_empty_response_cost {
-            resolved.fuel_empty_response_cost = fuel_empty_response_cost;
-        }
-        if let Some(ref username) = local.username {
-            resolved.username = username.clone();
-        }
-        if let Some(reflection_enabled) = local.reflection_enabled {
-            resolved.reflection_enabled = reflection_enabled;
-        }
-        if let Some(limit) = local.reflection_character_limit {
-            resolved.reflection_character_limit = limit;
-        }
-        if let Some(pct) = local.rolling_compact_drop_percentage {
-            resolved.rolling_compact_drop_percentage = pct;
-        }
-        if let Some(tool_output_cache_threshold) = local.tool_output_cache_threshold {
-            resolved.tool_output_cache_threshold = tool_output_cache_threshold;
-        }
-        if let Some(tool_cache_max_age_days) = local.tool_cache_max_age_days {
-            resolved.tool_cache_max_age_days = tool_cache_max_age_days;
-        }
-        if let Some(auto_cleanup_cache) = local.auto_cleanup_cache {
-            resolved.auto_cleanup_cache = auto_cleanup_cache;
-        }
-        if let Some(tool_cache_preview_chars) = local.tool_cache_preview_chars {
-            resolved.tool_cache_preview_chars = tool_cache_preview_chars;
-        }
-        if let Some(ref file_tools_allowed_paths) = local.file_tools_allowed_paths {
-            resolved.file_tools_allowed_paths = file_tools_allowed_paths.clone();
-        }
-        if let Some(ref fallback_tool) = local.fallback_tool {
-            resolved.fallback_tool = fallback_tool.clone();
-        }
+        // Apply local config overrides (simple fields via macro, see LocalConfig::apply_overrides)
+        local.apply_overrides(&mut resolved);
 
         // Apply context-level storage config overrides
         resolved.storage = resolved.storage.merge(&local.storage);
