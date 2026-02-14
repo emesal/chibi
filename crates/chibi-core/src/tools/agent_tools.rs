@@ -574,7 +574,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             model: "test-model".to_string(),
             context_window_limit: 128000,
-            warn_threshold_percent: 0.8,
+            warn_threshold_percent: 80.0,
             verbose: false,
             hide_tool_calls: false,
             no_tool_calls: false,

@@ -197,11 +197,7 @@ fn resolve_cli_config(
     let cli = load_cli_config(chibi.home_dir(), Some(context_name))?;
 
     // Resolve context_window_limit from ratatoskr registry if still unknown
-    if core.context_window_limit == 0
-        && let Ok(gateway) = chibi_core::gateway::build_gateway(&core)
-    {
-        chibi_core::gateway::resolve_context_window(&mut core, &gateway);
-    }
+    chibi_core::gateway::ensure_context_window(&mut core);
 
     Ok(ResolvedConfig {
         core,
@@ -210,6 +206,68 @@ fn resolve_cli_config(
         image: cli.image,
         markdown_style: cli.markdown_style,
     })
+}
+
+/// Resolve config, acquire lock, build sink, and send a prompt through the agentic loop.
+///
+/// This is the shared "send prompt" path used by SendPrompt, CallTool (with
+/// continuation), CheckInbox, and CheckAllInboxes. Keeps the resolve → lock →
+/// build-sink → stream sequence in one place.
+async fn send_with_cli_sink(
+    chibi: &Chibi,
+    ctx_name: &str,
+    prompt: &str,
+    ephemeral_username: Option<&str>,
+    raw: bool,
+    no_tool_calls: bool,
+    debug: &[DebugKey],
+    verbose: bool,
+    force_markdown: bool,
+    show_tool_calls: bool,
+    show_thinking_flag: bool,
+    fallback: Option<chibi_core::tools::HandoffTarget>,
+    output: &dyn OutputSink,
+) -> io::Result<()> {
+    let mut resolved = resolve_cli_config(chibi, ctx_name, ephemeral_username)?;
+    if raw {
+        resolved.render_markdown = false;
+    }
+    if no_tool_calls {
+        resolved.core.no_tool_calls = true;
+    }
+    let use_reflection = resolved.core.reflection_enabled;
+
+    let context_dir = chibi.app.context_dir(ctx_name);
+    let _lock = chibi_core::lock::ContextLock::acquire(
+        &context_dir,
+        chibi.app.config.lock_heartbeat_seconds,
+    )?;
+
+    let mut options = PromptOptions::new(verbose, use_reflection, debug, force_markdown);
+    if let Some(fb) = fallback {
+        options = options.with_fallback(fb);
+    }
+
+    let md_config = if resolved.render_markdown && !raw {
+        Some(md_config_from_resolved(
+            &resolved,
+            chibi.home_dir(),
+            force_markdown,
+        ))
+    } else {
+        None
+    };
+
+    let mut sink = CliResponseSink::new(
+        output,
+        md_config,
+        verbose,
+        show_tool_calls,
+        show_thinking_flag || resolved.show_thinking,
+    );
+    chibi
+        .send_prompt_streaming(ctx_name, prompt, &resolved.core, &options, &mut sink)
+        .await
 }
 
 fn inspect_context(
@@ -701,7 +759,9 @@ async fn execute_from_input(
                 })?
             };
 
-            let result = chibi.execute_tool(&working_context, name, args_json.clone())?;
+            let result = chibi
+                .execute_tool(&working_context, name, args_json.clone())
+                .await?;
 
             if input.flags.force_call_agent {
                 // Tool-first with continuation to LLM
@@ -709,55 +769,25 @@ async fn execute_from_input(
                     "[User initiated tool call: {}]\n[Arguments: {}]\n[Result: {}]",
                     name, args_json, result
                 );
-
-                let mut resolved = resolve_cli_config(chibi, &working_context, ephemeral_username)?;
-                if input.raw {
-                    resolved.render_markdown = false;
-                }
-                if input.flags.no_tool_calls {
-                    resolved.core.no_tool_calls = true;
-                }
-                let use_reflection = resolved.core.reflection_enabled;
-
-                let context_dir = chibi.app.context_dir(&working_context);
-                let _lock = chibi_core::lock::ContextLock::acquire(
-                    &context_dir,
-                    chibi.app.config.lock_heartbeat_seconds,
-                )?;
-
                 let fallback = chibi_core::tools::HandoffTarget::Agent {
                     prompt: String::new(),
                 };
-                let options =
-                    PromptOptions::new(verbose, use_reflection, &input.flags.debug, force_markdown)
-                        .with_fallback(fallback);
-
-                let md_config = if resolved.render_markdown && !input.raw {
-                    Some(md_config_from_resolved(
-                        &resolved,
-                        chibi.home_dir(),
-                        force_markdown,
-                    ))
-                } else {
-                    None
-                };
-
-                let mut sink = CliResponseSink::new(
-                    output,
-                    md_config,
+                send_with_cli_sink(
+                    chibi,
+                    &working_context,
+                    &tool_context,
+                    ephemeral_username,
+                    input.raw,
+                    input.flags.no_tool_calls,
+                    &input.flags.debug,
                     verbose,
+                    force_markdown,
                     show_tool_calls,
-                    show_thinking_flag || resolved.show_thinking,
-                );
-                chibi
-                    .send_prompt_streaming(
-                        &working_context,
-                        &tool_context,
-                        &resolved.core,
-                        &options,
-                        &mut sink,
-                    )
-                    .await?;
+                    show_thinking_flag,
+                    Some(fallback),
+                    output,
+                )
+                .await?;
             } else {
                 // Tool-first with immediate return (default for -P)
                 output.emit_result(&result);
@@ -792,53 +822,22 @@ async fn execute_from_input(
                 chibi.app.save_and_register_context(&new_context)?;
             }
 
-            // Resolve config with runtime override (ephemeral username extracted earlier)
-            let mut resolved = resolve_cli_config(chibi, &ctx_name, ephemeral_username)?;
-            if input.raw {
-                resolved.render_markdown = false;
-            }
-            if input.flags.no_tool_calls {
-                resolved.core.no_tool_calls = true;
-            }
-            let use_reflection = resolved.core.reflection_enabled;
-
-            // Acquire context lock
-            let context_dir = chibi.app.context_dir(&ctx_name);
-            let _lock = chibi_core::lock::ContextLock::acquire(
-                &context_dir,
-                chibi.app.config.lock_heartbeat_seconds,
-            )?;
-
-            let options =
-                PromptOptions::new(verbose, use_reflection, &input.flags.debug, force_markdown);
-
-            // Create markdown config if enabled
-            let md_config = if resolved.render_markdown && !input.raw {
-                Some(md_config_from_resolved(
-                    &resolved,
-                    chibi.home_dir(),
-                    force_markdown,
-                ))
-            } else {
-                None
-            };
-
-            let mut sink = CliResponseSink::new(
-                output,
-                md_config,
+            send_with_cli_sink(
+                chibi,
+                &ctx_name,
+                prompt,
+                ephemeral_username,
+                input.raw,
+                input.flags.no_tool_calls,
+                &input.flags.debug,
                 verbose,
+                force_markdown,
                 show_tool_calls,
-                show_thinking_flag || resolved.show_thinking,
-            );
-            chibi
-                .send_prompt_streaming(
-                    &working_context,
-                    prompt,
-                    &resolved.core,
-                    &options,
-                    &mut sink,
-                )
-                .await?;
+                show_thinking_flag,
+                None,
+                output,
+            )
+            .await?;
             did_action = true;
         }
         Command::CheckInbox { context } => {
@@ -867,53 +866,22 @@ async fn execute_from_input(
                     chibi.app.save_and_register_context(&new_context)?;
                 }
 
-                // Resolve config for this context
-                let mut resolved = resolve_cli_config(chibi, &ctx_name, None)?;
-                if input.raw {
-                    resolved.render_markdown = false;
-                }
-                if input.flags.no_tool_calls {
-                    resolved.core.no_tool_calls = true;
-                }
-                let use_reflection = resolved.core.reflection_enabled;
-
-                // Acquire context lock
-                let context_dir = chibi.app.context_dir(&ctx_name);
-                let _lock = chibi_core::lock::ContextLock::acquire(
-                    &context_dir,
-                    chibi.app.config.lock_heartbeat_seconds,
-                )?;
-
-                let options =
-                    PromptOptions::new(verbose, use_reflection, &input.flags.debug, force_markdown);
-
-                // Create markdown stream if enabled
-                let md_config = if resolved.render_markdown && !input.raw {
-                    Some(md_config_from_resolved(
-                        &resolved,
-                        chibi.home_dir(),
-                        force_markdown,
-                    ))
-                } else {
-                    None
-                };
-
-                let mut sink = CliResponseSink::new(
-                    output,
-                    md_config,
+                send_with_cli_sink(
+                    chibi,
+                    &ctx_name,
+                    chibi_core::INBOX_CHECK_PROMPT,
+                    None,
+                    input.raw,
+                    input.flags.no_tool_calls,
+                    &input.flags.debug,
                     verbose,
+                    force_markdown,
                     show_tool_calls,
-                    show_thinking_flag || resolved.show_thinking,
-                );
-                chibi
-                    .send_prompt_streaming(
-                        &ctx_name,
-                        chibi_core::INBOX_CHECK_PROMPT,
-                        &resolved.core,
-                        &options,
-                        &mut sink,
-                    )
-                    .await?;
+                    show_thinking_flag,
+                    None,
+                    output,
+                )
+                .await?;
             }
             did_action = true;
         }
@@ -937,53 +905,22 @@ async fn execute_from_input(
                     verbose,
                 );
 
-                // Resolve config for this context
-                let mut resolved = resolve_cli_config(chibi, &ctx_name, None)?;
-                if input.raw {
-                    resolved.render_markdown = false;
-                }
-                if input.flags.no_tool_calls {
-                    resolved.core.no_tool_calls = true;
-                }
-                let use_reflection = resolved.core.reflection_enabled;
-
-                // Acquire context lock
-                let context_dir = chibi.app.context_dir(&ctx_name);
-                let _lock = chibi_core::lock::ContextLock::acquire(
-                    &context_dir,
-                    chibi.app.config.lock_heartbeat_seconds,
-                )?;
-
-                let options =
-                    PromptOptions::new(verbose, use_reflection, &input.flags.debug, force_markdown);
-
-                // Create markdown stream if enabled
-                let md_config = if resolved.render_markdown && !input.raw {
-                    Some(md_config_from_resolved(
-                        &resolved,
-                        chibi.home_dir(),
-                        force_markdown,
-                    ))
-                } else {
-                    None
-                };
-
-                let mut sink = CliResponseSink::new(
-                    output,
-                    md_config,
+                send_with_cli_sink(
+                    chibi,
+                    &ctx_name,
+                    chibi_core::INBOX_CHECK_PROMPT,
+                    None,
+                    input.raw,
+                    input.flags.no_tool_calls,
+                    &input.flags.debug,
                     verbose,
+                    force_markdown,
                     show_tool_calls,
-                    show_thinking_flag || resolved.show_thinking,
-                );
-                chibi
-                    .send_prompt_streaming(
-                        &ctx_name,
-                        chibi_core::INBOX_CHECK_PROMPT,
-                        &resolved.core,
-                        &options,
-                        &mut sink,
-                    )
-                    .await?;
+                    show_thinking_flag,
+                    None,
+                    output,
+                )
+                .await?;
 
                 processed_count += 1;
             }

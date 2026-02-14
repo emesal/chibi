@@ -314,7 +314,7 @@ impl Chibi {
     ///
     /// The tool's output as a string, or an error if the tool wasn't found
     /// or execution failed.
-    pub fn execute_tool(
+    pub async fn execute_tool(
         &self,
         context_name: &str,
         name: &str,
@@ -335,6 +335,24 @@ impl Chibi {
             {
                 return result;
             }
+        }
+
+        // Try coding tools
+        if tools::is_coding_tool(name) {
+            let project_root = std::env::var("CHIBI_PROJECT_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+            if let Some(result) =
+                tools::execute_coding_tool(name, &args, &project_root, &self.tools).await
+            {
+                return result;
+            }
+        }
+
+        // Try agent tools
+        if tools::is_agent_tool(name) {
+            let config = self.app.resolve_config(context_name, None)?;
+            return tools::execute_agent_tool(&config, name, &args, &self.tools).await;
         }
 
         // Try plugins

@@ -12,7 +12,7 @@
 
 **fix:** reuse `resolve_and_validate_path` from `file_tools.rs` (extract to shared utility), add URL validation rejecting private/link-local/localhost ranges.
 
-### 2. Duplicate tool name arrays in `send.rs` are out of sync
+### 2. [DONE] Duplicate tool name arrays in `send.rs` are out of sync
 
 `send.rs:58-87` — four `const` arrays (`BUILTIN_TOOL_NAMES`, `FILE_TOOL_NAMES`, `CODING_TOOL_NAMES`, `AGENT_TOOL_NAMES`) duplicate what `is_*_tool()` functions already know. they're already wrong:
 - `fetch_url` missing from `CODING_TOOL_NAMES`
@@ -23,7 +23,7 @@ this breaks `classify_tool_type()` for hook data and `exclude_categories` filter
 
 **fix:** replace the arrays with calls to the authoritative `is_*_tool()` functions (single source of truth).
 
-### 3. chibi-json missing `context_window_limit` resolution
+### 3. [DONE] chibi-json missing `context_window_limit` resolution
 
 chibi-cli resolves `context_window_limit` from ratatoskr's model registry when unset (0). chibi-json doesn't do this at all. any command going through the agentic loop operates with `context_window_limit = 0`, causing incorrect compaction behaviour.
 
@@ -33,47 +33,47 @@ chibi-cli resolves `context_window_limit` from ratatoskr's model registry when u
 
 ## Important — should fix for release
 
-### 4. No concurrency cap on agent spawning
+### 4. [DONE] No concurrency cap on agent spawning
 
 `agent_tools.rs` — sub-agents run with `parallel: true`, so a single agentic round can fire up to 100 concurrent `spawn_agent` calls via `join_all`. no depth limit or concurrency cap exists.
 
 **options:** (a) mark agent tools as non-parallel in `ToolMetadata`, (b) add per-round concurrency cap for agent tools, (c) add `max_concurrent_agents` config field. option (a) is simplest for pre-alpha.
 
-### 5. `ArchiveHistory` skips hooks in chibi-json
+### 5. [DONE] `ArchiveHistory` skips hooks in chibi-json
 
 `chibi-json/main.rs:190` calls `chibi.app.clear_context()` (raw), bypassing `pre_clear`/`post_clear` hooks. chibi-cli correctly calls `chibi.clear_context()`.
 
 **fix:** use `chibi.clear_context(ctx_name)` in chibi-json.
 
-### 6. `Chibi::execute_tool()` missing agent tools and coding tools
+### 6. [DONE] `Chibi::execute_tool()` missing agent tools and coding tools
 
 `chibi.rs:317-349` — tries builtin, file, plugins but skips agent tools and coding tools entirely. library consumers calling `chibi.execute_tool("shell_exec", ...)` get "Tool not found".
 
 **fix:** add agent tool and coding tool dispatch branches.
 
-### 7. Stale json-mode references in CLI sink docs
+### 7. [DONE] Stale json-mode references in CLI sink docs
 
 `chibi-cli/sink.rs:3-4` — module doc says it handles "JSON mode", line 18 says it "emits transcript entries in JSON mode". both stale post-split.
 
-### 8. Stale hook count comment
+### 8. [DONE — fixed in #145] Stale hook count comment
 
 `hooks.rs:122` — says "All 26 hook points" but there are 29. stale since `PreSpawnAgent`, `PostSpawnAgent`, `PostIndexFile` were added.
 
-### 9. Stale function name reference in `send.rs`
+### 9. [DONE] Stale function name reference in `send.rs`
 
 `send.rs:476` — comment references `send_prompt_with_depth` which no longer exists (now `send_prompt_loop`).
 
-### 10. `warn_threshold_percent: 0.8` in agent_tools test helper
+### 10. [DONE] `warn_threshold_percent: 0.8` in agent_tools test helper
 
 `agent_tools.rs:541` — should be `80.0` (percentage scale). latent bug if any future test relies on it.
 
-### 11. Verbose diagnostics silently dropped in `JsonResponseSink`
+### 11. [DONE] Verbose diagnostics silently dropped in `JsonResponseSink`
 
 `chibi-json/sink.rs:41` — `verbose_only` events are discarded; the sink has no access to the verbose flag.
 
 **fix:** pass verbose flag into `JsonResponseSink::new()`, or always emit verbose diagnostics in JSON mode (programmatic consumers can filter).
 
-### 12. Duplicated "resolve config + build sink + send" pattern in CLI
+### 12. [DONE] Duplicated "resolve config + build sink + send" pattern in CLI
 
 `chibi-cli/main.rs` — ~20 lines repeated 4 times across `SendPrompt`, `CallTool` (agent), `CheckInbox`, `CheckAllInboxes`. extract into a helper.
 

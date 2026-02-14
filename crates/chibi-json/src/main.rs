@@ -187,7 +187,7 @@ async fn execute_json_command(
         }
         Command::ArchiveHistory { name } => {
             let ctx_name = name.as_deref().unwrap_or(context);
-            chibi.app.clear_context(ctx_name)?;
+            chibi.clear_context(ctx_name)?;
             output.emit_result(&format!(
                 "Context '{}' archived (history saved to transcript)",
                 ctx_name
@@ -328,7 +328,7 @@ async fn execute_json_command(
                     )
                 })?
             };
-            let result = chibi.execute_tool(context, name, args_json.clone())?;
+            let result = chibi.execute_tool(context, name, args_json.clone()).await?;
 
             if input.flags.force_call_agent {
                 let tool_context = format!(
@@ -336,6 +336,7 @@ async fn execute_json_command(
                     name, args_json, result
                 );
                 let mut resolved = chibi.resolve_config(context, input.username.as_deref())?;
+                chibi_core::gateway::ensure_context_window(&mut resolved);
                 if input.flags.no_tool_calls {
                     resolved.no_tool_calls = true;
                 }
@@ -386,6 +387,7 @@ async fn execute_json_command(
                 chibi.app.save_and_register_context(&new_context)?;
             }
             let mut resolved = chibi.resolve_config(context, input.username.as_deref())?;
+            chibi_core::gateway::ensure_context_window(&mut resolved);
             if input.flags.no_tool_calls {
                 resolved.no_tool_calls = true;
             }
@@ -419,6 +421,7 @@ async fn execute_json_command(
                     chibi.app.save_and_register_context(&new_context)?;
                 }
                 let mut resolved = chibi.resolve_config(ctx, None)?;
+                chibi_core::gateway::ensure_context_window(&mut resolved);
                 if input.flags.no_tool_calls {
                     resolved.no_tool_calls = true;
                 }
@@ -459,6 +462,7 @@ async fn execute_json_command(
                     verbose,
                 );
                 let mut resolved = chibi.resolve_config(&ctx_name, None)?;
+                chibi_core::gateway::ensure_context_window(&mut resolved);
                 if input.flags.no_tool_calls {
                     resolved.no_tool_calls = true;
                 }

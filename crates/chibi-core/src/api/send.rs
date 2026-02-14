@@ -54,47 +54,18 @@ impl ToolType {
     }
 }
 
-/// Built-in tool names (todos, goals, reflection, send_message)
-const BUILTIN_TOOL_NAMES: &[&str] = &[
-    "update_todos",
-    "update_goals",
-    "update_reflection",
-    "send_message",
-];
-
-/// File tool names (file_head, file_tail, file_lines, file_grep, cache_list)
-const FILE_TOOL_NAMES: &[&str] = &[
-    "file_head",
-    "file_tail",
-    "file_lines",
-    "file_grep",
-    "cache_list",
-];
-
-/// Agent tool names (spawn_agent, retrieve_content)
-const AGENT_TOOL_NAMES: &[&str] = &["spawn_agent", "retrieve_content"];
-
-/// Coding tool names (shell_exec, dir_list, glob_files, grep_files, file_edit, index_*)
-const CODING_TOOL_NAMES: &[&str] = &[
-    "shell_exec",
-    "dir_list",
-    "glob_files",
-    "grep_files",
-    "file_edit",
-    "index_update",
-    "index_query",
-    "index_status",
-];
-
-/// Classify a tool's type based on its name
+/// Classify a tool's type based on its name.
+///
+/// Delegates to the authoritative `is_*_tool()` functions in each tool module,
+/// ensuring classification stays in sync with tool registration automatically.
 fn classify_tool_type(name: &str, plugin_names: &[&str]) -> ToolType {
-    if BUILTIN_TOOL_NAMES.contains(&name) {
+    if tools::is_builtin_tool(name) {
         ToolType::Builtin
-    } else if FILE_TOOL_NAMES.contains(&name) {
+    } else if tools::is_file_tool(name) {
         ToolType::File
-    } else if AGENT_TOOL_NAMES.contains(&name) {
+    } else if tools::is_agent_tool(name) {
         ToolType::Agent
-    } else if CODING_TOOL_NAMES.contains(&name) {
+    } else if tools::is_coding_tool(name) {
         ToolType::Coding
     } else if plugin_names.contains(&name) {
         ToolType::Plugin
@@ -473,7 +444,7 @@ pub async fn send_prompt<S: ResponseSink>(
 }
 
 // ============================================================================
-// Helper Functions (extracted from send_prompt_with_depth)
+// Helper Functions (extracted from send_prompt_loop)
 // ============================================================================
 
 /// Build the full system prompt with all components.
@@ -1972,57 +1943,86 @@ mod tests {
 
     #[test]
     fn test_classify_tool_type_builtin() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
-        assert_eq!(
-            classify_tool_type("update_todos", &plugin_names),
-            ToolType::Builtin
-        );
-        assert_eq!(
-            classify_tool_type("update_goals", &plugin_names),
-            ToolType::Builtin
-        );
+        let plugins: Vec<&str> = vec![];
+        // Core builtins
+        for name in [
+            "update_todos",
+            "update_goals",
+            "update_reflection",
+            "send_message",
+            "call_agent",
+            "call_user",
+            "model_info",
+            "read_context",
+        ] {
+            assert_eq!(
+                classify_tool_type(name, &plugins),
+                ToolType::Builtin,
+                "{name}"
+            );
+        }
     }
 
     #[test]
     fn test_classify_tool_type_file() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
-        assert_eq!(
-            classify_tool_type("file_head", &plugin_names),
-            ToolType::File
-        );
-        assert_eq!(
-            classify_tool_type("cache_list", &plugin_names),
-            ToolType::File
-        );
+        let plugins: Vec<&str> = vec![];
+        for name in [
+            "file_head",
+            "file_tail",
+            "file_lines",
+            "file_grep",
+            "cache_list",
+            "write_file",
+        ] {
+            assert_eq!(classify_tool_type(name, &plugins), ToolType::File, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_classify_tool_type_coding() {
+        let plugins: Vec<&str> = vec![];
+        for name in [
+            "shell_exec",
+            "dir_list",
+            "glob_files",
+            "grep_files",
+            "file_edit",
+            "fetch_url",
+            "index_update",
+            "index_query",
+            "index_status",
+        ] {
+            assert_eq!(
+                classify_tool_type(name, &plugins),
+                ToolType::Coding,
+                "{name}"
+            );
+        }
     }
 
     #[test]
     fn test_classify_tool_type_agent() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
-        assert_eq!(
-            classify_tool_type("spawn_agent", &plugin_names),
-            ToolType::Agent
-        );
-        assert_eq!(
-            classify_tool_type("retrieve_content", &plugin_names),
-            ToolType::Agent
-        );
+        let plugins: Vec<&str> = vec![];
+        for name in ["spawn_agent", "retrieve_content"] {
+            assert_eq!(
+                classify_tool_type(name, &plugins),
+                ToolType::Agent,
+                "{name}"
+            );
+        }
     }
 
     #[test]
     fn test_classify_tool_type_plugin() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
-        assert_eq!(
-            classify_tool_type("my_plugin", &plugin_names),
-            ToolType::Plugin
-        );
+        let plugins: Vec<&str> = vec!["my_plugin"];
+        assert_eq!(classify_tool_type("my_plugin", &plugins), ToolType::Plugin);
     }
 
     #[test]
     fn test_classify_tool_type_unknown_defaults_to_plugin() {
-        let plugin_names: Vec<&str> = vec!["my_plugin"];
+        let plugins: Vec<&str> = vec![];
         assert_eq!(
-            classify_tool_type("unknown_tool", &plugin_names),
+            classify_tool_type("unknown_tool", &plugins),
             ToolType::Plugin
         );
     }
@@ -2031,6 +2031,8 @@ mod tests {
     fn test_tool_type_as_str() {
         assert_eq!(ToolType::Builtin.as_str(), "builtin");
         assert_eq!(ToolType::File.as_str(), "file");
+        assert_eq!(ToolType::Agent.as_str(), "agent");
+        assert_eq!(ToolType::Coding.as_str(), "coding");
         assert_eq!(ToolType::Plugin.as_str(), "plugin");
     }
 

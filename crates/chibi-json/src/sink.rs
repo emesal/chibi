@@ -38,10 +38,14 @@ impl ResponseSink for JsonResponseSink {
                 message,
                 verbose_only,
             } => {
-                if !verbose_only {
-                    let json = serde_json::json!({"type": "diagnostic", "content": message});
-                    eprintln!("{}", json);
-                }
+                // Always emit diagnostics in JSON mode — programmatic consumers can filter
+                // on the `verbose_only` field. Silently dropping them loses information.
+                let json = serde_json::json!({
+                    "type": "diagnostic",
+                    "content": message,
+                    "verbose_only": verbose_only,
+                });
+                eprintln!("{}", json);
             }
             ResponseEvent::ToolStart { name, summary } => {
                 let json = serde_json::json!({

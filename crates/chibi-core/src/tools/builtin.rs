@@ -233,6 +233,11 @@ pub fn builtin_summary_params(name: &str) -> &'static [&'static str] {
         .unwrap_or(&[])
 }
 
+/// Check if a tool name is a core builtin tool.
+pub fn is_builtin_tool(name: &str) -> bool {
+    BUILTIN_TOOL_DEFS.iter().any(|def| def.name == name)
+}
+
 /// Look up a specific builtin tool definition by name.
 /// Returns None if not found. Use this for testing or conditional tool access.
 pub fn get_builtin_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
@@ -271,7 +276,7 @@ pub fn builtin_tool_metadata(name: &str) -> ToolMetadata {
             flow_control: true,
             ends_turn: true,
         },
-        "shell_exec" => ToolMetadata {
+        "shell_exec" | "spawn_agent" => ToolMetadata {
             parallel: false,
             flow_control: false,
             ends_turn: false,
@@ -604,6 +609,22 @@ mod tests {
         assert!(!meta.parallel);
         assert!(meta.flow_control);
         assert!(meta.ends_turn); // call_user ends turn
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_spawn_agent() {
+        let meta = builtin_tool_metadata("spawn_agent");
+        assert!(!meta.parallel); // agent spawning must be sequential
+        assert!(!meta.flow_control);
+        assert!(!meta.ends_turn);
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_shell_exec() {
+        let meta = builtin_tool_metadata("shell_exec");
+        assert!(!meta.parallel);
+        assert!(!meta.flow_control);
+        assert!(!meta.ends_turn);
     }
 
     #[test]

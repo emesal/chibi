@@ -34,7 +34,7 @@ pub use builtin::{
 pub use builtin::{Handoff, HandoffTarget};
 
 // Re-export builtin tool registry lookup
-pub use builtin::get_builtin_tool_def;
+pub use builtin::{get_builtin_tool_def, is_builtin_tool};
 
 // Re-export registry-based tool generation
 pub use builtin::{all_builtin_tools_to_api_format, builtin_tools_to_api_format};
