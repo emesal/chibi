@@ -23,7 +23,7 @@ chibi works out of the box with no configuration — it uses free-tier OpenRoute
 chibi "hello, what can you do?"
 ```
 
-That's it. No API key, no config file, no models.toml needed.
+That's it.
 
 ## Customisation
 
