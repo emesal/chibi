@@ -71,23 +71,25 @@ Content appears in the system prompt under `--- AGENT INSTRUCTIONS ---`, after t
 
 Create `~/.chibi/config.toml` (or `<CHIBI_HOME>/config.toml` if overridden):
 
+All fields are optional. chibi works with no config file at all (free-tier OpenRouter, default model).
+
 ```toml
 # =============================================================================
-# Required Settings
+# Core Settings (all optional)
 # =============================================================================
 
-# API key for your LLM provider
-# Currently chibi uses OpenRouter (https://openrouter.ai/settings/keys)
-api_key = "your-api-key-here"
+# API key for OpenRouter (https://openrouter.ai/settings/keys)
+# Omit for free-tier access (no key needed)
+# api_key = "your-api-key-here"
 
-# Model to use (see https://openrouter.ai/models for available models)
-model = "anthropic/claude-sonnet-4"
+# Model to use (default: ratatoskr:free/agentic)
+# model = "anthropic/claude-sonnet-4"
 
-# Context window limit (tokens) - used for warning calculations
-context_window_limit = 200000
+# Context window limit in tokens (default: fetched from ratatoskr registry)
+# context_window_limit = 200000
 
-# Warning threshold (0-100) - warn when context exceeds this percentage
-warn_threshold_percent = 80.0
+# Warning threshold percentage (default: 80.0)
+# warn_threshold_percent = 80.0
 
 # =============================================================================
 # Optional Settings
@@ -248,41 +250,30 @@ effort = "medium"
 
 ## Model Metadata (models.toml)
 
-Define per-model settings in `~/.chibi/models.toml`:
+Per-model API parameter overrides in `~/.chibi/models.toml`. Model capabilities (context window, tool call support) come from ratatoskr's registry automatically — no need to configure them here.
+
+Use `chibi -M` to see what parameters a model supports.
 
 ```toml
 # Each key should match the model name used in config.toml or local.toml
 
-[models."anthropic/claude-sonnet-4"]
-context_window = 200000
+# Claude with extended thinking (token-based reasoning)
+[models."anthropic/claude-sonnet-4".api.reasoning]
+max_tokens = 32000
 
-[models."anthropic/claude-3.5-haiku"]
-context_window = 200000
-
-[models."openai/gpt-4o"]
-context_window = 128000
-
-[models."openai/o3"]
-context_window = 200000
-
+# OpenAI reasoning models (effort-based reasoning)
 [models."openai/o3".api]
 max_tokens = 100000
 
 [models."openai/o3".api.reasoning]
 effort = "high"
 
-[models."google/gemini-2.0-flash-thinking-exp:free"]
-context_window = 1048576
-
+# Gemini thinking model (token-based reasoning)
 [models."google/gemini-2.0-flash-thinking-exp:free".api.reasoning]
 max_tokens = 16000
-
-[models."anthropic/claude-sonnet-4".api.reasoning]
-max_tokens = 32000
 ```
 
 When you use a model, chibi checks for a matching entry and applies:
-- `context_window` - Overrides `context_window_limit` from config.toml
 - `api.*` - Model-specific API parameters (merged with global settings)
 
 ## Per-Context Configuration (local.toml)

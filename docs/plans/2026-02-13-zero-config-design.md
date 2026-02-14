@@ -11,12 +11,12 @@ depends on: [ratatoskr#24](https://github.com/emesal/ratatoskr/issues/24) (merge
 - [x] §3 config resolution
 - [x] §4 gateway building
 - [x] §5 context_window_limit resolution
-- [ ] §6 models.toml cleanup
-- [ ] §7 -m/-M output
-- [ ] §8 api_key Option propagation
-- [ ] §9 docs updates
+- [x] §6 models.toml cleanup
+- [x] §7 -m/-M output
+- [x] §8 api_key Option propagation
+- [x] §9 docs updates
 
-**status:** §1–5 done, 446 tests + 10 doctests passing. ratatoskr updated to v0.2.3 (Cargo.lock). §8 partially done (CLI accessor + test updates landed with §1–4).
+**status:** all sections complete. 443 tests + 10 doctests passing.
 
 ### what's already done
 
@@ -33,12 +33,12 @@ depends on: [ratatoskr#24](https://github.com/emesal/ratatoskr/issues/24) (merge
 - `resolve_context_window()` in `gateway.rs` — sync registry lookup fills `context_window_limit` when 0
 - `resolve_cli_config()` calls `resolve_context_window()` after config resolution — single choke point for CLI
 
-### what remains
+### what was done in §6–9
 
-- §6: remove `context_window` and `supports_tool_calls` from chibi's `ModelMetadata`
-- §7: update `format_model_toml()` — context_window as comment not settable field
-- §8: `get_field("api_key")` handle `None` (display "unset") — rest already done
-- §9: docs (getting-started.md, configuration.md, AGENTS.md)
+- §6: removed `context_window` and `supports_tool_calls` from chibi's `ModelMetadata` (now ratatoskr-only), dropped resolve_config reads, removed 3 tests, cleaned models.example.toml
+- §7: `format_model_toml()` — context_window now informational comment in full mode, absent in minimal
+- §8: `get_field("api_key")` returns `"(set)"` / `"(unset)"` (presence only, no secret leak), added to `list_fields()`
+- §9: getting-started.md zero-config quick-start, configuration.md all fields optional with defaults, models.toml docs trimmed
 
 ## goal
 
@@ -113,7 +113,7 @@ depends on ratatoskr#24: `openrouter(Option<impl Into<String>>)`.
 
 called from `resolve_cli_config()` (CLI's single config choke point) when `context_window_limit == 0`. if the model isn't in the registry, limit stays 0 and existing guards (skip compaction/warnings) remain in effect.
 
-### 6. models.toml cleanup
+### 6. models.toml cleanup ✅
 
 remove from `ModelMetadata` (the config struct, not ratatoskr's):
 
@@ -122,14 +122,14 @@ remove from `ModelMetadata` (the config struct, not ratatoskr's):
 
 `resolve_config()` drops the code reading those fields. models.toml keeps only per-model API param overrides.
 
-### 7. `-m`/`-M` output (`model_info.rs`)
+### 7. `-m`/`-M` output (`model_info.rs`) ✅
 
 `format_model_toml()`:
 
 - `-m` (minimal): remove `context_window` from settable output. only API params.
 - `-M` (full): show `context_window` as informational comment, not settable field. same for tool call support.
 
-### 8. `api_key: Option<String>` propagation
+### 8. `api_key: Option<String>` propagation ✅
 
 small blast radius:
 
@@ -138,7 +138,7 @@ small blast radius:
 - `get_field("api_key")` — handle `None` (display "unset")
 - tests — mechanical updates wrapping in `Some()`
 
-### 9. docs updates
+### 9. docs updates ✅
 
 - **`docs/getting-started.md`** — new zero-config quick-start path (`cargo install chibi && chibi "hello"`). existing config example becomes "customization" section.
 - **`docs/configuration.md`** — api_key, model, context_window_limit, warn_threshold_percent documented as optional with defaults. models.toml section trimmed (remove context_window/supports_tool_calls).

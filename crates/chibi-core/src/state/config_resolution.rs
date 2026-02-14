@@ -200,16 +200,6 @@ impl AppState {
             } else {
                 model_api
             };
-
-            if let Some(context_window) = model_meta.context_window {
-                resolved.context_window_limit = context_window;
-            }
-
-            // Model capability constraint: if the model doesn't support tool calls,
-            // unconditionally disable them regardless of user config
-            if model_meta.supports_tool_calls == Some(false) {
-                resolved.no_tool_calls = true;
-            }
         }
 
         Ok(resolved)

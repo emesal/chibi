@@ -580,16 +580,12 @@ pub struct LocalConfig {
     pub fallback_tool: Option<String>,
 }
 
-/// Model metadata from ~/.chibi/models.toml
+/// Model metadata from ~/.chibi/models.toml.
+///
+/// Contains only per-model API parameter overrides. Model capabilities
+/// (context window, tool call support) come from ratatoskr's registry.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelMetadata {
-    #[serde(default)]
-    pub context_window: Option<usize>,
-    /// Whether this model supports tool/function calling.
-    /// When `false`, `no_tool_calls` is automatically set to `true` during
-    /// config resolution — this is a hard capability constraint, not a preference.
-    #[serde(default)]
-    pub supports_tool_calls: Option<bool>,
     /// API parameters for this specific model
     #[serde(default)]
     pub api: ApiParams,
@@ -652,10 +648,18 @@ pub struct ResolvedConfig {
 impl ResolvedConfig {
     /// Get a config field value by path (e.g., "model", "api.temperature", "api.reasoning.effort").
     /// Returns None if the field doesn't exist or has no value set.
-    /// Note: api_key is intentionally excluded for security.
+    /// Note: api_key shows presence only ("(set)"/"(unset)"), never the actual value.
     pub fn get_field(&self, path: &str) -> Option<String> {
         match path {
-            // Top-level fields (excluding api_key for security)
+            "api_key" => Some(
+                if self.api_key.is_some() {
+                    "(set)"
+                } else {
+                    "(unset)"
+                }
+                .to_string(),
+            ),
+            // Top-level fields
             "verbose" => Some(self.verbose.to_string()),
             "hide_tool_calls" => Some(self.hide_tool_calls.to_string()),
             "no_tool_calls" => Some(self.no_tool_calls.to_string()),
@@ -723,10 +727,11 @@ impl ResolvedConfig {
     }
 
     /// List all inspectable config field paths.
-    /// Note: api_key is intentionally excluded for security.
+    /// Note: api_key shows presence only, not the actual value.
     pub fn list_fields() -> &'static [&'static str] {
         &[
             // Top-level fields
+            "api_key",
             "verbose",
             "hide_tool_calls",
             "no_tool_calls",
@@ -873,7 +878,7 @@ mod tests {
 
         assert_eq!(config.get_field("model"), Some("test-model".to_string()));
         assert_eq!(config.get_field("username"), Some("testuser".to_string()));
-        assert_eq!(config.get_field("api_key"), None); // Excluded for security
+        assert_eq!(config.get_field("api_key"), Some("(set)".to_string()));
         assert_eq!(
             config.get_field("file_tools_allowed_paths"),
             Some("/tmp".to_string())
