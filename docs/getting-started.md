@@ -15,26 +15,30 @@ cargo build --release
 # Binary will be at target/release/chibi
 ```
 
-## Basic Configuration
+## Quick Start
 
-Create a configuration file at `~/.chibi/config.toml`:
+chibi works out of the box with no configuration — it uses free-tier OpenRouter by default:
 
-```toml
-# API key for your LLM provider
-# Currently chibi uses OpenRouter (https://openrouter.ai/settings/keys)
-api_key = "your-api-key-here"
-
-# Model to use (see https://openrouter.ai/models)
-model = "anthropic/claude-sonnet-4"
-
-# Context window limit (tokens)
-context_window_limit = 200000
-
-# Warning threshold percentage (0-100)
-warn_threshold_percent = 80.0
+```bash
+chibi "hello, what can you do?"
 ```
 
-See [configuration.md](configuration.md) for the full configuration reference.
+That's it.
+
+## Customisation
+
+For better models or your own API key, create `~/.chibi/config.toml`:
+
+```toml
+# API key for OpenRouter (https://openrouter.ai/settings/keys)
+# Omit for free-tier access (no key needed)
+api_key = "your-api-key-here"
+
+# Model to use (default: ratatoskr:free/agentic)
+model = "anthropic/claude-sonnet-4"
+```
+
+All fields are optional — only set what you want to change. See [configuration.md](configuration.md) for the full reference.
 
 ## System Prompts
 
@@ -92,8 +96,7 @@ Plugins provide tools that the LLM can call. With verbose mode you can see tool 
 
 ```bash
 chibi -v "Read my package.json and list the dependencies"
-# stderr: [Loaded 1 tool(s): read_file]
-# stderr: [Tool: read_file]
+# stderr: [Tool: file_head(path: package.json)]
 # stdout: <LLM response about the file>
 ```
 

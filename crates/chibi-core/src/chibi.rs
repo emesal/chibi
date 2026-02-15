@@ -19,7 +19,7 @@
 //!     let config = chibi.resolve_config("default", None)?;
 //!
 //!     // Create options and a sink to collect the response
-//!     let options = PromptOptions::new(false, false, false, &[], false);
+//!     let options = PromptOptions::new(false, false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
 //!     // Send a prompt to the default context
@@ -36,11 +36,19 @@ use std::path::Path;
 use crate::api::sink::ResponseSink;
 use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
-use crate::context::ContextEntry;
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 
 use std::path::PathBuf;
+
+/// Permission handler for gated operations (file writes, shell execution).
+///
+/// Receives hook data as JSON (containing tool_name, path/command, etc.).
+/// Returns `Ok(true)` to allow the operation, `Ok(false)` to deny.
+///
+/// The frontend (e.g. CLI) registers a handler that prompts the user
+/// interactively. When no handler is set, operations fail-safe to deny.
+pub type PermissionHandler = Box<dyn Fn(&serde_json::Value) -> io::Result<bool>>;
 
 /// Options for loading a Chibi instance.
 ///
@@ -88,6 +96,9 @@ pub struct Chibi {
     pub tools: Vec<Tool>,
     /// Project root directory (always resolved, never None).
     pub project_root: PathBuf,
+    /// Optional permission handler for gated operations.
+    /// If `None`, gated operations fail-safe to deny (unless a plugin approves).
+    permission_handler: Option<PermissionHandler>,
 }
 
 impl Chibi {
@@ -158,7 +169,17 @@ impl Chibi {
             app,
             tools,
             project_root,
+            permission_handler: None,
         })
+    }
+
+    /// Set the permission handler for gated operations.
+    ///
+    /// The handler is called when a gated tool (write_file, file_edit, shell_exec)
+    /// is invoked and no plugin has denied the operation. If no handler is set,
+    /// operations fail-safe to deny.
+    pub fn set_permission_handler(&mut self, handler: PermissionHandler) {
+        self.permission_handler = Some(handler);
     }
 
     /// Initialize the session.
@@ -248,7 +269,7 @@ impl Chibi {
     /// # async fn example() -> std::io::Result<()> {
     /// # let chibi = Chibi::load()?;
     /// # let config = chibi.resolve_config("default", None)?;
-    /// # let options = PromptOptions::new(false, false, false, &[], false);
+    /// # let options = PromptOptions::new(false, false, &[], false);
     /// let mut sink = CollectingSink::new();
     /// chibi.send_prompt_streaming("default", "Hello", &config, &options, &mut sink).await?;
     /// println!("Got response: {}", sink.text);
@@ -271,6 +292,9 @@ impl Chibi {
             config,
             options,
             sink,
+            self.permission_handler.as_ref(),
+            self.home_dir(),
+            &self.project_root,
         )
         .await
     }
@@ -289,7 +313,7 @@ impl Chibi {
     ///
     /// The tool's output as a string, or an error if the tool wasn't found
     /// or execution failed.
-    pub fn execute_tool(
+    pub async fn execute_tool(
         &self,
         context_name: &str,
         name: &str,
@@ -310,6 +334,24 @@ impl Chibi {
             {
                 return result;
             }
+        }
+
+        // Try coding tools
+        if tools::is_coding_tool(name) {
+            let project_root = std::env::var("CHIBI_PROJECT_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+            if let Some(result) =
+                tools::execute_coding_tool(name, &args, &project_root, &self.tools).await
+            {
+                return result;
+            }
+        }
+
+        // Try agent tools
+        if tools::is_agent_tool(name) {
+            let config = self.app.resolve_config(context_name, None)?;
+            return tools::execute_agent_tool(&config, name, &args, &self.tools).await;
         }
 
         // Try plugins
@@ -334,11 +376,6 @@ impl Chibi {
     /// List all available context names.
     pub fn list_contexts(&self) -> Vec<String> {
         self.app.list_contexts()
-    }
-
-    /// List all available contexts with metadata.
-    pub fn list_context_entries(&self) -> &[ContextEntry] {
-        &self.app.state.contexts
     }
 
     /// Resolve configuration for the current context.
@@ -373,7 +410,7 @@ impl Chibi {
     }
 }
 
-/// Resolve project root: explicit path > `CHIBI_PROJECT_ROOT` env > current working directory.
+/// Resolve project root: explicit path > `CHIBI_PROJECT_ROOT` env > VCS root > cwd.
 fn resolve_project_root(explicit: Option<PathBuf>) -> io::Result<PathBuf> {
     if let Some(root) = explicit {
         return Ok(root);
@@ -383,7 +420,8 @@ fn resolve_project_root(explicit: Option<PathBuf>) -> io::Result<PathBuf> {
     {
         return Ok(PathBuf::from(env_root));
     }
-    std::env::current_dir()
+    let cwd = std::env::current_dir()?;
+    Ok(crate::vcs::detect_project_root(&cwd).unwrap_or(cwd))
 }
 
 /// Return the project-local chibi directory (`<project_root>/.chibi/`), creating it if absent.
@@ -476,13 +514,16 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_project_root_falls_back_to_cwd() {
+    fn test_resolve_project_root_falls_back_to_vcs_or_cwd() {
         // SAFETY: Test runs in single-threaded context
         unsafe {
             std::env::remove_var("CHIBI_PROJECT_ROOT");
         }
         let root = resolve_project_root(None).unwrap();
-        assert_eq!(root, std::env::current_dir().unwrap());
+        let cwd = std::env::current_dir().unwrap();
+        // Should find VCS root (if running inside a repo) or fall back to cwd
+        let expected = crate::vcs::detect_project_root(&cwd).unwrap_or(cwd);
+        assert_eq!(root, expected);
     }
 
     #[test]

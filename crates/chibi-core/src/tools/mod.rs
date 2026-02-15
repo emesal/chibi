@@ -12,6 +12,7 @@ pub mod coding_tools;
 pub mod file_tools;
 mod hooks;
 mod plugins;
+pub mod security;
 
 use std::path::PathBuf;
 
@@ -25,13 +26,15 @@ pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
 
 // Re-export built-in tool constants (used by api module)
 pub use builtin::{CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME};
-pub use builtin::{MODEL_INFO_TOOL_NAME, REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
+pub use builtin::{
+    MODEL_INFO_TOOL_NAME, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME,
+};
 
 // Re-export handoff types for control flow
 pub use builtin::{Handoff, HandoffTarget};
 
 // Re-export builtin tool registry lookup
-pub use builtin::get_builtin_tool_def;
+pub use builtin::{get_builtin_tool_def, is_builtin_tool};
 
 // Re-export registry-based tool generation
 pub use builtin::{all_builtin_tools_to_api_format, builtin_tools_to_api_format};
@@ -42,13 +45,17 @@ pub use builtin::execute_builtin_tool;
 // Re-export tool metadata functions
 pub use builtin::builtin_tool_metadata;
 
+// Re-export summary_params lookup
+pub use builtin::builtin_summary_params;
+
 // Re-export coding tool registry functions and execution
 pub use coding_tools::{
     CODING_TOOL_DEFS, all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool,
 };
 pub use coding_tools::{
-    DIR_LIST_TOOL_NAME, FILE_EDIT_TOOL_NAME, GLOB_FILES_TOOL_NAME, GREP_FILES_TOOL_NAME,
-    INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_UPDATE_TOOL_NAME, SHELL_EXEC_TOOL_NAME,
+    DIR_LIST_TOOL_NAME, FETCH_URL_TOOL_NAME, FILE_EDIT_TOOL_NAME, GLOB_FILES_TOOL_NAME,
+    GREP_FILES_TOOL_NAME, INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_UPDATE_TOOL_NAME,
+    SHELL_EXEC_TOOL_NAME,
 };
 
 // Re-export file tool registry functions
@@ -67,7 +74,13 @@ pub use agent_tools::{all_agent_tools_to_api_format, get_agent_tool_def};
 pub use agent_tools::{execute_agent_tool, is_agent_tool, spawn_agent};
 
 // Re-export agent tool types and constants
-pub use agent_tools::{RETRIEVE_CONTENT_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SpawnOptions};
+pub use agent_tools::{SPAWN_AGENT_TOOL_NAME, SUMMARIZE_CONTENT_TOOL_NAME, SpawnOptions};
+
+// Re-export security utilities
+pub use security::{
+    UrlAction, UrlCategory, UrlPolicy, UrlRule, UrlSafety, classify_url, evaluate_url_policy,
+    validate_file_path,
+};
 
 /// Metadata for tool behavior in the agentic loop
 #[derive(Debug, Clone, Default)]
@@ -106,6 +119,8 @@ pub struct Tool {
     pub path: PathBuf,
     pub hooks: Vec<HookPoint>,
     pub metadata: ToolMetadata,
+    /// Parameter names whose values should appear in tool-call notices.
+    pub summary_params: Vec<String>,
 }
 
 /// Collect names of all built-in tools (core, file, agent).
@@ -132,6 +147,129 @@ pub fn get_tool_metadata(tools: &[Tool], name: &str) -> ToolMetadata {
     builtin_tool_metadata(name)
 }
 
+/// Build a concise summary string from a tool's declared summary_params and actual arguments.
+///
+/// Checks plugins first, then falls back to builtin_summary_params. Extracts
+/// string values for each declared param from the JSON args and joins them
+/// with spaces. Returns None if no params are declared or no values found.
+pub fn tool_call_summary(tools: &[Tool], name: &str, args_json: &str) -> Option<String> {
+    let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
+
+    // Check plugins first, then builtins
+    let params: Vec<&str> = if let Some(tool) = tools.iter().find(|t| t.name == name) {
+        tool.summary_params.iter().map(|s| s.as_str()).collect()
+    } else {
+        builtin_summary_params(name).to_vec()
+    };
+
+    if params.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<String> = params
+        .iter()
+        .filter_map(|p| args[*p].as_str().map(String::from))
+        .collect();
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
+/// Shared HTTP client for URL fetching (agent_tools, coding_tools).
+///
+/// Reuses a single connection pool across all fetch_url calls within a process.
+/// Per-request timeouts can be set via `RequestBuilder::timeout()`.
+pub(crate) fn http_client() -> &'static reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
+            .expect("failed to build HTTP client")
+    })
+}
+
+/// Fetch a URL with streaming size limit and timeout.
+///
+/// Validates the URL scheme (http/https only), checks `Content-Length` for
+/// early rejection, then reads the body in chunks up to `max_bytes`.
+/// Returns the body as a UTF-8 string (lossy). Responses exceeding
+/// `max_bytes` are truncated with a notice appended.
+pub(crate) async fn fetch_url_with_limit(
+    url: &str,
+    max_bytes: usize,
+    timeout_secs: u64,
+) -> std::io::Result<String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("URL must start with http:// or https://, got: {}", url),
+        ));
+    }
+
+    let response = http_client()
+        .get(url)
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .send()
+        .await
+        .map_err(|e| std::io::Error::other(format!("Request failed: {}", e)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(std::io::Error::other(format!(
+            "HTTP {} {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("Unknown"),
+        )));
+    }
+
+    // Early reject if Content-Length exceeds limit
+    if let Some(content_length) = response.content_length()
+        && content_length as usize > max_bytes
+    {
+        return Err(std::io::Error::other(format!(
+            "Response too large: Content-Length {} exceeds limit of {} bytes",
+            content_length, max_bytes,
+        )));
+    }
+
+    // Stream body in chunks up to max_bytes
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut buf = Vec::with_capacity(max_bytes.min(64 * 1024));
+    let mut truncated = false;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|e| std::io::Error::other(format!("Failed to read response: {}", e)))?;
+        let remaining = max_bytes.saturating_sub(buf.len());
+        if remaining == 0 {
+            truncated = true;
+            break;
+        }
+        if chunk.len() > remaining {
+            buf.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+
+    let body = String::from_utf8_lossy(&buf).into_owned();
+    if truncated {
+        Ok(format!(
+            "{}\n\n[Truncated: response exceeded limit of {} bytes]",
+            body, max_bytes,
+        ))
+    } else {
+        Ok(body)
+    }
+}
+
 // Tests for Tool struct are in plugins.rs
 
 #[cfg(test)]
@@ -152,6 +290,7 @@ mod tests {
                 flow_control: true,
                 ends_turn: true,
             },
+            summary_params: vec![],
         }];
 
         let meta = get_tool_metadata(&tools, "custom_flow");
@@ -212,5 +351,56 @@ mod tests {
         for name in &names {
             assert!(seen.insert(name), "duplicate built-in tool name: {}", name);
         }
+    }
+
+    #[test]
+    fn test_tool_call_summary_with_plugin() {
+        let tools = vec![Tool {
+            name: "my_plugin".to_string(),
+            description: "test".to_string(),
+            parameters: serde_json::json!({}),
+            path: PathBuf::from("/bin/test"),
+            hooks: vec![],
+            metadata: ToolMetadata::new(),
+            summary_params: vec!["path".to_string(), "pattern".to_string()],
+        }];
+
+        let summary = tool_call_summary(
+            &tools,
+            "my_plugin",
+            r#"{"path": "src/main.rs", "pattern": "TODO"}"#,
+        );
+        assert_eq!(summary, Some("src/main.rs TODO".to_string()));
+    }
+
+    #[test]
+    fn test_tool_call_summary_builtin_fallback() {
+        let tools: Vec<Tool> = vec![];
+
+        // shell_exec has summary_params: &["command"]
+        let summary = tool_call_summary(&tools, "shell_exec", r#"{"command": "cargo test"}"#);
+        assert_eq!(summary, Some("cargo test".to_string()));
+    }
+
+    #[test]
+    fn test_tool_call_summary_no_params() {
+        let tools: Vec<Tool> = vec![];
+
+        // update_reflection has summary_params: &[]
+        let summary = tool_call_summary(
+            &tools,
+            "update_reflection",
+            r#"{"content": "some reflection"}"#,
+        );
+        assert_eq!(summary, None);
+    }
+
+    #[test]
+    fn test_tool_call_summary_missing_values() {
+        let tools: Vec<Tool> = vec![];
+
+        // file_head has summary_params: &["path"], but no path in args
+        let summary = tool_call_summary(&tools, "file_head", r#"{"cache_id": "abc123"}"#);
+        assert_eq!(summary, None);
     }
 }

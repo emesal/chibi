@@ -44,8 +44,9 @@ pub fn format_model_toml(metadata: &ModelMetadata, full: bool) -> String {
     // [models."<id>"]
     writeln!(out, "[models.\"{}\"]", id).unwrap();
 
-    if let Some(ctx) = metadata.info.context_window {
-        writeln!(out, "context_window = {}", ctx).unwrap();
+    // context_window is informational only (sourced from ratatoskr registry)
+    if full && let Some(ctx) = metadata.info.context_window {
+        writeln!(out, "# context_window: {}", ctx).unwrap();
     }
 
     // [models."<id>".api]
@@ -232,9 +233,9 @@ mod tests {
         let out = format_model_toml(&md, false);
 
         assert!(out.contains("[models.\"anthropic/claude-sonnet-4\"]"));
-        assert!(out.contains("context_window = 200000"));
         assert!(out.contains("max_tokens = 16384"));
-        // No comments in minimal mode
+        // No comments in minimal mode (context_window is informational, full-only)
+        assert!(!out.contains("context_window"));
         assert!(!out.contains("# provider"));
         assert!(!out.contains("# pricing"));
         assert!(!out.contains("# temperature"));
@@ -249,6 +250,7 @@ mod tests {
         assert!(out.contains("# provider: openrouter"));
         assert!(out.contains("# capabilities: Chat"));
         assert!(out.contains("# pricing: $3.00 / $15.00 per MTok"));
+        assert!(out.contains("# context_window: 200000"));
         assert!(out.contains("# temperature:"));
         assert!(out.contains("# top_p:"));
         assert!(out.contains("# top_k:"));

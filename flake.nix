@@ -10,11 +10,12 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
       in
       {
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "chibi";
-          version = "0.7.0";
+          version = cargoToml.workspace.package.version;
           src = ./.;
 
           cargoLock = {

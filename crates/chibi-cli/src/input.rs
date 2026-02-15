@@ -15,14 +15,13 @@
 //! - `Persistent` — save username to local.toml
 //! - `Ephemeral` — use username for this invocation only
 
-use chibi_core::input::{Command, Flags};
-use schemars::JsonSchema;
+use chibi_core::input::{Command, ExecutionFlags};
 use serde::{Deserialize, Serialize};
 
 /// Context selection mode.
 ///
 /// Determines how the CLI selects which context to operate on.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextSelection {
     /// Use the implied context from session.json (no switch)
@@ -46,7 +45,7 @@ fn default_true() -> bool {
 /// Username override mode.
 ///
 /// Determines how the CLI handles username overrides.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsernameOverride {
     /// Persistent username (-u): saves to local.toml
@@ -55,32 +54,44 @@ pub enum UsernameOverride {
     Ephemeral(String),
 }
 
-/// Unified input from CLI or JSON.
+/// Unified input from CLI.
 ///
 /// This is the main type that represents a fully parsed user request.
 /// It combines a command from chibi-core with CLI-specific selection modes.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChibiInput {
     /// The command to execute
     pub command: Command,
     /// Behavioral flags
     #[serde(default)]
-    pub flags: Flags,
+    pub flags: ExecutionFlags,
     /// Context selection
     #[serde(default)]
     pub context: ContextSelection,
     /// Optional username override
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username_override: Option<UsernameOverride>,
+    /// Disable markdown rendering (CLI-only presentation concern)
+    #[serde(default)]
+    pub raw: bool,
+    /// Debug: render a markdown file and quit (CLI-only, from --debug md=<FILE>)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub md_file: Option<String>,
+    /// Debug: force markdown rendering even when stdout is not a TTY (CLI-only)
+    #[serde(default)]
+    pub force_markdown: bool,
 }
 
 impl Default for ChibiInput {
     fn default() -> Self {
         Self {
             command: Command::NoOp,
-            flags: Flags::default(),
+            flags: ExecutionFlags::default(),
             context: ContextSelection::Current,
             username_override: None,
+            raw: false,
+            md_file: None,
+            force_markdown: false,
         }
     }
 }
@@ -97,7 +108,7 @@ mod tests {
         let input = ChibiInput::default();
         assert!(matches!(input.command, Command::NoOp));
         assert!(!input.flags.verbose);
-        assert!(!input.flags.json_output);
+        assert!(!input.raw);
         assert!(matches!(input.context, ContextSelection::Current));
     }
 
@@ -198,15 +209,13 @@ mod tests {
                 context: Some("test".to_string()),
                 thing: Inspectable::SystemPrompt,
             },
-            flags: Flags {
+            flags: ExecutionFlags {
                 verbose: true,
                 hide_tool_calls: false,
                 show_thinking: false,
                 no_tool_calls: false,
-                json_output: true,
                 force_call_user: true,
                 force_call_agent: false,
-                raw: false,
                 debug: vec![DebugKey::All],
             },
             context: ContextSelection::Switch {
@@ -214,6 +223,9 @@ mod tests {
                 persistent: false,
             },
             username_override: Some(UsernameOverride::Ephemeral("alice".to_string())),
+            raw: true,
+            md_file: None,
+            force_markdown: false,
         };
 
         let json = serde_json::to_string(&input).unwrap();
@@ -223,9 +235,9 @@ mod tests {
             matches!(deserialized.command, Command::Inspect { context: Some(ref c), thing: Inspectable::SystemPrompt } if c == "test")
         );
         assert!(deserialized.flags.verbose);
-        assert!(deserialized.flags.json_output);
         assert!(deserialized.flags.force_call_user);
         assert_eq!(deserialized.flags.debug, vec![DebugKey::All]);
+        assert!(deserialized.raw);
         assert!(
             matches!(deserialized.context, ContextSelection::Switch { ref name, persistent: false } if name == "coding")
         );
@@ -238,9 +250,12 @@ mod tests {
     fn test_chibi_input_minimal_round_trip() {
         let input = ChibiInput {
             command: Command::ListContexts,
-            flags: Flags::default(),
+            flags: ExecutionFlags::default(),
             context: ContextSelection::Current,
             username_override: None,
+            raw: false,
+            md_file: None,
+            force_markdown: false,
         };
 
         let json = serde_json::to_string(&input).unwrap();

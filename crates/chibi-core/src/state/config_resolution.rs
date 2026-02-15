@@ -2,7 +2,8 @@
 //!
 //! Methods for loading, saving, and resolving local configs and model names.
 
-use crate::config::{ApiParams, LocalConfig, ResolvedConfig, ToolsConfig};
+use crate::config::{ApiParams, ConfigDefaults, LocalConfig, ResolvedConfig};
+use std::env;
 use std::fs;
 use std::io::{self, ErrorKind};
 
@@ -52,11 +53,12 @@ impl AppState {
     }
 
     /// Resolve the full configuration, applying overrides in order:
-    /// 1. Runtime override (passed as parameter)
+    /// 1. Runtime override (passed as parameter, highest priority)
     /// 2. Context-local config (local.toml)
-    /// 3. Global config (config.toml)
-    /// 4. Models.toml (for model expansion)
-    /// 5. Defaults
+    /// 3. Models.toml (per-model API params)
+    /// 4. Environment variables (`CHIBI_API_KEY`, `CHIBI_MODEL`)
+    /// 5. Global config (config.toml)
+    /// 6. Defaults
     pub fn resolve_config(
         &self,
         context_name: &str,
@@ -68,11 +70,18 @@ impl AppState {
         let mut api_params = ApiParams::defaults();
         api_params = api_params.merge_with(&self.config.api);
 
-        // Start with global config values
+        // Start with global config values, applying defaults for optional fields
         let mut resolved = ResolvedConfig {
             api_key: self.config.api_key.clone(),
-            model: self.config.model.clone(),
-            context_window_limit: self.config.context_window_limit,
+            model: self
+                .config
+                .model
+                .clone()
+                .unwrap_or_else(|| ConfigDefaults::MODEL.to_string()),
+            context_window_limit: self
+                .config
+                .context_window_limit
+                .unwrap_or(ConfigDefaults::CONTEXT_WINDOW_LIMIT),
             warn_threshold_percent: self.config.warn_threshold_percent,
             verbose: self.config.verbose,
             hide_tool_calls: self.config.hide_tool_calls,
@@ -91,75 +100,17 @@ impl AppState {
             tool_cache_preview_chars: self.config.tool_cache_preview_chars,
             file_tools_allowed_paths: self.config.file_tools_allowed_paths.clone(),
             api: api_params,
-            tools: ToolsConfig::default(),
+            tools: self.config.tools.clone(),
             fallback_tool: self.config.fallback_tool.clone(),
             storage: self.config.storage.clone(),
+            url_policy: self.config.url_policy.clone(),
         };
 
-        // Apply local config overrides
-        if let Some(ref api_key) = local.api_key {
-            resolved.api_key = api_key.clone();
-        }
-        if let Some(ref model) = local.model {
-            resolved.model = model.clone();
-        }
-        if let Some(context_window_limit) = local.context_window_limit {
-            resolved.context_window_limit = context_window_limit;
-        }
-        if let Some(warn_threshold_percent) = local.warn_threshold_percent {
-            resolved.warn_threshold_percent = warn_threshold_percent;
-        }
-        if let Some(verbose) = local.verbose {
-            resolved.verbose = verbose;
-        }
-        if let Some(hide_tool_calls) = local.hide_tool_calls {
-            resolved.hide_tool_calls = hide_tool_calls;
-        }
-        if let Some(no_tool_calls) = local.no_tool_calls {
-            resolved.no_tool_calls = no_tool_calls;
-        }
-        if let Some(auto_compact) = local.auto_compact {
-            resolved.auto_compact = auto_compact;
-        }
-        if let Some(auto_compact_threshold) = local.auto_compact_threshold {
-            resolved.auto_compact_threshold = auto_compact_threshold;
-        }
-        if let Some(fuel) = local.fuel {
-            resolved.fuel = fuel;
-        }
-        if let Some(fuel_empty_response_cost) = local.fuel_empty_response_cost {
-            resolved.fuel_empty_response_cost = fuel_empty_response_cost;
-        }
-        if let Some(ref username) = local.username {
-            resolved.username = username.clone();
-        }
-        if let Some(reflection_enabled) = local.reflection_enabled {
-            resolved.reflection_enabled = reflection_enabled;
-        }
-        if let Some(limit) = local.reflection_character_limit {
-            resolved.reflection_character_limit = limit;
-        }
-        if let Some(pct) = local.rolling_compact_drop_percentage {
-            resolved.rolling_compact_drop_percentage = pct;
-        }
-        if let Some(tool_output_cache_threshold) = local.tool_output_cache_threshold {
-            resolved.tool_output_cache_threshold = tool_output_cache_threshold;
-        }
-        if let Some(tool_cache_max_age_days) = local.tool_cache_max_age_days {
-            resolved.tool_cache_max_age_days = tool_cache_max_age_days;
-        }
-        if let Some(auto_cleanup_cache) = local.auto_cleanup_cache {
-            resolved.auto_cleanup_cache = auto_cleanup_cache;
-        }
-        if let Some(tool_cache_preview_chars) = local.tool_cache_preview_chars {
-            resolved.tool_cache_preview_chars = tool_cache_preview_chars;
-        }
-        if let Some(ref file_tools_allowed_paths) = local.file_tools_allowed_paths {
-            resolved.file_tools_allowed_paths = file_tools_allowed_paths.clone();
-        }
-        if let Some(ref fallback_tool) = local.fallback_tool {
-            resolved.fallback_tool = fallback_tool.clone();
-        }
+        // Apply environment variable overrides (between global config and local.toml)
+        apply_env_overrides(&mut resolved);
+
+        // Apply local config overrides (simple fields via macro, see LocalConfig::apply_overrides)
+        local.apply_overrides(&mut resolved);
 
         // Apply context-level storage config overrides
         resolved.storage = resolved.storage.merge(&local.storage);
@@ -169,9 +120,9 @@ impl AppState {
             resolved.api = resolved.api.merge_with(local_api);
         }
 
-        // Apply context-level tool filtering config
+        // Apply context-level tool filtering config (merge local on top of global)
         if let Some(ref local_tools) = local.tools {
-            resolved.tools = local_tools.clone();
+            resolved.tools = resolved.tools.merge_local(local_tools);
         }
 
         // Apply runtime username override (highest priority)
@@ -193,16 +144,6 @@ impl AppState {
             } else {
                 model_api
             };
-
-            if let Some(context_window) = model_meta.context_window {
-                resolved.context_window_limit = context_window;
-            }
-
-            // Model capability constraint: if the model doesn't support tool calls,
-            // unconditionally disable them regardless of user config
-            if model_meta.supports_tool_calls == Some(false) {
-                resolved.no_tool_calls = true;
-            }
         }
 
         Ok(resolved)
@@ -247,5 +188,21 @@ impl AppState {
         }
 
         Ok(())
+    }
+}
+
+/// Environment variable names for config overrides.
+pub const ENV_API_KEY: &str = "CHIBI_API_KEY";
+pub const ENV_MODEL: &str = "CHIBI_MODEL";
+
+/// Apply environment variable overrides onto a resolved config.
+///
+/// Priority: global config.toml < **env vars** < context local.toml.
+fn apply_env_overrides(resolved: &mut ResolvedConfig) {
+    if let Ok(key) = env::var(ENV_API_KEY) {
+        resolved.api_key = Some(key);
+    }
+    if let Ok(model) = env::var(ENV_MODEL) {
+        resolved.model = model;
     }
 }

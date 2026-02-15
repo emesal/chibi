@@ -1,7 +1,7 @@
 //! Tests for state module.
 
 use super::*;
-use crate::config::{ApiParams, LocalConfig};
+use crate::config::{ApiParams, LocalConfig, ToolsConfig};
 use crate::context::InboxEntry;
 use crate::partition::StorageConfig;
 use serde_json::json;
@@ -11,9 +11,9 @@ use tempfile::TempDir;
 fn create_test_app() -> (AppState, TempDir) {
     let temp_dir = TempDir::new().unwrap();
     let config = Config {
-        api_key: "test-key".to_string(),
-        model: "test-model".to_string(),
-        context_window_limit: 8000,
+        api_key: Some("test-key".to_string()),
+        model: Some("test-model".to_string()),
+        context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
         verbose: false,
         hide_tool_calls: false,
@@ -35,6 +35,8 @@ fn create_test_app() -> (AppState, TempDir) {
         api: ApiParams::default(),
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
+        tools: ToolsConfig::default(),
+        url_policy: None,
     };
     let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
     (app, temp_dir)
@@ -451,7 +453,7 @@ fn test_resolve_config_defaults() {
     let (app, _temp) = create_test_app();
     let resolved = app.resolve_config("default", None).unwrap();
 
-    assert_eq!(resolved.api_key, "test-key");
+    assert_eq!(resolved.api_key, Some("test-key".to_string()));
     assert_eq!(resolved.model, "test-model");
     assert_eq!(resolved.username, "testuser");
 }
@@ -530,13 +532,14 @@ fn test_resolve_config_api_params_context_override() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_resolve_config_model_level_api_params() {
     // Create test app with models config
     let temp_dir = TempDir::new().unwrap();
     let config = Config {
-        api_key: "test-key".to_string(),
-        model: "test-model".to_string(),
-        context_window_limit: 8000,
+        api_key: Some("test-key".to_string()),
+        model: Some("test-model".to_string()),
+        context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
         verbose: false,
         hide_tool_calls: false,
@@ -558,6 +561,8 @@ fn test_resolve_config_model_level_api_params() {
         api: ApiParams::default(),
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
+        tools: ToolsConfig::default(),
+        url_policy: None,
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -566,8 +571,6 @@ fn test_resolve_config_model_level_api_params() {
     app.models_config.models.insert(
         "test-model".to_string(),
         crate::config::ModelMetadata {
-            context_window: Some(16000),
-            supports_tool_calls: None,
             api: ApiParams {
                 temperature: Some(0.5),
                 reasoning: crate::config::ReasoningConfig {
@@ -587,18 +590,17 @@ fn test_resolve_config_model_level_api_params() {
         resolved.api.reasoning.effort,
         Some(crate::config::ReasoningEffort::High)
     );
-    // Model context window should override
-    assert_eq!(resolved.context_window_limit, 16000);
 }
 
 #[test]
+#[serial_test::serial]
 fn test_resolve_config_hierarchy_context_over_model() {
     // Test that context-level API params override model-level
     let temp_dir = TempDir::new().unwrap();
     let config = Config {
-        api_key: "test-key".to_string(),
-        model: "test-model".to_string(),
-        context_window_limit: 8000,
+        api_key: Some("test-key".to_string()),
+        model: Some("test-model".to_string()),
+        context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
         verbose: false,
         hide_tool_calls: false,
@@ -620,6 +622,8 @@ fn test_resolve_config_hierarchy_context_over_model() {
         api: ApiParams::default(),
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
+        tools: ToolsConfig::default(),
+        url_policy: None,
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -628,8 +632,6 @@ fn test_resolve_config_hierarchy_context_over_model() {
     app.models_config.models.insert(
         "test-model".to_string(),
         crate::config::ModelMetadata {
-            context_window: Some(16000),
-            supports_tool_calls: None,
             api: ApiParams {
                 temperature: Some(0.5),
                 max_tokens: Some(1000),
@@ -692,13 +694,14 @@ fn test_resolve_config_all_local_overrides() {
         tools: None,
         storage: StorageConfig::default(),
         fallback_tool: None,
+        url_policy: None,
     };
     app.save_local_config("default", &local).unwrap();
 
     let resolved = app.resolve_config("default", None).unwrap();
 
     assert_eq!(resolved.model, "local-model");
-    assert_eq!(resolved.api_key, "local-key");
+    assert_eq!(resolved.api_key, Some("local-key".to_string()));
     assert_eq!(resolved.username, "localuser");
     assert!(resolved.auto_compact);
     assert!((resolved.auto_compact_threshold - 90.0).abs() < f32::EPSILON);
@@ -708,160 +711,71 @@ fn test_resolve_config_all_local_overrides() {
     assert!(!resolved.reflection_enabled);
 }
 
+// === Environment variable override tests ===
+// These tests mutate process-global state (env vars) and must not run in parallel.
+
 #[test]
-fn test_resolve_config_supports_tool_calls_false_disables_tools() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = Config {
-        api_key: "test-key".to_string(),
-        model: "no-tools-model".to_string(),
-        context_window_limit: 8000,
-        warn_threshold_percent: 75.0,
-        verbose: false,
-        hide_tool_calls: false,
-        no_tool_calls: false, // user hasn't disabled tools
-        auto_compact: false,
-        auto_compact_threshold: 80.0,
-        reflection_enabled: true,
-        reflection_character_limit: 10000,
-        fuel: 15,
-        fuel_empty_response_cost: 15,
-        username: "testuser".to_string(),
-        lock_heartbeat_seconds: 30,
-        rolling_compact_drop_percentage: 50.0,
-        tool_output_cache_threshold: 4000,
-        tool_cache_max_age_days: 7,
-        auto_cleanup_cache: true,
-        tool_cache_preview_chars: 500,
-        file_tools_allowed_paths: vec![],
-        api: ApiParams::default(),
-        storage: StorageConfig::default(),
-        fallback_tool: "call_user".to_string(),
-    };
+#[serial_test::serial]
+fn test_resolve_config_env_model_override() {
+    let (app, _temp) = create_test_app();
 
-    let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
-
-    // Model that doesn't support tool calls
-    app.models_config.models.insert(
-        "no-tools-model".to_string(),
-        crate::config::ModelMetadata {
-            context_window: Some(128000),
-            supports_tool_calls: Some(false),
-            api: ApiParams::default(),
-        },
-    );
-
+    // SAFETY: env::set_var is unsafe in edition 2024 due to potential data races
+    // in multithreaded programs. test-only, and env vars are restored after use.
+    unsafe {
+        std::env::set_var(super::config_resolution::ENV_MODEL, "env-model");
+    }
     let resolved = app.resolve_config("default", None).unwrap();
+    unsafe {
+        std::env::remove_var(super::config_resolution::ENV_MODEL);
+    }
 
-    // Model capability constraint should force no_tool_calls = true
-    assert!(resolved.no_tool_calls);
+    assert_eq!(resolved.model, "env-model");
 }
 
 #[test]
-fn test_resolve_config_supports_tool_calls_overrides_user_config() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = Config {
-        api_key: "test-key".to_string(),
-        model: "no-tools-model".to_string(),
-        context_window_limit: 8000,
-        warn_threshold_percent: 75.0,
-        verbose: false,
-        hide_tool_calls: false,
-        no_tool_calls: false,
-        auto_compact: false,
-        auto_compact_threshold: 80.0,
-        reflection_enabled: true,
-        reflection_character_limit: 10000,
-        fuel: 15,
-        fuel_empty_response_cost: 15,
-        username: "testuser".to_string(),
-        lock_heartbeat_seconds: 30,
-        rolling_compact_drop_percentage: 50.0,
-        tool_output_cache_threshold: 4000,
-        tool_cache_max_age_days: 7,
-        auto_cleanup_cache: true,
-        tool_cache_preview_chars: 500,
-        file_tools_allowed_paths: vec![],
-        api: ApiParams::default(),
-        storage: StorageConfig::default(),
-        fallback_tool: "call_user".to_string(),
-    };
+#[serial_test::serial]
+fn test_resolve_config_env_api_key_override() {
+    let (app, _temp) = create_test_app();
 
-    let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+    unsafe {
+        std::env::set_var(super::config_resolution::ENV_API_KEY, "env-secret");
+    }
+    let resolved = app.resolve_config("default", None).unwrap();
+    unsafe {
+        std::env::remove_var(super::config_resolution::ENV_API_KEY);
+    }
 
-    app.models_config.models.insert(
-        "no-tools-model".to_string(),
-        crate::config::ModelMetadata {
-            context_window: Some(128000),
-            supports_tool_calls: Some(false),
-            api: ApiParams::default(),
-        },
-    );
+    assert_eq!(resolved.api_key, Some("env-secret".to_string()));
+}
 
-    // Even if local.toml explicitly sets no_tool_calls = false,
-    // model capability should still win
+#[test]
+#[serial_test::serial]
+fn test_resolve_config_local_overrides_env() {
+    let (app, _temp) = create_test_app();
+
+    // Set env var
+    unsafe {
+        std::env::set_var(super::config_resolution::ENV_MODEL, "env-model");
+    }
+
+    // Set local config with higher priority
     let local = LocalConfig {
-        no_tool_calls: Some(false),
+        model: Some("local-model".to_string()),
         ..Default::default()
     };
     app.save_local_config("default", &local).unwrap();
 
     let resolved = app.resolve_config("default", None).unwrap();
-    assert!(
-        resolved.no_tool_calls,
-        "model capability constraint must override user config"
-    );
+    unsafe {
+        std::env::remove_var(super::config_resolution::ENV_MODEL);
+    }
+
+    // local.toml should win over env var
+    assert_eq!(resolved.model, "local-model");
 }
 
-#[test]
-fn test_resolve_config_supports_tool_calls_none_preserves_default() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = Config {
-        api_key: "test-key".to_string(),
-        model: "normal-model".to_string(),
-        context_window_limit: 8000,
-        warn_threshold_percent: 75.0,
-        verbose: false,
-        hide_tool_calls: false,
-        no_tool_calls: false,
-        auto_compact: false,
-        auto_compact_threshold: 80.0,
-        reflection_enabled: true,
-        reflection_character_limit: 10000,
-        fuel: 15,
-        fuel_empty_response_cost: 15,
-        username: "testuser".to_string(),
-        lock_heartbeat_seconds: 30,
-        rolling_compact_drop_percentage: 50.0,
-        tool_output_cache_threshold: 4000,
-        tool_cache_max_age_days: 7,
-        auto_cleanup_cache: true,
-        tool_cache_preview_chars: 500,
-        file_tools_allowed_paths: vec![],
-        api: ApiParams::default(),
-        storage: StorageConfig::default(),
-        fallback_tool: "call_user".to_string(),
-    };
-
-    let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
-
-    // Model with supports_tool_calls omitted (None) — should not affect no_tool_calls
-    app.models_config.models.insert(
-        "normal-model".to_string(),
-        crate::config::ModelMetadata {
-            context_window: Some(128000),
-            supports_tool_calls: None,
-            api: ApiParams::default(),
-        },
-    );
-
-    let resolved = app.resolve_config("default", None).unwrap();
-    assert!(
-        !resolved.no_tool_calls,
-        "None should not disable tool calls"
-    );
-}
-
-// Note: Image config tests removed - image presentation is handled by CLI layer
+// Note: supports_tool_calls tests removed — capability detection now from ratatoskr registry
+// Note: Image config tests removed — image presentation is handled by CLI layer
 
 // === Transcript entry creation tests ===
 

@@ -93,10 +93,6 @@ pub enum DebugKey {
     DestroyAt(u64),
     /// Set destroy_after_seconds_inactive on the current context (e.g., "destroy_after_seconds_inactive=60")
     DestroyAfterSecondsInactive(u64),
-    /// Render a markdown file and quit (e.g., "md=README.md")
-    Md(String),
-    /// Force markdown rendering even when stdout is not a TTY
-    ForceMarkdown,
     /// Enable all debug features (request_log, response_meta)
     All,
 }
@@ -119,16 +115,10 @@ impl DebugKey {
                 .ok()
                 .map(DebugKey::DestroyAfterSecondsInactive);
         }
-        if let Some(path) = s.strip_prefix("md=")
-            && !path.is_empty()
-        {
-            return Some(DebugKey::Md(path.to_string()));
-        }
 
         match s {
             "request-log" | "request_log" => Some(DebugKey::RequestLog),
             "response-meta" | "response_meta" => Some(DebugKey::ResponseMeta),
-            "force-markdown" | "force_markdown" => Some(DebugKey::ForceMarkdown),
             "all" => Some(DebugKey::All),
             _ => None,
         }
@@ -143,34 +133,32 @@ impl DebugKey {
     }
 }
 
-/// Behavioral modifiers (flags that affect how commands run)
+/// Execution flags — what core needs to run any command.
+///
+/// Excludes presentation concerns (JSON mode, markdown rendering) which
+/// belong to the binary layer. Both chibi-cli and chibi-json map their
+/// own input types to this.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct Flags {
-    /// Show verbose output (-v)
+pub struct ExecutionFlags {
+    /// Show verbose output
     #[serde(default)]
     pub verbose: bool,
-    /// Output in JSON format (--json-output)
-    #[serde(default)]
-    pub json_output: bool,
-    /// Force handoff to user immediately (-x)
-    #[serde(default)]
-    pub force_call_user: bool,
-    /// Force handoff to agent (-X)
-    #[serde(default)]
-    pub force_call_agent: bool,
-    /// Hide tool call display (--hide-tool-calls, verbose overrides)
-    #[serde(default)]
-    pub hide_tool_calls: bool,
-    /// Omit tools from API requests entirely (--no-tool-calls)
+    /// Omit tools from API requests entirely
     #[serde(default)]
     pub no_tool_calls: bool,
-    /// Show thinking/reasoning content (--show-thinking, verbose overrides)
+    /// Show thinking/reasoning content
     #[serde(default)]
     pub show_thinking: bool,
-    /// Disable markdown rendering (--raw)
+    /// Hide tool call display (verbose overrides)
     #[serde(default)]
-    pub raw: bool,
-    /// Debug features to enable (supports comma-separated list)
+    pub hide_tool_calls: bool,
+    /// Force handoff to agent
+    #[serde(default)]
+    pub force_call_agent: bool,
+    /// Force handoff to user immediately
+    #[serde(default)]
+    pub force_call_user: bool,
+    /// Debug features to enable
     #[serde(default)]
     pub debug: Vec<DebugKey>,
 }
@@ -183,13 +171,12 @@ pub struct Flags {
 mod tests {
     use super::*;
 
-    // === Flags tests ===
+    // === ExecutionFlags tests ===
 
     #[test]
     fn test_flags_default() {
-        let flags = Flags::default();
+        let flags = ExecutionFlags::default();
         assert!(!flags.verbose);
-        assert!(!flags.json_output);
         assert!(!flags.force_call_user);
         assert!(!flags.force_call_agent);
         assert!(flags.debug.is_empty());
@@ -197,29 +184,25 @@ mod tests {
 
     #[test]
     fn test_flags_serialization() {
-        let flags = Flags {
+        let flags = ExecutionFlags {
             verbose: true,
             hide_tool_calls: false,
             show_thinking: false,
             no_tool_calls: false,
-            json_output: true,
             force_call_user: false,
             force_call_agent: false,
-            raw: false,
             debug: vec![DebugKey::RequestLog],
         };
         let json = serde_json::to_string(&flags).unwrap();
         assert!(json.contains("verbose"));
-        assert!(json.contains("json_output"));
         assert!(json.contains("request_log"));
     }
 
     #[test]
     fn test_flags_deserialization() {
-        let json = r#"{"verbose":true,"json_output":false,"force_call_user":true}"#;
-        let flags: Flags = serde_json::from_str(json).unwrap();
+        let json = r#"{"verbose":true,"force_call_user":true}"#;
+        let flags: ExecutionFlags = serde_json::from_str(json).unwrap();
         assert!(flags.verbose);
-        assert!(!flags.json_output);
         assert!(flags.force_call_user);
     }
 
@@ -280,17 +263,11 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_key_from_str_md() {
-        assert_eq!(
-            DebugKey::parse("md=README.md"),
-            Some(DebugKey::Md("README.md".to_string()))
-        );
-        assert_eq!(
-            DebugKey::parse("md=docs/guide.md"),
-            Some(DebugKey::Md("docs/guide.md".to_string()))
-        );
-        // Empty path should return None
-        assert_eq!(DebugKey::parse("md="), None);
+    fn test_debug_key_cli_only_keys_not_parsed_by_core() {
+        // md= and force-markdown are CLI-only keys, not recognized by core
+        assert_eq!(DebugKey::parse("md=README.md"), None);
+        assert_eq!(DebugKey::parse("force-markdown"), None);
+        assert_eq!(DebugKey::parse("force_markdown"), None);
     }
 
     #[test]
@@ -311,27 +288,24 @@ mod tests {
     #[test]
     fn test_debug_key_parse_list_multiple() {
         assert_eq!(
-            DebugKey::parse_list("request-log,force-markdown"),
-            vec![DebugKey::RequestLog, DebugKey::ForceMarkdown]
+            DebugKey::parse_list("request-log,response-meta"),
+            vec![DebugKey::RequestLog, DebugKey::ResponseMeta]
         );
     }
 
     #[test]
     fn test_debug_key_parse_list_with_parameterized() {
         assert_eq!(
-            DebugKey::parse_list("force-markdown,md=README.md"),
-            vec![
-                DebugKey::ForceMarkdown,
-                DebugKey::Md("README.md".to_string())
-            ]
+            DebugKey::parse_list("request-log,destroy_at=1234567890"),
+            vec![DebugKey::RequestLog, DebugKey::DestroyAt(1234567890)]
         );
     }
 
     #[test]
     fn test_debug_key_parse_list_ignores_invalid() {
         assert_eq!(
-            DebugKey::parse_list("request-log,invalid,force-markdown"),
-            vec![DebugKey::RequestLog, DebugKey::ForceMarkdown]
+            DebugKey::parse_list("request-log,invalid,response-meta"),
+            vec![DebugKey::RequestLog, DebugKey::ResponseMeta]
         );
     }
 
@@ -502,5 +476,37 @@ mod tests {
         let cmd = Command::NoOp;
         let json = serde_json::to_string(&cmd).unwrap();
         assert_eq!(json, r#""no_op""#);
+    }
+
+    // === ExecutionFlags tests ===
+
+    #[test]
+    fn test_execution_flags_default() {
+        let flags = ExecutionFlags::default();
+        assert!(!flags.verbose);
+        assert!(!flags.no_tool_calls);
+        assert!(!flags.show_thinking);
+        assert!(!flags.hide_tool_calls);
+        assert!(!flags.force_call_agent);
+        assert!(!flags.force_call_user);
+        assert!(flags.debug.is_empty());
+    }
+
+    #[test]
+    fn test_execution_flags_serialization() {
+        let flags = ExecutionFlags {
+            verbose: true,
+            no_tool_calls: true,
+            show_thinking: false,
+            hide_tool_calls: false,
+            force_call_agent: true,
+            force_call_user: false,
+            debug: vec![DebugKey::RequestLog],
+        };
+        let json = serde_json::to_string(&flags).unwrap();
+        let deser: ExecutionFlags = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.verbose, flags.verbose);
+        assert_eq!(deser.force_call_agent, flags.force_call_agent);
+        assert_eq!(deser.debug.len(), 1);
     }
 }

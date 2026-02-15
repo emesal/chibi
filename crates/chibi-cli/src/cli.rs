@@ -3,7 +3,7 @@
 //! This module handles parsing command-line arguments and converting them
 //! to the unified `ChibiInput` format.
 
-use chibi_core::input::{Command, DebugKey, Flags, Inspectable};
+use chibi_core::input::{Command, DebugKey, ExecutionFlags, Inspectable};
 
 use crate::input::{ChibiInput, ContextSelection, UsernameOverride};
 use clap::Parser;
@@ -281,6 +281,10 @@ pub struct Cli {
     #[arg(long = "no-tool-calls")]
     pub no_tool_calls: bool,
 
+    /// Trust mode: auto-approve all permission checks (for automation/piping)
+    #[arg(short = 't', long = "trust")]
+    pub trust: bool,
+
     /// Force handoff to user (-x)
     #[arg(short = 'x', long = "force-call-user")]
     pub force_call_user: bool,
@@ -288,18 +292,6 @@ pub struct Cli {
     /// Force handoff to agent (-X)
     #[arg(short = 'X', long = "force-call-agent")]
     pub force_call_agent: bool,
-
-    // === JSON modes ===
-    /// Read input as JSON from stdin (exclusive with config flags).
-    /// Note: consumed via raw arg scanning before clap parsing (see main.rs),
-    /// so this field is never read from the struct. It exists here solely for
-    /// --help output and to prevent "unexpected argument" errors from clap.
-    #[arg(long = "json-config")]
-    pub json_config: bool,
-
-    /// Output in JSONL format
-    #[arg(long = "json-output")]
-    pub json_output: bool,
 
     /// Disable markdown rendering (raw output)
     #[arg(long = "raw")]
@@ -352,7 +344,6 @@ const CLI_AFTER_HELP: &str = r#"EXAMPLES:
   chibi -p myplugin "arg1 arg2"   Run plugin with args (shell-style split)
   chibi -P mytool '{}'            Call tool with empty JSON args
   chibi -P send '{"to":"x"}'      Call tool with JSON args
-  chibi --json-schema             Print JSON schema for --json-config
 
 FLAG BEHAVIOR:
   Some flags imply --no-chibi (operations that produce output or
@@ -492,13 +483,28 @@ impl Cli {
             args: v.get(1).cloned().into_iter().collect(),
         });
 
-        // Parse debug keys (comma-separated) to check for md=<file>
-        let debug_keys = self
+        // Parse debug keys (comma-separated), separating CLI-only keys from core keys.
+        // CLI-only keys (md=<file>, force-markdown) are extracted here and never
+        // enter ExecutionFlags — core doesn't need to know about them.
+        let debug_segments: Vec<&str> = self
             .debug
-            .as_ref()
-            .map(|s| DebugKey::parse_list(s))
+            .as_deref()
+            .map(|s| s.split(',').map(str::trim).collect())
             .unwrap_or_default();
-        let debug_implies_force_call_user = debug_keys.iter().any(|k| matches!(k, DebugKey::Md(_)));
+        let md_file = debug_segments.iter().find_map(|s| {
+            s.strip_prefix("md=")
+                .filter(|p| !p.is_empty())
+                .map(String::from)
+        });
+        let force_markdown = debug_segments
+            .iter()
+            .any(|s| *s == "force-markdown" || *s == "force_markdown");
+        let debug_keys: Vec<DebugKey> = debug_segments
+            .iter()
+            .filter(|s| !s.starts_with("md=") && **s != "force-markdown" && **s != "force_markdown")
+            .filter_map(|s| DebugKey::parse(s))
+            .collect();
+        let debug_implies_force_call_user = md_file.is_some();
 
         // Compute implied force_call_user based on flags
         let implies_force_call_user = self.list_current_context
@@ -652,15 +658,13 @@ impl Cli {
             Command::NoOp
         };
 
-        let flags = Flags {
+        let flags = ExecutionFlags {
             verbose: self.verbose,
             hide_tool_calls: self.hide_tool_calls,
             show_thinking: self.show_thinking,
             no_tool_calls: self.no_tool_calls,
-            json_output: self.json_output,
             force_call_user,
             force_call_agent: self.force_call_agent,
-            raw: self.raw,
             debug: debug_keys,
         };
 
@@ -669,6 +673,9 @@ impl Cli {
             flags,
             context,
             username_override,
+            raw: self.raw,
+            md_file,
+            force_markdown,
         })
     }
 
@@ -778,11 +785,23 @@ pub fn parse() -> io::Result<ChibiInput> {
         std::process::exit(0);
     }
     if cli.version {
-        println!(
-            "chibi v{}-{}",
-            env!("CARGO_PKG_VERSION"),
-            option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown")
-        );
+        let branch = option_env!("VERGEN_GIT_BRANCH").unwrap_or("unknown");
+        let is_main = branch == "main";
+        if is_main {
+            println!("chibi v{}", env!("CARGO_PKG_VERSION"));
+        } else {
+            let sha = option_env!("VERGEN_GIT_SHA")
+                .map(|s| &s[..7.min(s.len())])
+                .unwrap_or("unknown");
+            let date = env!("CHIBI_BUILD_DATE");
+            println!(
+                "chibi v{}-{} ({} {})",
+                env!("CARGO_PKG_VERSION"),
+                branch,
+                sha,
+                date
+            );
+        }
         println!("ratatoskr {}", chibi_core::ratatoskr_version());
         std::process::exit(0);
     }
@@ -1662,13 +1681,9 @@ mod tests {
     fn test_debug_md_implies_force_call_user() {
         let input = parse_input("--debug md=README.md").unwrap();
         assert!(input.flags.force_call_user); // should imply -x
-        assert!(
-            input
-                .flags
-                .debug
-                .iter()
-                .any(|k| matches!(k, DebugKey::Md(path) if path == "README.md"))
-        );
+        assert_eq!(input.md_file.as_deref(), Some("README.md"));
+        // md= should not leak into core debug keys
+        assert!(input.flags.debug.is_empty());
     }
 
     #[test]
@@ -1676,13 +1691,7 @@ mod tests {
         let input = parse_input("-X --debug md=README.md").unwrap();
         assert!(!input.flags.force_call_user); // -X should override
         assert!(input.flags.force_call_agent);
-        assert!(
-            input
-                .flags
-                .debug
-                .iter()
-                .any(|k| matches!(k, DebugKey::Md(path) if path == "README.md"))
-        );
+        assert_eq!(input.md_file.as_deref(), Some("README.md"));
     }
 
     #[test]
@@ -1753,7 +1762,8 @@ mod tests {
     #[test]
     fn test_debug_comma_separated() {
         let input = parse_input("--debug request-log,force-markdown").unwrap();
-        assert_eq!(input.flags.debug.len(), 2);
+        // force-markdown is CLI-only, extracted into its own field
+        assert_eq!(input.flags.debug.len(), 1);
         assert!(
             input
                 .flags
@@ -1761,12 +1771,6 @@ mod tests {
                 .iter()
                 .any(|k| matches!(k, DebugKey::RequestLog))
         );
-        assert!(
-            input
-                .flags
-                .debug
-                .iter()
-                .any(|k| matches!(k, DebugKey::ForceMarkdown))
-        );
+        assert!(input.force_markdown);
     }
 }

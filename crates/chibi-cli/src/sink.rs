@@ -1,23 +1,23 @@
 //! CLI-specific response sink for terminal output.
 //!
 //! This module implements `ResponseSink` for the CLI, handling markdown
-//! rendering, diagnostic output, and JSON mode.
+//! rendering and diagnostic output.
 
 use chibi_core::api::sink::{ResponseEvent, ResponseSink};
 use std::io;
 
+use chibi_core::OutputSink;
+
 use crate::markdown::{MarkdownConfig, MarkdownStream};
-use crate::output::OutputHandler;
 
 /// CLI-specific response sink for terminal output.
 ///
 /// Connects the core API's event system to CLI presentation concerns:
 /// - Renders text chunks through `MarkdownStream` when enabled
 /// - Handles diagnostic messages through `OutputHandler`
-/// - Emits transcript entries in JSON mode
 /// - Manages stream lifecycle (finish, newlines)
 pub struct CliResponseSink<'a> {
-    output: &'a OutputHandler,
+    output: &'a dyn OutputSink,
     markdown: Option<MarkdownStream>,
     markdown_config: Option<MarkdownConfig>,
     verbose: bool,
@@ -39,7 +39,7 @@ impl<'a> CliResponseSink<'a> {
     /// * `show_tool_calls` - Whether tool call start/result messages are shown
     /// * `show_thinking` - Whether thinking/reasoning content is shown
     pub fn new(
-        output: &'a OutputHandler,
+        output: &'a dyn OutputSink,
         markdown_config: Option<MarkdownConfig>,
         verbose: bool,
         show_tool_calls: bool,
@@ -104,7 +104,7 @@ impl ResponseSink for CliResponseSink<'_> {
                 }
             }
             ResponseEvent::TranscriptEntry(entry) => {
-                self.output.emit(&entry)?;
+                self.output.emit_entry(&entry)?;
             }
             ResponseEvent::Finished => {
                 if self.in_reasoning {
@@ -117,16 +117,17 @@ impl ResponseSink for CliResponseSink<'_> {
             ResponseEvent::Newline => {
                 self.output.newline();
             }
-            ResponseEvent::ToolStart { name } => {
-                self.output
-                    .diagnostic(&format!("\n[Tool: {}]\n", name), self.show_tool_calls);
+            ResponseEvent::ToolStart { name, summary } => {
+                let msg = match summary {
+                    Some(s) => format!("\n[Tool: {}] {}", name, s),
+                    None => format!("\n[Tool: {}]", name),
+                };
+                self.output.diagnostic(&msg, self.show_tool_calls);
             }
             ResponseEvent::ToolResult { name, cached, .. } => {
                 if cached {
-                    self.output.diagnostic(
-                        &format!("\n[Tool {} (cached)]\n", name),
-                        self.show_tool_calls,
-                    );
+                    self.output
+                        .diagnostic(&format!("\n[Tool {} (cached)]", name), self.show_tool_calls);
                 }
             }
             ResponseEvent::StartResponse => {
@@ -149,25 +150,19 @@ impl ResponseSink for CliResponseSink<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output::OutputHandler;
     use chibi_core::context::TranscriptEntry;
 
     #[test]
     fn test_is_json_mode_normal() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let sink = CliResponseSink::new(&output, None, false, true, false);
         assert!(!sink.is_json_mode());
     }
 
     #[test]
-    fn test_is_json_mode_json() {
-        let output = OutputHandler::new(true);
-        let sink = CliResponseSink::new(&output, None, false, true, false);
-        assert!(sink.is_json_mode());
-    }
-
-    #[test]
     fn test_handle_text_chunk_no_markdown() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
         // Should not panic when no markdown stream is present
@@ -176,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_handle_finished_no_markdown() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
         // Should not panic when no markdown stream is present
@@ -184,8 +179,8 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_transcript_entry_json_mode() {
-        let output = OutputHandler::new(true);
+    fn test_handle_transcript_entry() {
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
         let entry = TranscriptEntry {
@@ -199,13 +194,13 @@ mod tests {
             tool_call_id: None,
         };
 
-        // Should not panic
+        // Should not panic (text mode: emit_entry is a no-op)
         sink.handle(ResponseEvent::TranscriptEntry(entry)).unwrap();
     }
 
     #[test]
     fn test_handle_diagnostic_verbose_false() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
         // Should not panic (verbose is false, message should be suppressed)
@@ -218,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_handle_diagnostic_always() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
         // Should not panic (verbose_only: false means always show)
@@ -231,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_handle_newline() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
         // Should not panic
@@ -240,19 +235,20 @@ mod tests {
 
     #[test]
     fn test_handle_tool_start() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, true, true, false);
 
         // Should not panic
         sink.handle(ResponseEvent::ToolStart {
             name: "test_tool".to_string(),
+            summary: None,
         })
         .unwrap();
     }
 
     #[test]
     fn test_handle_tool_result_cached() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, true, true, false);
 
         // Should not panic
@@ -266,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_handle_tool_result_not_cached() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, true, true, false);
 
         // Should not panic (non-cached results don't print extra message)
@@ -280,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_handle_start_response_no_config() {
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
         // Should not panic when no markdown config is present
@@ -292,7 +288,7 @@ mod tests {
     fn test_start_response_recreates_markdown_stream() {
         use crate::config::{ImageConfig, default_markdown_style};
 
-        let output = OutputHandler::new(false);
+        let output = OutputHandler::new();
         let config = MarkdownConfig {
             render_markdown: true,
             force_render: true, // Force render even when not a TTY (for tests)

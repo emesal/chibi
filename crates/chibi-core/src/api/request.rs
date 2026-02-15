@@ -12,7 +12,6 @@ use serde_json::json;
 pub struct PromptOptions<'a> {
     pub verbose: bool,
     pub use_reflection: bool,
-    pub json_output: bool,
     pub debug: &'a [DebugKey],
     pub force_render: bool,
     /// Optional override for the fallback handoff target
@@ -23,14 +22,12 @@ impl<'a> PromptOptions<'a> {
     pub fn new(
         verbose: bool,
         use_reflection: bool,
-        json_output: bool,
         debug: &'a [DebugKey],
         force_render: bool,
     ) -> Self {
         Self {
             verbose,
             use_reflection,
-            json_output,
             debug,
             force_render,
             fallback_override: None,

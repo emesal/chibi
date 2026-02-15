@@ -170,12 +170,43 @@ fn to_ratatoskr_reasoning(reasoning: &config::ReasoningConfig) -> RatatoskrReaso
 }
 
 /// Build a gateway from ResolvedConfig.
+///
+/// Passes `api_key` as `Option<&str>` to ratatoskr — `None` enables keyless
+/// free-tier access via openrouter.
 pub fn build_gateway(config: &ResolvedConfig) -> io::Result<EmbeddedGateway> {
-    // For now, always use OpenRouter (chibi's current default)
     Ratatoskr::builder()
-        .openrouter(&config.api_key)
+        .openrouter(config.api_key.as_deref())
         .build()
         .map_err(|e| io::Error::other(format!("Failed to build gateway: {}", e)))
+}
+
+/// Resolve `context_window_limit` from ratatoskr's model registry.
+///
+/// When `context_window_limit` is 0 (the "unknown" sentinel), performs a
+/// synchronous registry lookup — no network I/O — to fill it in from
+/// ratatoskr's built-in model metadata.  If the model isn't in the registry,
+/// the limit stays at 0 and the existing guards (skip compaction/warnings)
+/// remain in effect.
+pub fn resolve_context_window(config: &mut ResolvedConfig, gateway: &EmbeddedGateway) {
+    if config.context_window_limit == 0
+        && let Some(meta) = gateway.model_metadata(&config.model)
+        && let Some(ctx) = meta.info.context_window
+    {
+        config.context_window_limit = ctx;
+    }
+}
+
+/// Ensure `context_window_limit` is populated in the config.
+///
+/// Convenience wrapper: builds a gateway and calls `resolve_context_window`.
+/// Safe to call even when the limit is already set (no-op) or the model
+/// isn't in the registry (limit stays 0, compaction/warnings remain guarded).
+pub fn ensure_context_window(config: &mut ResolvedConfig) {
+    if config.context_window_limit == 0
+        && let Ok(gateway) = build_gateway(config)
+    {
+        resolve_context_window(config, &gateway);
+    }
 }
 
 /// Simple non-streaming chat completion.
@@ -322,7 +353,7 @@ mod tests {
         let mut api = config::ApiParams::default();
         api_modifier(&mut api);
         ResolvedConfig {
-            api_key: String::new(),
+            api_key: None,
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,
@@ -346,6 +377,7 @@ mod tests {
             tools: config::ToolsConfig::default(),
             fallback_tool: "call_user".to_string(),
             storage: crate::partition::StorageConfig::default(),
+            url_policy: None,
         }
     }
 
@@ -368,5 +400,24 @@ mod tests {
         let tool_calls = msg.tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].name, "get_weather");
+    }
+
+    #[test]
+    fn resolve_context_window_skips_when_already_set() {
+        let gateway = build_gateway(&test_config(|_| {})).unwrap();
+        let mut config = test_config(|_| {});
+        config.context_window_limit = 8192;
+        resolve_context_window(&mut config, &gateway);
+        assert_eq!(config.context_window_limit, 8192);
+    }
+
+    #[test]
+    fn resolve_context_window_stays_zero_for_unknown_model() {
+        let gateway = build_gateway(&test_config(|_| {})).unwrap();
+        let mut config = test_config(|_| {});
+        config.context_window_limit = 0;
+        config.model = "nonexistent/model-that-does-not-exist".to_string();
+        resolve_context_window(&mut config, &gateway);
+        assert_eq!(config.context_window_limit, 0);
     }
 }

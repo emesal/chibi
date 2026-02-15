@@ -10,8 +10,8 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 | `-C, --ephemeral-context <NAME>` | Use context for this invocation only (doesn't change global state) |
 | `-l, --list-current-context` | Show current context info (name, message count, todos, goals) |
 | `-L, --list-contexts` | List all contexts (shows `[active]` or `[stale]` lock status) |
-| `-d, --delete-current-context` | Delete the current context |
-| `-D, --delete-context <CTX>` | Delete a specified context |
+| `-d, --destroy-current-context` | Destroy the current context |
+| `-D, --destroy-context <CTX>` | Destroy a specified context |
 | `-a, --archive-current-history` | Archive current context history (saves to transcript) |
 | `-A, --archive-history <CTX>` | Archive specified context's history |
 | `-z, --compact-current-context` | Compact current context (LLM summarizes) |
@@ -104,25 +104,30 @@ chibi -M openai/gpt-4o                   # Full metadata including pricing
 | Flag | Description |
 |------|-------------|
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
+| `-t, --trust` | Auto-approve all permission checks (for automation/headless) |
+| `--show-thinking` | Display thinking/reasoning content from models that support extended thinking |
 | `--hide-tool-calls` | Hide tool call display (tool calls are shown by default; verbose overrides) |
 | `--no-tool-calls` | Omit tools from API requests entirely (pure text mode) |
-| `-x, --no-chibi` | Don't invoke the LLM |
-| `-X, --force-chibi` | Force LLM invocation (overrides implied -x) |
+| `-x, --force-call-user` | Force return to user after operations (skip LLM) |
+| `-X, --force-call-agent` | Force agent continuation (overrides implied -x) |
 | `--raw` | Disable markdown rendering (plain text output) |
 | `-h, --help` | Show help message |
 | `--version` | Show version |
 
-## JSON Modes
+## Programmatic / JSON Mode
 
-| Flag | Description |
-|------|-------------|
-| `--json-config` | Read input as JSON from stdin (for programmatic use) |
-| `--json-output` | Output in JSONL format (structured output) |
-| `--json-schema` | Print the JSON schema for `--json-config` input and exit |
+JSON mode has moved to the separate `chibi-json` binary (see [upgrade notes](upgrade-notes.md) for migration). The CLI is now text-only.
 
-### JSON Input Format (--json-config)
+```bash
+# programmatic usage (v0.8.0+)
+chibi-json < input.json > output.jsonl
+chibi-json --json-schema          # print input schema
+chibi-json --version
+```
 
-When using `--json-config`, pass a JSON object to stdin:
+`chibi-json` reads a JSON object from stdin, emits JSONL output, and always runs in trust mode (all permissions auto-approved). See `chibi-json --json-schema` for the full input format.
+
+**Input format:**
 
 ```json
 {
@@ -132,13 +137,13 @@ When using `--json-config`, pass a JSON object to stdin:
 }
 ```
 
-**Flags:** `"verbose"`, `"json_output"`, `"force_call_user"`, `"force_call_agent"`, `"hide_tool_calls"`, `"no_tool_calls"`, `"raw"`
+**Flags:** `"verbose"`, `"force_call_user"`, `"force_call_agent"`, `"hide_tool_calls"`, `"no_tool_calls"`
 
 **Simple commands:** `"list_contexts"`, `"list_current_context"`, `"no_op"`
 
 **Commands with arguments:**
 - `{ "send_prompt": { "prompt": "..." } }`
-- `{ "delete_context": { "name": "..." } }` (name optional, null = current)
+- `{ "destroy_context": { "name": "..." } }` (name optional, null = current)
 - `{ "archive_history": { "name": "..." } }`
 - `{ "compact_context": { "name": "..." } }`
 - `{ "rename_context": { "old": "...", "new": "..." } }`
@@ -152,20 +157,7 @@ When using `--json-config`, pass a JSON object to stdin:
 
 **Username:** `{ "persistent": "name" }`, `{ "ephemeral": "name" }`
 
-**Home directory:** Use `--home` alongside `--json-config` (cannot be set in JSON):
-```bash
-echo '{"command": "list_contexts"}' | chibi --home /path/to/alt --json-config
-```
-
-### JSON Schema (--json-schema)
-
-Print the full JSON Schema describing the input format accepted by `--json-config`, then exit. This is useful for editor integration, validation, and code generation. All other flags are ignored.
-
-```bash
-chibi --json-schema              # Print schema to stdout
-chibi --json-schema > schema.json  # Save to file
-chibi --json-schema | jq .definitions.Command  # Inspect a specific type
-```
+**Home/project root:** set via `"home"` and `"project_root"` fields in the JSON input.
 
 ## Directory Override
 
@@ -267,9 +259,9 @@ Auto-destroy runs automatically at every chibi invocation. It checks all non-cur
 
 ## Flag Behavior
 
-### Implied --no-chibi
+### Implied -x (force-call-user)
 
-These flags produce output or operate on other contexts, so they imply `--no-chibi`:
+These flags produce output or operate on other contexts, so they imply `-x`:
 
 `-l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -p, -P`
 
@@ -281,13 +273,13 @@ These flags can be combined with a prompt (execute operation, then invoke LLM):
 
 ### Force Override
 
-Use `-X/--force-chibi` to override implied `--no-chibi`:
+Use `-X/--force-call-agent` to override implied `-x`:
 
 ```bash
-# Normally -L implies -x (no LLM)
+# Normally -L implies -x (skip LLM)
 chibi -L
 
-# Force LLM invocation after listing
+# Force agent continuation after listing
 chibi -L -X "Now help me with something"
 ```
 
@@ -373,8 +365,7 @@ chibi -n system_prompt          # View it
 
 ```bash
 chibi -v "Read my Cargo.toml"
-# stderr: [Loaded 1 tool(s): read_file]
-# stderr: [Tool: read_file]
+# stderr: [Tool: file_head(path: Cargo.toml)]
 ```
 
 ### Scripting
