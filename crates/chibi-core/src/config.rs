@@ -565,7 +565,7 @@ pub struct Config {
     /// Number of preview characters to show in truncated message
     #[serde(default = "default_tool_cache_preview_chars")]
     pub tool_cache_preview_chars: usize,
-    /// Paths allowed for file tools (empty = cache only)
+    /// Paths allowed for file tools (empty = defaults to cwd at runtime)
     #[serde(default)]
     pub file_tools_allowed_paths: Vec<String>,
     /// API parameters (temperature, max_tokens, etc.)
@@ -617,7 +617,7 @@ pub struct LocalConfig {
     pub auto_cleanup_cache: Option<bool>,
     /// Number of preview characters to show in truncated message
     pub tool_cache_preview_chars: Option<usize>,
-    /// Paths allowed for file tools (empty = cache only)
+    /// Paths allowed for file tools (empty = defaults to cwd at runtime)
     pub file_tools_allowed_paths: Option<Vec<String>>,
     /// API parameters (temperature, max_tokens, etc.)
     #[serde(default)]
@@ -739,7 +739,8 @@ pub struct ResolvedConfig {
     pub auto_cleanup_cache: bool,
     /// Number of preview characters to show in truncated message
     pub tool_cache_preview_chars: usize,
-    /// Paths allowed for file tools (empty = cache only)
+    /// Paths allowed for file tools (empty = defaults to cwd at runtime).
+    /// Reads inside these paths are auto-allowed; reads outside require permission.
     pub file_tools_allowed_paths: Vec<String>,
     /// Resolved API parameters (merged from all layers)
     pub api: ApiParams,

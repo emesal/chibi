@@ -850,17 +850,45 @@ async fn execute_tool_pure(
                 Err(reason) => format!("Error: {}", reason),
             }
         } else {
-            // Read-only file tools don't need permission
-            match tools::execute_file_tool(
-                app,
-                context_name,
-                &tool_call.name,
-                &args,
-                resolved_config,
-            ) {
-                Some(Ok(r)) => r,
-                Some(Err(e)) => format!("Error: {}", e),
-                None => format!("Error: Unknown file tool '{}'", tool_call.name),
+            // Read-only file tools: auto-allow inside allowed paths, prompt outside
+            let path = args.get_str("path").unwrap_or("");
+            let permission_denied = if !path.is_empty() {
+                match tools::classify_file_path(path, resolved_config) {
+                    Ok(tools::FilePathAccess::Allowed(_)) => None,
+                    Ok(tools::FilePathAccess::NeedsPermission(_)) => {
+                        let hook_data = serde_json::json!({
+                            "tool_name": tool_call.name,
+                            "path": path,
+                        });
+                        check_permission(
+                            tools,
+                            tools::HookPoint::PreFileRead,
+                            &hook_data,
+                            permission_handler,
+                        )?
+                        .err()
+                    }
+                    Err(e) => Some(e.to_string()),
+                }
+            } else {
+                // cache_id access (no path) — always allowed
+                None
+            };
+
+            if let Some(reason) = permission_denied {
+                format!("Error: {}", reason)
+            } else {
+                match tools::execute_file_tool(
+                    app,
+                    context_name,
+                    &tool_call.name,
+                    &args,
+                    resolved_config,
+                ) {
+                    Some(Ok(r)) => r,
+                    Some(Err(e)) => format!("Error: {}", e),
+                    None => format!("Error: Unknown file tool '{}'", tool_call.name),
+                }
             }
         }
     } else if tools::is_agent_tool(&tool_call.name) {

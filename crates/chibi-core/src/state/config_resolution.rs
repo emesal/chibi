@@ -130,6 +130,14 @@ impl AppState {
             resolved.username = username.to_string();
         }
 
+        // Default file_tools_allowed_paths to cwd when empty (after all overrides).
+        // This ensures project files are readable without explicit config.
+        if resolved.file_tools_allowed_paths.is_empty()
+            && let Ok(cwd) = std::env::current_dir()
+        {
+            resolved.file_tools_allowed_paths = vec![cwd.to_string_lossy().to_string()];
+        }
+
         // Resolve model name and potentially override context window + API params
         resolved.model = self.resolve_model_name(&resolved.model);
         if let Some(model_meta) = self.models_config.models.get(&resolved.model) {
