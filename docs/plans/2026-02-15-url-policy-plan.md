@@ -8,9 +8,13 @@
 
 **Tech Stack:** rust, serde, schemars, `url` crate (already a dep)
 
+**Progress:** tasks 1–3 complete, tasks 4–9 remaining.
+
 ---
 
-### Task 1: add `UrlCategory` enum and refactor `UrlSafety`
+### ~~Task 1: add `UrlCategory` enum and refactor `UrlSafety`~~ ✅
+
+
 
 **Files:**
 - Modify: `crates/chibi-core/src/tools/security.rs:77-136`
@@ -215,7 +219,7 @@ Sensitive(String) → Sensitive(UrlCategory) with Display impl.
 
 ---
 
-### Task 2: add `UrlPolicy` types and evaluation logic
+### ~~Task 2: add `UrlPolicy` types and evaluation logic~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/tools/security.rs`
@@ -588,7 +592,7 @@ preset categories or URL glob patterns. first match wins.
 
 ---
 
-### Task 3: add `url_policy` to config structs
+### ~~Task 3: add `url_policy` to config structs~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/config.rs:514-747`

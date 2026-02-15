@@ -5,6 +5,7 @@
 //! rendering) lives in the CLI crate.
 
 use crate::partition::StorageConfig;
+use crate::tools::security::UrlPolicy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -585,6 +586,9 @@ pub struct Config {
     /// Global tool filtering configuration (include/exclude/exclude_categories)
     #[serde(default)]
     pub tools: ToolsConfig,
+    /// URL security policy for sensitive URL handling
+    #[serde(default)]
+    pub url_policy: Option<UrlPolicy>,
 }
 
 /// Per-context config from `~/.chibi/contexts/<name>/local.toml`
@@ -632,6 +636,8 @@ pub struct LocalConfig {
     pub storage: StorageConfig,
     /// Override fallback tool for this context
     pub fallback_tool: Option<String>,
+    /// URL security policy override
+    pub url_policy: Option<UrlPolicy>,
 }
 
 impl LocalConfig {
@@ -679,6 +685,10 @@ impl LocalConfig {
             auto_cleanup_cache,
             tool_cache_preview_chars,
         );
+        // url_policy: whole-object override (not merge)
+        if self.url_policy.is_some() {
+            resolved.url_policy = self.url_policy.clone();
+        }
     }
 }
 
@@ -745,6 +755,8 @@ pub struct ResolvedConfig {
     pub fallback_tool: String,
     /// Storage configuration for partitioned context storage
     pub storage: StorageConfig,
+    /// URL security policy (None = use permission handler fallback)
+    pub url_policy: Option<UrlPolicy>,
 }
 
 impl ResolvedConfig {
@@ -816,6 +828,16 @@ impl ResolvedConfig {
                 self.storage.enable_bloom_filters.map(|v| v.to_string())
             }
 
+            // URL policy
+            "url_policy" => Some(
+                if self.url_policy.is_some() {
+                    "(set)"
+                } else {
+                    "(unset)"
+                }
+                .to_string(),
+            ),
+
             _ => None,
         }
     }
@@ -846,6 +868,7 @@ impl ResolvedConfig {
             "auto_cleanup_cache",
             "tool_cache_preview_chars",
             "file_tools_allowed_paths",
+            "url_policy",
             // API params
             "api.temperature",
             "api.max_tokens",
@@ -968,6 +991,7 @@ mod tests {
                 partition_max_tokens: Some(100_000),
                 ..Default::default()
             },
+            url_policy: None,
         };
 
         assert_eq!(config.get_field("model"), Some("test-model".to_string()));

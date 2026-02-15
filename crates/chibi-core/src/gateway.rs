@@ -377,6 +377,7 @@ mod tests {
             tools: config::ToolsConfig::default(),
             fallback_tool: "call_user".to_string(),
             storage: crate::partition::StorageConfig::default(),
+            url_policy: None,
         }
     }
 

@@ -868,13 +868,13 @@ async fn execute_tool_pure(
         if tool_call.name == tools::RETRIEVE_CONTENT_TOOL_NAME
             && let Some(source) = args.get_str("source")
             && tools::agent_tools::is_url(source)
-            && let tools::UrlSafety::Sensitive(reason) = tools::classify_url(source)
+            && let tools::UrlSafety::Sensitive(category) = tools::classify_url(source)
         {
             let hook_data = json!({
                 "tool_name": tool_call.name,
                 "url": source,
                 "safety": "sensitive",
-                "reason": reason,
+                "reason": category.to_string(),
             });
             match check_permission(
                 tools,
