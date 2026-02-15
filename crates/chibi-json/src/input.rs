@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use chibi_core::input::{Command, ExecutionFlags};
+use chibi_core::tools::UrlPolicy;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -26,4 +27,7 @@ pub struct JsonInput {
     /// Project root override
     #[serde(default)]
     pub project_root: Option<PathBuf>,
+    /// URL security policy override (replaces config-level policy)
+    #[serde(default)]
+    pub url_policy: Option<UrlPolicy>,
 }

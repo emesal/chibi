@@ -595,6 +595,7 @@ mod tests {
             tools: ToolsConfig::default(),
             fallback_tool: "call_agent".to_string(),
             storage: crate::partition::StorageConfig::default(),
+            url_policy: None,
         }
     }
 }

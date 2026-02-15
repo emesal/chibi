@@ -1,4 +1,4 @@
-# chibi-json: configurable URL security policy (#147)
+# chibi-json: configurable URL security policy (#147) ✅ implemented
 
 ## context
 

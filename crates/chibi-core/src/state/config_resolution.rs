@@ -103,6 +103,7 @@ impl AppState {
             tools: self.config.tools.clone(),
             fallback_tool: self.config.fallback_tool.clone(),
             storage: self.config.storage.clone(),
+            url_policy: self.config.url_policy.clone(),
         };
 
         // Apply environment variable overrides (between global config and local.toml)

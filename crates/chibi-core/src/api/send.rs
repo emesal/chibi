@@ -864,26 +864,20 @@ async fn execute_tool_pure(
             }
         }
     } else if tools::is_agent_tool(&tool_call.name) {
-        // URL permission check for retrieve_content with sensitive URLs
+        // URL policy / permission check for retrieve_content
         if tool_call.name == tools::RETRIEVE_CONTENT_TOOL_NAME
             && let Some(source) = args.get_str("source")
             && tools::agent_tools::is_url(source)
-            && let tools::UrlSafety::Sensitive(reason) = tools::classify_url(source)
         {
-            let hook_data = json!({
-                "tool_name": tool_call.name,
-                "url": source,
-                "safety": "sensitive",
-                "reason": reason,
-            });
-            match check_permission(
-                tools,
-                tools::HookPoint::PreFetchUrl,
-                &hook_data,
-                permission_handler,
-            )? {
-                Ok(()) => {} // approved, continue to execute
-                Err(reason) => {
+            let safety = tools::classify_url(source);
+
+            if let Some(ref policy) = resolved_config.url_policy {
+                // policy is authoritative — no fallback to permission handler
+                if tools::evaluate_url_policy(source, &safety, policy) == tools::UrlAction::Deny {
+                    let reason = match &safety {
+                        tools::UrlSafety::Sensitive(cat) => cat.to_string(),
+                        tools::UrlSafety::Safe => "denied by URL policy".to_string(),
+                    };
                     let msg = format!("Permission denied: {}", reason);
                     return Ok(ToolExecutionResult {
                         final_result: msg.clone(),
@@ -891,6 +885,31 @@ async fn execute_tool_pure(
                         was_cached: false,
                         diagnostics,
                     });
+                }
+            } else if let tools::UrlSafety::Sensitive(category) = &safety {
+                // no policy — existing behaviour: check permission handler
+                let hook_data = json!({
+                    "tool_name": tool_call.name,
+                    "url": source,
+                    "safety": "sensitive",
+                    "reason": category.to_string(),
+                });
+                match check_permission(
+                    tools,
+                    tools::HookPoint::PreFetchUrl,
+                    &hook_data,
+                    permission_handler,
+                )? {
+                    Ok(()) => {}
+                    Err(reason) => {
+                        let msg = format!("Permission denied: {}", reason);
+                        return Ok(ToolExecutionResult {
+                            final_result: msg.clone(),
+                            original_result: msg,
+                            was_cached: false,
+                            diagnostics,
+                        });
+                    }
                 }
             }
         }

@@ -541,6 +541,35 @@ chibi -t "refactor this module"
 
 Plugins can implement custom permission logic via the `pre_file_write` and `pre_shell_exec` hooks. A plugin that returns `{"denied": true}` overrides all other approvals (deny wins). See [hooks documentation](hooks.md) for details.
 
+### URL Security Policy
+
+By default, `retrieve_content` prompts for permission when fetching sensitive URLs (loopback, private network, link-local, cloud metadata). A URL policy replaces this interactive check with declarative rules — useful for automation and chibi-json.
+
+```toml
+[url_policy]
+default = "deny"                          # deny all URLs by default
+allow = [
+    "preset:loopback",                    # allow localhost
+    "https://api.example.com/*",          # allow by glob pattern
+]
+deny_override = ["preset:cloud_metadata"] # always deny, even if allowed above
+```
+
+**Evaluation order** (first match wins, highest priority first):
+
+1. `deny_override` — unconditional deny
+2. `allow_override` — unconditional allow (except deny_override)
+3. `deny` — standard deny
+4. `allow` — standard allow
+5. `default` — fallback (`allow` if omitted)
+
+**Rule types:**
+
+- `preset:<category>` — matches a built-in category: `loopback`, `private_network`, `link_local`, `cloud_metadata`, `unparseable`
+- bare string — glob pattern (`*` any sequence, `?` single char, `\*` literal asterisk)
+
+**Config layers:** `config.toml` (global) → `local.toml` (per-context) → `JsonInput` (per-invocation). Each layer replaces the previous entirely (no merge). When no policy is set, the interactive permission handler applies as before.
+
 ## Tool Filtering Configuration
 
 Control which tools are available to the LLM. Tool filtering can be configured globally in `config.toml` and per-context in `local.toml`.

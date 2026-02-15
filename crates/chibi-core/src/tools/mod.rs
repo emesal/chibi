@@ -77,7 +77,10 @@ pub use agent_tools::{execute_agent_tool, is_agent_tool, spawn_agent};
 pub use agent_tools::{RETRIEVE_CONTENT_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SpawnOptions};
 
 // Re-export security utilities
-pub use security::{UrlSafety, classify_url, validate_file_path};
+pub use security::{
+    UrlAction, UrlCategory, UrlPolicy, UrlRule, UrlSafety, classify_url, evaluate_url_policy,
+    validate_file_path,
+};
 
 /// Metadata for tool behavior in the agentic loop
 #[derive(Debug, Clone, Default)]

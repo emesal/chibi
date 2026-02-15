@@ -8,9 +8,13 @@
 
 **Tech Stack:** rust, serde, schemars, `url` crate (already a dep)
 
+**Progress:** all tasks complete (1–9).
+
 ---
 
-### Task 1: add `UrlCategory` enum and refactor `UrlSafety`
+### ~~Task 1: add `UrlCategory` enum and refactor `UrlSafety`~~ ✅
+
+
 
 **Files:**
 - Modify: `crates/chibi-core/src/tools/security.rs:77-136`
@@ -215,7 +219,7 @@ Sensitive(String) → Sensitive(UrlCategory) with Display impl.
 
 ---
 
-### Task 2: add `UrlPolicy` types and evaluation logic
+### ~~Task 2: add `UrlPolicy` types and evaluation logic~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/tools/security.rs`
@@ -588,7 +592,7 @@ preset categories or URL glob patterns. first match wins.
 
 ---
 
-### Task 3: add `url_policy` to config structs
+### ~~Task 3: add `url_policy` to config structs~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/config.rs:514-747`
@@ -680,7 +684,7 @@ per-invocation replaces per-context. None = use permission handler.
 
 ---
 
-### Task 4: add `url_policy` to `JsonInput` and wire it through
+### ~~Task 4: add `url_policy` to `JsonInput` and wire it through~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-json/src/input.rs:6-28`
@@ -731,7 +735,7 @@ access via JSON pipe. whole-object replacement, not merge.
 
 ---
 
-### Task 5: integrate policy evaluation into `send.rs`
+### ~~Task 5: integrate policy evaluation into `send.rs`~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/api/send.rs:866-896`
@@ -835,7 +839,7 @@ existing permission handler (backwards compatible).
 
 ---
 
-### Task 6: URL canonicalization
+### ~~Task 6: URL canonicalization~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/tools/security.rs`
@@ -905,7 +909,7 @@ category matching already safe via parsed IP addresses.
 
 ---
 
-### Task 7: serde round-trip tests and error handling
+### ~~Task 7: serde round-trip tests and error handling~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/tools/security.rs` (tests)
@@ -984,7 +988,7 @@ test: URL policy serde round-trips and error cases (#147)
 
 ---
 
-### Task 8: verify full build, all tests, `cargo clippy`
+### ~~Task 8: verify full build, all tests, `cargo clippy`~~ ✅
 
 **Step 1: full build**
 
@@ -1007,7 +1011,7 @@ If clippy or test issues were found and fixed, commit them.
 
 ---
 
-### Task 9: update AGENTS.md and design doc
+### ~~Task 9: update AGENTS.md and design doc~~ ✅
 
 **Files:**
 - Modify: `AGENTS.md`
