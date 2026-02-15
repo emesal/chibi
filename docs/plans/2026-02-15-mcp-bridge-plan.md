@@ -12,9 +12,9 @@
 
 ---
 
-## Phase 1: daemon skeleton
+## Phase 1: daemon skeleton ✓
 
-### Task 1: create crate and workspace entry
+### Task 1: create crate and workspace entry ✓
 
 **Files:**
 - Create: `crates/chibi-mcp-bridge/Cargo.toml`
@@ -72,7 +72,7 @@ feat(mcp-bridge): scaffold crate and workspace entry (#154)
 
 ---
 
-### Task 2: protocol types
+### Task 2: protocol types ✓
 
 **Files:**
 - Create: `crates/chibi-mcp-bridge/src/protocol.rs`
@@ -160,7 +160,7 @@ feat(mcp-bridge): protocol types for JSON-over-TCP (#154)
 
 ---
 
-### Task 3: config parsing
+### Task 3: config parsing ✓
 
 **Files:**
 - Create: `crates/chibi-mcp-bridge/src/config.rs`
@@ -255,7 +255,12 @@ feat(mcp-bridge): config parsing for mcp-bridge.toml (#154)
 
 ---
 
-### Task 4: refactor lock.rs — extract generic `Lockfile` primitives
+### Task 4: ~~refactor lock.rs~~ SKIPPED
+
+> **Skipped:** the bridge lockfile is fundamentally different from ContextLock
+> (JSON with PID/address, no heartbeat, liveness via kill(pid,0)). the bridge
+> writes its own lockfile directly in main.rs using the same atomic O_CREAT |
+> O_EXCL pattern. refactoring lock.rs would add complexity for marginal reuse.
 
 **Files:**
 - Modify: `crates/chibi-core/src/lock.rs`
@@ -308,7 +313,7 @@ refactor(lock): generalize lockfile primitives for reuse (#154)
 
 ---
 
-### Task 5: TCP listener + idle timeout
+### Task 5: TCP listener + idle timeout ✓
 
 **Files:**
 - Modify: `crates/chibi-mcp-bridge/src/main.rs`
@@ -380,7 +385,7 @@ feat(mcp-bridge): TCP listener with idle timeout and lockfile (#154)
 
 ---
 
-### Task 6: MCP server management via rmcp
+### Task 6: MCP server management via rmcp ✓
 
 **Files:**
 - Create: `crates/chibi-mcp-bridge/src/server.rs`
@@ -436,7 +441,7 @@ feat(mcp-bridge): MCP server lifecycle management via rmcp (#154)
 
 ---
 
-### Task 7: request routing (bridge.rs)
+### Task 7: request routing (bridge.rs) ✓
 
 **Files:**
 - Create: `crates/chibi-mcp-bridge/src/bridge.rs`
