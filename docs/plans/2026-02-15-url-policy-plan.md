@@ -8,7 +8,7 @@
 
 **Tech Stack:** rust, serde, schemars, `url` crate (already a dep)
 
-**Progress:** tasks 1–3 complete, tasks 4–9 remaining.
+**Progress:** all tasks complete (1–9).
 
 ---
 
@@ -684,7 +684,7 @@ per-invocation replaces per-context. None = use permission handler.
 
 ---
 
-### Task 4: add `url_policy` to `JsonInput` and wire it through
+### ~~Task 4: add `url_policy` to `JsonInput` and wire it through~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-json/src/input.rs:6-28`
@@ -735,7 +735,7 @@ access via JSON pipe. whole-object replacement, not merge.
 
 ---
 
-### Task 5: integrate policy evaluation into `send.rs`
+### ~~Task 5: integrate policy evaluation into `send.rs`~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/api/send.rs:866-896`
@@ -839,7 +839,7 @@ existing permission handler (backwards compatible).
 
 ---
 
-### Task 6: URL canonicalization
+### ~~Task 6: URL canonicalization~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/tools/security.rs`
@@ -909,7 +909,7 @@ category matching already safe via parsed IP addresses.
 
 ---
 
-### Task 7: serde round-trip tests and error handling
+### ~~Task 7: serde round-trip tests and error handling~~ ✅
 
 **Files:**
 - Modify: `crates/chibi-core/src/tools/security.rs` (tests)
@@ -988,7 +988,7 @@ test: URL policy serde round-trips and error cases (#147)
 
 ---
 
-### Task 8: verify full build, all tests, `cargo clippy`
+### ~~Task 8: verify full build, all tests, `cargo clippy`~~ ✅
 
 **Step 1: full build**
 
@@ -1011,7 +1011,7 @@ If clippy or test issues were found and fixed, commit them.
 
 ---
 
-### Task 9: update AGENTS.md and design doc
+### ~~Task 9: update AGENTS.md and design doc~~ ✅
 
 **Files:**
 - Modify: `AGENTS.md`

@@ -72,7 +72,11 @@ async fn main() -> io::Result<()> {
     }
 
     // Resolve core config and build response sink
-    let resolved = chibi.resolve_config(context, json_input.username.as_deref())?;
+    let mut resolved = chibi.resolve_config(context, json_input.username.as_deref())?;
+    // per-invocation URL policy override (highest priority, whole-object)
+    if json_input.url_policy.is_some() {
+        resolved.url_policy = json_input.url_policy.clone();
+    }
     let mut response_sink = sink::JsonResponseSink::new();
 
     // Delegate to core — handles init, auto-destroy, touch, dispatch, shutdown, cache cleanup

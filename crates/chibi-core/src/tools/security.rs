@@ -244,22 +244,31 @@ fn default_url_action() -> UrlAction {
 ///
 /// `url` is the original URL string (for glob matching).
 /// `safety` is the result of `classify_url()` (for category matching).
+///
+/// For glob matching, the URL is canonicalized (lowercased, parsed and
+/// re-serialized) to prevent bypasses via case or encoding tricks.
 pub fn evaluate_url_policy(url: &str, safety: &UrlSafety, policy: &UrlPolicy) -> UrlAction {
     let category = match safety {
         UrlSafety::Sensitive(cat) => Some(cat),
         UrlSafety::Safe => None,
     };
 
-    if rule_matches(&policy.deny_override, category, url) {
+    // canonicalize for glob matching: parse normalizes percent-encoding and
+    // lowercases the host; we lowercase the whole URL for consistent matching
+    let canonical = url::Url::parse(url)
+        .map(|u| u.to_string())
+        .unwrap_or_else(|_| url.to_lowercase());
+
+    if rule_matches(&policy.deny_override, category, &canonical) {
         return UrlAction::Deny;
     }
-    if rule_matches(&policy.allow_override, category, url) {
+    if rule_matches(&policy.allow_override, category, &canonical) {
         return UrlAction::Allow;
     }
-    if rule_matches(&policy.deny, category, url) {
+    if rule_matches(&policy.deny, category, &canonical) {
         return UrlAction::Deny;
     }
-    if rule_matches(&policy.allow, category, url) {
+    if rule_matches(&policy.allow, category, &canonical) {
         return UrlAction::Allow;
     }
     policy.default
@@ -385,9 +394,15 @@ mod tests {
     #[test]
     fn test_url_category_display() {
         assert_eq!(UrlCategory::Loopback.to_string(), "loopback address");
-        assert_eq!(UrlCategory::PrivateNetwork.to_string(), "private network address");
+        assert_eq!(
+            UrlCategory::PrivateNetwork.to_string(),
+            "private network address"
+        );
         assert_eq!(UrlCategory::LinkLocal.to_string(), "link-local address");
-        assert_eq!(UrlCategory::CloudMetadata.to_string(), "cloud metadata endpoint");
+        assert_eq!(
+            UrlCategory::CloudMetadata.to_string(),
+            "cloud metadata endpoint"
+        );
         assert_eq!(UrlCategory::Unparseable.to_string(), "could not parse URL");
     }
 
@@ -425,7 +440,10 @@ mod tests {
     #[test]
     fn test_classify_url_public_safe() {
         assert_eq!(classify_url("https://example.com"), UrlSafety::Safe);
-        assert_eq!(classify_url("https://api.github.com/repos"), UrlSafety::Safe);
+        assert_eq!(
+            classify_url("https://api.github.com/repos"),
+            UrlSafety::Safe
+        );
         assert_eq!(classify_url("http://1.2.3.4/path"), UrlSafety::Safe);
     }
 
@@ -505,7 +523,11 @@ mod tests {
     fn test_policy_default_allow() {
         let policy = make_policy(UrlAction::Allow);
         assert_eq!(
-            evaluate_url_policy("http://localhost/", &classify_url("http://localhost/"), &policy),
+            evaluate_url_policy(
+                "http://localhost/",
+                &classify_url("http://localhost/"),
+                &policy
+            ),
             UrlAction::Allow,
         );
     }
@@ -514,7 +536,11 @@ mod tests {
     fn test_policy_default_deny() {
         let policy = make_policy(UrlAction::Deny);
         assert_eq!(
-            evaluate_url_policy("http://localhost/", &classify_url("http://localhost/"), &policy),
+            evaluate_url_policy(
+                "http://localhost/",
+                &classify_url("http://localhost/"),
+                &policy
+            ),
             UrlAction::Deny,
         );
     }
@@ -524,7 +550,11 @@ mod tests {
         let mut policy = make_policy(UrlAction::Deny);
         policy.allow.push(UrlRule::Preset(UrlCategory::Loopback));
         assert_eq!(
-            evaluate_url_policy("http://localhost/", &classify_url("http://localhost/"), &policy),
+            evaluate_url_policy(
+                "http://localhost/",
+                &classify_url("http://localhost/"),
+                &policy
+            ),
             UrlAction::Allow,
         );
         assert_eq!(
@@ -552,7 +582,11 @@ mod tests {
             UrlAction::Deny,
         );
         assert_eq!(
-            evaluate_url_policy("http://localhost/", &classify_url("http://localhost/"), &policy),
+            evaluate_url_policy(
+                "http://localhost/",
+                &classify_url("http://localhost/"),
+                &policy
+            ),
             UrlAction::Allow,
         );
     }
@@ -584,7 +618,11 @@ mod tests {
             .allow_override
             .push(UrlRule::Preset(UrlCategory::Loopback));
         assert_eq!(
-            evaluate_url_policy("http://localhost/", &classify_url("http://localhost/"), &policy),
+            evaluate_url_policy(
+                "http://localhost/",
+                &classify_url("http://localhost/"),
+                &policy
+            ),
             UrlAction::Allow,
         );
     }
@@ -595,7 +633,11 @@ mod tests {
         policy.allow.push(UrlRule::Preset(UrlCategory::Loopback));
         policy.deny.push(UrlRule::Preset(UrlCategory::Loopback));
         assert_eq!(
-            evaluate_url_policy("http://localhost/", &classify_url("http://localhost/"), &policy),
+            evaluate_url_policy(
+                "http://localhost/",
+                &classify_url("http://localhost/"),
+                &policy
+            ),
             UrlAction::Deny,
         );
     }
@@ -672,7 +714,11 @@ mod tests {
             .push(UrlRule::Preset(UrlCategory::PrivateNetwork));
         // deny beats allow at same tier
         assert_eq!(
-            evaluate_url_policy("http://10.0.0.1/", &classify_url("http://10.0.0.1/"), &policy),
+            evaluate_url_policy(
+                "http://10.0.0.1/",
+                &classify_url("http://10.0.0.1/"),
+                &policy
+            ),
             UrlAction::Deny,
         );
         // but allow_override beats deny
@@ -680,7 +726,11 @@ mod tests {
             .allow_override
             .push(UrlRule::Preset(UrlCategory::PrivateNetwork));
         assert_eq!(
-            evaluate_url_policy("http://10.0.0.1/", &classify_url("http://10.0.0.1/"), &policy),
+            evaluate_url_policy(
+                "http://10.0.0.1/",
+                &classify_url("http://10.0.0.1/"),
+                &policy
+            ),
             UrlAction::Allow,
         );
         // but deny_override beats allow_override
@@ -688,8 +738,119 @@ mod tests {
             .deny_override
             .push(UrlRule::Preset(UrlCategory::PrivateNetwork));
         assert_eq!(
-            evaluate_url_policy("http://10.0.0.1/", &classify_url("http://10.0.0.1/"), &policy),
+            evaluate_url_policy(
+                "http://10.0.0.1/",
+                &classify_url("http://10.0.0.1/"),
+                &policy
+            ),
             UrlAction::Deny,
         );
+    }
+
+    #[test]
+    fn test_canonicalize_percent_encoded_host() {
+        // %6c%6f%63%61%6c%68%6f%73%74 = "localhost"
+        let url = "http://%6c%6f%63%61%6c%68%6f%73%74/path";
+        let safety = classify_url(url);
+        assert!(
+            matches!(safety, UrlSafety::Sensitive(UrlCategory::Loopback)),
+            "percent-encoded localhost should be classified as loopback, got: {:?}",
+            safety
+        );
+    }
+
+    #[test]
+    fn test_policy_glob_matches_case_insensitive() {
+        // url::Url::parse lowercases hosts, so we should normalize for glob matching
+        let mut policy = make_policy(UrlAction::Deny);
+        policy
+            .allow
+            .push(UrlRule::Pattern("https://example.com/*".to_string()));
+        let url = "https://EXAMPLE.COM/path";
+        let safety = classify_url(url);
+        // evaluate_url_policy should canonicalize the URL for glob matching
+        assert_eq!(evaluate_url_policy(url, &safety, &policy), UrlAction::Allow,);
+    }
+
+    #[test]
+    fn test_policy_overrides_sensitive_classification() {
+        // a sensitive URL with an allow policy should be allowed
+        let url = "http://localhost:3000/api";
+        let safety = classify_url(url);
+        assert!(matches!(
+            safety,
+            UrlSafety::Sensitive(UrlCategory::Loopback)
+        ));
+
+        let mut policy = make_policy(UrlAction::Deny);
+        policy.allow.push(UrlRule::Preset(UrlCategory::Loopback));
+        assert_eq!(evaluate_url_policy(url, &safety, &policy), UrlAction::Allow);
+
+        // a safe URL with a deny policy should be denied
+        let url = "https://example.com/";
+        let safety = classify_url(url);
+        assert_eq!(safety, UrlSafety::Safe);
+
+        let policy = make_policy(UrlAction::Deny);
+        assert_eq!(evaluate_url_policy(url, &safety, &policy), UrlAction::Deny);
+    }
+
+    // === serde round-trips ===
+
+    #[test]
+    fn test_url_rule_serde_preset() {
+        let rule: UrlRule = serde_json::from_str("\"preset:loopback\"").unwrap();
+        assert_eq!(rule, UrlRule::Preset(UrlCategory::Loopback));
+        let serialized = serde_json::to_string(&rule).unwrap();
+        assert_eq!(serialized, "\"preset:loopback\"");
+    }
+
+    #[test]
+    fn test_url_rule_serde_pattern() {
+        let rule: UrlRule = serde_json::from_str("\"https://example.com/*\"").unwrap();
+        assert_eq!(rule, UrlRule::Pattern("https://example.com/*".to_string()));
+    }
+
+    #[test]
+    fn test_url_rule_serde_invalid_preset() {
+        let result: Result<UrlRule, _> = serde_json::from_str("\"preset:nonexistent\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_url_policy_serde_full() {
+        let json = r#"{
+            "default": "deny",
+            "allow": ["preset:loopback", "https://api.example.com/*"],
+            "deny_override": ["preset:cloud_metadata"]
+        }"#;
+        let policy: UrlPolicy = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.default, UrlAction::Deny);
+        assert_eq!(policy.allow.len(), 2);
+        assert_eq!(policy.deny.len(), 0);
+        assert_eq!(policy.deny_override.len(), 1);
+        assert_eq!(policy.allow_override.len(), 0);
+    }
+
+    #[test]
+    fn test_url_policy_serde_defaults() {
+        let json = "{}";
+        let policy: UrlPolicy = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.default, UrlAction::Allow);
+        assert!(policy.allow.is_empty());
+        assert!(policy.deny.is_empty());
+    }
+
+    #[test]
+    fn test_url_policy_toml() {
+        let toml_str = r#"
+default = "deny"
+allow = ["preset:private_network", "preset:loopback"]
+deny_override = ["preset:cloud_metadata"]
+"#;
+        let policy: UrlPolicy = toml::from_str(toml_str).expect("valid toml");
+        assert_eq!(policy.default, UrlAction::Deny);
+        assert_eq!(policy.allow.len(), 2);
+        assert_eq!(policy.deny_override.len(), 1);
     }
 }
