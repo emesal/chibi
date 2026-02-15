@@ -10,10 +10,11 @@ pub struct ServerConfig {
     pub args: Vec<String>,
 }
 
-/// Summary generation config (used in task 12: LLM summary generation)
+/// Summary generation config.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct SummaryConfig {
+    #[serde(default = "default_summary_enabled")]
+    pub enabled: bool,
     #[serde(default = "default_summary_model")]
     pub model: String,
 }
@@ -22,9 +23,14 @@ fn default_summary_model() -> String {
     "ratatoskr:free/text-generation".to_string()
 }
 
+fn default_summary_enabled() -> bool {
+    true
+}
+
 impl Default for SummaryConfig {
     fn default() -> Self {
         Self {
+            enabled: default_summary_enabled(),
             model: default_summary_model(),
         }
     }
@@ -36,7 +42,6 @@ pub struct BridgeConfig {
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_minutes: u64,
     #[serde(default)]
-    #[allow(dead_code)] // used in task 12: LLM summary generation
     pub summary: SummaryConfig,
     #[serde(default)]
     pub servers: HashMap<String, ServerConfig>,

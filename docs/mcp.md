@@ -70,7 +70,8 @@ idle_timeout_minutes = 5
 
 # LLM-powered tool summary generation (optional)
 [summary]
-model = "ratatoskr:free/text-generation"  # default
+enabled = true                             # set to false to disable
+model = "ratatoskr:free/text-generation"   # default
 
 # MCP servers
 [servers.name]
@@ -81,6 +82,8 @@ args = ["--flag", "value"]
 ### Tool summaries
 
 The bridge can generate concise one-sentence summaries of MCP tool descriptions using an LLM. This runs in the background on first startup and caches results in `~/.chibi/mcp-bridge/cache.jsonl`. Summaries are regenerated automatically when a tool's schema changes.
+
+To disable summary generation entirely, set `enabled = false` in the `[summary]` section. When disabled, no summaries are generated and existing cached summaries are ignored. Re-enabling picks up where it left off — the cache remains intact on disk.
 
 ## Architecture
 

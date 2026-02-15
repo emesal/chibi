@@ -106,9 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Spawn background summary generation
+    // Spawn background summary generation (if enabled)
     let all_tools = server_manager.list_all_tools();
-    if !all_tools.is_empty() {
+    if config.summary.enabled && !all_tools.is_empty() {
         let summary_home = home.clone();
         let summary_model = config.summary.model.clone();
         tokio::spawn(async move {
