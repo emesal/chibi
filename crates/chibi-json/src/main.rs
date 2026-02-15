@@ -80,7 +80,7 @@ async fn main() -> io::Result<()> {
     let mut response_sink = sink::JsonResponseSink::new();
 
     // Delegate to core — handles init, auto-destroy, touch, dispatch, shutdown, cache cleanup
-    chibi_core::execute_command(
+    let effect = chibi_core::execute_command(
         &mut chibi,
         context,
         &json_input.command,
@@ -91,6 +91,26 @@ async fn main() -> io::Result<()> {
         &mut response_sink,
     )
     .await?;
+
+    // Handle config inspection effects — JSON mode only has core fields
+    match &effect {
+        chibi_core::CommandEffect::InspectConfigField { field, .. } => {
+            match resolved.get_field(field) {
+                Some(value) => output.emit_result(&value),
+                None => output.emit_result("(not set)"),
+            }
+        }
+        chibi_core::CommandEffect::InspectConfigList { .. } => {
+            output.emit_result("Inspectable items:");
+            for name in ["system_prompt", "reflection", "todos", "goals", "home"] {
+                output.emit_result(&format!("  {}", name));
+            }
+            for field in chibi_core::config::ResolvedConfig::list_fields() {
+                output.emit_result(&format!("  {}", field));
+            }
+        }
+        _ => {}
+    }
 
     Ok(())
 }

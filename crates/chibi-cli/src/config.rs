@@ -278,10 +278,10 @@ impl ResolvedConfig {
     /// First checks presentation fields, then delegates to core.
     ///
     /// TODO: currently unused since inspect moved to core, which only sees
-    /// CoreResolvedConfig. CLI-specific fields (render_markdown, image.*, etc.)
-    /// are no longer inspectable via `-n config.<field>`. Re-wire when we add
-    /// a config inspection hook or move inspect back to binaries.
-    #[allow(dead_code)]
+    /// Get a CLI config field value by path.
+    ///
+    /// Handles CLI-specific fields (render_markdown, image.*, etc.) and
+    /// delegates to core for everything else.
     pub fn get_field(&self, path: &str) -> Option<String> {
         match path {
             "render_markdown" => Some(self.render_markdown.to_string()),

@@ -381,6 +381,22 @@ async fn execute_from_input(
                 session.save(chibi.home_dir())?;
             }
         }
+        CommandEffect::InspectConfigField { context: ctx, field } => {
+            let cfg = resolve_cli_config(chibi, &ctx, ephemeral_username)?;
+            match cfg.get_field(&field) {
+                Some(value) => output.emit_result(&value),
+                None => output.emit_result("(not set)"),
+            }
+        }
+        CommandEffect::InspectConfigList { context: _ } => {
+            output.emit_result("Inspectable items:");
+            for name in ["system_prompt", "reflection", "todos", "goals", "home"] {
+                output.emit_result(&format!("  {}", name));
+            }
+            for field in ResolvedConfig::list_fields() {
+                output.emit_result(&format!("  {}", field));
+            }
+        }
         CommandEffect::None => {}
     }
 

@@ -28,6 +28,10 @@ pub enum CommandEffect {
     ContextDestroyed(String),
     /// A context was renamed. CLI should update session if needed.
     ContextRenamed { old: String, new: String },
+    /// Config field inspection — binary resolves with its full config.
+    InspectConfigField { context: String, field: String },
+    /// Config field listing — binary emits its full field list.
+    InspectConfigList { context: String },
 }
 
 /// Execute a command with full lifecycle management.
@@ -141,7 +145,7 @@ async fn dispatch_command<S: ResponseSink>(
     command: &Command,
     flags: &ExecutionFlags,
     config: &ResolvedConfig,
-    username: Option<&str>,
+    _username: Option<&str>,
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
@@ -243,8 +247,10 @@ async fn dispatch_command<S: ResponseSink>(
             thing,
         } => {
             let ctx_name = ctx.as_deref().unwrap_or(context);
-            inspect_context(chibi, ctx_name, thing, config, username, output)?;
-            Ok(CommandEffect::None)
+            match inspect_context(chibi, ctx_name, thing, output)? {
+                Some(effect) => Ok(effect),
+                None => Ok(CommandEffect::None),
+            }
         }
         Command::SetSystemPrompt {
             context: ctx,
@@ -556,24 +562,18 @@ fn show_log(
 /// Inspect a context property.
 ///
 /// Renders markdown-bearing content (todos, goals) via `emit_markdown()`.
+/// Returns `Some(CommandEffect)` for config-related inspections that require
+/// binary-specific resolution (binaries may have extended config fields).
 fn inspect_context(
     chibi: &Chibi,
     context: &str,
     thing: &Inspectable,
-    config: &ResolvedConfig,
-    username: Option<&str>,
     output: &dyn OutputSink,
-) -> io::Result<()> {
+) -> io::Result<Option<CommandEffect>> {
     match thing {
-        Inspectable::List => {
-            output.emit_result("Inspectable items:");
-            for name in ["system_prompt", "reflection", "todos", "goals", "home"] {
-                output.emit_result(&format!("  {}", name));
-            }
-            for field in ResolvedConfig::list_fields() {
-                output.emit_result(&format!("  {}", field));
-            }
-        }
+        Inspectable::List => Ok(Some(CommandEffect::InspectConfigList {
+            context: context.to_string(),
+        })),
         Inspectable::SystemPrompt => {
             let prompt = chibi.app.load_system_prompt_for(context)?;
             if prompt.is_empty() {
@@ -581,6 +581,7 @@ fn inspect_context(
             } else {
                 output.emit_result(prompt.trim_end());
             }
+            Ok(None)
         }
         Inspectable::Reflection => {
             let reflection = chibi.app.load_reflection()?;
@@ -589,6 +590,7 @@ fn inspect_context(
             } else {
                 output.emit_result(reflection.trim_end());
             }
+            Ok(None)
         }
         Inspectable::Todos => {
             let todos = chibi.app.load_todos_for(context)?;
@@ -597,6 +599,7 @@ fn inspect_context(
             } else {
                 output.emit_markdown(todos.trim_end())?;
             }
+            Ok(None)
         }
         Inspectable::Goals => {
             let goals = chibi.app.load_goals_for(context)?;
@@ -605,24 +608,15 @@ fn inspect_context(
             } else {
                 output.emit_markdown(goals.trim_end())?;
             }
+            Ok(None)
         }
         Inspectable::Home => {
             output.emit_result(&chibi.home_dir().display().to_string());
+            Ok(None)
         }
-        Inspectable::ConfigField(field_path) => {
-            // Use provided config, or re-resolve with username for accurate field values
-            let resolved;
-            let cfg = if username.is_some() {
-                resolved = chibi.resolve_config(context, username)?;
-                &resolved
-            } else {
-                config
-            };
-            match cfg.get_field(field_path) {
-                Some(value) => output.emit_result(&value),
-                None => output.emit_result("(not set)"),
-            }
-        }
+        Inspectable::ConfigField(field_path) => Ok(Some(CommandEffect::InspectConfigField {
+            context: context.to_string(),
+            field: field_path.clone(),
+        })),
     }
-    Ok(())
 }
