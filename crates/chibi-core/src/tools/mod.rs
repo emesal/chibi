@@ -78,8 +78,8 @@ pub use agent_tools::{SPAWN_AGENT_TOOL_NAME, SUMMARIZE_CONTENT_TOOL_NAME, SpawnO
 
 // Re-export security utilities
 pub use security::{
-    UrlAction, UrlCategory, UrlPolicy, UrlRule, UrlSafety, classify_url, evaluate_url_policy,
-    validate_file_path,
+    FilePathAccess, UrlAction, UrlCategory, UrlPolicy, UrlRule, UrlSafety, classify_file_path,
+    classify_url, evaluate_url_policy, validate_file_path,
 };
 
 /// Metadata for tool behavior in the agentic loop

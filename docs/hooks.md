@@ -48,6 +48,12 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 | `pre_agentic_loop` | Before entering the tool loop (each iteration) | Yes (fallback target, fuel) |
 | `post_tool_batch` | After processing a batch of tool calls | Yes (fallback target, fuel delta) |
 
+### File Read Permission
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_file_read` | Before reading a file outside `file_tools_allowed_paths` | Yes (approve/deny, fail-safe deny if no handler) |
+
 ### File Write Permission
 
 | Hook | When | Can Modify |
@@ -445,6 +451,30 @@ Notification after output has been cached.
   "context_name": "default",
   "delivery_result": "Message delivered to 'research' via local inbox"
 }
+```
+
+### pre_file_read
+
+Called before `file_head`, `file_tail`, or `file_lines` reads a file **outside** `file_tools_allowed_paths`. Reads inside allowed paths (defaults to cwd) proceed without prompting. Uses the **deny-only** permission protocol: plugins can block, otherwise falls through to the frontend's permission handler. Fail-safe denied if no handler is configured.
+
+```json
+{
+  "tool_name": "file_head",
+  "path": "/etc/passwd"
+}
+```
+
+**To deny:**
+```json
+{
+  "denied": true,
+  "reason": "Path not allowed"
+}
+```
+
+**No opinion (falls through to frontend handler):**
+```json
+{}
 ```
 
 ### pre_file_write

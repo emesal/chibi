@@ -1,7 +1,13 @@
 //! Security utilities for path validation and URL safety classification.
 //!
-//! Single source of truth for file path allowlist checks (used by both
+//! Single source of truth for file path access control (used by both
 //! `file_tools` and `agent_tools`) and URL SSRF classification.
+//!
+//! File path access uses a two-tier model:
+//! - Paths under `file_tools_allowed_paths` (auto-populated with cwd if empty)
+//!   are allowed directly for reads.
+//! - Paths outside allowed paths require user permission via `PreFileRead` hook.
+//! - Writes always require permission via `PreFileWrite` hook regardless of path.
 
 use crate::config::ResolvedConfig;
 use schemars::JsonSchema;
@@ -15,11 +21,62 @@ use std::path::PathBuf;
 // File Path Validation
 // ============================================================================
 
+/// File path access classification result.
+///
+/// Used by the agentic loop to decide whether a read operation can proceed
+/// directly or needs user permission via the `PreFileRead` hook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilePathAccess {
+    /// Path is under an allowed directory — proceed without prompting.
+    Allowed(PathBuf),
+    /// Path is outside allowed directories — requires user permission.
+    NeedsPermission(PathBuf),
+}
+
+/// Resolve and classify a file path against `file_tools_allowed_paths`.
+///
+/// Performs tilde expansion, canonicalization, and allowlist checking.
+/// Returns `Allowed` for paths under an allowed directory, or
+/// `NeedsPermission` for paths outside (including when the allowlist is empty).
+pub fn classify_file_path(path: &str, config: &ResolvedConfig) -> io::Result<FilePathAccess> {
+    let canonical = resolve_and_canonicalize(path)?;
+
+    let is_allowed = !config.file_tools_allowed_paths.is_empty()
+        && config.file_tools_allowed_paths.iter().any(|allowed_path| {
+            resolve_allowed_path(allowed_path)
+                .is_some_and(|allowed_canonical| canonical.starts_with(&allowed_canonical))
+        });
+
+    if is_allowed {
+        Ok(FilePathAccess::Allowed(canonical))
+    } else {
+        Ok(FilePathAccess::NeedsPermission(canonical))
+    }
+}
+
 /// Resolve and validate a file path against `file_tools_allowed_paths`.
 ///
 /// Performs tilde expansion, canonicalization, and allowlist checking.
 /// Returns the canonical path on success, or `PermissionDenied` on failure.
+///
+/// This is a strict wrapper around `classify_file_path` that maps
+/// `NeedsPermission` to an error. Used by callers that don't handle
+/// interactive permission prompting (e.g. agent_tools).
 pub fn validate_file_path(path: &str, config: &ResolvedConfig) -> io::Result<PathBuf> {
+    match classify_file_path(path, config)? {
+        FilePathAccess::Allowed(canonical) => Ok(canonical),
+        FilePathAccess::NeedsPermission(_) => Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            format!(
+                "Path '{}' is not under any allowed path. Allowed: {:?}",
+                path, config.file_tools_allowed_paths
+            ),
+        )),
+    }
+}
+
+/// Tilde-expand and canonicalize a file path.
+fn resolve_and_canonicalize(path: &str) -> io::Result<PathBuf> {
     let resolved = if let Some(rest) = path.strip_prefix("~/") {
         let home = dirs_next::home_dir().ok_or_else(|| {
             io::Error::new(ErrorKind::NotFound, "Could not determine home directory")
@@ -33,45 +90,25 @@ pub fn validate_file_path(path: &str, config: &ResolvedConfig) -> io::Result<Pat
         PathBuf::from(path)
     };
 
-    let canonical = resolved.canonicalize().map_err(|e| {
+    resolved.canonicalize().map_err(|e| {
         io::Error::new(
             ErrorKind::NotFound,
             format!("Could not resolve path '{}': {}", path, e),
         )
-    })?;
+    })
+}
 
-    if config.file_tools_allowed_paths.is_empty() {
-        return Err(io::Error::new(
-            ErrorKind::PermissionDenied,
-            "File path access is not allowed. Use cache_id to access cached tool outputs, or configure file_tools_allowed_paths.",
-        ));
-    }
+/// Resolve an allowed path entry (tilde expansion + canonicalization).
+fn resolve_allowed_path(allowed_path: &str) -> Option<PathBuf> {
+    let resolved = if let Some(rest) = allowed_path.strip_prefix("~/") {
+        dirs_next::home_dir().map(|home| home.join(rest))
+    } else if allowed_path == "~" {
+        dirs_next::home_dir()
+    } else {
+        Some(PathBuf::from(allowed_path))
+    };
 
-    let allowed = config.file_tools_allowed_paths.iter().any(|allowed_path| {
-        let allowed_resolved = if let Some(rest) = allowed_path.strip_prefix("~/") {
-            dirs_next::home_dir().map(|home| home.join(rest))
-        } else if allowed_path == "~" {
-            dirs_next::home_dir()
-        } else {
-            Some(PathBuf::from(allowed_path))
-        };
-
-        allowed_resolved
-            .and_then(|p| p.canonicalize().ok())
-            .is_some_and(|allowed_canonical| canonical.starts_with(&allowed_canonical))
-    });
-
-    if !allowed {
-        return Err(io::Error::new(
-            ErrorKind::PermissionDenied,
-            format!(
-                "Path '{}' is not under any allowed path. Allowed: {:?}",
-                path, config.file_tools_allowed_paths
-            ),
-        ));
-    }
-
-    Ok(canonical)
+    resolved.and_then(|p| p.canonicalize().ok())
 }
 
 // ============================================================================
@@ -401,6 +438,47 @@ mod tests {
     fn test_validate_path_nonexistent_file() {
         let config = make_test_config(vec!["/tmp".to_string()]);
         let result = validate_file_path("/tmp/nonexistent_abc123.txt", &config);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::NotFound);
+    }
+
+    // === classify_file_path ===
+
+    #[test]
+    fn test_classify_path_under_allowed_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+        let config = make_test_config(vec![dir.path().to_string_lossy().to_string()]);
+        let result = classify_file_path(file.to_str().unwrap(), &config);
+        assert!(matches!(result, Ok(FilePathAccess::Allowed(_))));
+    }
+
+    #[test]
+    fn test_classify_path_outside_allowed_dir() {
+        let allowed = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("secret.txt");
+        std::fs::write(&file, "secret").unwrap();
+        let config = make_test_config(vec![allowed.path().to_string_lossy().to_string()]);
+        let result = classify_file_path(file.to_str().unwrap(), &config);
+        assert!(matches!(result, Ok(FilePathAccess::NeedsPermission(_))));
+    }
+
+    #[test]
+    fn test_classify_path_empty_allowlist_needs_permission() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+        let config = make_test_config(vec![]);
+        let result = classify_file_path(file.to_str().unwrap(), &config);
+        assert!(matches!(result, Ok(FilePathAccess::NeedsPermission(_))));
+    }
+
+    #[test]
+    fn test_classify_path_nonexistent_file() {
+        let config = make_test_config(vec!["/tmp".to_string()]);
+        let result = classify_file_path("/tmp/nonexistent_abc123.txt", &config);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::NotFound);
     }

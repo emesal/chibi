@@ -36,9 +36,10 @@ pub enum HookPoint {
     PreApiRequest,    // Before API request is sent (can modify full request body)
     PreAgenticLoop,   // Before entering the tool loop (can override fallback)
     PostToolBatch,    // After processing a batch of tool calls (can override fallback)
-    PreFileWrite,     // Before file write/patch (can approve/deny/modify operation)
-    PreShellExec,     // Before shell command execution (can approve/deny, fail-safe deny)
-    PreFetchUrl,      // Before fetching a sensitive URL (can approve/deny, fail-safe deny)
+    PreFileRead, // Before reading a file outside allowed paths (can approve/deny, fail-safe deny)
+    PreFileWrite, // Before file write/patch (can approve/deny/modify operation)
+    PreShellExec, // Before shell command execution (can approve/deny, fail-safe deny)
+    PreFetchUrl, // Before fetching a sensitive URL (can approve/deny, fail-safe deny)
     PreSpawnAgent, // Before sub-agent call (can intercept/replace with {"response": "..."} or block)
     PostSpawnAgent, // After sub-agent call (observe only)
     PostIndexFile, // After a file is indexed (observe: path, lang, symbol_count, ref_count)
@@ -120,7 +121,7 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
-    // All 30 hook points for testing
+    // All 31 hook points for testing
     const ALL_HOOKS: &[(&str, HookPoint)] = &[
         ("pre_message", HookPoint::PreMessage),
         ("post_message", HookPoint::PostMessage),
@@ -146,6 +147,7 @@ mod tests {
         ("pre_api_request", HookPoint::PreApiRequest),
         ("pre_agentic_loop", HookPoint::PreAgenticLoop),
         ("post_tool_batch", HookPoint::PostToolBatch),
+        ("pre_file_read", HookPoint::PreFileRead),
         ("pre_file_write", HookPoint::PreFileWrite),
         ("pre_shell_exec", HookPoint::PreShellExec),
         ("pre_fetch_url", HookPoint::PreFetchUrl),
