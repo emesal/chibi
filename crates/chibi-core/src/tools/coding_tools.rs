@@ -1020,54 +1020,14 @@ fn execute_index_status(project_root: &Path) -> io::Result<String> {
 
 /// Execute fetch_url: HTTP GET a URL and return the response body.
 ///
-/// Follows redirects (up to 10). Validates URL scheme (http/https only).
-/// Limits response body to `max_bytes` to prevent unbounded memory usage.
+/// Delegates to `fetch_url_with_limit` for streaming size-limited fetching.
+/// URL policy gating is handled by the caller in `send.rs`.
 async fn execute_fetch_url(args: &serde_json::Value) -> io::Result<String> {
     let url = require_str_param(args, "url")?;
     let max_bytes = args.get_u64_or("max_bytes", 1_048_576) as usize;
     let timeout_secs = args.get_u64_or("timeout_secs", 30);
 
-    // Validate URL scheme
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("URL must start with http:// or https://, got: {}", url),
-        ));
-    }
-
-    let response = super::http_client()
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .send()
-        .await
-        .map_err(|e| io::Error::other(format!("Request failed: {}", e)))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(io::Error::other(format!(
-            "HTTP {} {}",
-            status.as_u16(),
-            status.canonical_reason().unwrap_or("Unknown"),
-        )));
-    }
-
-    // Read body with size limit
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| io::Error::other(format!("Failed to read response body: {}", e)))?;
-
-    if bytes.len() > max_bytes {
-        let truncated = String::from_utf8_lossy(&bytes[..max_bytes]);
-        Ok(format!(
-            "{}\n\n[Truncated: response was {} bytes, limit is {} bytes]",
-            truncated,
-            bytes.len(),
-            max_bytes,
-        ))
-    } else {
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
-    }
+    super::fetch_url_with_limit(&url, max_bytes, timeout_secs).await
 }
 
 // === Tests ===

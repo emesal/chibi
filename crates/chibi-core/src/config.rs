@@ -365,12 +365,33 @@ pub struct ToolsConfig {
     pub exclude_categories: Option<Vec<String>>,
 }
 
+/// Merge two optional string vecs: append `local` to `global`, deduplicating entries.
+fn merge_option_vecs(
+    global: &Option<Vec<String>>,
+    local: &Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    match (global, local) {
+        (Some(g), Some(l)) => {
+            let mut merged = g.clone();
+            for item in l {
+                if !merged.contains(item) {
+                    merged.push(item.clone());
+                }
+            }
+            Some(merged)
+        }
+        (None, Some(l)) => Some(l.clone()),
+        (Some(g), None) => Some(g.clone()),
+        (None, None) => None,
+    }
+}
+
 impl ToolsConfig {
     /// Merge a local (per-context) tools config on top of this (global) config.
     ///
     /// - `include`: local overrides global entirely if set
-    /// - `exclude`: local appends to global
-    /// - `exclude_categories`: local appends to global
+    /// - `exclude`: local appends to global (deduplicated)
+    /// - `exclude_categories`: local appends to global (deduplicated)
     pub fn merge_local(&self, local: &ToolsConfig) -> ToolsConfig {
         let include = if local.include.is_some() {
             local.include.clone()
@@ -378,40 +399,13 @@ impl ToolsConfig {
             self.include.clone()
         };
 
-        let exclude = match (&self.exclude, &local.exclude) {
-            (Some(g), Some(l)) => {
-                let mut merged = g.clone();
-                for item in l {
-                    if !merged.contains(item) {
-                        merged.push(item.clone());
-                    }
-                }
-                Some(merged)
-            }
-            (None, Some(l)) => Some(l.clone()),
-            (Some(g), None) => Some(g.clone()),
-            (None, None) => None,
-        };
-
-        let exclude_categories = match (&self.exclude_categories, &local.exclude_categories) {
-            (Some(g), Some(l)) => {
-                let mut merged = g.clone();
-                for item in l {
-                    if !merged.contains(item) {
-                        merged.push(item.clone());
-                    }
-                }
-                Some(merged)
-            }
-            (None, Some(l)) => Some(l.clone()),
-            (Some(g), None) => Some(g.clone()),
-            (None, None) => None,
-        };
-
         ToolsConfig {
             include,
-            exclude,
-            exclude_categories,
+            exclude: merge_option_vecs(&self.exclude, &local.exclude),
+            exclude_categories: merge_option_vecs(
+                &self.exclude_categories,
+                &local.exclude_categories,
+            ),
         }
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! Provides two LLM-facing tools:
 //! - `spawn_agent` — general-purpose sub-agent spawning (also usable as internal Rust API)
-//! - `retrieve_content` — reads files/URLs and processes content through a sub-agent
+//! - `summarize_content` — reads files/URLs and processes content through a sub-agent
 //!
 //! Sub-agent calls are non-streaming (results are tool outputs, not user-facing).
 //! Hooks (`pre_spawn_agent` / `post_spawn_agent`) allow plugins to intercept or observe.
@@ -18,7 +18,7 @@ use std::io::{self, ErrorKind};
 // === Tool Name Constants ===
 
 pub const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
-pub const RETRIEVE_CONTENT_TOOL_NAME: &str = "retrieve_content";
+pub const SUMMARIZE_CONTENT_TOOL_NAME: &str = "summarize_content";
 
 // === Tool Definition Registry ===
 
@@ -63,8 +63,8 @@ pub static AGENT_TOOL_DEFS: &[BuiltinToolDef] = &[
         summary_params: &[],
     },
     BuiltinToolDef {
-        name: RETRIEVE_CONTENT_TOOL_NAME,
-        description: "Read a file or fetch a URL, then process the content through a sub-agent with your instructions. Use for summarizing documents, extracting information, or analyzing content.",
+        name: SUMMARIZE_CONTENT_TOOL_NAME,
+        description: "Read a file or fetch a URL, then summarize or process the content through a sub-agent with your instructions. Use for summarizing documents, extracting information, or analyzing content.",
         properties: &[
             ToolPropertyDef {
                 name: "source",
@@ -157,27 +157,11 @@ fn read_file(path: &str, config: &ResolvedConfig) -> io::Result<String> {
         .map_err(|e| io::Error::new(e.kind(), format!("Failed to read '{}': {}", path, e)))
 }
 
-/// Fetch content from a URL with a 30-second timeout.
+/// Fetch content from a URL with a 30-second timeout and 1 MB limit.
+///
+/// Delegates to `fetch_url_with_limit` for streaming size-limited fetching.
 async fn fetch_url(url: &str) -> io::Result<String> {
-    let response = super::http_client()
-        .get(url)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| io::Error::other(format!("Failed to fetch '{}': {}", url, e)))?;
-
-    if !response.status().is_success() {
-        return Err(io::Error::other(format!(
-            "HTTP {} fetching '{}'",
-            response.status(),
-            url
-        )));
-    }
-
-    response
-        .text()
-        .await
-        .map_err(|e| io::Error::other(format!("Failed to read response from '{}': {}", url, e)))
+    super::fetch_url_with_limit(url, 1_048_576, 30).await
 }
 
 /// Check if a source string is a URL (http:// or https://).
@@ -242,8 +226,8 @@ pub async fn spawn_agent(
     Ok(response)
 }
 
-/// Reads file or fetches URL, then delegates to spawn_agent.
-pub async fn retrieve_content(
+/// Reads file or fetches URL, then delegates to spawn_agent for summarization.
+pub async fn summarize_content(
     config: &ResolvedConfig,
     source: &str,
     instructions: &str,
@@ -275,7 +259,7 @@ pub async fn retrieve_content(
 
 /// Check if a tool name is an agent tool.
 pub fn is_agent_tool(name: &str) -> bool {
-    matches!(name, SPAWN_AGENT_TOOL_NAME | RETRIEVE_CONTENT_TOOL_NAME)
+    matches!(name, SPAWN_AGENT_TOOL_NAME | SUMMARIZE_CONTENT_TOOL_NAME)
 }
 
 /// Execute an agent tool by name.
@@ -297,14 +281,14 @@ pub async fn execute_agent_tool(
             })?;
             spawn_agent(config, system_prompt, input, &options, tools).await
         }
-        RETRIEVE_CONTENT_TOOL_NAME => {
+        SUMMARIZE_CONTENT_TOOL_NAME => {
             let source = args.get_str("source").ok_or_else(|| {
                 io::Error::new(ErrorKind::InvalidInput, "Missing 'source' parameter")
             })?;
             let instructions = args.get_str("instructions").ok_or_else(|| {
                 io::Error::new(ErrorKind::InvalidInput, "Missing 'instructions' parameter")
             })?;
-            retrieve_content(config, source, instructions, &options, tools).await
+            summarize_content(config, source, instructions, &options, tools).await
         }
         _ => Err(io::Error::new(
             ErrorKind::InvalidInput,
@@ -344,19 +328,19 @@ mod tests {
         assert_eq!(AGENT_TOOL_DEFS.len(), 2);
         let names: Vec<_> = AGENT_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&SPAWN_AGENT_TOOL_NAME));
-        assert!(names.contains(&RETRIEVE_CONTENT_TOOL_NAME));
+        assert!(names.contains(&SUMMARIZE_CONTENT_TOOL_NAME));
     }
 
     #[test]
     fn test_tool_constants() {
         assert_eq!(SPAWN_AGENT_TOOL_NAME, "spawn_agent");
-        assert_eq!(RETRIEVE_CONTENT_TOOL_NAME, "retrieve_content");
+        assert_eq!(SUMMARIZE_CONTENT_TOOL_NAME, "summarize_content");
     }
 
     #[test]
     fn test_is_agent_tool() {
         assert!(is_agent_tool(SPAWN_AGENT_TOOL_NAME));
-        assert!(is_agent_tool(RETRIEVE_CONTENT_TOOL_NAME));
+        assert!(is_agent_tool(SUMMARIZE_CONTENT_TOOL_NAME));
         assert!(!is_agent_tool("file_head"));
         assert!(!is_agent_tool("other_tool"));
     }
@@ -364,7 +348,7 @@ mod tests {
     #[test]
     fn test_get_agent_tool_def() {
         assert!(get_agent_tool_def(SPAWN_AGENT_TOOL_NAME).is_some());
-        assert!(get_agent_tool_def(RETRIEVE_CONTENT_TOOL_NAME).is_some());
+        assert!(get_agent_tool_def(SUMMARIZE_CONTENT_TOOL_NAME).is_some());
         assert!(get_agent_tool_def("nonexistent").is_none());
     }
 
@@ -393,13 +377,13 @@ mod tests {
         assert_eq!(required.len(), 2);
     }
 
-    // === retrieve_content Tool API ===
+    // === summarize_content Tool API ===
 
     #[test]
-    fn test_retrieve_content_tool_api_format() {
-        let tool = get_tool_api(RETRIEVE_CONTENT_TOOL_NAME);
+    fn test_summarize_content_tool_api_format() {
+        let tool = get_tool_api(SUMMARIZE_CONTENT_TOOL_NAME);
         assert_eq!(tool["type"], "function");
-        assert_eq!(tool["function"]["name"], RETRIEVE_CONTENT_TOOL_NAME);
+        assert_eq!(tool["function"]["name"], SUMMARIZE_CONTENT_TOOL_NAME);
         let required = tool["function"]["parameters"]["required"]
             .as_array()
             .unwrap();

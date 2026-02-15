@@ -864,8 +864,8 @@ async fn execute_tool_pure(
             }
         }
     } else if tools::is_agent_tool(&tool_call.name) {
-        // URL policy / permission check for retrieve_content
-        if tool_call.name == tools::RETRIEVE_CONTENT_TOOL_NAME
+        // URL policy / permission check for summarize_content
+        if tool_call.name == tools::SUMMARIZE_CONTENT_TOOL_NAME
             && let Some(source) = args.get_str("source")
             && tools::agent_tools::is_url(source)
         {
@@ -965,8 +965,64 @@ async fn execute_tool_pure(
                 }
                 Err(reason) => format!("Error: {}", reason),
             }
+        } else if tool_call.name == tools::FETCH_URL_TOOL_NAME {
+            // URL policy / permission check for fetch_url (mirrors summarize_content gating)
+            let url = args.get_str("url").unwrap_or("");
+            let safety = tools::classify_url(url);
+
+            let denied = if let Some(ref policy) = resolved_config.url_policy {
+                tools::evaluate_url_policy(url, &safety, policy) == tools::UrlAction::Deny
+            } else {
+                false
+            };
+
+            if denied {
+                let reason = match &safety {
+                    tools::UrlSafety::Sensitive(cat) => cat.to_string(),
+                    tools::UrlSafety::Safe => "denied by URL policy".to_string(),
+                };
+                format!("Permission denied: {}", reason)
+            } else if let tools::UrlSafety::Sensitive(category) = &safety {
+                // No policy — fall back to permission handler for sensitive URLs
+                let hook_data = json!({
+                    "tool_name": tool_call.name,
+                    "url": url,
+                    "safety": "sensitive",
+                    "reason": category.to_string(),
+                });
+                match check_permission(
+                    tools,
+                    tools::HookPoint::PreFetchUrl,
+                    &hook_data,
+                    permission_handler,
+                )? {
+                    Ok(()) => {
+                        match tools::execute_coding_tool(
+                            &tool_call.name,
+                            &args,
+                            project_root,
+                            tools,
+                        )
+                        .await
+                        {
+                            Some(Ok(r)) => r,
+                            Some(Err(e)) => format!("Error: {}", e),
+                            None => format!("Error: Unknown coding tool '{}'", tool_call.name),
+                        }
+                    }
+                    Err(reason) => format!("Permission denied: {}", reason),
+                }
+            } else {
+                match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools).await
+                {
+                    Some(Ok(r)) => r,
+                    Some(Err(e)) => format!("Error: {}", e),
+                    None => format!("Error: Unknown coding tool '{}'", tool_call.name),
+                }
+            }
         } else {
-            // Read-only coding tools (dir_list, glob_files, grep_files) don't need permission
+            // Ungated coding tools: dir_list, glob_files, grep_files,
+            // index_update, index_query, index_status
             match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools).await {
                 Some(Ok(r)) => r,
                 Some(Err(e)) => format!("Error: {}", e),
@@ -1992,7 +2048,7 @@ mod tests {
     #[test]
     fn test_classify_tool_type_agent() {
         let plugins: Vec<&str> = vec![];
-        for name in ["spawn_agent", "retrieve_content"] {
+        for name in ["spawn_agent", "summarize_content"] {
             assert_eq!(
                 classify_tool_type(name, &plugins),
                 ToolType::Agent,

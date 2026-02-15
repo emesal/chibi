@@ -31,4 +31,5 @@ dead_code = "deny"
 
 [dev-dependencies]
 serde_json = "1.0.149"
+serial_test = "3"
 tempfile = "3.19"

@@ -381,9 +381,12 @@ async fn execute_from_input(
                 session.save(chibi.home_dir())?;
             }
         }
-        CommandEffect::InspectConfigField { context: ctx, field } => {
-            let cfg = resolve_cli_config(chibi, &ctx, ephemeral_username)?;
-            match cfg.get_field(&field) {
+        CommandEffect::InspectConfigField {
+            context: ctx,
+            field,
+        } => {
+            let cfg = resolve_cli_config(chibi, ctx, ephemeral_username)?;
+            match cfg.get_field(field) {
                 Some(value) => output.emit_result(&value),
                 None => output.emit_result("(not set)"),
             }

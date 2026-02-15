@@ -431,16 +431,7 @@ fn execute_read_context(
     use crate::StatePaths;
     use crate::json_ext::JsonExt;
 
-    // Validate context name (alphanumeric, dash, underscore only)
-    if !context_name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "Invalid context name. Must be alphanumeric with dashes and underscores only.",
-        ));
-    }
+    crate::context::validate_context_name(context_name)?;
 
     // Check context exists
     if !app.list_contexts().contains(&context_name.to_string()) {

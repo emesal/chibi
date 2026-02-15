@@ -284,8 +284,24 @@ fn rule_matches(rules: &[UrlRule], category: Option<&UrlCategory>, url: &str) ->
 
 /// Simple glob matching: `*` matches any sequence, `?` matches one char,
 /// `\*` matches literal `*`, `\?` matches literal `?`.
+///
+/// Consecutive unescaped `*` are collapsed into a single `*` before matching,
+/// so patterns like `****` behave identically to `*`.
 fn glob_match(pattern: &str, text: &str) -> bool {
-    let pat: Vec<char> = pattern.chars().collect();
+    let raw: Vec<char> = pattern.chars().collect();
+    // Collapse consecutive unescaped `*` into a single `*`
+    let mut pat = Vec::with_capacity(raw.len());
+    for (i, &ch) in raw.iter().enumerate() {
+        if ch == '*' && i > 0 && raw[i - 1] == '*' {
+            // Skip if previous char was also `*` (and wasn't escaped)
+            if i >= 2 && raw[i - 2] == '\\' {
+                pat.push(ch); // previous `*` was escaped, keep this one
+            }
+            // else: consecutive unescaped `*`, skip
+        } else {
+            pat.push(ch);
+        }
+    }
     let txt: Vec<char> = text.chars().collect();
     glob_match_inner(&pat, &txt)
 }

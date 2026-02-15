@@ -532,6 +532,7 @@ fn test_resolve_config_api_params_context_override() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_resolve_config_model_level_api_params() {
     // Create test app with models config
     let temp_dir = TempDir::new().unwrap();
@@ -592,6 +593,7 @@ fn test_resolve_config_model_level_api_params() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_resolve_config_hierarchy_context_over_model() {
     // Test that context-level API params override model-level
     let temp_dir = TempDir::new().unwrap();
@@ -711,9 +713,9 @@ fn test_resolve_config_all_local_overrides() {
 
 // === Environment variable override tests ===
 // These tests mutate process-global state (env vars) and must not run in parallel.
-// Run with: cargo test -- --test-threads=1   (or accept the race risk in CI)
 
 #[test]
+#[serial_test::serial]
 fn test_resolve_config_env_model_override() {
     let (app, _temp) = create_test_app();
 
@@ -731,6 +733,7 @@ fn test_resolve_config_env_model_override() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_resolve_config_env_api_key_override() {
     let (app, _temp) = create_test_app();
 
@@ -746,6 +749,7 @@ fn test_resolve_config_env_api_key_override() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_resolve_config_local_overrides_env() {
     let (app, _temp) = create_test_app();
 

@@ -33,6 +33,10 @@ pub fn load_agents_md(
     try_load(home_dir.join("AGENTS.md"), &mut sections);
 
     // 2. ~/.chibi/AGENTS.md
+    // Note: if chibi_home is under home_dir (the usual ~/.chibi case) and the
+    // project root also lives under ~, the walk in step 3 could theoretically
+    // visit the same file again. This is benign — duplicate content is either
+    // deduplicated at the consumer level or simply seen twice by the LLM.
     try_load(chibi_home.join("AGENTS.md"), &mut sections);
 
     // 3. Walk from project root down to cwd

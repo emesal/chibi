@@ -74,7 +74,7 @@ pub use agent_tools::{all_agent_tools_to_api_format, get_agent_tool_def};
 pub use agent_tools::{execute_agent_tool, is_agent_tool, spawn_agent};
 
 // Re-export agent tool types and constants
-pub use agent_tools::{RETRIEVE_CONTENT_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SpawnOptions};
+pub use agent_tools::{SPAWN_AGENT_TOOL_NAME, SUMMARIZE_CONTENT_TOOL_NAME, SpawnOptions};
 
 // Re-export security utilities
 pub use security::{
@@ -191,6 +191,83 @@ pub(crate) fn http_client() -> &'static reqwest::Client {
             .build()
             .expect("failed to build HTTP client")
     })
+}
+
+/// Fetch a URL with streaming size limit and timeout.
+///
+/// Validates the URL scheme (http/https only), checks `Content-Length` for
+/// early rejection, then reads the body in chunks up to `max_bytes`.
+/// Returns the body as a UTF-8 string (lossy). Responses exceeding
+/// `max_bytes` are truncated with a notice appended.
+pub(crate) async fn fetch_url_with_limit(
+    url: &str,
+    max_bytes: usize,
+    timeout_secs: u64,
+) -> std::io::Result<String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("URL must start with http:// or https://, got: {}", url),
+        ));
+    }
+
+    let response = http_client()
+        .get(url)
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .send()
+        .await
+        .map_err(|e| std::io::Error::other(format!("Request failed: {}", e)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(std::io::Error::other(format!(
+            "HTTP {} {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("Unknown"),
+        )));
+    }
+
+    // Early reject if Content-Length exceeds limit
+    if let Some(content_length) = response.content_length()
+        && content_length as usize > max_bytes
+    {
+        return Err(std::io::Error::other(format!(
+            "Response too large: Content-Length {} exceeds limit of {} bytes",
+            content_length, max_bytes,
+        )));
+    }
+
+    // Stream body in chunks up to max_bytes
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut buf = Vec::with_capacity(max_bytes.min(64 * 1024));
+    let mut truncated = false;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|e| std::io::Error::other(format!("Failed to read response: {}", e)))?;
+        let remaining = max_bytes.saturating_sub(buf.len());
+        if remaining == 0 {
+            truncated = true;
+            break;
+        }
+        if chunk.len() > remaining {
+            buf.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+
+    let body = String::from_utf8_lossy(&buf).into_owned();
+    if truncated {
+        Ok(format!(
+            "{}\n\n[Truncated: response exceeded limit of {} bytes]",
+            body, max_bytes,
+        ))
+    } else {
+        Ok(body)
+    }
 }
 
 // Tests for Tool struct are in plugins.rs
