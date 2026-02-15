@@ -9,6 +9,7 @@ dirs = "6.0"
 rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
 ratatoskr.workspace = true
 serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.8"

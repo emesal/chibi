@@ -1,7 +1,9 @@
 mod bridge;
+mod cache;
 mod config;
 mod protocol;
 mod server;
+mod summary;
 
 use bridge::Bridge;
 use config::BridgeConfig;
@@ -103,6 +105,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Err(e) = server_manager.start_server(name, server_config).await {
             eprintln!("[mcp-bridge] failed to start server '{name}': {e}");
         }
+    }
+
+    // Spawn background summary generation
+    let all_tools = server_manager.list_all_tools();
+    if !all_tools.is_empty() {
+        let summary_home = home.clone();
+        let summary_model = config.summary.model.clone();
+        tokio::spawn(async move {
+            let mut cache = cache::SummaryCache::load(&summary_home);
+            let count = summary::fill_cache_gaps(&mut cache, &all_tools, &summary_model).await;
+            if count > 0 {
+                eprintln!("[mcp-bridge] generated {count} new tool summaries");
+            }
+        });
     }
 
     let bridge = Arc::new(Bridge { server_manager });
