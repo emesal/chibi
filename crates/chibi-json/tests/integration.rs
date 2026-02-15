@@ -44,8 +44,17 @@ fn test_version_flag() {
 
 #[test]
 fn test_invalid_json_input() {
-    let (_, _, success) = run_chibi_json("not json");
+    let (stdout, _, success) = run_chibi_json("not json");
     assert!(!success);
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("error output should be valid JSON");
+    assert_eq!(parsed["type"], "error");
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid JSON input")
+    );
 }
 
 #[test]

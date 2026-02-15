@@ -7,8 +7,22 @@ mod input;
 mod output;
 mod sink;
 
-#[tokio::main]
-async fn main() -> io::Result<()> {
+fn main() {
+    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    match rt.block_on(run()) {
+        Ok(()) => {}
+        Err(e) => {
+            let json = serde_json::json!({
+                "type": "error",
+                "message": e.to_string(),
+            });
+            println!("{}", json);
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     // --json-schema: print input schema and exit
