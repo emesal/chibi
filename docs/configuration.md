@@ -435,9 +435,9 @@ bright = "#00FF00"
 
 ## API Parameters Reference
 
-Chibi delegates LLM communication to the [ratatoskr](https://github.com/emesal/ratatoskr) crate. Currently, only a subset of API parameters are passed through — see [issue #109](https://github.com/emesal/chibi/issues/109) for status.
+Chibi delegates LLM communication to the [ratatoskr](https://github.com/emesal/ratatoskr) crate.
 
-### Generation Control (supported)
+### Generation Control
 
 | Parameter | Type | Range | Description |
 |-----------|------|-------|-------------|
@@ -446,25 +446,18 @@ Chibi delegates LLM communication to the [ratatoskr](https://github.com/emesal/r
 | `top_p` | float | 0.0-1.0 | Nucleus sampling. Lower = more focused. |
 | `stop` | array | - | Sequences that stop generation. |
 | `seed` | integer | - | Random seed for reproducibility. |
+| `frequency_penalty` | float | - | Penalize frequent tokens. |
+| `presence_penalty` | float | - | Penalize tokens that appeared. |
 
-### Additional Supported Parameters
+### Behaviour
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
+| `tool_choice` | string | How the model uses tools (`auto`, `none`, `required`). |
 | `parallel_tool_calls` | boolean | Allow multiple tool calls at once (default: true). |
+| `response_format` | object | Force JSON output format. |
 | `prompt_caching` | boolean | Enable prompt caching (default: true, mainly benefits Anthropic models). |
 | `reasoning.*` | various | Extended thinking configuration (see below). |
-
-### Not Yet Passed Through
-
-The following parameters are parsed from config but not yet sent to the API ([#109](https://github.com/emesal/chibi/issues/109)):
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `frequency_penalty` | float | Penalize frequent tokens. |
-| `presence_penalty` | float | Penalize tokens that appeared. |
-| `tool_choice` | string | How the model uses tools (`auto`, `none`, `required`). |
-| `response_format` | object | Force JSON output format. |
 
 ### Reasoning Configuration
 
