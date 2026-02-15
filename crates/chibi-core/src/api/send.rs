@@ -69,7 +69,10 @@ fn classify_tool_type(name: &str, plugin_tools: &[Tool]) -> ToolType {
         ToolType::Agent
     } else if tools::is_coding_tool(name) {
         ToolType::Coding
-    } else if plugin_tools.iter().any(|t| t.name == name && tools::mcp::is_mcp_tool(t)) {
+    } else if plugin_tools
+        .iter()
+        .any(|t| t.name == name && tools::mcp::is_mcp_tool(t))
+    {
         ToolType::Mcp
     } else if plugin_tools.iter().any(|t| t.name == name) {
         ToolType::Plugin
@@ -2047,11 +2050,7 @@ mod tests {
             "model_info",
             "read_context",
         ] {
-            assert_eq!(
-                classify_tool_type(name, &[]),
-                ToolType::Builtin,
-                "{name}"
-            );
+            assert_eq!(classify_tool_type(name, &[]), ToolType::Builtin, "{name}");
         }
     }
 
@@ -2082,22 +2081,14 @@ mod tests {
             "index_query",
             "index_status",
         ] {
-            assert_eq!(
-                classify_tool_type(name, &[]),
-                ToolType::Coding,
-                "{name}"
-            );
+            assert_eq!(classify_tool_type(name, &[]), ToolType::Coding, "{name}");
         }
     }
 
     #[test]
     fn test_classify_tool_type_agent() {
         for name in ["spawn_agent", "summarize_content"] {
-            assert_eq!(
-                classify_tool_type(name, &[]),
-                ToolType::Agent,
-                "{name}"
-            );
+            assert_eq!(classify_tool_type(name, &[]), ToolType::Agent, "{name}");
         }
     }
 
@@ -2118,10 +2109,7 @@ mod tests {
 
     #[test]
     fn test_classify_tool_type_unknown_defaults_to_plugin() {
-        assert_eq!(
-            classify_tool_type("unknown_tool", &[]),
-            ToolType::Plugin
-        );
+        assert_eq!(classify_tool_type("unknown_tool", &[]), ToolType::Plugin);
     }
 
     #[test]

@@ -44,7 +44,10 @@ pub async fn fill_cache_gaps(
     let mut generated = 0;
 
     for tool in tools {
-        if cache.get(&tool.server, &tool.name, &tool.parameters).is_some() {
+        if cache
+            .get(&tool.server, &tool.name, &tool.parameters)
+            .is_some()
+        {
             continue;
         }
 
@@ -66,10 +69,10 @@ pub async fn fill_cache_gaps(
         }
     }
 
-    if generated > 0 {
-        if let Err(e) = cache.save() {
-            eprintln!("[mcp-bridge] failed to save summary cache: {e}");
-        }
+    if generated > 0
+        && let Err(e) = cache.save()
+    {
+        eprintln!("[mcp-bridge] failed to save summary cache: {e}");
     }
 
     generated

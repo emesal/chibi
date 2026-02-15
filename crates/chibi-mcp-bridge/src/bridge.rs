@@ -9,9 +9,7 @@ pub struct Bridge {
 impl Bridge {
     pub async fn handle_request(&self, req: Request) -> Response {
         match req {
-            Request::ListTools => {
-                Response::ok_tools(self.server_manager.list_all_tools())
-            }
+            Request::ListTools => Response::ok_tools(self.server_manager.list_all_tools()),
             Request::CallTool { server, tool, args } => {
                 match self.server_manager.call_tool(&server, &tool, &args).await {
                     Ok(result) => Response::ok_result(result),

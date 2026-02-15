@@ -45,10 +45,8 @@ impl ServerManager {
             tools.len()
         );
 
-        self.servers.insert(
-            name.to_string(),
-            ManagedServer { service, tools },
-        );
+        self.servers
+            .insert(name.to_string(), ManagedServer { service, tools });
 
         Ok(())
     }
@@ -61,11 +59,7 @@ impl ServerManager {
                 managed.tools.iter().map(move |tool| ToolInfo {
                     server: server_name.clone(),
                     name: tool.name.to_string(),
-                    description: tool
-                        .description
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_string(),
+                    description: tool.description.as_deref().unwrap_or("").to_string(),
                     parameters: serde_json::to_value(&*tool.input_schema)
                         .unwrap_or(serde_json::Value::Object(Default::default())),
                 })

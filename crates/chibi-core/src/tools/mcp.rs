@@ -122,12 +122,8 @@ pub fn ensure_bridge_running(home: &Path) -> io::Result<SocketAddr> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
-    cmd.spawn().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("failed to spawn chibi-mcp-bridge: {e}"),
-        )
-    })?;
+    cmd.spawn()
+        .map_err(|e| io::Error::other(format!("failed to spawn chibi-mcp-bridge: {e}")))?;
 
     // Poll for lockfile (up to 10s)
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -224,8 +220,7 @@ pub fn load_mcp_tools(home: &Path) -> io::Result<Vec<Tool>> {
     })?;
 
     if !parsed.ok {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             parsed.error.unwrap_or_else(|| "bridge error".into()),
         ));
     }
@@ -238,11 +233,7 @@ pub fn load_mcp_tools(home: &Path) -> io::Result<Vec<Tool>> {
 }
 
 /// Execute an MCP tool via the bridge daemon.
-pub fn execute_mcp_tool(
-    tool: &Tool,
-    args: &serde_json::Value,
-    home: &Path,
-) -> io::Result<String> {
+pub fn execute_mcp_tool(tool: &Tool, args: &serde_json::Value, home: &Path) -> io::Result<String> {
     let (server, tool_name) = parse_mcp_path(&tool.path).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -268,8 +259,7 @@ pub fn execute_mcp_tool(
     })?;
 
     if !parsed.ok {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             parsed.error.unwrap_or_else(|| "MCP tool error".into()),
         ));
     }
@@ -302,7 +292,12 @@ mod tests {
 
     #[test]
     fn is_mcp_tool_true() {
-        let tool = mcp_tool_from_info("serena", "find_symbol", "find symbols", serde_json::json!({}));
+        let tool = mcp_tool_from_info(
+            "serena",
+            "find_symbol",
+            "find symbols",
+            serde_json::json!({}),
+        );
         assert!(is_mcp_tool(&tool));
     }
 

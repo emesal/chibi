@@ -100,12 +100,7 @@ fn execute_mcp_tool_sends_call_tool_and_returns_result() {
     write_test_lockfile(home, addr);
     write_test_config(home);
 
-    let tool = mcp::mcp_tool_from_info(
-        "test_server",
-        "greet",
-        "say hello",
-        serde_json::json!({}),
-    );
+    let tool = mcp::mcp_tool_from_info("test_server", "greet", "say hello", serde_json::json!({}));
     let args = serde_json::json!({"name": "world"});
 
     let handle = std::thread::spawn(move || {

@@ -56,8 +56,7 @@ fn write_lockfile(home: &Path, addr: &SocketAddr) -> std::io::Result<PathBuf> {
             .as_secs(),
     };
 
-    let json = serde_json::to_string(&content)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string(&content).map_err(std::io::Error::other)?;
 
     let mut file = OpenOptions::new()
         .write(true)
@@ -229,11 +228,8 @@ mod tests {
     async fn bridge_handles_get_schema_for_unknown_server() {
         let addr = spawn_test_bridge().await;
 
-        let response = send_request(
-            addr,
-            r#"{"op":"get_schema","server":"nope","tool":"bar"}"#,
-        )
-        .await;
+        let response =
+            send_request(addr, r#"{"op":"get_schema","server":"nope","tool":"bar"}"#).await;
         let v: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(v["ok"], false);
     }

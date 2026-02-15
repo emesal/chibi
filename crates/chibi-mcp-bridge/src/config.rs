@@ -24,7 +24,9 @@ fn default_summary_model() -> String {
 
 impl Default for SummaryConfig {
     fn default() -> Self {
-        Self { model: default_summary_model() }
+        Self {
+            model: default_summary_model(),
+        }
     }
 }
 

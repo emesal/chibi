@@ -29,22 +29,10 @@ pub enum Request {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Response {
-    Tools {
-        ok: bool,
-        tools: Vec<ToolInfo>,
-    },
-    Schema {
-        ok: bool,
-        schema: serde_json::Value,
-    },
-    Result {
-        ok: bool,
-        result: String,
-    },
-    Error {
-        ok: bool,
-        error: String,
-    },
+    Tools { ok: bool, tools: Vec<ToolInfo> },
+    Schema { ok: bool, schema: serde_json::Value },
+    Result { ok: bool, result: String },
+    Error { ok: bool, error: String },
 }
 
 impl Response {
@@ -61,7 +49,10 @@ impl Response {
     }
 
     pub fn error(msg: String) -> Self {
-        Self::Error { ok: false, error: msg }
+        Self::Error {
+            ok: false,
+            error: msg,
+        }
     }
 }
 
@@ -95,7 +86,8 @@ mod tests {
     fn request_get_schema_serialisation() {
         let req: Request = serde_json::from_str(
             r#"{"op": "get_schema", "server": "serena", "tool": "read_file"}"#,
-        ).unwrap();
+        )
+        .unwrap();
         match req {
             Request::GetSchema { server, tool } => {
                 assert_eq!(server, "serena");
