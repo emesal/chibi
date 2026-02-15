@@ -11,6 +11,7 @@ mod builtin;
 pub mod coding_tools;
 pub mod file_tools;
 mod hooks;
+pub mod mcp;
 mod plugins;
 pub mod security;
 

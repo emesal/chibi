@@ -39,6 +39,7 @@ enum ToolType {
     File,
     Agent,
     Coding,
+    Mcp,
     Plugin,
 }
 
@@ -49,6 +50,7 @@ impl ToolType {
             ToolType::File => "file",
             ToolType::Agent => "agent",
             ToolType::Coding => "coding",
+            ToolType::Mcp => "mcp",
             ToolType::Plugin => "plugin",
         }
     }
@@ -58,7 +60,7 @@ impl ToolType {
 ///
 /// Delegates to the authoritative `is_*_tool()` functions in each tool module,
 /// ensuring classification stays in sync with tool registration automatically.
-fn classify_tool_type(name: &str, plugin_names: &[&str]) -> ToolType {
+fn classify_tool_type(name: &str, plugin_tools: &[Tool]) -> ToolType {
     if tools::is_builtin_tool(name) {
         ToolType::Builtin
     } else if tools::is_file_tool(name) {
@@ -67,7 +69,9 @@ fn classify_tool_type(name: &str, plugin_names: &[&str]) -> ToolType {
         ToolType::Agent
     } else if tools::is_coding_tool(name) {
         ToolType::Coding
-    } else if plugin_names.contains(&name) {
+    } else if plugin_tools.iter().any(|t| t.name == name && tools::mcp::is_mcp_tool(t)) {
+        ToolType::Mcp
+    } else if plugin_tools.iter().any(|t| t.name == name) {
         ToolType::Plugin
     } else {
         // Unknown tools default to plugin type
@@ -130,8 +134,6 @@ fn build_tool_info_list(
     all_tools: &[serde_json::Value],
     plugin_tools: &[Tool],
 ) -> Vec<serde_json::Value> {
-    let plugin_names: Vec<&str> = plugin_tools.iter().map(|t| t.name.as_str()).collect();
-
     all_tools
         .iter()
         .filter_map(|tool| {
@@ -139,7 +141,7 @@ fn build_tool_info_list(
                 .get("function")
                 .and_then(|f| f.get("name"))
                 .and_then(|n| n.as_str())?;
-            let tool_type = classify_tool_type(name, &plugin_names);
+            let tool_type = classify_tool_type(name, plugin_tools);
             Some(json!({
                 "name": name,
                 "type": tool_type.as_str(),
@@ -175,6 +177,7 @@ fn annotate_fallback_tool(tools: &mut [serde_json::Value], fallback_name: &str) 
 fn filter_tools_by_config(
     tools: Vec<serde_json::Value>,
     config: &ToolsConfig,
+    plugin_tools: &[Tool],
 ) -> Vec<serde_json::Value> {
     let mut result = tools;
 
@@ -205,7 +208,7 @@ fn filter_tools_by_config(
                 .and_then(|f| f.get("name"))
                 .and_then(|n| n.as_str())
                 .map(|name| {
-                    let tool_type = classify_tool_type(name, &[]);
+                    let tool_type = classify_tool_type(name, plugin_tools);
                     !categories.contains(&tool_type.as_str().to_string())
                 })
                 .unwrap_or(true)
@@ -1801,7 +1804,7 @@ pub async fn send_prompt<S: ResponseSink>(
         all_tools.extend(tools::all_agent_tools_to_api_format());
         all_tools.extend(tools::all_coding_tools_to_api_format());
         annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
-        all_tools = filter_tools_by_config(all_tools, &resolved_config.tools);
+        all_tools = filter_tools_by_config(all_tools, &resolved_config.tools, tools);
 
         // Execute pre_api_tools hook
         let tool_info = build_tool_info_list(&all_tools, tools);
@@ -2014,10 +2017,26 @@ pub async fn send_prompt<S: ResponseSink>(
 mod tests {
     use super::*;
 
+    /// Helper: create a minimal plugin Tool for classification tests.
+    fn fake_plugin_tool(name: &str) -> Tool {
+        Tool {
+            name: name.to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({}),
+            path: std::path::PathBuf::from(format!("/plugins/{name}")),
+            hooks: vec![],
+            metadata: tools::ToolMetadata::new(),
+            summary_params: vec![],
+        }
+    }
+
+    /// Helper: create a minimal MCP Tool for classification tests.
+    fn fake_mcp_tool(server: &str, tool: &str) -> Tool {
+        tools::mcp::mcp_tool_from_info(server, tool, "", serde_json::json!({}))
+    }
+
     #[test]
     fn test_classify_tool_type_builtin() {
-        let plugins: Vec<&str> = vec![];
-        // Core builtins
         for name in [
             "update_todos",
             "update_goals",
@@ -2029,7 +2048,7 @@ mod tests {
             "read_context",
         ] {
             assert_eq!(
-                classify_tool_type(name, &plugins),
+                classify_tool_type(name, &[]),
                 ToolType::Builtin,
                 "{name}"
             );
@@ -2038,7 +2057,6 @@ mod tests {
 
     #[test]
     fn test_classify_tool_type_file() {
-        let plugins: Vec<&str> = vec![];
         for name in [
             "file_head",
             "file_tail",
@@ -2047,13 +2065,12 @@ mod tests {
             "cache_list",
             "write_file",
         ] {
-            assert_eq!(classify_tool_type(name, &plugins), ToolType::File, "{name}");
+            assert_eq!(classify_tool_type(name, &[]), ToolType::File, "{name}");
         }
     }
 
     #[test]
     fn test_classify_tool_type_coding() {
-        let plugins: Vec<&str> = vec![];
         for name in [
             "shell_exec",
             "dir_list",
@@ -2066,7 +2083,7 @@ mod tests {
             "index_status",
         ] {
             assert_eq!(
-                classify_tool_type(name, &plugins),
+                classify_tool_type(name, &[]),
                 ToolType::Coding,
                 "{name}"
             );
@@ -2075,10 +2092,9 @@ mod tests {
 
     #[test]
     fn test_classify_tool_type_agent() {
-        let plugins: Vec<&str> = vec![];
         for name in ["spawn_agent", "summarize_content"] {
             assert_eq!(
-                classify_tool_type(name, &plugins),
+                classify_tool_type(name, &[]),
                 ToolType::Agent,
                 "{name}"
             );
@@ -2087,15 +2103,23 @@ mod tests {
 
     #[test]
     fn test_classify_tool_type_plugin() {
-        let plugins: Vec<&str> = vec!["my_plugin"];
-        assert_eq!(classify_tool_type("my_plugin", &plugins), ToolType::Plugin);
+        let tools = vec![fake_plugin_tool("my_plugin")];
+        assert_eq!(classify_tool_type("my_plugin", &tools), ToolType::Plugin);
+    }
+
+    #[test]
+    fn test_classify_tool_type_mcp() {
+        let tools = vec![fake_mcp_tool("serena", "find_symbol")];
+        assert_eq!(
+            classify_tool_type("serena_find_symbol", &tools),
+            ToolType::Mcp
+        );
     }
 
     #[test]
     fn test_classify_tool_type_unknown_defaults_to_plugin() {
-        let plugins: Vec<&str> = vec![];
         assert_eq!(
-            classify_tool_type("unknown_tool", &plugins),
+            classify_tool_type("unknown_tool", &[]),
             ToolType::Plugin
         );
     }
@@ -2106,6 +2130,7 @@ mod tests {
         assert_eq!(ToolType::File.as_str(), "file");
         assert_eq!(ToolType::Agent.as_str(), "agent");
         assert_eq!(ToolType::Coding.as_str(), "coding");
+        assert_eq!(ToolType::Mcp.as_str(), "mcp");
         assert_eq!(ToolType::Plugin.as_str(), "plugin");
     }
 
@@ -2116,7 +2141,7 @@ mod tests {
             json!({"function": {"name": "tool2"}}),
         ];
         let config = ToolsConfig::default();
-        let result = filter_tools_by_config(tools.clone(), &config);
+        let result = filter_tools_by_config(tools.clone(), &config, &[]);
         assert_eq!(result.len(), 2);
     }
 
@@ -2132,7 +2157,7 @@ mod tests {
             exclude: None,
             exclude_categories: None,
         };
-        let result = filter_tools_by_config(tools, &config);
+        let result = filter_tools_by_config(tools, &config, &[]);
         assert_eq!(result.len(), 2);
     }
 
@@ -2148,7 +2173,7 @@ mod tests {
             exclude: Some(vec!["tool2".to_string()]),
             exclude_categories: None,
         };
-        let result = filter_tools_by_config(tools, &config);
+        let result = filter_tools_by_config(tools, &config, &[]);
         assert_eq!(result.len(), 2);
     }
 
@@ -2170,7 +2195,7 @@ mod tests {
             exclude: None,
             exclude_categories: Some(vec!["coding".to_string()]),
         };
-        let result = filter_tools_by_config(tools, &config);
+        let result = filter_tools_by_config(tools, &config, &[]);
         let names: Vec<&str> = result
             .iter()
             .filter_map(|t| t.get("function")?.get("name")?.as_str())
@@ -2204,7 +2229,7 @@ mod tests {
             exclude: None,
             exclude_categories: Some(vec!["coding".to_string(), "agent".to_string()]),
         };
-        let result = filter_tools_by_config(tools, &config);
+        let result = filter_tools_by_config(tools, &config, &[]);
         let names: Vec<&str> = result
             .iter()
             .filter_map(|t| t.get("function")?.get("name")?.as_str())
