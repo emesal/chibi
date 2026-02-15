@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["cache_output","cleanup_old_cache","clear_cache","generate_cache_id","generate_truncated_message","iter_cache_metadata","list_cache_entries","read_cache_grep","read_cache_head","read_cache_lines","read_cache_tail","resolve_cache_path","should_cache"],"struct":["CacheEntry","CacheMetadata"]};

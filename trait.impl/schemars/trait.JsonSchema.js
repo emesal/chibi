@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["chibi_core",[["impl JsonSchema for <a class=\"enum\" href=\"chibi_core/input/enum.Command.html\" title=\"enum chibi_core::input::Command\">Command</a>"],["impl JsonSchema for <a class=\"enum\" href=\"chibi_core/input/enum.DebugKey.html\" title=\"enum chibi_core::input::DebugKey\">DebugKey</a>"],["impl JsonSchema for <a class=\"enum\" href=\"chibi_core/input/enum.Inspectable.html\" title=\"enum chibi_core::input::Inspectable\">Inspectable</a>"],["impl JsonSchema for <a class=\"enum\" href=\"chibi_core/tools/security/enum.UrlAction.html\" title=\"enum chibi_core::tools::security::UrlAction\">UrlAction</a>"],["impl JsonSchema for <a class=\"enum\" href=\"chibi_core/tools/security/enum.UrlCategory.html\" title=\"enum chibi_core::tools::security::UrlCategory\">UrlCategory</a>"],["impl JsonSchema for <a class=\"enum\" href=\"chibi_core/tools/security/enum.UrlRule.html\" title=\"enum chibi_core::tools::security::UrlRule\">UrlRule</a>"],["impl JsonSchema for <a class=\"struct\" href=\"chibi_core/input/struct.ExecutionFlags.html\" title=\"struct chibi_core::input::ExecutionFlags\">ExecutionFlags</a>"],["impl JsonSchema for <a class=\"struct\" href=\"chibi_core/tools/security/struct.UrlPolicy.html\" title=\"struct chibi_core::tools::security::UrlPolicy\">UrlPolicy</a>"]]],["chibi_json",[["impl JsonSchema for <a class=\"struct\" href=\"chibi_json/input/struct.JsonInput.html\" title=\"struct chibi_json::input::JsonInput\">JsonInput</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[1284,169]}

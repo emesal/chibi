@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CommandEffect"],"fn":["dispatch_command","execute_command","inspect_context","send_prompt_inner","show_log"]};
