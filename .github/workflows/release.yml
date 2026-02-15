@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: chibi-linux-amd64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset: chibi-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: chibi-macos-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: chibi-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: chibi-windows-amd64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            target/${{ matrix.target }}/release/chibi
+            target/${{ matrix.target }}/release/chibi.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
