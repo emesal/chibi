@@ -9,13 +9,16 @@ use ratatoskr::{ChatOptions, Message, ModelGateway, Ratatoskr};
 ///
 /// The summary is a single sentence describing what the tool does and
 /// its key parameters, suitable for an LLM tool listing.
+/// Uses the OpenRouter API key from chibi's config.toml when available.
+
 pub async fn generate_summary(
     model: &str,
     tool_name: &str,
     description: &str,
     schema: &serde_json::Value,
+    api_key: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let gateway = Ratatoskr::builder().openrouter(None::<String>).build()?;
+    let gateway = Ratatoskr::builder().openrouter(api_key).build()?;
 
     let schema_str = serde_json::to_string_pretty(schema).unwrap_or_default();
     let prompt = format!(
@@ -33,10 +36,16 @@ pub async fn generate_summary(
     Ok(response.content.trim().to_string())
 }
 
+/// Fill cache gaps by generating summaries for tools that aren't cached yet.
+///
+/// Aborts on first failure (e.g. missing API key) to avoid spamming errors.
+/// Returns the number of newly generated summaries.
+
 pub async fn fill_cache_gaps(
     cache: &std::sync::Arc<tokio::sync::Mutex<crate::cache::SummaryCache>>,
     tools: &[crate::protocol::ToolInfo],
     model: &str,
+    api_key: Option<&str>,
 ) -> usize {
     let mut generated = 0;
 
@@ -53,7 +62,9 @@ pub async fn fill_cache_gaps(
         }
 
         // LLM call runs without holding the lock
-        let result = generate_summary(model, &tool.name, &tool.description, &tool.parameters).await;
+        let result =
+            generate_summary(model, &tool.name, &tool.description, &tool.parameters, api_key)
+                .await;
         match result {
             Ok(summary) => {
                 eprintln!(

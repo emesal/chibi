@@ -38,6 +38,15 @@ fn chibi_home() -> PathBuf {
         .join(".chibi")
 }
 
+/// Read `api_key` from `<home>/config.toml` (chibi's main config).
+///
+/// Returns `None` if the file is missing, unparseable, or has no key set.
+fn read_api_key(home: &Path) -> Option<String> {
+    let content = fs::read_to_string(home.join("config.toml")).ok()?;
+    let table: toml::Table = content.parse().ok()?;
+    table.get("api_key")?.as_str().map(String::from)
+}
+
 /// Write bridge lockfile atomically (O_CREAT | O_EXCL).
 /// Returns `AlreadyExists` if another bridge instance is running.
 fn write_lockfile(home: &Path, addr: &SocketAddr) -> std::io::Result<PathBuf> {
@@ -97,6 +106,7 @@ async fn handle_connection(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = chibi_home();
     let config = BridgeConfig::load(&home);
+    let api_key = read_api_key(&home);
 
     // Start MCP servers
     let mut server_manager = ServerManager::new();
@@ -114,8 +124,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !all_tools.is_empty() {
             let bg_cache = Arc::clone(&cache);
             let summary_model = config.summary.model.clone();
+            let bg_api_key = api_key.clone();
             tokio::spawn(async move {
-                let count = summary::fill_cache_gaps(&bg_cache, &all_tools, &summary_model).await;
+                let count = summary::fill_cache_gaps(&bg_cache, &all_tools, &summary_model, bg_api_key.as_deref()).await;
                 if count > 0 {
                     eprintln!("[mcp-bridge] generated {count} new tool summaries");
                 }
