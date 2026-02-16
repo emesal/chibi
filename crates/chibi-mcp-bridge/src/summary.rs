@@ -10,7 +10,6 @@ use ratatoskr::{ChatOptions, Message, ModelGateway, Ratatoskr};
 /// The summary is a single sentence describing what the tool does and
 /// its key parameters, suitable for an LLM tool listing.
 /// Uses the OpenRouter API key from chibi's config.toml when available.
-
 pub async fn generate_summary(
     model: &str,
     tool_name: &str,
@@ -40,7 +39,6 @@ pub async fn generate_summary(
 ///
 /// Aborts on first failure (e.g. missing API key) to avoid spamming errors.
 /// Returns the number of newly generated summaries.
-
 pub async fn fill_cache_gaps(
     cache: &std::sync::Arc<tokio::sync::Mutex<crate::cache::SummaryCache>>,
     tools: &[crate::protocol::ToolInfo],
@@ -62,9 +60,14 @@ pub async fn fill_cache_gaps(
         }
 
         // LLM call runs without holding the lock
-        let result =
-            generate_summary(model, &tool.name, &tool.description, &tool.parameters, api_key)
-                .await;
+        let result = generate_summary(
+            model,
+            &tool.name,
+            &tool.description,
+            &tool.parameters,
+            api_key,
+        )
+        .await;
         match result {
             Ok(summary) => {
                 eprintln!(
@@ -76,9 +79,7 @@ pub async fn fill_cache_gaps(
                 generated += 1;
             }
             Err(e) => {
-                eprintln!(
-                    "[mcp-bridge] summary generation failed, aborting: {e}",
-                );
+                eprintln!("[mcp-bridge] summary generation failed, aborting: {e}",);
                 break;
             }
         }
