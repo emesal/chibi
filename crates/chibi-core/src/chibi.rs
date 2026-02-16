@@ -346,7 +346,7 @@ impl Chibi {
         if tools::is_file_tool(name) {
             let config = self.app.resolve_config(context_name, None)?;
             if let Some(result) =
-                tools::execute_file_tool(&self.app, context_name, name, &args, &config)
+                tools::execute_file_tool(&self.app, context_name, name, &args, &config, &self.project_root)
             {
                 return result;
             }

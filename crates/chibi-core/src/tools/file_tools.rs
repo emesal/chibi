@@ -9,7 +9,7 @@ use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;
 use crate::state::{AppState, StatePaths};
 use std::io::{self, ErrorKind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // === Tool Name Constants ===
 
@@ -191,12 +191,17 @@ pub fn get_file_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
 
 // === Path Resolution ===
 
-/// Resolve a file path from either cache_id or path argument
+/// Resolve a file path from either cache_id or path argument.
+///
+/// When a relative `path` is provided, it is resolved against `project_root`
+/// before validation so that tools work correctly even when the process CWD
+/// differs from the project root.
 fn resolve_file_path(
     app: &AppState,
     context_name: &str,
     args: &serde_json::Value,
     config: &ResolvedConfig,
+    project_root: &Path,
 ) -> io::Result<PathBuf> {
     let cache_id = args.get_str("cache_id");
     let path = args.get_str("path");
@@ -208,8 +213,13 @@ fn resolve_file_path(
             cache::resolve_cache_path(&cache_dir, id)
         }
         (None, Some(p)) => {
-            // Validate path against allowed paths
-            let resolved = super::security::validate_file_path(p, config)?;
+            // Resolve relative paths against project_root before validation
+            let resolved_path = if Path::new(p).is_relative() {
+                project_root.join(p).to_string_lossy().to_string()
+            } else {
+                p.to_string()
+            };
+            let resolved = super::security::validate_file_path(&resolved_path, config)?;
             Ok(resolved)
         }
         (Some(_), Some(_)) => Err(io::Error::new(
@@ -265,8 +275,9 @@ fn execute_file_head_or_tail(
     args: &serde_json::Value,
     config: &ResolvedConfig,
     direction: ReadDirection,
+    project_root: &Path,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config)?;
+    let path = resolve_file_path(app, context_name, args, config, project_root)?;
     let lines = args.get_u64_or("lines", 50) as usize;
 
     match direction {
@@ -281,8 +292,9 @@ pub fn execute_file_head(
     context_name: &str,
     args: &serde_json::Value,
     config: &ResolvedConfig,
+    project_root: &Path,
 ) -> io::Result<String> {
-    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Head)
+    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Head, project_root)
 }
 
 /// Execute file_tail tool
@@ -291,8 +303,9 @@ pub fn execute_file_tail(
     context_name: &str,
     args: &serde_json::Value,
     config: &ResolvedConfig,
+    project_root: &Path,
 ) -> io::Result<String> {
-    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Tail)
+    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Tail, project_root)
 }
 
 /// Execute file_lines tool
@@ -301,8 +314,9 @@ pub fn execute_file_lines(
     context_name: &str,
     args: &serde_json::Value,
     config: &ResolvedConfig,
+    project_root: &Path,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config)?;
+    let path = resolve_file_path(app, context_name, args, config, project_root)?;
     let start = require_u64_param(args, "start")? as usize;
     let end = require_u64_param(args, "end")? as usize;
 
@@ -329,8 +343,9 @@ pub fn execute_file_grep(
     context_name: &str,
     args: &serde_json::Value,
     config: &ResolvedConfig,
+    project_root: &Path,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config)?;
+    let path = resolve_file_path(app, context_name, args, config, project_root)?;
     let pattern = require_str_param(args, "pattern")?;
     let context_before = args.get_u64_or("context_before", 2) as usize;
     let context_after = args.get_u64_or("context_after", 2) as usize;
@@ -410,19 +425,23 @@ pub fn is_file_tool(name: &str) -> bool {
     )
 }
 
-/// Execute a file tool by name
+/// Execute a file tool by name.
+///
+/// `project_root` is used to resolve relative paths in file read tools.
+/// `CACHE_LIST_TOOL_NAME` and `WRITE_FILE_TOOL_NAME` do not use it.
 pub fn execute_file_tool(
     app: &AppState,
     context_name: &str,
     tool_name: &str,
     args: &serde_json::Value,
     config: &ResolvedConfig,
+    project_root: &Path,
 ) -> Option<io::Result<String>> {
     match tool_name {
-        FILE_HEAD_TOOL_NAME => Some(execute_file_head(app, context_name, args, config)),
-        FILE_TAIL_TOOL_NAME => Some(execute_file_tail(app, context_name, args, config)),
-        FILE_LINES_TOOL_NAME => Some(execute_file_lines(app, context_name, args, config)),
-        FILE_GREP_TOOL_NAME => Some(execute_file_grep(app, context_name, args, config)),
+        FILE_HEAD_TOOL_NAME => Some(execute_file_head(app, context_name, args, config, project_root)),
+        FILE_TAIL_TOOL_NAME => Some(execute_file_tail(app, context_name, args, config, project_root)),
+        FILE_LINES_TOOL_NAME => Some(execute_file_lines(app, context_name, args, config, project_root)),
+        FILE_GREP_TOOL_NAME => Some(execute_file_grep(app, context_name, args, config, project_root)),
         CACHE_LIST_TOOL_NAME => Some(execute_cache_list(app, context_name)),
         WRITE_FILE_TOOL_NAME => {
             let path = require_str_param(args, "path");
@@ -635,5 +654,96 @@ mod tests {
         let result = super::execute_write_file(path.to_str().unwrap(), "new content");
         assert!(result.is_ok());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
+    }
+
+    // === resolve_file_path project_root tests ===
+
+    use crate::config::{ApiParams, ToolsConfig};
+    use crate::partition::StorageConfig;
+
+    fn make_test_config(allowed_paths: Vec<String>) -> ResolvedConfig {
+        ResolvedConfig {
+            api_key: Some("test-key".to_string()),
+            model: "test-model".to_string(),
+            context_window_limit: 128000,
+            warn_threshold_percent: 0.8,
+            verbose: false,
+            hide_tool_calls: false,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 0.9,
+            fuel: 5,
+            fuel_empty_response_cost: 15,
+            username: "user".to_string(),
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 5000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: false,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: allowed_paths,
+            api: ApiParams::default(),
+            tools: ToolsConfig::default(),
+            fallback_tool: "call_agent".to_string(),
+            storage: StorageConfig::default(),
+            url_policy: None,
+        }
+    }
+
+    #[test]
+    fn test_resolve_file_path_relative_uses_project_root() {
+        let project_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project_dir.path().join("docs")).unwrap();
+        std::fs::write(project_dir.path().join("docs/readme.md"), "hello world").unwrap();
+
+        let config = make_test_config(vec![project_dir.path().to_string_lossy().to_string()]);
+        let home = tempfile::tempdir().unwrap();
+        let app = AppState::load(Some(home.path().to_path_buf())).unwrap();
+
+        let args = serde_json::json!({"path": "docs/readme.md"});
+        let result = resolve_file_path(&app, "test", &args, &config, project_dir.path());
+        assert!(
+            result.is_ok(),
+            "relative path should resolve against project_root: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_resolve_file_path_absolute_ignores_project_root() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let other_dir = tempfile::tempdir().unwrap();
+        let file = other_dir.path().join("test.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let config = make_test_config(vec![other_dir.path().to_string_lossy().to_string()]);
+        let home = tempfile::tempdir().unwrap();
+        let app = AppState::load(Some(home.path().to_path_buf())).unwrap();
+
+        let args = serde_json::json!({"path": file.to_string_lossy().to_string()});
+        let result = resolve_file_path(&app, "test", &args, &config, project_dir.path());
+        assert!(
+            result.is_ok(),
+            "absolute path should resolve without project_root: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_file_path_relative_outside_allowed_fails() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let allowed_dir = tempfile::tempdir().unwrap();
+        // Create file under project_dir but allowed_dir is different
+        std::fs::write(project_dir.path().join("secret.txt"), "secret").unwrap();
+
+        let config = make_test_config(vec![allowed_dir.path().to_string_lossy().to_string()]);
+        let home = tempfile::tempdir().unwrap();
+        let app = AppState::load(Some(home.path().to_path_buf())).unwrap();
+
+        let args = serde_json::json!({"path": "secret.txt"});
+        let result = resolve_file_path(&app, "test", &args, &config, project_dir.path());
+        assert!(result.is_err(), "path outside allowed dirs should fail");
     }
 }

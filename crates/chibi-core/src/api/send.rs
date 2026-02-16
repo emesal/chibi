@@ -848,6 +848,7 @@ async fn execute_tool_pure(
                     &tool_call.name,
                     &args,
                     resolved_config,
+                    project_root,
                 ) {
                     Some(Ok(r)) => r,
                     Some(Err(e)) => format!("Error: {}", e),
@@ -890,6 +891,7 @@ async fn execute_tool_pure(
                     &tool_call.name,
                     &args,
                     resolved_config,
+                    project_root,
                 ) {
                     Some(Ok(r)) => r,
                     Some(Err(e)) => format!("Error: {}", e),
