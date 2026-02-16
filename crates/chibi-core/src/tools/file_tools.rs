@@ -746,4 +746,40 @@ mod tests {
         let result = resolve_file_path(&app, "test", &args, &config, project_dir.path());
         assert!(result.is_err(), "path outside allowed dirs should fail");
     }
+
+    // === Integration tests: full execute path with project_root ===
+
+    #[test]
+    fn test_execute_file_head_with_project_root() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let file = project_dir.path().join("test.txt");
+        std::fs::write(&file, "line1\nline2\nline3\n").unwrap();
+
+        let config = make_test_config(vec![project_dir.path().to_string_lossy().to_string()]);
+        let home = tempfile::tempdir().unwrap();
+        let app = AppState::load(Some(home.path().to_path_buf())).unwrap();
+
+        let args = serde_json::json!({"path": "test.txt", "lines": 2});
+        let result = execute_file_head(&app, "test", &args, &config, project_dir.path());
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("line1"));
+        assert!(output.contains("line2"));
+    }
+
+    #[test]
+    fn test_execute_file_grep_with_project_root() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let file = project_dir.path().join("code.rs");
+        std::fs::write(&file, "fn hello() {\n    println!(\"world\");\n}\n").unwrap();
+
+        let config = make_test_config(vec![project_dir.path().to_string_lossy().to_string()]);
+        let home = tempfile::tempdir().unwrap();
+        let app = AppState::load(Some(home.path().to_path_buf())).unwrap();
+
+        let args = serde_json::json!({"path": "code.rs", "pattern": "println"});
+        let result = execute_file_grep(&app, "test", &args, &config, project_dir.path());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("println"));
+    }
 }

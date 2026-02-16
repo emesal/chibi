@@ -5,7 +5,7 @@
 //! regex, edit files in a structured way, and query a codebase index.
 //!
 //! All path parameters are resolved relative to `project_root`, which is
-//! supplied to the executor from the `CHIBI_PROJECT_ROOT` environment variable.
+//! set during `Chibi::load_with_options` from options, env, or CWD.
 
 use std::io::{self, BufRead, ErrorKind};
 use std::path::{Path, PathBuf};
