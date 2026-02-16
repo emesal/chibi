@@ -90,9 +90,7 @@ fn write_lockfile(home: &Path, addr: &SocketAddr) -> std::io::Result<PathBuf> {
                 // kill(pid, 0) checks existence without sending a signal.
                 let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
                 if !alive {
-                    eprintln!(
-                        "[mcp-bridge] removing stale lockfile (pid {pid} is dead)"
-                    );
+                    eprintln!("[mcp-bridge] removing stale lockfile (pid {pid} is dead)");
                     fs::remove_file(&lock_path)?;
                     // Retry once.
                     let mut file = OpenOptions::new()
