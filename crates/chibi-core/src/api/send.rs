@@ -859,11 +859,12 @@ async fn execute_tool_pure(
         } else {
             // Read-only file tools: auto-allow inside allowed paths, prompt outside
             let raw_path = args.get_str("path").unwrap_or("");
-            let resolved_path_str = if !raw_path.is_empty() && std::path::Path::new(raw_path).is_relative() {
-                project_root.join(raw_path).to_string_lossy().to_string()
-            } else {
-                raw_path.to_string()
-            };
+            let resolved_path_str =
+                if !raw_path.is_empty() && std::path::Path::new(raw_path).is_relative() {
+                    project_root.join(raw_path).to_string_lossy().to_string()
+                } else {
+                    raw_path.to_string()
+                };
             let permission_denied = if !resolved_path_str.is_empty() {
                 match tools::classify_file_path(&resolved_path_str, resolved_config) {
                     Ok(tools::FilePathAccess::Allowed(_)) => None,

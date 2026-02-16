@@ -294,7 +294,14 @@ pub fn execute_file_head(
     config: &ResolvedConfig,
     project_root: &Path,
 ) -> io::Result<String> {
-    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Head, project_root)
+    execute_file_head_or_tail(
+        app,
+        context_name,
+        args,
+        config,
+        ReadDirection::Head,
+        project_root,
+    )
 }
 
 /// Execute file_tail tool
@@ -305,7 +312,14 @@ pub fn execute_file_tail(
     config: &ResolvedConfig,
     project_root: &Path,
 ) -> io::Result<String> {
-    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Tail, project_root)
+    execute_file_head_or_tail(
+        app,
+        context_name,
+        args,
+        config,
+        ReadDirection::Tail,
+        project_root,
+    )
 }
 
 /// Execute file_lines tool
@@ -438,10 +452,34 @@ pub fn execute_file_tool(
     project_root: &Path,
 ) -> Option<io::Result<String>> {
     match tool_name {
-        FILE_HEAD_TOOL_NAME => Some(execute_file_head(app, context_name, args, config, project_root)),
-        FILE_TAIL_TOOL_NAME => Some(execute_file_tail(app, context_name, args, config, project_root)),
-        FILE_LINES_TOOL_NAME => Some(execute_file_lines(app, context_name, args, config, project_root)),
-        FILE_GREP_TOOL_NAME => Some(execute_file_grep(app, context_name, args, config, project_root)),
+        FILE_HEAD_TOOL_NAME => Some(execute_file_head(
+            app,
+            context_name,
+            args,
+            config,
+            project_root,
+        )),
+        FILE_TAIL_TOOL_NAME => Some(execute_file_tail(
+            app,
+            context_name,
+            args,
+            config,
+            project_root,
+        )),
+        FILE_LINES_TOOL_NAME => Some(execute_file_lines(
+            app,
+            context_name,
+            args,
+            config,
+            project_root,
+        )),
+        FILE_GREP_TOOL_NAME => Some(execute_file_grep(
+            app,
+            context_name,
+            args,
+            config,
+            project_root,
+        )),
         CACHE_LIST_TOOL_NAME => Some(execute_cache_list(app, context_name)),
         WRITE_FILE_TOOL_NAME => {
             let path = require_str_param(args, "path");

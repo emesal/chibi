@@ -119,9 +119,10 @@ fn resolve_allowed_path(allowed_path: &str) -> Option<PathBuf> {
 pub fn ensure_project_root_allowed(config: &mut ResolvedConfig, project_root: &Path) {
     let canonical_root = project_root.canonicalize().ok();
     let already_covered = canonical_root.as_ref().is_some_and(|root| {
-        config.file_tools_allowed_paths.iter().any(|p| {
-            resolve_allowed_path(p).is_some_and(|allowed| root.starts_with(&allowed))
-        })
+        config
+            .file_tools_allowed_paths
+            .iter()
+            .any(|p| resolve_allowed_path(p).is_some_and(|allowed| root.starts_with(&allowed)))
     });
     if !already_covered {
         config
