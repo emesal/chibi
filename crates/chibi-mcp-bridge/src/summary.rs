@@ -29,7 +29,9 @@ pub async fn generate_summary(
     );
 
     let messages = vec![Message::user(prompt)];
-    let options = ChatOptions::new(model).max_tokens(150);
+    // Reasoning models (e.g. R1) use part of the budget for <think> chains,
+    // so we need headroom beyond the ~1 sentence we actually want back.
+    let options = ChatOptions::new(model).max_tokens(300);
 
     let response = gateway.chat(&messages, None, &options).await?;
     Ok(response.content.trim().to_string())
