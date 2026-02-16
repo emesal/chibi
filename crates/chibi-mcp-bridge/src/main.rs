@@ -126,7 +126,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let summary_model = config.summary.model.clone();
             let bg_api_key = api_key.clone();
             tokio::spawn(async move {
-                let count = summary::fill_cache_gaps(&bg_cache, &all_tools, &summary_model, bg_api_key.as_deref()).await;
+                let count = summary::fill_cache_gaps(
+                    &bg_cache,
+                    &all_tools,
+                    &summary_model,
+                    bg_api_key.as_deref(),
+                )
+                .await;
                 if count > 0 {
                     eprintln!("[mcp-bridge] generated {count} new tool summaries");
                 }
