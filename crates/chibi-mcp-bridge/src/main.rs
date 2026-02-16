@@ -48,7 +48,10 @@ fn read_api_key(home: &Path) -> Option<String> {
 }
 
 /// Write bridge lockfile atomically (O_CREAT | O_EXCL).
-/// Returns `AlreadyExists` if another bridge instance is running.
+///
+/// If a lockfile already exists, checks whether the owning process is still
+/// alive. Stale lockfiles (dead PID) are removed and retried. Returns
+/// `AlreadyExists` only when another bridge instance is genuinely running.
 fn write_lockfile(home: &Path, addr: &SocketAddr) -> std::io::Result<PathBuf> {
     let lock_path = home.join("mcp-bridge.lock");
 
@@ -67,15 +70,44 @@ fn write_lockfile(home: &Path, addr: &SocketAddr) -> std::io::Result<PathBuf> {
 
     let json = serde_json::to_string(&content).map_err(std::io::Error::other)?;
 
-    let mut file = OpenOptions::new()
+    // Try to create exclusively first.
+    match OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&lock_path)?;
-
-    file.write_all(json.as_bytes())?;
-    file.sync_all()?;
-
-    Ok(lock_path)
+        .open(&lock_path)
+    {
+        Ok(mut file) => {
+            file.write_all(json.as_bytes())?;
+            file.sync_all()?;
+            Ok(lock_path)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Check if the existing lock is stale (dead PID).
+            if let Ok(existing) = fs::read_to_string(&lock_path)
+                && let Ok(lock) = serde_json::from_str::<serde_json::Value>(&existing)
+                && let Some(pid) = lock.get("pid").and_then(|v| v.as_u64())
+            {
+                // kill(pid, 0) checks existence without sending a signal.
+                let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+                if !alive {
+                    eprintln!(
+                        "[mcp-bridge] removing stale lockfile (pid {pid} is dead)"
+                    );
+                    fs::remove_file(&lock_path)?;
+                    // Retry once.
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&lock_path)?;
+                    file.write_all(json.as_bytes())?;
+                    file.sync_all()?;
+                    return Ok(lock_path);
+                }
+            }
+            Err(e)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Remove the lockfile on shutdown.

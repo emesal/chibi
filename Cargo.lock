@@ -1059,6 +1059,7 @@ name = "chibi-mcp-bridge"
 version = "0.8.2"
 dependencies = [
  "dirs 6.0.0",
+ "libc",
  "ratatoskr",
  "rmcp",
  "serde",

@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 dirs = "6.0"
+libc = "0.2"
 rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
 ratatoskr.workspace = true
 serde = { version = "1.0", features = ["derive"] }
