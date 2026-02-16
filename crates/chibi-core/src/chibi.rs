@@ -154,7 +154,23 @@ impl Chibi {
         let app = AppState::load(options.home)?;
         // CLI flag overrides config setting
         let verbose = options.verbose || app.config.verbose;
-        let tools = tools::load_tools(&app.plugins_dir, verbose)?;
+        let mut tools = tools::load_tools(&app.plugins_dir, verbose)?;
+
+        // Load MCP bridge tools (non-fatal: bridge may not be configured)
+        match tools::mcp::load_mcp_tools(&app.chibi_dir) {
+            Ok(mcp_tools) => {
+                if verbose && !mcp_tools.is_empty() {
+                    eprintln!("[MCP: {} tools loaded]", mcp_tools.len());
+                }
+                tools.extend(mcp_tools);
+            }
+            Err(e) => {
+                if verbose {
+                    eprintln!("[MCP: bridge unavailable: {e}]");
+                }
+            }
+        }
+
         let project_root = resolve_project_root(options.project_root)?;
 
         // Expose project root to plugins/hooks via environment variables.
@@ -354,8 +370,12 @@ impl Chibi {
             return tools::execute_agent_tool(&config, name, &args, &self.tools).await;
         }
 
-        // Try plugins
+        // Try MCP tools (virtual path mcp://server/tool)
         if let Some(tool) = tools::find_tool(&self.tools, name) {
+            if tools::mcp::is_mcp_tool(tool) {
+                return tools::mcp::execute_mcp_tool(tool, &args, &self.app.chibi_dir);
+            }
+            // Regular plugin
             return tools::execute_tool(tool, &args, false);
         }
 

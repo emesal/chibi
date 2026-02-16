@@ -52,6 +52,7 @@ Contexts persist across invocations. Switch with `-c <name>`, list with `-L`.
 - [Contexts](docs/contexts.md) — Managing conversations
 - [Plugins](docs/plugins.md) — Creating tools for the LLM
 - [Hooks](docs/hooks.md) — Lifecycle event system
+- [MCP Servers](docs/mcp.md) — Using MCP-compatible tool providers
 - [Agentic Workflows](docs/agentic.md) — Autonomous processing
 - [CLI Reference](docs/cli-reference.md) — All flags and commands
 - [Images](docs/images.md) — Terminal image rendering
