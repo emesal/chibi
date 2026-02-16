@@ -1,10 +1,14 @@
 //! Tools and plugins module.
 //!
-//! This module provides the tool system that extends chibi's capabilities:
+//! This module provides the extensible tool system:
 //! - Plugin loading and execution from the plugins directory
+//! - MCP bridge client for tools from remote MCP servers
 //! - Built-in tools for reflection, todos, goals, and messaging
+//! - Coding tools for shell execution, file editing, and codebase indexing
 //! - File tools for examining cached tool outputs
-//! - Hook system for plugin lifecycle events
+//! - Agent tools for sub-agent spawning and content retrieval
+//! - URL and file path security policies
+//! - Hook system for plugin lifecycle events (31 hook points)
 
 pub mod agent_tools;
 mod builtin;

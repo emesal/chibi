@@ -14,7 +14,7 @@ pub async fn generate_summary(
     tool_name: &str,
     description: &str,
     schema: &serde_json::Value,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let gateway = Ratatoskr::builder().openrouter(None::<String>).build()?;
 
     let schema_str = serde_json::to_string_pretty(schema).unwrap_or_default();
@@ -33,30 +33,34 @@ pub async fn generate_summary(
     Ok(response.content.trim().to_string())
 }
 
-/// Fill cache gaps by generating summaries for tools that aren't cached yet.
-///
-/// Returns the number of newly generated summaries.
 pub async fn fill_cache_gaps(
-    cache: &mut crate::cache::SummaryCache,
+    cache: &std::sync::Arc<tokio::sync::Mutex<crate::cache::SummaryCache>>,
     tools: &[crate::protocol::ToolInfo],
     model: &str,
 ) -> usize {
     let mut generated = 0;
 
     for tool in tools {
-        if cache
-            .get(&tool.server, &tool.name, &tool.parameters)
-            .is_some()
+        // Lock briefly to check cache
         {
-            continue;
+            let cache = cache.lock().await;
+            if cache
+                .get(&tool.server, &tool.name, &tool.parameters)
+                .is_some()
+            {
+                continue;
+            }
         }
 
-        match generate_summary(model, &tool.name, &tool.description, &tool.parameters).await {
+        // LLM call runs without holding the lock
+        let result = generate_summary(model, &tool.name, &tool.description, &tool.parameters).await;
+        match result {
             Ok(summary) => {
                 eprintln!(
                     "[mcp-bridge] generated summary for {}:{}: {}",
                     tool.server, tool.name, summary
                 );
+                let mut cache = cache.lock().await;
                 cache.set(&tool.server, &tool.name, &tool.parameters, summary);
                 generated += 1;
             }
@@ -69,10 +73,11 @@ pub async fn fill_cache_gaps(
         }
     }
 
-    if generated > 0
-        && let Err(e) = cache.save()
-    {
-        eprintln!("[mcp-bridge] failed to save summary cache: {e}");
+    if generated > 0 {
+        let cache = cache.lock().await;
+        if let Err(e) = cache.save() {
+            eprintln!("[mcp-bridge] failed to save summary cache: {e}");
+        }
     }
 
     generated

@@ -1064,9 +1064,16 @@ async fn execute_tool_pure(
             }
         }
     } else if let Some(tool) = tools::find_tool(tools, &tool_call.name) {
-        match tools::execute_tool(tool, &args, verbose) {
-            Ok(r) => r,
-            Err(e) => format!("Error: {}", e),
+        if tools::mcp::is_mcp_tool(tool) {
+            match tools::mcp::execute_mcp_tool(tool, &args, &app.chibi_dir) {
+                Ok(r) => r,
+                Err(e) => format!("Error: {}", e),
+            }
+        } else {
+            match tools::execute_tool(tool, &args, verbose) {
+                Ok(r) => r,
+                Err(e) => format!("Error: {}", e),
+            }
         }
     } else {
         format!("Error: Unknown tool '{}'", tool_call.name)

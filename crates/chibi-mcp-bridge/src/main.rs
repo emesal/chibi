@@ -115,9 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bg_cache = Arc::clone(&cache);
             let summary_model = config.summary.model.clone();
             tokio::spawn(async move {
-                let mut cache = bg_cache.lock().await;
-                let count =
-                    summary::fill_cache_gaps(&mut cache, &all_tools, &summary_model).await;
+                let count = summary::fill_cache_gaps(&bg_cache, &all_tools, &summary_model).await;
                 if count > 0 {
                     eprintln!("[mcp-bridge] generated {count} new tool summaries");
                 }
@@ -309,9 +307,7 @@ mod tests {
         // ServerManager has no servers, so list_tools returns []. To test substitution,
         // we call the substitution logic indirectly — verify the bridge compiles and
         // the None path works (no servers = empty tools, nothing to substitute).
-        let response = bridge
-            .handle_request(protocol::Request::ListTools)
-            .await;
+        let response = bridge.handle_request(protocol::Request::ListTools).await;
         match response {
             protocol::Response::Tools { ok, tools } => {
                 assert!(ok);
@@ -328,9 +324,7 @@ mod tests {
             summary_cache: None,
         };
 
-        let response = bridge
-            .handle_request(protocol::Request::ListTools)
-            .await;
+        let response = bridge.handle_request(protocol::Request::ListTools).await;
         match response {
             protocol::Response::Tools { ok, tools } => {
                 assert!(ok);
