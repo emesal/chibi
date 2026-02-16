@@ -446,6 +446,44 @@ mod tests {
     }
 
     #[test]
+    fn lockfile_nonexistent_is_stale() {
+        let tmp = TempDir::new().unwrap();
+        let lock_path = tmp.path().join("mcp-bridge.lock");
+
+        // Nonexistent lockfile should be considered stale
+        assert!(is_lockfile_stale(&lock_path));
+    }
+
+    #[test]
+    fn lockfile_stale_is_cleaned_up_by_write() {
+        let tmp = TempDir::new().unwrap();
+        let lock_path = tmp.path().join("mcp-bridge.lock");
+
+        // Create a stale lockfile (60 seconds old)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let content = serde_json::json!({
+            "pid": 1, "address": "127.0.0.1:8888",
+            "started": now, "heartbeat_secs": 30, "timestamp": now - 60,
+        });
+        fs::write(&lock_path, content.to_string()).unwrap();
+
+        // write_lockfile should clean up the stale lock and succeed
+        let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        let result = write_lockfile(tmp.path(), &addr);
+        assert!(result.is_ok());
+
+        // New lockfile should have fresh content
+        let new_content: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+        assert_eq!(new_content["address"], "127.0.0.1:9999");
+        let timestamp = new_content["timestamp"].as_u64().unwrap();
+        assert!(now.abs_diff(timestamp) < 5, "timestamp should be fresh");
+    }
+
+    #[test]
     fn lockfile_atomic_exclusive() {
         let tmp = TempDir::new().unwrap();
         let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
