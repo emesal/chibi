@@ -858,14 +858,19 @@ async fn execute_tool_pure(
             }
         } else {
             // Read-only file tools: auto-allow inside allowed paths, prompt outside
-            let path = args.get_str("path").unwrap_or("");
-            let permission_denied = if !path.is_empty() {
-                match tools::classify_file_path(path, resolved_config) {
+            let raw_path = args.get_str("path").unwrap_or("");
+            let resolved_path_str = if !raw_path.is_empty() && std::path::Path::new(raw_path).is_relative() {
+                project_root.join(raw_path).to_string_lossy().to_string()
+            } else {
+                raw_path.to_string()
+            };
+            let permission_denied = if !resolved_path_str.is_empty() {
+                match tools::classify_file_path(&resolved_path_str, resolved_config) {
                     Ok(tools::FilePathAccess::Allowed(_)) => None,
                     Ok(tools::FilePathAccess::NeedsPermission(_)) => {
                         let hook_data = serde_json::json!({
                             "tool_name": tool_call.name,
-                            "path": path,
+                            "path": resolved_path_str,
                         });
                         check_permission(
                             tools,
@@ -1681,6 +1686,10 @@ pub async fn send_prompt<S: ResponseSink>(
     home_dir: &Path,
     project_root: &Path,
 ) -> io::Result<()> {
+    let mut resolved_config = resolved_config.clone();
+    tools::ensure_project_root_allowed(&mut resolved_config, project_root);
+    let resolved_config = resolved_config; // re-bind as immutable
+
     let fuel_total = resolved_config.fuel;
     let mut fuel_remaining = fuel_total;
     let mut current_prompt = initial_prompt;
@@ -1696,7 +1705,7 @@ pub async fn send_prompt<S: ResponseSink>(
             ));
         }
 
-        app.validate_config(resolved_config, tools)?;
+        app.validate_config(&resolved_config, tools)?;
 
         let verbose = options.verbose;
 
@@ -1768,8 +1777,8 @@ pub async fn send_prompt<S: ResponseSink>(
         }
 
         // === Auto-compaction Check ===
-        if app.should_auto_compact(&context, resolved_config) {
-            return compact_context_with_llm(app, context_name, resolved_config, verbose).await;
+        if app.should_auto_compact(&context, &resolved_config) {
+            return compact_context_with_llm(app, context_name, &resolved_config, verbose).await;
         }
 
         // === Build System Prompt ===
@@ -1779,7 +1788,7 @@ pub async fn send_prompt<S: ResponseSink>(
             &context.summary,
             use_reflection,
             tools,
-            resolved_config,
+            &resolved_config,
             verbose,
             sink,
             home_dir,
@@ -1836,7 +1845,7 @@ pub async fn send_prompt<S: ResponseSink>(
             Some(all_tools.as_slice())
         };
         let mut request_body =
-            build_request_body(resolved_config, &messages, tools_for_request, true);
+            build_request_body(&resolved_config, &messages, tools_for_request, true);
 
         // Execute pre_api_request hook
         let hook_data = json!({
@@ -1887,7 +1896,7 @@ pub async fn send_prompt<S: ResponseSink>(
             log_request_if_enabled(app, context_name, debug, &request_body);
 
             let response =
-                collect_streaming_response(resolved_config, &messages, &all_tools, verbose, sink)
+                collect_streaming_response(&resolved_config, &messages, &all_tools, verbose, sink)
                     .await?;
 
             // Log response metadata
@@ -1910,7 +1919,7 @@ pub async fn send_prompt<S: ResponseSink>(
                     tools,
                     &mut handoff,
                     use_reflection,
-                    resolved_config,
+                    &resolved_config,
                     &mut fuel_remaining,
                     fuel_total,
                     verbose,
@@ -1981,7 +1990,7 @@ pub async fn send_prompt<S: ResponseSink>(
                 &final_prompt,
                 handoff,
                 tools,
-                resolved_config,
+                &resolved_config,
                 verbose,
                 sink,
             )? {

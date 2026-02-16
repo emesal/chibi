@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ============================================================================
 // File Path Validation
@@ -109,6 +109,25 @@ fn resolve_allowed_path(allowed_path: &str) -> Option<PathBuf> {
     };
 
     resolved.and_then(|p| p.canonicalize().ok())
+}
+
+/// Ensure `project_root` is included in `file_tools_allowed_paths`.
+///
+/// If `project_root` is not already covered by an existing allowed path
+/// (by canonical prefix comparison), adds it. This ensures files within
+/// the project are readable when `project_root` differs from process CWD.
+pub fn ensure_project_root_allowed(config: &mut ResolvedConfig, project_root: &Path) {
+    let canonical_root = project_root.canonicalize().ok();
+    let already_covered = canonical_root.as_ref().is_some_and(|root| {
+        config.file_tools_allowed_paths.iter().any(|p| {
+            resolve_allowed_path(p).is_some_and(|allowed| root.starts_with(&allowed))
+        })
+    });
+    if !already_covered {
+        config
+            .file_tools_allowed_paths
+            .push(project_root.to_string_lossy().to_string());
+    }
 }
 
 // ============================================================================
@@ -946,5 +965,24 @@ deny_override = ["preset:cloud_metadata"]
         assert_eq!(policy.default, UrlAction::Deny);
         assert_eq!(policy.allow.len(), 2);
         assert_eq!(policy.deny_override.len(), 1);
+    }
+
+    // === ensure_project_root_allowed ===
+
+    #[test]
+    fn test_ensure_project_root_allowed_adds_when_missing() {
+        let project = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let mut config = make_test_config(vec![other.path().to_string_lossy().to_string()]);
+        ensure_project_root_allowed(&mut config, project.path());
+        assert_eq!(config.file_tools_allowed_paths.len(), 2);
+    }
+
+    #[test]
+    fn test_ensure_project_root_allowed_skips_when_covered() {
+        let project = tempfile::tempdir().unwrap();
+        let mut config = make_test_config(vec![project.path().to_string_lossy().to_string()]);
+        ensure_project_root_allowed(&mut config, project.path());
+        assert_eq!(config.file_tools_allowed_paths.len(), 1);
     }
 }
