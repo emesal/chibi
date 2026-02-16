@@ -43,35 +43,32 @@ pub fn mcp_tool_from_info(
 /// Lockfile content from the bridge daemon.
 #[derive(serde::Deserialize)]
 struct LockContent {
+    #[allow(dead_code)]
     pid: u32,
     address: String,
     #[allow(dead_code)]
     started: u64,
+    #[serde(default = "default_heartbeat_secs")]
+    heartbeat_secs: u64,
+    #[serde(default)]
+    timestamp: u64,
 }
 
-/// Check whether a process is alive by inspecting `/proc/<pid>` (Linux)
-/// or sending signal 0 via `kill -0` (other Unix). Always returns true
-/// on non-Unix platforms (caller should handle gracefully).
-fn is_pid_alive(pid: u32) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        Path::new(&format!("/proc/{pid}")).exists()
+fn default_heartbeat_secs() -> u64 {
+    30
+}
+
+/// Check if a bridge lockfile is stale (timestamp older than 1.5x heartbeat).
+fn is_lockfile_stale(lock: &LockContent) -> bool {
+    if lock.timestamp == 0 {
+        return false; // Legacy lockfile without timestamp — assume alive
     }
-    #[cfg(all(unix, not(target_os = "linux")))]
-    {
-        // signal 0 checks existence without sending a real signal
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        true
-    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(std::time::Duration::ZERO)
+        .as_secs();
+    let stale_threshold = (lock.heartbeat_secs as f64 * 1.5) as u64;
+    now.saturating_sub(lock.timestamp) > stale_threshold
 }
 
 /// Read the bridge address from the lockfile, verifying PID liveness.
@@ -82,8 +79,8 @@ pub fn read_bridge_address(home: &Path) -> io::Result<SocketAddr> {
         io::Error::new(io::ErrorKind::InvalidData, format!("invalid lockfile: {e}"))
     })?;
 
-    // Check PID liveness
-    if !is_pid_alive(lock.pid) {
+    // Check heartbeat staleness
+    if is_lockfile_stale(&lock) {
         let _ = std::fs::remove_file(&lock_path);
         return Err(io::Error::new(
             io::ErrorKind::NotConnected,

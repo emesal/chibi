@@ -25,10 +25,16 @@ fn handle_one_request(listener: &TcpListener) -> (String, std::net::TcpStream) {
 
 /// Write a fake lockfile for tests.
 fn write_test_lockfile(home: &Path, addr: SocketAddr) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let content = serde_json::json!({
         "pid": std::process::id(),
         "address": addr.to_string(),
-        "started": 1000000,
+        "started": now,
+        "heartbeat_secs": 30,
+        "timestamp": now,
     });
     std::fs::write(home.join("mcp-bridge.lock"), content.to_string()).unwrap();
 }
