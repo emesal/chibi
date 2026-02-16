@@ -69,7 +69,7 @@ pub async fn fill_cache_gaps(
         )
         .await;
         match result {
-            Ok(summary) => {
+            Ok(summary) if !summary.is_empty() => {
                 eprintln!(
                     "[mcp-bridge] generated summary for {}:{}: {}",
                     tool.server, tool.name, summary
@@ -77,6 +77,12 @@ pub async fn fill_cache_gaps(
                 let mut cache = cache.lock().await;
                 cache.set(&tool.server, &tool.name, &tool.parameters, summary);
                 generated += 1;
+            }
+            Ok(_) => {
+                eprintln!(
+                    "[mcp-bridge] empty summary for {}:{}, skipping",
+                    tool.server, tool.name
+                );
             }
             Err(e) => {
                 eprintln!("[mcp-bridge] summary generation failed, aborting: {e}",);
