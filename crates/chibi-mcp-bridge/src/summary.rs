@@ -66,9 +66,9 @@ pub async fn fill_cache_gaps(
             }
             Err(e) => {
                 eprintln!(
-                    "[mcp-bridge] failed to generate summary for {}:{}: {e}",
-                    tool.server, tool.name
+                    "[mcp-bridge] summary generation failed, aborting: {e}",
                 );
+                break;
             }
         }
     }
