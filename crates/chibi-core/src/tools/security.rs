@@ -388,6 +388,7 @@ mod tests {
     use super::*;
     use crate::config::{ApiParams, ToolsConfig};
     use crate::partition::StorageConfig;
+    use std::collections::BTreeMap;
 
     fn make_test_config(allowed_paths: Vec<String>) -> ResolvedConfig {
         ResolvedConfig {
@@ -416,6 +417,7 @@ mod tests {
             fallback_tool: "call_agent".to_string(),
             storage: StorageConfig::default(),
             url_policy: None,
+            extra: BTreeMap::new(),
         }
     }
 
