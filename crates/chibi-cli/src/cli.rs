@@ -1809,7 +1809,10 @@ mod tests {
     fn test_set_multiple_overrides() {
         let input = parse_input("-s fuel=50 -s model=gpt-4").unwrap();
         assert_eq!(input.config_overrides.len(), 2);
-        assert_eq!(input.config_overrides[0], ("fuel".to_string(), "50".to_string()));
+        assert_eq!(
+            input.config_overrides[0],
+            ("fuel".to_string(), "50".to_string())
+        );
         assert_eq!(
             input.config_overrides[1],
             ("model".to_string(), "gpt-4".to_string())
@@ -1848,6 +1851,8 @@ mod tests {
             input.config_overrides,
             vec![("fuel".to_string(), "5".to_string())]
         );
-        assert!(matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "hello world"));
+        assert!(
+            matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "hello world")
+        );
     }
 }

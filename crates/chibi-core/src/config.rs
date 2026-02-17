@@ -270,9 +270,7 @@ impl JsonSchema for ReasoningConfig {
         "ReasoningConfig".to_string()
     }
 
-    fn json_schema(
-        generator: &mut schemars::r#gen::SchemaGenerator,
-    ) -> schemars::schema::Schema {
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
         ReasoningConfigRaw::json_schema(generator)
     }
 }
@@ -978,36 +976,60 @@ impl ResolvedConfig {
         match path {
             // API params (api.*)
             "api.temperature" => {
-                self.api.temperature = Some(value.parse::<f32>()
-                    .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?);
+                self.api.temperature = Some(
+                    value
+                        .parse::<f32>()
+                        .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?,
+                );
             }
             "api.max_tokens" => {
-                self.api.max_tokens = Some(value.parse::<usize>()
-                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+                self.api.max_tokens = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid usize for '{}': {}", path, value))?,
+                );
             }
             "api.top_p" => {
-                self.api.top_p = Some(value.parse::<f32>()
-                    .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?);
+                self.api.top_p = Some(
+                    value
+                        .parse::<f32>()
+                        .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?,
+                );
             }
             "api.prompt_caching" => {
-                self.api.prompt_caching = Some(value.parse::<bool>()
-                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+                self.api.prompt_caching = Some(
+                    value
+                        .parse::<bool>()
+                        .map_err(|_| format!("invalid bool for '{}': {}", path, value))?,
+                );
             }
             "api.parallel_tool_calls" => {
-                self.api.parallel_tool_calls = Some(value.parse::<bool>()
-                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+                self.api.parallel_tool_calls = Some(
+                    value
+                        .parse::<bool>()
+                        .map_err(|_| format!("invalid bool for '{}': {}", path, value))?,
+                );
             }
             "api.frequency_penalty" => {
-                self.api.frequency_penalty = Some(value.parse::<f32>()
-                    .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?);
+                self.api.frequency_penalty = Some(
+                    value
+                        .parse::<f32>()
+                        .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?,
+                );
             }
             "api.presence_penalty" => {
-                self.api.presence_penalty = Some(value.parse::<f32>()
-                    .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?);
+                self.api.presence_penalty = Some(
+                    value
+                        .parse::<f32>()
+                        .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?,
+                );
             }
             "api.seed" => {
-                self.api.seed = Some(value.parse::<u64>()
-                    .map_err(|_| format!("invalid u64 for '{}': {}", path, value))?);
+                self.api.seed = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("invalid u64 for '{}': {}", path, value))?,
+                );
             }
 
             // Reasoning config (api.reasoning.*)
@@ -1017,38 +1039,62 @@ impl ResolvedConfig {
                 self.api.reasoning.effort = Some(effort);
             }
             "api.reasoning.max_tokens" => {
-                self.api.reasoning.max_tokens = Some(value.parse::<usize>()
-                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+                self.api.reasoning.max_tokens = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid usize for '{}': {}", path, value))?,
+                );
             }
             "api.reasoning.exclude" => {
-                self.api.reasoning.exclude = Some(value.parse::<bool>()
-                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+                self.api.reasoning.exclude = Some(
+                    value
+                        .parse::<bool>()
+                        .map_err(|_| format!("invalid bool for '{}': {}", path, value))?,
+                );
             }
             "api.reasoning.enabled" => {
-                self.api.reasoning.enabled = Some(value.parse::<bool>()
-                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+                self.api.reasoning.enabled = Some(
+                    value
+                        .parse::<bool>()
+                        .map_err(|_| format!("invalid bool for '{}': {}", path, value))?,
+                );
             }
 
             // Storage config (storage.*)
             "storage.partition_max_entries" => {
-                self.storage.partition_max_entries = Some(value.parse::<usize>()
-                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+                self.storage.partition_max_entries = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid usize for '{}': {}", path, value))?,
+                );
             }
             "storage.partition_max_age_seconds" => {
-                self.storage.partition_max_age_seconds = Some(value.parse::<u64>()
-                    .map_err(|_| format!("invalid u64 for '{}': {}", path, value))?);
+                self.storage.partition_max_age_seconds = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("invalid u64 for '{}': {}", path, value))?,
+                );
             }
             "storage.partition_max_tokens" => {
-                self.storage.partition_max_tokens = Some(value.parse::<usize>()
-                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+                self.storage.partition_max_tokens = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid usize for '{}': {}", path, value))?,
+                );
             }
             "storage.bytes_per_token" => {
-                self.storage.bytes_per_token = Some(value.parse::<usize>()
-                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+                self.storage.bytes_per_token = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid usize for '{}': {}", path, value))?,
+                );
             }
             "storage.enable_bloom_filters" => {
-                self.storage.enable_bloom_filters = Some(value.parse::<bool>()
-                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+                self.storage.enable_bloom_filters = Some(
+                    value
+                        .parse::<bool>()
+                        .map_err(|_| format!("invalid bool for '{}': {}", path, value))?,
+                );
             }
 
             // Unknown paths → freeform extra
@@ -1323,9 +1369,7 @@ mod tests {
         let mut config = test_resolved_config();
         config.set_field("auto_compact_threshold", "0.9").unwrap();
         assert_eq!(config.auto_compact_threshold, 0.9);
-        config
-            .set_field("warn_threshold_percent", "75.5")
-            .unwrap();
+        config.set_field("warn_threshold_percent", "75.5").unwrap();
         assert_eq!(config.warn_threshold_percent, 75.5);
     }
 
