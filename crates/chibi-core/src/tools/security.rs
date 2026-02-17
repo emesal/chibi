@@ -399,6 +399,7 @@ mod tests {
             verbose: false,
             hide_tool_calls: false,
             no_tool_calls: false,
+            show_thinking: false,
             auto_compact: false,
             auto_compact_threshold: 0.9,
             fuel: 5,

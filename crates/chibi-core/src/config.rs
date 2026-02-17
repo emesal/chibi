@@ -483,6 +483,7 @@ impl ConfigDefaults {
     pub const VERBOSE: bool = false;
     pub const HIDE_TOOL_CALLS: bool = false;
     pub const NO_TOOL_CALLS: bool = false;
+    pub const SHOW_THINKING: bool = false;
     pub const AUTO_COMPACT: bool = false;
     pub const REFLECTION_ENABLED: bool = true;
     pub const AUTO_CLEANUP_CACHE: bool = true;
@@ -517,6 +518,9 @@ fn default_hide_tool_calls() -> bool {
 }
 fn default_no_tool_calls() -> bool {
     ConfigDefaults::NO_TOOL_CALLS
+}
+fn default_show_thinking() -> bool {
+    ConfigDefaults::SHOW_THINKING
 }
 fn default_auto_compact() -> bool {
     ConfigDefaults::AUTO_COMPACT
@@ -591,6 +595,9 @@ pub struct Config {
     /// Omit tools from API requests entirely (pure text mode)
     #[serde(default = "default_no_tool_calls")]
     pub no_tool_calls: bool,
+    /// Show thinking/reasoning content (default: false, verbose overrides)
+    #[serde(default = "default_show_thinking")]
+    pub show_thinking: bool,
     #[serde(default = "default_auto_compact")]
     pub auto_compact: bool,
     #[serde(default = "default_auto_compact_threshold")]
@@ -659,6 +666,8 @@ pub struct LocalConfig {
     pub hide_tool_calls: Option<bool>,
     /// Per-context no tool calls override
     pub no_tool_calls: Option<bool>,
+    /// Per-context show thinking override
+    pub show_thinking: Option<bool>,
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
     /// Per-context fuel budget override
@@ -726,6 +735,7 @@ impl LocalConfig {
             verbose,
             hide_tool_calls,
             no_tool_calls,
+            show_thinking,
             auto_compact,
             auto_compact_threshold,
             fuel,
@@ -780,6 +790,8 @@ pub struct ResolvedConfig {
     pub hide_tool_calls: bool,
     /// Omit tools from API requests (pure text mode, from config/flag)
     pub no_tool_calls: bool,
+    /// Show thinking/reasoning content (default: false, verbose overrides)
+    pub show_thinking: bool,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
     /// Total fuel budget for the agentic loop
@@ -825,7 +837,7 @@ impl ResolvedConfig {
     pub fn get_field(&self, path: &str) -> Option<String> {
         // Macro handles standard fields with uniform display logic
         config_get_field!(self, path,
-            display: verbose, hide_tool_calls, no_tool_calls, auto_compact,
+            display: verbose, hide_tool_calls, no_tool_calls, show_thinking, auto_compact,
                      reflection_enabled, auto_cleanup_cache,
                      context_window_limit, reflection_character_limit,
                      fuel, fuel_empty_response_cost,
@@ -911,6 +923,7 @@ impl ResolvedConfig {
             "verbose",
             "hide_tool_calls",
             "no_tool_calls",
+            "show_thinking",
             "model",
             "username",
             "context_window_limit",
@@ -961,7 +974,7 @@ impl ResolvedConfig {
     pub fn set_field(&mut self, path: &str, value: &str) -> Result<(), String> {
         // Macro handles standard top-level fields
         config_set_field!(self, path, value,
-            bool: verbose, hide_tool_calls, no_tool_calls, auto_compact,
+            bool: verbose, hide_tool_calls, no_tool_calls, show_thinking, auto_compact,
                   reflection_enabled, auto_cleanup_cache;
             usize: context_window_limit, reflection_character_limit,
                    fuel, fuel_empty_response_cost,
@@ -1191,6 +1204,7 @@ mod tests {
             verbose: false,
             hide_tool_calls: false,
             no_tool_calls: false,
+            show_thinking: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
             fuel: 30,
@@ -1321,6 +1335,7 @@ mod tests {
             verbose: false,
             hide_tool_calls: false,
             no_tool_calls: false,
+            show_thinking: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
             fuel: 30,
