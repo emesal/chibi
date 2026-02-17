@@ -42,7 +42,7 @@ async fn run() -> io::Result<()> {
     let mut json_str = String::new();
     io::stdin().read_to_string(&mut json_str)?;
 
-    let mut json_input: input::JsonInput = serde_json::from_str(&json_str).map_err(|e| {
+    let json_input: input::JsonInput = serde_json::from_str(&json_str).map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("Invalid JSON input: {}", e),
@@ -51,8 +51,17 @@ async fn run() -> io::Result<()> {
 
     let output = output::JsonOutputSink;
 
+    // Pre-resolution verbose: check typed config and string-keyed overrides
+    let load_verbose = json_input
+        .overrides
+        .as_ref()
+        .and_then(|o| o.get("verbose"))
+        .map(|v| v == "true")
+        .or_else(|| json_input.config.as_ref().and_then(|c| c.verbose))
+        .unwrap_or(false);
+
     let mut chibi = Chibi::load_with_options(LoadOptions {
-        verbose: json_input.flags.verbose,
+        verbose: load_verbose,
         home: json_input.home.clone(),
         project_root: json_input.project_root.clone(),
     })?;
@@ -60,17 +69,9 @@ async fn run() -> io::Result<()> {
     // Trust mode -- programmatic callers have already decided
     chibi.set_permission_handler(Box::new(|_| Ok(true)));
 
-    // Config flag overrides
-    json_input.flags.verbose = json_input.flags.verbose || chibi.app.config.verbose;
-    json_input.flags.hide_tool_calls =
-        json_input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
-    json_input.flags.no_tool_calls =
-        json_input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
-
-    let verbose = json_input.flags.verbose;
     let context = &json_input.context;
 
-    output.diagnostic(&format!("[Loaded {} tool(s)]", chibi.tool_count()), verbose);
+    output.diagnostic(&format!("[Loaded {} tool(s)]", chibi.tool_count()), load_verbose);
 
     // Intercept binary-specific commands before delegating to core
     match &json_input.command {
