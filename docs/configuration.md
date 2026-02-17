@@ -109,7 +109,7 @@ hide_tool_calls = false
 no_tool_calls = false
 
 # Show thinking/reasoning content (default: false, verbose overrides)
-show_thinking = false
+show_thinking = true
 
 # Fallback tool when LLM doesn't explicitly call call_agent/call_user
 # Options: "call_user" (return to user) or "call_agent" (continue loop)
@@ -304,7 +304,7 @@ warn_threshold_percent = 90.0
 verbose = true
 hide_tool_calls = false
 no_tool_calls = false
-show_thinking = false
+show_thinking = true
 
 # Override auto-compact behavior
 auto_compact = true

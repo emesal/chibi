@@ -483,7 +483,7 @@ impl ConfigDefaults {
     pub const VERBOSE: bool = false;
     pub const HIDE_TOOL_CALLS: bool = false;
     pub const NO_TOOL_CALLS: bool = false;
-    pub const SHOW_THINKING: bool = false;
+    pub const SHOW_THINKING: bool = true;
     pub const AUTO_COMPACT: bool = false;
     pub const REFLECTION_ENABLED: bool = true;
     pub const AUTO_CLEANUP_CACHE: bool = true;
