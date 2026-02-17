@@ -470,12 +470,7 @@ async fn send_prompt_inner<S: ResponseSink>(
 ///
 /// Selects entries by count and emits each via `emit_entry()`.
 /// Formatting is the responsibility of the sink implementation.
-fn show_log(
-    chibi: &Chibi,
-    context: &str,
-    count: isize,
-    output: &dyn OutputSink,
-) -> io::Result<()> {
+fn show_log(chibi: &Chibi, context: &str, count: isize, output: &dyn OutputSink) -> io::Result<()> {
     let entries = chibi.app.read_jsonl_transcript(context)?;
 
     let selected: Vec<_> = if count == 0 {
