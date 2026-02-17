@@ -325,7 +325,15 @@ async fn execute_from_input(
     let command = resolve_command_names(&input.command, chibi, session)?;
 
     // --- resolve config and build CLI response sink ---
-    let cli_config = resolve_cli_config(chibi, &working_context, ephemeral_username)?;
+    let mut cli_config = resolve_cli_config(chibi, &working_context, ephemeral_username)?;
+
+    // Apply per-invocation config overrides (-s/--set)
+    if !input.config_overrides.is_empty() {
+        cli_config
+            .core
+            .apply_overrides_from_pairs(&input.config_overrides)
+            .map_err(|e| io::Error::new(ErrorKind::InvalidInput, e))?;
+    }
 
     let md_config = if cli_config.render_markdown && !input.raw {
         Some(md_config_from_resolved(
@@ -385,7 +393,13 @@ async fn execute_from_input(
             context: ctx,
             field,
         } => {
-            let cfg = resolve_cli_config(chibi, ctx, ephemeral_username)?;
+            let mut cfg = resolve_cli_config(chibi, ctx, ephemeral_username)?;
+            // Re-apply per-invocation overrides so -s is visible via inspect
+            if !input.config_overrides.is_empty() {
+                cfg.core
+                    .apply_overrides_from_pairs(&input.config_overrides)
+                    .map_err(|e| io::Error::new(ErrorKind::InvalidInput, e))?;
+            }
             match cfg.get_field(field) {
                 Some(value) => output.emit_result(&value),
                 None => output.emit_result("(not set)"),

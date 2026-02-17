@@ -80,6 +80,9 @@ pub struct ChibiInput {
     /// Debug: force markdown rendering even when stdout is not a TTY (CLI-only)
     #[serde(default)]
     pub force_markdown: bool,
+    /// Per-invocation config overrides from -s/--set (KEY=VALUE pairs)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_overrides: Vec<(String, String)>,
 }
 
 impl Default for ChibiInput {
@@ -92,6 +95,7 @@ impl Default for ChibiInput {
             raw: false,
             md_file: None,
             force_markdown: false,
+            config_overrides: vec![],
         }
     }
 }
@@ -226,6 +230,7 @@ mod tests {
             raw: true,
             md_file: None,
             force_markdown: false,
+            config_overrides: vec![],
         };
 
         let json = serde_json::to_string(&input).unwrap();
@@ -256,6 +261,7 @@ mod tests {
             raw: false,
             md_file: None,
             force_markdown: false,
+            config_overrides: vec![],
         };
 
         let json = serde_json::to_string(&input).unwrap();

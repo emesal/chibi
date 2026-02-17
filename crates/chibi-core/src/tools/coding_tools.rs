@@ -5,7 +5,7 @@
 //! regex, edit files in a structured way, and query a codebase index.
 //!
 //! All path parameters are resolved relative to `project_root`, which is
-//! supplied to the executor from the `CHIBI_PROJECT_ROOT` environment variable.
+//! set during `Chibi::load_with_options` from options, env, or CWD.
 
 use std::io::{self, BufRead, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -341,7 +341,7 @@ pub async fn execute_coding_tool(
     tools: &[super::Tool],
 ) -> Option<io::Result<String>> {
     match tool_name {
-        SHELL_EXEC_TOOL_NAME => Some(execute_shell_exec(args).await),
+        SHELL_EXEC_TOOL_NAME => Some(execute_shell_exec(args, project_root).await),
         DIR_LIST_TOOL_NAME => Some(execute_dir_list(args, project_root)),
         GLOB_FILES_TOOL_NAME => Some(execute_glob_files(args, project_root)),
         GREP_FILES_TOOL_NAME => Some(execute_grep_files(args, project_root)),
@@ -358,10 +358,10 @@ pub async fn execute_coding_tool(
 
 /// Execute shell_exec: run a command with a timeout and return structured JSON output.
 ///
-/// Spawns `sh -c <command>` and waits up to `timeout_secs` seconds. If the
-/// timeout expires the child is killed. The JSON result always contains the
-/// fields `stdout`, `stderr`, `exit_code`, and `timed_out`.
-async fn execute_shell_exec(args: &serde_json::Value) -> io::Result<String> {
+/// Spawns `sh -c <command>` in `project_root` and waits up to `timeout_secs`
+/// seconds. If the timeout expires the child is killed. The JSON result always
+/// contains the fields `stdout`, `stderr`, `exit_code`, and `timed_out`.
+async fn execute_shell_exec(args: &serde_json::Value, project_root: &Path) -> io::Result<String> {
     use tokio::time::{Duration, timeout};
 
     let command = require_str_param(args, "command")?;
@@ -370,6 +370,7 @@ async fn execute_shell_exec(args: &serde_json::Value) -> io::Result<String> {
     let child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(&command)
+        .current_dir(project_root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -1394,8 +1395,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_exec_basic() {
+        let dir = tempfile::tempdir().unwrap();
         let a = args(&[("command", serde_json::json!("echo hello"))]);
-        let result = execute_shell_exec(&a).await.unwrap();
+        let result = execute_shell_exec(&a, dir.path()).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["stdout"].as_str().unwrap().trim(), "hello");
         assert_eq!(parsed["exit_code"], 0);
@@ -1404,19 +1406,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_exec_timeout() {
+        let dir = tempfile::tempdir().unwrap();
         let a = args(&[
             ("command", serde_json::json!("sleep 10")),
             ("timeout_secs", serde_json::json!(1)),
         ]);
-        let result = execute_shell_exec(&a).await.unwrap();
+        let result = execute_shell_exec(&a, dir.path()).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["timed_out"], true);
     }
 
     #[tokio::test]
     async fn test_shell_exec_nonzero_exit() {
+        let dir = tempfile::tempdir().unwrap();
         let a = args(&[("command", serde_json::json!("exit 42"))]);
-        let result = execute_shell_exec(&a).await.unwrap();
+        let result = execute_shell_exec(&a, dir.path()).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["exit_code"], 42);
         assert_eq!(parsed["timed_out"], false);
@@ -1424,10 +1428,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_exec_stderr() {
+        let dir = tempfile::tempdir().unwrap();
         let a = args(&[("command", serde_json::json!("echo error >&2"))]);
-        let result = execute_shell_exec(&a).await.unwrap();
+        let result = execute_shell_exec(&a, dir.path()).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["stderr"].as_str().unwrap().trim(), "error");
+    }
+
+    #[tokio::test]
+    async fn test_shell_exec_uses_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = args(&[("command", serde_json::json!("pwd"))]);
+        let result = execute_shell_exec(&a, dir.path()).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let stdout = parsed["stdout"].as_str().unwrap().trim();
+        // Canonicalize both sides for macOS /private/tmp symlink
+        let expected = dir.path().canonicalize().unwrap();
+        let actual = PathBuf::from(stdout).canonicalize().unwrap();
+        assert_eq!(actual, expected);
     }
 
     // --- index tools ---

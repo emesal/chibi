@@ -54,6 +54,7 @@ use crate::context::TranscriptEntry;
 use crate::jsonl::read_jsonl_file;
 use crate::safe_io::{FileLock, atomic_write_json};
 use fastbloom::BloomFilter;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
@@ -97,7 +98,7 @@ fn estimate_tokens(text: &str, bytes_per_token: usize) -> usize {
 ///
 /// All fields are optional; defaults are applied when loading a `PartitionManager`.
 /// This allows partial overrides in both global `config.toml` and per-context `local.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
 pub struct StorageConfig {
     /// Maximum entries per partition before rotation.
     /// When the active partition reaches this count, it rotates to an archived partition.

@@ -10,9 +10,10 @@
 //! 3. Directory walk from project root down to cwd, checking each level
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// Collect AGENTS.md content from all standard locations.
+/// Collect AGENTS.md content from all standard locations, falling back to
+/// CLAUDE.md at each location when AGENTS.md is not found.
 ///
 /// Returns the concatenated content of all found files (separated by blank
 /// lines), or an empty string if none exist. Empty files are skipped.
@@ -29,15 +30,15 @@ pub fn load_agents_md(
 ) -> String {
     let mut sections = Vec::new();
 
-    // 1. ~/AGENTS.md
-    try_load(home_dir.join("AGENTS.md"), &mut sections);
+    // 1. ~/AGENTS.md (or ~/CLAUDE.md)
+    try_load(home_dir, &mut sections);
 
-    // 2. ~/.chibi/AGENTS.md
+    // 2. ~/.chibi/AGENTS.md (or ~/.chibi/CLAUDE.md)
     // Note: if chibi_home is under home_dir (the usual ~/.chibi case) and the
     // project root also lives under ~, the walk in step 3 could theoretically
     // visit the same file again. This is benign — duplicate content is either
     // deduplicated at the consumer level or simply seen twice by the LLM.
-    try_load(chibi_home.join("AGENTS.md"), &mut sections);
+    try_load(chibi_home, &mut sections);
 
     // 3. Walk from project root down to cwd
     if let Ok(project_root) = project_root.canonicalize()
@@ -45,28 +46,32 @@ pub fn load_agents_md(
     {
         if let Ok(rel) = cwd.strip_prefix(&project_root) {
             // Project root itself
-            try_load(project_root.join("AGENTS.md"), &mut sections);
+            try_load(&project_root, &mut sections);
             // Each intermediate directory down to cwd
             let mut walk = project_root.clone();
             for component in rel.components() {
                 walk = walk.join(component);
-                try_load(walk.join("AGENTS.md"), &mut sections);
+                try_load(&walk, &mut sections);
             }
         } else {
             // cwd is not under project_root (unusual); just check project root
-            try_load(project_root.join("AGENTS.md"), &mut sections);
+            try_load(&project_root, &mut sections);
         }
     }
 
     sections.join("\n\n")
 }
 
-/// Try to read a file; if it exists and is non-empty, push its content.
-fn try_load(path: PathBuf, sections: &mut Vec<String>) {
-    if let Ok(content) = fs::read_to_string(&path) {
-        let trimmed = content.trim();
-        if !trimmed.is_empty() {
-            sections.push(trimmed.to_string());
+/// Try to read AGENTS.md from a directory; fall back to CLAUDE.md if not found.
+/// If either exists and is non-empty, push its content.
+fn try_load(dir: &Path, sections: &mut Vec<String>) {
+    for filename in ["AGENTS.md", "CLAUDE.md"] {
+        if let Ok(content) = fs::read_to_string(dir.join(filename)) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                sections.push(trimmed.to_string());
+                return;
+            }
         }
     }
 }
@@ -202,5 +207,58 @@ mod tests {
             &project,
         );
         assert_eq!(result, "once");
+    }
+
+    #[test]
+    fn test_claude_md_fallback() {
+        // CLAUDE.md is used when AGENTS.md is absent at a given location
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+
+        std::fs::write(home.join("CLAUDE.md"), "home claude").unwrap();
+        std::fs::write(project.join("CLAUDE.md"), "project claude").unwrap();
+
+        let result = load_agents_md(&home, &tmp.path().join("chibi"), &project, &project);
+        assert_eq!(result, "home claude\n\nproject claude");
+    }
+
+    #[test]
+    fn test_agents_md_takes_precedence_over_claude_md() {
+        // When both exist at the same location, only AGENTS.md is loaded
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+
+        std::fs::write(project.join("AGENTS.md"), "agents wins").unwrap();
+        std::fs::write(project.join("CLAUDE.md"), "claude loses").unwrap();
+
+        let result = load_agents_md(
+            &tmp.path().join("home"),
+            &tmp.path().join("chibi"),
+            &project,
+            &project,
+        );
+        assert_eq!(result, "agents wins");
+    }
+
+    #[test]
+    fn test_mixed_agents_and_claude_md() {
+        // Different locations can independently use AGENTS.md or CLAUDE.md
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let project = tmp.path().join("project");
+        let sub = project.join("src");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&sub).unwrap();
+
+        std::fs::write(home.join("AGENTS.md"), "home agents").unwrap();
+        std::fs::write(project.join("CLAUDE.md"), "project claude").unwrap();
+        std::fs::write(sub.join("AGENTS.md"), "sub agents").unwrap();
+
+        let result = load_agents_md(&home, &tmp.path().join("chibi"), &project, &sub);
+        assert_eq!(result, "home agents\n\nproject claude\n\nsub agents");
     }
 }

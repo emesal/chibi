@@ -344,10 +344,16 @@ impl Chibi {
 
         // Try file tools
         if tools::is_file_tool(name) {
-            let config = self.app.resolve_config(context_name, None)?;
-            if let Some(result) =
-                tools::execute_file_tool(&self.app, context_name, name, &args, &config)
-            {
+            let mut config = self.app.resolve_config(context_name, None)?;
+            tools::ensure_project_root_allowed(&mut config, &self.project_root);
+            if let Some(result) = tools::execute_file_tool(
+                &self.app,
+                context_name,
+                name,
+                &args,
+                &config,
+                &self.project_root,
+            ) {
                 return result;
             }
         }
@@ -461,13 +467,59 @@ pub fn project_index_db_path(root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StatePaths;
+    use crate::config::{ApiParams, ToolsConfig};
+    use crate::partition::StorageConfig;
+    use tempfile::TempDir;
 
     // Note: Most tests require a real chibi directory structure.
     // These are basic sanity tests.
 
+    /// create a test chibi instance with a temporary directory.
+    /// returns both for lifetime management (tempdir must outlive chibi).
+    fn create_test_chibi() -> (Chibi, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::config::Config {
+            api_key: Some("test-key".to_string()),
+            model: Some("test-model".to_string()),
+            context_window_limit: Some(8000),
+            warn_threshold_percent: 75.0,
+            verbose: false,
+            hide_tool_calls: false,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            reflection_enabled: true,
+            reflection_character_limit: 10000,
+            fuel: 15,
+            fuel_empty_response_cost: 15,
+            username: "testuser".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: true,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api: ApiParams::default(),
+            storage: StorageConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            tools: ToolsConfig::default(),
+            url_policy: None,
+        };
+        let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+        let chibi = Chibi {
+            project_root: temp_dir.path().to_path_buf(),
+            app,
+            tools: vec![],
+            permission_handler: None,
+        };
+        (chibi, temp_dir)
+    }
+
     #[test]
     fn test_chibi_facade_exists() {
-        // Basic compile test - if this compiles, the facade is properly defined
+        // basic compile test - if this compiles, the facade is properly defined
         fn _takes_chibi(_c: Chibi) {}
     }
 
@@ -564,5 +616,163 @@ mod tests {
             project_index_db_path(&root),
             PathBuf::from("/my/project/.chibi/codebase.db")
         );
+    }
+
+    // === Chibi struct method tests ===
+
+    #[test]
+    fn test_init_no_hooks() {
+        let (chibi, _tmp) = create_test_chibi();
+        let results = chibi.init().unwrap();
+        // no plugins loaded, so no hook results
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_shutdown_no_hooks() {
+        let (chibi, _tmp) = create_test_chibi();
+        let results = chibi.shutdown().unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_init_hook_data() {
+        // we can't easily test hook *execution* without a real hook plugin,
+        // but we verify init() succeeds and returns the right shape.
+        // the hook_data json built internally contains chibi_home, project_root,
+        // and tool_count — verified indirectly by init() not erroring.
+        let (chibi, _tmp) = create_test_chibi();
+        let results = chibi.init().unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_clear_context_nonexistent() {
+        // clear_context calls get_or_create_context first (creates if missing),
+        // then clears it — should succeed as a no-op on fresh context
+        let (chibi, _tmp) = create_test_chibi();
+        chibi.clear_context("nonexistent").unwrap();
+    }
+
+    #[test]
+    fn test_clear_context_with_messages() {
+        let (chibi, _tmp) = create_test_chibi();
+        let ctx_name = "test-ctx";
+
+        // add a message to the context
+        let mut context = chibi.app.get_or_create_context(ctx_name).unwrap();
+        chibi
+            .app
+            .add_message(&mut context, "user".to_string(), "hello".to_string());
+        assert_eq!(context.messages.len(), 1);
+        chibi.app.save_context(&context).unwrap();
+
+        // clear should succeed
+        chibi.clear_context(ctx_name).unwrap();
+
+        // verify the context is now empty
+        let cleared = chibi.app.get_or_create_context(ctx_name).unwrap();
+        assert!(cleared.messages.is_empty());
+    }
+
+    #[test]
+    fn test_list_contexts_empty() {
+        let (chibi, _tmp) = create_test_chibi();
+        assert!(chibi.list_contexts().is_empty());
+    }
+
+    #[test]
+    fn test_list_contexts_after_create() {
+        let (mut chibi, _tmp) = create_test_chibi();
+
+        // save contexts to disk then sync in-memory state
+        for name in &["alpha", "beta"] {
+            let ctx = chibi.app.get_or_create_context(name).unwrap();
+            chibi.app.save_context(&ctx).unwrap();
+        }
+        chibi.app.sync_state_with_filesystem().unwrap();
+
+        let names = chibi.list_contexts();
+        assert!(names.contains(&"alpha".to_string()));
+        assert!(names.contains(&"beta".to_string()));
+        assert_eq!(names.len(), 2);
+    }
+
+    #[test]
+    fn test_resolve_config_defaults() {
+        let (chibi, _tmp) = create_test_chibi();
+        let config = chibi.resolve_config("default", None).unwrap();
+        // should reflect the values from create_test_chibi's Config
+        assert_eq!(config.model, "test-model");
+        assert_eq!(config.username, "testuser");
+        assert_eq!(config.fuel, 15);
+        assert_eq!(config.context_window_limit, 8000);
+        assert!(!config.verbose);
+    }
+
+    #[test]
+    fn test_resolve_config_with_local_override() {
+        let (chibi, _tmp) = create_test_chibi();
+        let ctx_name = "override-ctx";
+
+        // ensure the context directory exists
+        let ctx = chibi.app.get_or_create_context(ctx_name).unwrap();
+        chibi.app.save_context(&ctx).unwrap();
+
+        // write a local.toml that overrides the model
+        let local_toml = chibi.app.context_dir(ctx_name).join("local.toml");
+        std::fs::write(&local_toml, "model = \"local-model\"\nfuel = 99\n").unwrap();
+
+        let config = chibi.resolve_config(ctx_name, None).unwrap();
+        assert_eq!(config.model, "local-model");
+        assert_eq!(config.fuel, 99);
+        // non-overridden values should still come from global config
+        assert_eq!(config.username, "testuser");
+    }
+
+    #[test]
+    fn test_save_persists_state() {
+        let (chibi, tmp) = create_test_chibi();
+        chibi.save().unwrap();
+        let state_path = tmp.path().join("state.json");
+        assert!(state_path.exists());
+    }
+
+    #[test]
+    fn test_home_dir() {
+        let (chibi, tmp) = create_test_chibi();
+        assert_eq!(chibi.home_dir(), tmp.path());
+    }
+
+    #[test]
+    fn test_tool_count_empty() {
+        let (chibi, _tmp) = create_test_chibi();
+        assert_eq!(chibi.tool_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_tool_not_found() {
+        let (chibi, _tmp) = create_test_chibi();
+        let result = chibi
+            .execute_tool("default", "nonexistent_tool", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("nonexistent_tool"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_tool_builtin() {
+        let (chibi, _tmp) = create_test_chibi();
+        let result = chibi
+            .execute_tool(
+                "default",
+                "update_todos",
+                serde_json::json!({"content": "- [ ] write tests"}),
+            )
+            .await;
+        let output = result.unwrap();
+        assert!(output.contains("Todos updated"));
     }
 }
