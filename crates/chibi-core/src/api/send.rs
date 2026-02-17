@@ -1589,7 +1589,14 @@ async fn process_tool_calls<S: ResponseSink>(
         hook_data["fuel_total"] = json!(fuel_total);
     }
     let hook_results = tools::execute_hook(tools, tools::HookPoint::PostToolBatch, &hook_data)?;
-    apply_hook_overrides(handoff, fuel_remaining, fuel_unlimited, &hook_results, verbose, sink)?;
+    apply_hook_overrides(
+        handoff,
+        fuel_remaining,
+        fuel_unlimited,
+        &hook_results,
+        verbose,
+        sink,
+    )?;
 
     Ok(())
 }
@@ -2051,7 +2058,10 @@ pub async fn send_prompt<S: ResponseSink>(
                     } else {
                         format!(
                             "[reengaged (fuel: {}/{}) via {}. call_user(<message>) to end turn.]\n{}",
-                            fuel_remaining, fuel_total, resolved_config.fallback_tool, continue_prompt
+                            fuel_remaining,
+                            fuel_total,
+                            resolved_config.fallback_tool,
+                            continue_prompt
                         )
                     };
                     break; // break inner, continue outer
@@ -2443,7 +2453,10 @@ mod tests {
             )
         };
 
-        assert!(!prompt.contains("fuel:"), "fuel info must not appear in unlimited mode");
+        assert!(
+            !prompt.contains("fuel:"),
+            "fuel info must not appear in unlimited mode"
+        );
         assert!(prompt.contains("reengaged via call_user"));
         assert!(prompt.contains("keep going"));
     }
@@ -2468,6 +2481,9 @@ mod tests {
             )
         };
 
-        assert!(prompt.contains("fuel: 7/10"), "fuel info must appear in limited mode");
+        assert!(
+            prompt.contains("fuel: 7/10"),
+            "fuel info must appear in limited mode"
+        );
     }
 }
