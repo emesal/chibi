@@ -391,9 +391,6 @@ pub async fn compact_context_by_name(
         return Ok(());
     }
 
-    // Archive to transcript.md for human readability
-    app.append_to_transcript_md(&context)?;
-
     // Finalize compaction: write anchor to transcript and mark dirty
     let simple_summary = format!(
         "Context compacted. {} messages archived to transcript.",
@@ -454,9 +451,6 @@ async fn compact_context_with_llm_internal(
         "summary": context.summary,
     });
     let _ = tools::execute_hook(&tools, tools::HookPoint::PreCompact, &hook_data);
-
-    // Append to transcript.md before compacting (for archival)
-    app.append_to_transcript_md(&context)?;
 
     if print_message && verbose {
         eprintln!(

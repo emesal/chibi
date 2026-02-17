@@ -77,9 +77,6 @@ impl AppState {
             return Ok(());
         }
 
-        // Append to transcript.md before clearing (for human-readable archival)
-        self.append_to_transcript_md(&context)?;
-
         // Write archival anchor to transcript.jsonl
         let archival_anchor = create_archival_anchor(&context.name);
         self.append_to_transcript(&context.name, &archival_anchor)?;

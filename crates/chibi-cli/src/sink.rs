@@ -103,8 +103,9 @@ impl ResponseSink for CliResponseSink<'_> {
                     self.output.diagnostic_always(&message);
                 }
             }
-            ResponseEvent::TranscriptEntry(entry) => {
-                self.output.emit_entry(&entry)?;
+            ResponseEvent::TranscriptEntry(_entry) => {
+                // CLI displays content via streaming events (TextChunk, ToolStart, ToolResult).
+                // TranscriptEntry is for structured consumers (JSON mode, show_log).
             }
             ResponseEvent::Finished => {
                 if self.in_reasoning {
@@ -183,7 +184,7 @@ mod tests {
             tool_call_id: None,
         };
 
-        // Should not panic — routes entry to OutputHandler::emit_entry for formatting
+        // TranscriptEntry is a no-op in CLI sink (content displayed via streaming events)
         sink.handle(ResponseEvent::TranscriptEntry(entry)).unwrap();
     }
 

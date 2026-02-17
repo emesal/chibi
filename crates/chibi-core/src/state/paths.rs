@@ -30,11 +30,6 @@ pub trait StatePaths {
         self.context_dir(name).join("context_meta.json")
     }
 
-    /// Path to human-readable transcript (transcript.md)
-    fn transcript_md_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript.md")
-    }
-
     /// Path to JSONL transcript (transcript.jsonl) - legacy location
     fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("transcript.jsonl")

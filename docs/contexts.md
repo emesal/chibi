@@ -284,7 +284,6 @@ chibi -g -5  # First 5 entries
 ├── context_meta.json    # Metadata (created_at timestamp)
 ├── local.toml           # Per-context config overrides (optional)
 ├── summary.md           # Conversation summary (from compaction)
-├── transcript.md        # Human-readable history archive
 ├── todos.md             # Current todos
 ├── goals.md             # Current goals
 ├── inbox.jsonl          # Messages from other contexts

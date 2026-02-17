@@ -878,38 +878,6 @@ impl AppState {
         Ok(())
     }
 
-    /// Append all context messages to human-readable transcript.md
-    pub fn append_to_transcript_md(&self, context: &Context) -> io::Result<()> {
-        self.ensure_context_dir(&context.name)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.transcript_md_file(&context.name))?;
-
-        for msg in &context.messages {
-            let role = msg["role"].as_str().unwrap_or("unknown");
-            // Skip system messages to avoid cluttering transcript with boilerplate
-            if role == "system" {
-                continue;
-            }
-            if let Some(tool_calls) = msg["tool_calls"].as_array() {
-                let names: Vec<&str> = tool_calls
-                    .iter()
-                    .filter_map(|tc| tc["function"]["name"].as_str())
-                    .collect();
-                writeln!(file, "[ASSISTANT]: [called tools: {}]\n", names.join(", "))?;
-            } else if role == "tool" {
-                let content = msg["content"].as_str().unwrap_or("");
-                writeln!(file, "[TOOL RESULT]: {}\n", content)?;
-            } else {
-                let content = msg["content"].as_str().unwrap_or("");
-                writeln!(file, "[{}]: {}\n", role.to_uppercase(), content)?;
-            }
-        }
-
-        Ok(())
-    }
-
     /// Append a single entry to transcript (the authoritative log, using partitioned storage)
     ///
     /// Uses cached active state when available to avoid repeated file scans.
