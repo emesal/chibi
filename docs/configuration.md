@@ -108,6 +108,9 @@ hide_tool_calls = false
 # Omit tools from API requests entirely for pure text mode (default: false)
 no_tool_calls = false
 
+# Show thinking/reasoning content (default: false, verbose overrides)
+show_thinking = false
+
 # Fallback tool when LLM doesn't explicitly call call_agent/call_user
 # Options: "call_user" (return to user) or "call_agent" (continue loop)
 fallback_tool = "call_user"
@@ -297,10 +300,11 @@ context_window_limit = 128000
 # Override warning threshold
 warn_threshold_percent = 90.0
 
-# Override verbose, tool call display, or tool omission
+# Override verbose, tool call display, tool omission, or thinking display
 verbose = true
 hide_tool_calls = false
 no_tool_calls = false
+show_thinking = false
 
 # Override auto-compact behavior
 auto_compact = true

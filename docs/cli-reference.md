@@ -133,11 +133,14 @@ chibi-json --version
 {
   "command": { "send_prompt": { "prompt": "Hello" } },
   "context": { "switch": { "name": "coding" } },
-  "flags": { "verbose": true }
+  "flags": { "force_call_agent": true },
+  "overrides": { "verbose": "true" }
 }
 ```
 
-**Flags:** `"verbose"`, `"force_call_user"`, `"force_call_agent"`, `"hide_tool_calls"`, `"no_tool_calls"`
+**Flags** (ephemeral command modifiers): `"force_call_user"`, `"force_call_agent"`
+
+**Config overrides** (via `"overrides"` map or `"config"` object): `"verbose"`, `"hide_tool_calls"`, `"no_tool_calls"`, `"show_thinking"`
 
 **Simple commands:** `"list_contexts"`, `"list_current_context"`, `"no_op"`
 
