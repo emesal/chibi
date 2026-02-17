@@ -71,7 +71,10 @@ async fn run() -> io::Result<()> {
 
     let context = &json_input.context;
 
-    output.diagnostic(&format!("[Loaded {} tool(s)]", chibi.tool_count()), load_verbose);
+    output.diagnostic(
+        &format!("[Loaded {} tool(s)]", chibi.tool_count()),
+        load_verbose,
+    );
 
     // Intercept binary-specific commands before delegating to core
     match &json_input.command {

@@ -352,13 +352,7 @@ async fn execute_from_input(
         None
     };
 
-    let mut sink = CliResponseSink::new(
-        output,
-        md_config,
-        verbose,
-        show_tool_calls,
-        show_thinking,
-    );
+    let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls, show_thinking);
 
     // --- delegate to core ---
     let effect = chibi_core::execute_command(
@@ -522,7 +516,10 @@ async fn main() -> io::Result<()> {
     // Handle --debug force-markdown
     let force_markdown = input.force_markdown;
 
-    let load_verbose = input.config_overrides.iter().any(|(k, v)| k == "verbose" && v == "true");
+    let load_verbose = input
+        .config_overrides
+        .iter()
+        .any(|(k, v)| k == "verbose" && v == "true");
 
     let mut chibi = Chibi::load_with_options(LoadOptions {
         verbose: load_verbose,
