@@ -144,11 +144,14 @@ reflection_character_limit = 10000
 
 # Total fuel budget for autonomous tool loops (default: 30)
 # Each tool-call round and agent continuation costs 1 fuel. First turn is free.
+# Set to 0 to disable fuel tracking entirely (unlimited mode — no budget enforced,
+# no fuel info injected into prompts or hook payloads).
 fuel = 30
 
 # Fuel cost of an empty LLM response (default: 15)
 # When the LLM returns an empty response (no text, no tool calls), this much
 # fuel is consumed. High cost prevents infinite empty-response loops.
+# Ignored when fuel = 0 (unlimited mode).
 fuel_empty_response_cost = 15
 
 # Context lock heartbeat interval in seconds (default: 30)
