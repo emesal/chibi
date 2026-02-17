@@ -55,7 +55,7 @@ pub async fn execute_command<S: ResponseSink>(
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
-    let verbose = flags.verbose;
+    let verbose = config.verbose;
 
     // --- pre-command lifecycle ---
 
@@ -149,7 +149,7 @@ async fn dispatch_command<S: ResponseSink>(
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
-    let verbose = flags.verbose;
+    let verbose = config.verbose;
 
     match command {
         Command::ShowHelp | Command::ShowVersion => {
@@ -441,9 +441,6 @@ async fn send_prompt_inner<S: ResponseSink>(
     sink: &mut S,
 ) -> io::Result<()> {
     let mut resolved = config.clone();
-    if flags.no_tool_calls {
-        resolved.no_tool_calls = true;
-    }
     crate::gateway::ensure_context_window(&mut resolved);
     let use_reflection = resolved.reflection_enabled;
 
@@ -452,7 +449,7 @@ async fn send_prompt_inner<S: ResponseSink>(
         crate::lock::ContextLock::acquire(&context_dir, chibi.app.config.lock_heartbeat_seconds)?;
 
     let mut options = PromptOptions::new(
-        flags.verbose,
+        config.verbose,
         use_reflection,
         &flags.debug,
         false, // force_render is a CLI concern
