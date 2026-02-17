@@ -550,6 +550,7 @@ mod tests {
 
     fn make_test_config() -> ResolvedConfig {
         use crate::config::{ApiParams, ToolsConfig};
+        use std::collections::BTreeMap;
         ResolvedConfig {
             api_key: Some("test-key".to_string()),
             model: "test-model".to_string(),
@@ -580,6 +581,7 @@ mod tests {
             fallback_tool: "call_agent".to_string(),
             storage: crate::partition::StorageConfig::default(),
             url_policy: None,
+            extra: BTreeMap::new(),
         }
     }
 }

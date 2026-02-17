@@ -87,9 +87,23 @@ async fn run() -> io::Result<()> {
 
     // Resolve core config and build response sink
     let mut resolved = chibi.resolve_config(context, json_input.username.as_deref())?;
-    // per-invocation URL policy override (highest priority, whole-object)
+    // Legacy per-invocation URL policy override (prefer config.url_policy instead)
     if json_input.url_policy.is_some() {
         resolved.url_policy = json_input.url_policy.clone();
+    }
+    // Typed config overrides (same semantics as local.toml but per-invocation)
+    if let Some(ref config_override) = json_input.config {
+        config_override.apply_overrides(&mut resolved);
+    }
+    // String-keyed overrides (highest priority, freeform escape hatch)
+    if let Some(ref overrides) = json_input.overrides {
+        let pairs: Vec<_> = overrides
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        resolved
+            .apply_overrides_from_pairs(&pairs)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     }
     let mut response_sink = sink::JsonResponseSink::new();
 

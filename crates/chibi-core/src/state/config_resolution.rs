@@ -3,6 +3,7 @@
 //! Methods for loading, saving, and resolving local configs and model names.
 
 use crate::config::{ApiParams, ConfigDefaults, LocalConfig, ResolvedConfig};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -104,6 +105,7 @@ impl AppState {
             fallback_tool: self.config.fallback_tool.clone(),
             storage: self.config.storage.clone(),
             url_policy: self.config.url_policy.clone(),
+            extra: BTreeMap::new(),
         };
 
         // Apply environment variable overrides (between global config and local.toml)

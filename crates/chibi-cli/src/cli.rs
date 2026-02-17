@@ -297,6 +297,10 @@ pub struct Cli {
     #[arg(long = "raw")]
     pub raw: bool,
 
+    /// Override a config value for this invocation (repeatable, KEY=VALUE)
+    #[arg(short = 's', long = "set", value_name = "KEY=VALUE")]
+    pub set: Vec<String>,
+
     // === Debug options ===
     /// Enable debug features (request-log, response-meta, all)
     #[arg(long = "debug", value_name = "KEY")]
@@ -668,6 +672,21 @@ impl Cli {
             debug: debug_keys,
         };
 
+        // Parse -s/--set KEY=VALUE pairs
+        let config_overrides: Vec<(String, String)> = self
+            .set
+            .iter()
+            .map(|s| {
+                let (k, v) = s.split_once('=').ok_or_else(|| {
+                    io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("--set value must be KEY=VALUE, got: {}", s),
+                    )
+                })?;
+                Ok((k.to_string(), v.to_string()))
+            })
+            .collect::<io::Result<_>>()?;
+
         Ok(ChibiInput {
             command,
             flags,
@@ -676,6 +695,7 @@ impl Cli {
             raw: self.raw,
             md_file,
             force_markdown,
+            config_overrides,
         })
     }
 
@@ -930,8 +950,8 @@ mod tests {
 
     #[test]
     fn test_prompt_with_dash_requires_double_dash() {
-        // Prompts starting with - should use -- separator
-        let result = parse_cli("-starts-with-dash");
+        // Prompts starting with - should use -- separator (use a letter not claimed by any flag)
+        let result = parse_cli("-qwerty");
         assert!(result.is_err());
 
         // With --, it works
@@ -1772,5 +1792,62 @@ mod tests {
                 .any(|k| matches!(k, DebugKey::RequestLog))
         );
         assert!(input.force_markdown);
+    }
+
+    // === -s/--set config override tests ===
+
+    #[test]
+    fn test_set_single_override() {
+        let input = parse_input("-s fuel=50").unwrap();
+        assert_eq!(
+            input.config_overrides,
+            vec![("fuel".to_string(), "50".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_set_multiple_overrides() {
+        let input = parse_input("-s fuel=50 -s model=gpt-4").unwrap();
+        assert_eq!(input.config_overrides.len(), 2);
+        assert_eq!(input.config_overrides[0], ("fuel".to_string(), "50".to_string()));
+        assert_eq!(
+            input.config_overrides[1],
+            ("model".to_string(), "gpt-4".to_string())
+        );
+    }
+
+    #[test]
+    fn test_set_long_form() {
+        let input = parse_input("--set fuel=50").unwrap();
+        assert_eq!(
+            input.config_overrides,
+            vec![("fuel".to_string(), "50".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_set_value_with_equals() {
+        // values can contain '=' (split on first only)
+        let input = parse_input("-s api.stop=a=b").unwrap();
+        assert_eq!(
+            input.config_overrides,
+            vec![("api.stop".to_string(), "a=b".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_set_missing_equals_errors() {
+        let result = parse_input("-s fuelonly");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_with_prompt() {
+        let input = parse_input("-s fuel=5 -- hello world").unwrap();
+        assert_eq!(
+            input.config_overrides,
+            vec![("fuel".to_string(), "5".to_string())]
+        );
+        assert!(matches!(input.command, Command::SendPrompt { ref prompt } if prompt == "hello world"));
     }
 }

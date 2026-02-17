@@ -6,8 +6,9 @@
 
 use crate::partition::StorageConfig;
 use crate::tools::security::UrlPolicy;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 // ============================================================================
 // Config Macros
@@ -63,12 +64,61 @@ macro_rules! config_get_field {
     };
 }
 
+/// Early-return from `set_field` for simple config fields.
+///
+/// Parses `$value` into the appropriate type and assigns it, returning `Ok(())`.
+/// Falls through for fields not listed here (handled by the caller's match block).
+///
+/// Parse modes:
+/// - `bool`: parses "true"/"false"
+/// - `usize`: parses via `str::parse::<usize>()`
+/// - `u64`: parses via `str::parse::<u64>()`
+/// - `f32`: parses via `str::parse::<f32>()`
+/// - `string`: clones directly
+macro_rules! config_set_field {
+    ($self:expr, $path:expr, $value:expr,
+     $(bool: $($b_field:ident),* ;)?
+     $(usize: $($u_field:ident),* ;)?
+     $(u64: $($u64_field:ident),* ;)?
+     $(f32: $($f_field:ident),* ;)?
+     $(string: $($s_field:ident),* ;)?
+    ) => {
+        match $path {
+            $($( stringify!($b_field) => {
+                $self.$b_field = $value.parse::<bool>()
+                    .map_err(|_| format!("invalid bool for '{}': {}", $path, $value))?;
+                return Ok(());
+            }, )*)?
+            $($( stringify!($u_field) => {
+                $self.$u_field = $value.parse::<usize>()
+                    .map_err(|_| format!("invalid usize for '{}': {}", $path, $value))?;
+                return Ok(());
+            }, )*)?
+            $($( stringify!($u64_field) => {
+                $self.$u64_field = $value.parse::<u64>()
+                    .map_err(|_| format!("invalid u64 for '{}': {}", $path, $value))?;
+                return Ok(());
+            }, )*)?
+            $($( stringify!($f_field) => {
+                $self.$f_field = $value.parse::<f32>()
+                    .map_err(|_| format!("invalid f32 for '{}': {}", $path, $value))?;
+                return Ok(());
+            }, )*)?
+            $($( stringify!($s_field) => {
+                $self.$s_field = $value.to_string();
+                return Ok(());
+            }, )*)?
+            _ => {} // fall through to caller's match
+        }
+    };
+}
+
 // ============================================================================
 // API Parameters Types
 // ============================================================================
 
 /// Reasoning effort level for models that support it (e.g., OpenAI o3, Grok)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
     XHigh,
@@ -118,7 +168,7 @@ pub struct ReasoningConfig {
 
 /// Raw deserialization target for ReasoningConfig.
 /// Mutual exclusivity is enforced during From conversion.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, JsonSchema)]
 struct ReasoningConfigRaw {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     effort: Option<ReasoningEffort>,
@@ -214,8 +264,21 @@ impl ReasoningConfig {
     }
 }
 
+/// Delegate JsonSchema to ReasoningConfigRaw (the canonical serde shape).
+impl JsonSchema for ReasoningConfig {
+    fn schema_name() -> String {
+        "ReasoningConfig".to_string()
+    }
+
+    fn json_schema(
+        generator: &mut schemars::r#gen::SchemaGenerator,
+    ) -> schemars::schema::Schema {
+        ReasoningConfigRaw::json_schema(generator)
+    }
+}
+
 /// Tool choice mode for the API
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolChoiceMode {
     Auto,
@@ -224,13 +287,13 @@ pub enum ToolChoiceMode {
 }
 
 /// Specific function to call
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolChoiceFunction {
     pub name: String,
 }
 
 /// Tool choice - either a mode or a specific function
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ToolChoice {
     Mode(ToolChoiceMode),
@@ -242,7 +305,7 @@ pub enum ToolChoice {
 }
 
 /// Response format specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseFormat {
     Text,
@@ -254,7 +317,7 @@ pub enum ResponseFormat {
 }
 
 /// API parameters that can be configured at various levels
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ApiParams {
     // OpenRouter-specific
     /// Enable prompt caching (default: true, mainly for Anthropic models)
@@ -352,7 +415,7 @@ impl ApiParams {
 }
 
 /// Tool filtering configuration
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ToolsConfig {
     /// Allowlist - only these tools are available (if set)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -587,7 +650,7 @@ pub struct Config {
 
 /// Per-context config from `~/.chibi/contexts/<name>/local.toml`
 /// Note: Core fields only. Presentation overrides are in CLI layer.
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, JsonSchema)]
 pub struct LocalConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
@@ -752,6 +815,9 @@ pub struct ResolvedConfig {
     pub storage: StorageConfig,
     /// URL security policy (None = use permission handler fallback)
     pub url_policy: Option<UrlPolicy>,
+    /// Arbitrary per-invocation key-value overrides (freeform escape hatch).
+    /// Unknown field paths in `set_field` land here; `get_field` falls through to here.
+    pub extra: BTreeMap<String, String>,
 }
 
 impl ResolvedConfig {
@@ -833,7 +899,8 @@ impl ResolvedConfig {
                 .to_string(),
             ),
 
-            _ => None,
+            // Fall through to extra (freeform per-invocation overrides)
+            _ => self.extra.get(path).cloned(),
         }
     }
 
@@ -886,6 +953,119 @@ impl ResolvedConfig {
             "storage.bytes_per_token",
             "storage.enable_bloom_filters",
         ]
+    }
+
+    /// Set a config field by path (e.g., "model", "api.temperature", "fuel").
+    ///
+    /// Known fields are parsed into their native types; unknown paths are stored
+    /// in `extra` as freeform string key-value pairs.
+    /// Returns `Err` on parse failure for known fields.
+    pub fn set_field(&mut self, path: &str, value: &str) -> Result<(), String> {
+        // Macro handles standard top-level fields
+        config_set_field!(self, path, value,
+            bool: verbose, hide_tool_calls, no_tool_calls, auto_compact,
+                  reflection_enabled, auto_cleanup_cache;
+            usize: context_window_limit, reflection_character_limit,
+                   fuel, fuel_empty_response_cost,
+                   tool_output_cache_threshold, tool_cache_preview_chars;
+            u64: tool_cache_max_age_days;
+            f32: warn_threshold_percent, auto_compact_threshold,
+                 rolling_compact_drop_percentage;
+            string: model, username, fallback_tool;
+        );
+
+        // Fields with custom parsing
+        match path {
+            // API params (api.*)
+            "api.temperature" => {
+                self.api.temperature = Some(value.parse::<f32>()
+                    .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?);
+            }
+            "api.max_tokens" => {
+                self.api.max_tokens = Some(value.parse::<usize>()
+                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+            }
+            "api.top_p" => {
+                self.api.top_p = Some(value.parse::<f32>()
+                    .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?);
+            }
+            "api.prompt_caching" => {
+                self.api.prompt_caching = Some(value.parse::<bool>()
+                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+            }
+            "api.parallel_tool_calls" => {
+                self.api.parallel_tool_calls = Some(value.parse::<bool>()
+                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+            }
+            "api.frequency_penalty" => {
+                self.api.frequency_penalty = Some(value.parse::<f32>()
+                    .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?);
+            }
+            "api.presence_penalty" => {
+                self.api.presence_penalty = Some(value.parse::<f32>()
+                    .map_err(|_| format!("invalid f32 for '{}': {}", path, value))?);
+            }
+            "api.seed" => {
+                self.api.seed = Some(value.parse::<u64>()
+                    .map_err(|_| format!("invalid u64 for '{}': {}", path, value))?);
+            }
+
+            // Reasoning config (api.reasoning.*)
+            "api.reasoning.effort" => {
+                let effort: ReasoningEffort = serde_json::from_str(&format!("\"{}\"", value))
+                    .map_err(|_| format!("invalid reasoning effort for '{}': {}", path, value))?;
+                self.api.reasoning.effort = Some(effort);
+            }
+            "api.reasoning.max_tokens" => {
+                self.api.reasoning.max_tokens = Some(value.parse::<usize>()
+                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+            }
+            "api.reasoning.exclude" => {
+                self.api.reasoning.exclude = Some(value.parse::<bool>()
+                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+            }
+            "api.reasoning.enabled" => {
+                self.api.reasoning.enabled = Some(value.parse::<bool>()
+                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+            }
+
+            // Storage config (storage.*)
+            "storage.partition_max_entries" => {
+                self.storage.partition_max_entries = Some(value.parse::<usize>()
+                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+            }
+            "storage.partition_max_age_seconds" => {
+                self.storage.partition_max_age_seconds = Some(value.parse::<u64>()
+                    .map_err(|_| format!("invalid u64 for '{}': {}", path, value))?);
+            }
+            "storage.partition_max_tokens" => {
+                self.storage.partition_max_tokens = Some(value.parse::<usize>()
+                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+            }
+            "storage.bytes_per_token" => {
+                self.storage.bytes_per_token = Some(value.parse::<usize>()
+                    .map_err(|_| format!("invalid usize for '{}': {}", path, value))?);
+            }
+            "storage.enable_bloom_filters" => {
+                self.storage.enable_bloom_filters = Some(value.parse::<bool>()
+                    .map_err(|_| format!("invalid bool for '{}': {}", path, value))?);
+            }
+
+            // Unknown paths → freeform extra
+            _ => {
+                self.extra.insert(path.to_string(), value.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply a sequence of key-value overrides, short-circuiting on the first error.
+    pub fn apply_overrides_from_pairs(&mut self, pairs: &[(String, String)]) -> Result<(), String> {
+        for (key, value) in pairs {
+            self.set_field(key, value)
+                .map_err(|e| format!("override '{}={}': {}", key, value, e))?;
+        }
+        Ok(())
     }
 }
 
@@ -987,6 +1167,7 @@ mod tests {
                 ..Default::default()
             },
             url_policy: None,
+            extra: BTreeMap::new(),
         };
 
         assert_eq!(config.get_field("model"), Some("test-model".to_string()));
@@ -1082,5 +1263,154 @@ mod tests {
             merged.exclude,
             Some(vec!["tool_a".to_string(), "tool_b".to_string()])
         );
+    }
+
+    /// Helper: minimal ResolvedConfig for set_field tests
+    fn test_resolved_config() -> ResolvedConfig {
+        ResolvedConfig {
+            api_key: None,
+            model: "test-model".to_string(),
+            context_window_limit: 4096,
+            warn_threshold_percent: 80.0,
+            verbose: false,
+            hide_tool_calls: false,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            fuel: 30,
+            fuel_empty_response_cost: 15,
+            username: "testuser".to_string(),
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: true,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api: ApiParams::defaults(),
+            tools: ToolsConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            storage: StorageConfig::default(),
+            url_policy: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_set_field_bool() {
+        let mut config = test_resolved_config();
+        config.set_field("verbose", "true").unwrap();
+        assert_eq!(config.get_field("verbose"), Some("true".to_string()));
+        config.set_field("verbose", "false").unwrap();
+        assert_eq!(config.get_field("verbose"), Some("false".to_string()));
+    }
+
+    #[test]
+    fn test_set_field_usize() {
+        let mut config = test_resolved_config();
+        config.set_field("fuel", "50").unwrap();
+        assert_eq!(config.get_field("fuel"), Some("50".to_string()));
+        config.set_field("fuel_empty_response_cost", "5").unwrap();
+        assert_eq!(
+            config.get_field("fuel_empty_response_cost"),
+            Some("5".to_string())
+        );
+    }
+
+    #[test]
+    fn test_set_field_f32() {
+        let mut config = test_resolved_config();
+        config.set_field("auto_compact_threshold", "0.9").unwrap();
+        assert_eq!(config.auto_compact_threshold, 0.9);
+        config
+            .set_field("warn_threshold_percent", "75.5")
+            .unwrap();
+        assert_eq!(config.warn_threshold_percent, 75.5);
+    }
+
+    #[test]
+    fn test_set_field_string() {
+        let mut config = test_resolved_config();
+        config
+            .set_field("model", "claude-sonnet-4-5-20250929")
+            .unwrap();
+        assert_eq!(
+            config.get_field("model"),
+            Some("claude-sonnet-4-5-20250929".to_string())
+        );
+        config.set_field("username", "alice").unwrap();
+        assert_eq!(config.get_field("username"), Some("alice".to_string()));
+        config.set_field("fallback_tool", "call_agent").unwrap();
+        assert_eq!(
+            config.get_field("fallback_tool"),
+            Some("call_agent".to_string())
+        );
+    }
+
+    #[test]
+    fn test_set_field_nested() {
+        let mut config = test_resolved_config();
+        config.set_field("api.temperature", "0.7").unwrap();
+        assert_eq!(config.api.temperature, Some(0.7));
+        config.set_field("api.reasoning.effort", "high").unwrap();
+        assert_eq!(config.api.reasoning.effort, Some(ReasoningEffort::High));
+        config
+            .set_field("storage.partition_max_entries", "1000")
+            .unwrap();
+        assert_eq!(config.storage.partition_max_entries, Some(1000));
+    }
+
+    #[test]
+    fn test_set_field_unknown_goes_to_extra() {
+        let mut config = test_resolved_config();
+        config
+            .set_field("my_custom_key", "my_custom_value")
+            .unwrap();
+        assert_eq!(
+            config.get_field("my_custom_key"),
+            Some("my_custom_value".to_string())
+        );
+        assert_eq!(
+            config.extra.get("my_custom_key"),
+            Some(&"my_custom_value".to_string())
+        );
+    }
+
+    #[test]
+    fn test_set_field_parse_error() {
+        let mut config = test_resolved_config();
+        let result = config.set_field("fuel", "notanumber");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid usize"));
+    }
+
+    #[test]
+    fn test_apply_overrides_from_pairs() {
+        let mut config = test_resolved_config();
+        let pairs = vec![
+            ("fuel".to_string(), "50".to_string()),
+            ("model".to_string(), "gpt-4".to_string()),
+            ("verbose".to_string(), "true".to_string()),
+        ];
+        config.apply_overrides_from_pairs(&pairs).unwrap();
+        assert_eq!(config.fuel, 50);
+        assert_eq!(config.model, "gpt-4");
+        assert!(config.verbose);
+    }
+
+    #[test]
+    fn test_apply_overrides_from_pairs_stops_on_error() {
+        let mut config = test_resolved_config();
+        let pairs = vec![
+            ("fuel".to_string(), "50".to_string()),
+            ("verbose".to_string(), "notabool".to_string()),
+            ("model".to_string(), "should-not-reach".to_string()),
+        ];
+        let result = config.apply_overrides_from_pairs(&pairs);
+        assert!(result.is_err());
+        // first pair applied, second failed, third not reached
+        assert_eq!(config.fuel, 50);
+        assert_eq!(config.model, "test-model"); // unchanged
     }
 }

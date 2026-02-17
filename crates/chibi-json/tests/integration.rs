@@ -478,3 +478,97 @@ fn test_result_output_format() {
         "version result should contain chibi-json"
     );
 }
+
+// === per-invocation config override tests ===
+
+#[test]
+fn test_json_schema_includes_config_field() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi-json"))
+        .arg("--json-schema")
+        .output()
+        .expect("Failed to run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let schema: serde_json::Value =
+        serde_json::from_str(&stdout).expect("schema should be valid JSON");
+
+    // config and overrides fields should be present in the schema
+    let properties = &schema["properties"];
+    assert!(
+        properties.get("config").is_some(),
+        "schema should include 'config' field"
+    );
+    assert!(
+        properties.get("overrides").is_some(),
+        "schema should include 'overrides' field"
+    );
+}
+
+#[test]
+fn test_json_schema_config_contains_fuel() {
+    let output = Command::new(env!("CARGO_BIN_EXE_chibi-json"))
+        .arg("--json-schema")
+        .output()
+        .expect("Failed to run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // fuel should appear somewhere in the schema (nested under config's LocalConfig)
+    assert!(
+        stdout.contains("fuel"),
+        "schema should mention 'fuel' (the original bug)"
+    );
+}
+
+#[test]
+fn test_config_override_accepted() {
+    let tmp = tempfile::tempdir().expect("failed to create tempdir");
+    setup_context(tmp.path(), "default");
+
+    // config overrides should be accepted without error
+    let (_, _, success) = run_chibi_json_with_home(
+        serde_json::json!({
+            "command": "no_op",
+            "context": "default",
+            "config": {"fuel": 5}
+        }),
+        tmp.path(),
+    );
+    assert!(success, "config override should be accepted");
+}
+
+#[test]
+fn test_string_overrides_accepted() {
+    let tmp = tempfile::tempdir().expect("failed to create tempdir");
+    setup_context(tmp.path(), "default");
+
+    // string-keyed overrides should be accepted without error
+    let (_, _, success) = run_chibi_json_with_home(
+        serde_json::json!({
+            "command": "no_op",
+            "context": "default",
+            "overrides": {"fuel": "5", "model": "test-model"}
+        }),
+        tmp.path(),
+    );
+    assert!(success, "string overrides should be accepted");
+}
+
+#[test]
+fn test_invalid_string_override_errors() {
+    let tmp = tempfile::tempdir().expect("failed to create tempdir");
+    setup_context(tmp.path(), "default");
+
+    let (stdout, _, success) = run_chibi_json_with_home(
+        serde_json::json!({
+            "command": "no_op",
+            "context": "default",
+            "overrides": {"fuel": "notanumber"}
+        }),
+        tmp.path(),
+    );
+    assert!(!success, "invalid override should fail");
+    assert!(
+        stdout.contains("error"),
+        "should report error for invalid override"
+    );
+}

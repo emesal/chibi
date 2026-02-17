@@ -235,6 +235,7 @@ mod tests {
     use crate::config::ResolvedConfig;
     use ratatoskr::Role;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_to_ratatoskr_message_user() {
@@ -378,6 +379,7 @@ mod tests {
             fallback_tool: "call_user".to_string(),
             storage: crate::partition::StorageConfig::default(),
             url_policy: None,
+            extra: BTreeMap::new(),
         }
     }
 
