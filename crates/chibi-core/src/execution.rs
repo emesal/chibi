@@ -239,7 +239,7 @@ async fn dispatch_command<S: ResponseSink>(
             count,
         } => {
             let ctx_name = ctx.as_deref().unwrap_or(context);
-            show_log(chibi, ctx_name, *count, verbose, output)?;
+            show_log(chibi, ctx_name, *count, output)?;
             Ok(CommandEffect::None)
         }
         Command::Inspect {
@@ -468,13 +468,12 @@ async fn send_prompt_inner<S: ResponseSink>(
 
 /// Show log entries for a context.
 ///
-/// Renders message content via `emit_markdown()`. Tool calls and results
-/// are emitted as plain text. In JSON mode, entries are emitted via `emit_entry()`.
+/// Selects entries by count and emits each via `emit_entry()`.
+/// Formatting is the responsibility of the sink implementation.
 fn show_log(
     chibi: &Chibi,
     context: &str,
     count: isize,
-    verbose: bool,
     output: &dyn OutputSink,
 ) -> io::Result<()> {
     let entries = chibi.app.read_jsonl_transcript(context)?;
@@ -496,65 +495,8 @@ fn show_log(
         entries.iter().take(n).collect()
     };
 
-    // JSON mode: emit structured entries directly
-    if output.is_json_mode() {
-        for entry in selected {
-            output.emit_entry(entry)?;
-        }
-        return Ok(());
-    }
-
-    // Text mode: format for human reading
     for entry in selected {
-        match entry.entry_type.as_str() {
-            context::ENTRY_TYPE_MESSAGE => {
-                output.emit_result(&format!("[{}]", entry.from.to_uppercase()));
-                output.emit_markdown(&entry.content)?;
-                output.newline();
-            }
-            context::ENTRY_TYPE_TOOL_CALL => {
-                if verbose {
-                    output.emit_result(&format!("[TOOL CALL: {}]\n{}\n", entry.to, entry.content));
-                } else {
-                    let args_preview = if entry.content.len() > 60 {
-                        format!("{}...", &entry.content[..60])
-                    } else {
-                        entry.content.clone()
-                    };
-                    output.emit_result(&format!("[TOOL: {}] {}", entry.to, args_preview));
-                }
-            }
-            context::ENTRY_TYPE_TOOL_RESULT => {
-                if verbose {
-                    output.emit_result(&format!(
-                        "[TOOL RESULT: {}]\n{}\n",
-                        entry.from, entry.content
-                    ));
-                } else {
-                    let size = entry.content.len();
-                    let size_str = if size > 1024 {
-                        format!("{:.1}kb", size as f64 / 1024.0)
-                    } else {
-                        format!("{}b", size)
-                    };
-                    output.emit_result(&format!("  -> {}", size_str));
-                }
-            }
-            "compaction" => {
-                if verbose {
-                    output.emit_result(&format!("[COMPACTION]: {}\n", entry.content));
-                }
-            }
-            _ => {
-                if verbose {
-                    output.emit_result(&format!(
-                        "[{}]: {}\n",
-                        entry.entry_type.to_uppercase(),
-                        entry.content
-                    ));
-                }
-            }
-        }
+        output.emit_entry(entry)?;
     }
     Ok(())
 }

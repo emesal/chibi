@@ -37,10 +37,6 @@ impl OutputSink for JsonOutputSink {
         Ok(())
     }
 
-    fn is_json_mode(&self) -> bool {
-        true
-    }
-
     fn confirm(&self, _prompt: &str) -> bool {
         true // trust mode -- programmatic callers have already decided
     }

@@ -18,14 +18,14 @@ pub trait OutputSink {
     /// Emit a blank line.
     fn newline(&self);
 
-    /// Emit a transcript entry (for JSON-mode structured output).
+    /// Emit a transcript entry for display.
+    ///
+    /// Each sink formats entries appropriately for its output medium:
+    /// CLI renders human-readable text, JSON emits structured JSONL.
     fn emit_entry(&self, entry: &TranscriptEntry) -> io::Result<()>;
 
-    /// Whether this sink operates in JSON mode (affects downstream formatting).
-    fn is_json_mode(&self) -> bool;
-
     /// Prompt the user for confirmation. Returns true if confirmed.
-    /// JSON-mode implementations should auto-approve (return true).
+    /// Programmatic sinks (e.g. chibi-json) should auto-approve (return true).
     fn confirm(&self, prompt: &str) -> bool;
 
     /// Emit content that may contain markdown.

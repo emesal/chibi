@@ -12,18 +12,15 @@ use std::io::{self, IsTerminal, Write};
 ///
 /// Implements `OutputSink` directly; all output goes through trait methods.
 /// Always operates in text mode — JSON output belongs to chibi-json.
-pub struct OutputHandler;
-
-impl Default for OutputHandler {
-    fn default() -> Self {
-        Self
-    }
+#[derive(Default)]
+pub struct OutputHandler {
+    verbose: bool,
 }
 
 impl OutputHandler {
     /// Create a new output handler.
-    pub fn new() -> Self {
-        Self
+    pub fn new(verbose: bool) -> Self {
+        Self { verbose }
     }
 }
 
@@ -46,14 +43,59 @@ impl OutputSink for OutputHandler {
         println!();
     }
 
-    fn emit_entry(&self, _entry: &TranscriptEntry) -> io::Result<()> {
-        // Text mode: transcript entries are handled by the response sink,
-        // not emitted directly. No-op.
-        Ok(())
-    }
+    fn emit_entry(&self, entry: &TranscriptEntry) -> io::Result<()> {
+        use chibi_core::context;
 
-    fn is_json_mode(&self) -> bool {
-        false
+        match entry.entry_type.as_str() {
+            context::ENTRY_TYPE_MESSAGE => {
+                self.emit_result(&format!("[{}]", entry.from.to_uppercase()));
+                self.emit_markdown(&entry.content)?;
+                self.newline();
+            }
+            context::ENTRY_TYPE_TOOL_CALL => {
+                if self.verbose {
+                    self.emit_result(&format!("[TOOL CALL: {}]\n{}\n", entry.to, entry.content));
+                } else {
+                    let args_preview = if entry.content.len() > 60 {
+                        format!("{}...", &entry.content[..60])
+                    } else {
+                        entry.content.clone()
+                    };
+                    self.emit_result(&format!("[TOOL: {}] {}", entry.to, args_preview));
+                }
+            }
+            context::ENTRY_TYPE_TOOL_RESULT => {
+                if self.verbose {
+                    self.emit_result(&format!(
+                        "[TOOL RESULT: {}]\n{}\n",
+                        entry.from, entry.content
+                    ));
+                } else {
+                    let size = entry.content.len();
+                    let size_str = if size > 1024 {
+                        format!("{:.1}kb", size as f64 / 1024.0)
+                    } else {
+                        format!("{}b", size)
+                    };
+                    self.emit_result(&format!("  -> {}", size_str));
+                }
+            }
+            "compaction" => {
+                if self.verbose {
+                    self.emit_result(&format!("[COMPACTION]: {}\n", entry.content));
+                }
+            }
+            _ => {
+                if self.verbose {
+                    self.emit_result(&format!(
+                        "[{}]: {}\n",
+                        entry.entry_type.to_uppercase(),
+                        entry.content
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn confirm(&self, prompt: &str) -> bool {
@@ -84,14 +126,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_text_mode() {
-        let handler = OutputHandler::new();
-        assert!(!handler.is_json_mode());
-    }
-
-    #[test]
-    fn test_emit_entry_noop() {
-        let handler = OutputHandler::new();
+    fn test_emit_entry_message() {
+        let handler = OutputHandler::new(false);
         let entry = TranscriptEntry {
             id: "test-id".to_string(),
             timestamp: 12345,
@@ -102,20 +138,88 @@ mod tests {
             metadata: None,
             tool_call_id: None,
         };
-        // Should not panic (no-op in text mode)
-        let _ = handler.emit_entry(&entry);
+        // Should not panic — formats as human-readable text
+        handler.emit_entry(&entry).unwrap();
+    }
+
+    #[test]
+    fn test_emit_entry_tool_call_compact() {
+        let handler = OutputHandler::new(false);
+        let entry = TranscriptEntry {
+            id: "test-id".to_string(),
+            timestamp: 12345,
+            from: "assistant".to_string(),
+            to: "shell_exec".to_string(),
+            content: r#"{"command":"ls"}"#.to_string(),
+            entry_type: "tool_call".to_string(),
+            metadata: None,
+            tool_call_id: None,
+        };
+        // Compact mode: shows tool name + truncated args
+        handler.emit_entry(&entry).unwrap();
+    }
+
+    #[test]
+    fn test_emit_entry_tool_call_verbose() {
+        let handler = OutputHandler::new(true);
+        let entry = TranscriptEntry {
+            id: "test-id".to_string(),
+            timestamp: 12345,
+            from: "assistant".to_string(),
+            to: "shell_exec".to_string(),
+            content: r#"{"command":"ls -la"}"#.to_string(),
+            entry_type: "tool_call".to_string(),
+            metadata: None,
+            tool_call_id: None,
+        };
+        // Verbose mode: shows full content
+        handler.emit_entry(&entry).unwrap();
+    }
+
+    #[test]
+    fn test_emit_entry_tool_result_compact() {
+        let handler = OutputHandler::new(false);
+        let entry = TranscriptEntry {
+            id: "test-id".to_string(),
+            timestamp: 12345,
+            from: "shell_exec".to_string(),
+            to: "assistant".to_string(),
+            content: "file1.rs\nfile2.rs\n".to_string(),
+            entry_type: "tool_result".to_string(),
+            metadata: None,
+            tool_call_id: None,
+        };
+        // Compact mode: shows size only
+        handler.emit_entry(&entry).unwrap();
+    }
+
+    #[test]
+    fn test_emit_entry_skips_compaction_when_not_verbose() {
+        let handler = OutputHandler::new(false);
+        let entry = TranscriptEntry {
+            id: "test-id".to_string(),
+            timestamp: 12345,
+            from: "system".to_string(),
+            to: "system".to_string(),
+            content: "compacted 10 entries".to_string(),
+            entry_type: "compaction".to_string(),
+            metadata: None,
+            tool_call_id: None,
+        };
+        // Non-verbose: compaction entries are silently skipped
+        handler.emit_entry(&entry).unwrap();
     }
 
     #[test]
     fn test_diagnostic_verbose_false() {
-        let handler = OutputHandler::new();
+        let handler = OutputHandler::new(false);
         // Should not panic (no output when verbose is false)
         handler.diagnostic("Test message", false);
     }
 
     #[test]
     fn test_diagnostic_verbose_true() {
-        let handler = OutputHandler::new();
+        let handler = OutputHandler::new(false);
         // Should not panic
         handler.diagnostic("Test message", true);
     }

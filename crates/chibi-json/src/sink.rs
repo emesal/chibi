@@ -67,8 +67,4 @@ impl ResponseSink for JsonResponseSink {
         }
         Ok(())
     }
-
-    fn is_json_mode(&self) -> bool {
-        true
-    }
 }

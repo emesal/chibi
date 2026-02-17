@@ -616,7 +616,6 @@ async fn collect_streaming_response<S: ResponseSink>(
     let mut has_tool_calls = false;
     let mut response_meta: Option<serde_json::Value> = None;
     let mut is_first_content = true;
-    let json_mode = sink.is_json_mode();
 
     while let Some(event_result) = stream.next().await {
         let event = event_result.map_err(|e| io::Error::other(format!("Stream error: {}", e)))?;
@@ -639,9 +638,7 @@ async fn collect_streaming_response<S: ResponseSink>(
                 };
 
                 full_response.push_str(&text);
-                if !json_mode {
-                    sink.handle(ResponseEvent::TextChunk(&text))?;
-                }
+                sink.handle(ResponseEvent::TextChunk(&text))?;
             }
             ChatEvent::Reasoning(chunk) => {
                 // Reasoning is ephemeral thinking — always forward to sink so
@@ -1906,9 +1903,7 @@ pub async fn send_prompt<S: ResponseSink>(
             }
 
             // Signal streaming finished
-            if !sink.is_json_mode() {
-                sink.handle(ResponseEvent::Finished)?;
-            }
+            sink.handle(ResponseEvent::Finished)?;
 
             // Handle tool calls
             if response.has_tool_calls && !response.tool_calls.is_empty() {

@@ -87,14 +87,6 @@ pub trait ResponseSink {
     /// Called for each event during prompt processing. Implementations
     /// should handle the event appropriately for their output medium.
     fn handle(&mut self, event: ResponseEvent<'_>) -> io::Result<()>;
-
-    /// Returns true if the sink is in JSON output mode.
-    ///
-    /// When in JSON mode, text chunks should typically not be streamed
-    /// to the terminal, as the output will be formatted as JSON instead.
-    fn is_json_mode(&self) -> bool {
-        false
-    }
 }
 
 /// A sink that collects responses for programmatic use.
@@ -164,11 +156,5 @@ mod tests {
         .unwrap();
         assert_eq!(sink.diagnostics.len(), 1);
         assert_eq!(sink.diagnostics[0], "test message");
-    }
-
-    #[test]
-    fn test_is_json_mode_default() {
-        let sink = CollectingSink::new();
-        assert!(!sink.is_json_mode());
     }
 }
