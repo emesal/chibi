@@ -353,11 +353,15 @@ fn apply_request_modifications<S: ResponseSink>(
 ///
 /// Handles three keys from hook return values:
 /// - `"fallback"`: override the fallback tool (existing behaviour)
-/// - `"fuel"`: absolute fuel override (e.g. from `pre_agentic_loop`)
-/// - `"fuel_delta"`: relative fuel adjustment (e.g. from `post_tool_batch`)
+/// - `"fuel"`: absolute fuel override (e.g. from `pre_agentic_loop`); ignored when `fuel_unlimited`
+/// - `"fuel_delta"`: relative fuel adjustment (e.g. from `post_tool_batch`); ignored when `fuel_unlimited`
+///
+/// Note: `"fuel": 0` from a hook means "exhaust immediately" (not unlimited).
+/// Unlimited mode is determined solely by the configured `fuel = 0`, not by runtime hook values.
 fn apply_hook_overrides<S: ResponseSink>(
     handoff: &mut tools::Handoff,
     fuel_remaining: &mut usize,
+    fuel_unlimited: bool,
     hook_results: &[(String, serde_json::Value)],
     verbose: bool,
     sink: &mut S,
@@ -383,26 +387,28 @@ fn apply_hook_overrides<S: ResponseSink>(
                 })?;
             }
         }
-        if let Some(fuel) = hook_result.get("fuel").and_then(|v| v.as_u64()) {
-            *fuel_remaining = fuel as usize;
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!("[Hook {} set fuel to {}]", hook_name, fuel),
-                    verbose_only: true,
-                })?;
+        if !fuel_unlimited {
+            if let Some(fuel) = hook_result.get("fuel").and_then(|v| v.as_u64()) {
+                *fuel_remaining = fuel as usize;
+                if verbose {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!("[Hook {} set fuel to {}]", hook_name, fuel),
+                        verbose_only: true,
+                    })?;
+                }
             }
-        }
-        if let Some(delta) = hook_result.get("fuel_delta").and_then(|v| v.as_i64()) {
-            if delta < 0 {
-                *fuel_remaining = fuel_remaining.saturating_sub((-delta) as usize);
-            } else {
-                *fuel_remaining = fuel_remaining.saturating_add(delta as usize);
-            }
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!("[Hook {} adjusted fuel by {}]", hook_name, delta),
-                    verbose_only: true,
-                })?;
+            if let Some(delta) = hook_result.get("fuel_delta").and_then(|v| v.as_i64()) {
+                if delta < 0 {
+                    *fuel_remaining = fuel_remaining.saturating_sub((-delta) as usize);
+                } else {
+                    *fuel_remaining = fuel_remaining.saturating_add(delta as usize);
+                }
+                if verbose {
+                    sink.handle(ResponseEvent::Diagnostic {
+                        message: format!("[Hook {} adjusted fuel by {}]", hook_name, delta),
+                        verbose_only: true,
+                    })?;
+                }
             }
         }
     }
@@ -1365,6 +1371,7 @@ async fn process_tool_calls<S: ResponseSink>(
     resolved_config: &ResolvedConfig,
     fuel_remaining: &mut usize,
     fuel_total: usize,
+    fuel_unlimited: bool,
     verbose: bool,
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
@@ -1572,15 +1579,17 @@ async fn process_tool_calls<S: ResponseSink>(
             })
         })
         .collect();
-    let hook_data = json!({
+    let mut hook_data = json!({
         "context_name": context_name,
-        "fuel_remaining": fuel_remaining,
-        "fuel_total": fuel_total,
         "current_fallback": resolved_config.fallback_tool,
         "tool_calls": tool_batch_info,
     });
+    if !fuel_unlimited {
+        hook_data["fuel_remaining"] = json!(*fuel_remaining);
+        hook_data["fuel_total"] = json!(fuel_total);
+    }
     let hook_results = tools::execute_hook(tools, tools::HookPoint::PostToolBatch, &hook_data)?;
-    apply_hook_overrides(handoff, fuel_remaining, &hook_results, verbose, sink)?;
+    apply_hook_overrides(handoff, fuel_remaining, fuel_unlimited, &hook_results, verbose, sink)?;
 
     Ok(())
 }
@@ -1828,12 +1837,14 @@ pub async fn send_prompt<S: ResponseSink>(
 
         // Execute pre_api_tools hook
         let tool_info = build_tool_info_list(&all_tools, tools);
-        let hook_data = json!({
+        let mut hook_data = json!({
             "context_name": context.name,
             "tools": tool_info,
-            "fuel_remaining": fuel_remaining,
-            "fuel_total": fuel_total,
         });
+        if !fuel_unlimited {
+            hook_data["fuel_remaining"] = json!(fuel_remaining);
+            hook_data["fuel_total"] = json!(fuel_total);
+        }
         let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiTools, &hook_data)?;
         all_tools = filter_tools_from_hook_results(all_tools, &hook_results, verbose, sink)?;
 
@@ -1847,12 +1858,14 @@ pub async fn send_prompt<S: ResponseSink>(
             build_request_body(&resolved_config, &messages, tools_for_request, true);
 
         // Execute pre_api_request hook
-        let hook_data = json!({
+        let mut hook_data = json!({
             "context_name": context.name,
             "request_body": request_body,
-            "fuel_remaining": fuel_remaining,
-            "fuel_total": fuel_total,
         });
+        if !fuel_unlimited {
+            hook_data["fuel_remaining"] = json!(fuel_remaining);
+            hook_data["fuel_total"] = json!(fuel_total);
+        }
         let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
         request_body = apply_request_modifications(request_body, &hook_results, verbose, sink)?;
 
@@ -1872,18 +1885,21 @@ pub async fn send_prompt<S: ResponseSink>(
         let mut handoff = tools::Handoff::new(fallback);
 
         // Execute pre_agentic_loop hook
-        let hook_data = json!({
+        let mut hook_data = json!({
             "context_name": context.name,
-            "fuel_remaining": fuel_remaining,
-            "fuel_total": fuel_total,
             "current_fallback": resolved_config.fallback_tool,
             "message": final_prompt,
         });
+        if !fuel_unlimited {
+            hook_data["fuel_remaining"] = json!(fuel_remaining);
+            hook_data["fuel_total"] = json!(fuel_total);
+        }
         let hook_results =
             tools::execute_hook(tools, tools::HookPoint::PreAgenticLoop, &hook_data)?;
         apply_hook_overrides(
             &mut handoff,
             &mut fuel_remaining,
+            fuel_unlimited,
             &hook_results,
             verbose,
             sink,
@@ -1919,6 +1935,7 @@ pub async fn send_prompt<S: ResponseSink>(
                     &resolved_config,
                     &mut fuel_remaining,
                     fuel_total,
+                    fuel_unlimited,
                     verbose,
                     sink,
                     permission_handler,
