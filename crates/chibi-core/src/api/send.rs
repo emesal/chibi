@@ -2421,4 +2421,53 @@ mod tests {
         let result = evaluate_permission(&results, &hook_data, Some(&handler)).unwrap();
         assert_eq!(result, Err("blocked by policy".to_string()));
     }
+
+    #[test]
+    fn test_continuation_prompt_unlimited_mode_omits_fuel() {
+        // fuel_unlimited = true when fuel_total == 0
+        let fuel_total: usize = 0;
+        let fuel_remaining: usize = 0;
+        let fuel_unlimited = fuel_total == 0;
+        let fallback_tool = "call_user";
+        let continue_prompt = "keep going";
+
+        let prompt = if fuel_unlimited {
+            format!(
+                "[reengaged via {}. call_user(<message>) to end turn.]\n{}",
+                fallback_tool, continue_prompt
+            )
+        } else {
+            format!(
+                "[reengaged (fuel: {}/{}) via {}. call_user(<message>) to end turn.]\n{}",
+                fuel_remaining, fuel_total, fallback_tool, continue_prompt
+            )
+        };
+
+        assert!(!prompt.contains("fuel:"), "fuel info must not appear in unlimited mode");
+        assert!(prompt.contains("reengaged via call_user"));
+        assert!(prompt.contains("keep going"));
+    }
+
+    #[test]
+    fn test_continuation_prompt_limited_mode_includes_fuel() {
+        let fuel_total: usize = 10;
+        let fuel_remaining: usize = 7;
+        let fuel_unlimited = fuel_total == 0;
+        let fallback_tool = "call_user";
+        let continue_prompt = "keep going";
+
+        let prompt = if fuel_unlimited {
+            format!(
+                "[reengaged via {}. call_user(<message>) to end turn.]\n{}",
+                fallback_tool, continue_prompt
+            )
+        } else {
+            format!(
+                "[reengaged (fuel: {}/{}) via {}. call_user(<message>) to end turn.]\n{}",
+                fuel_remaining, fuel_total, fallback_tool, continue_prompt
+            )
+        };
+
+        assert!(prompt.contains("fuel: 7/10"), "fuel info must appear in limited mode");
+    }
 }
