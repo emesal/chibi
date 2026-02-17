@@ -1690,6 +1690,7 @@ pub async fn send_prompt<S: ResponseSink>(
 
     let fuel_total = resolved_config.fuel;
     let mut fuel_remaining = fuel_total;
+    let fuel_unlimited = fuel_total == 0;
     let mut current_prompt = initial_prompt;
 
     // Outer loop: each iteration is a full setup + agentic exchange.
@@ -1707,7 +1708,7 @@ pub async fn send_prompt<S: ResponseSink>(
 
         let verbose = options.verbose;
 
-        if verbose {
+        if verbose && !fuel_unlimited {
             sink.handle(ResponseEvent::Diagnostic {
                 message: format!("[fuel: {}/{} entering turn]", fuel_remaining, fuel_total),
                 verbose_only: true,
@@ -1929,51 +1930,55 @@ pub async fn send_prompt<S: ResponseSink>(
                 request_body["messages"] = serde_json::json!(messages);
 
                 // Tool call round costs 1 fuel
-                fuel_remaining = fuel_remaining.saturating_sub(1);
-                if verbose {
-                    sink.handle(ResponseEvent::Diagnostic {
-                        message: format!(
-                            "[fuel: {}/{} after tool batch]",
-                            fuel_remaining, fuel_total
-                        ),
-                        verbose_only: true,
-                    })?;
-                }
-                if fuel_remaining == 0 {
-                    sink.handle(ResponseEvent::Diagnostic {
-                        message: format!(
-                            "[fuel exhausted (0/{}), returning control to user]",
-                            fuel_total
-                        ),
-                        verbose_only: false,
-                    })?;
-                    return Ok(());
+                if !fuel_unlimited {
+                    fuel_remaining = fuel_remaining.saturating_sub(1);
+                    if verbose {
+                        sink.handle(ResponseEvent::Diagnostic {
+                            message: format!(
+                                "[fuel: {}/{} after tool batch]",
+                                fuel_remaining, fuel_total
+                            ),
+                            verbose_only: true,
+                        })?;
+                    }
+                    if fuel_remaining == 0 {
+                        sink.handle(ResponseEvent::Diagnostic {
+                            message: format!(
+                                "[fuel exhausted (0/{}), returning control to user]",
+                                fuel_total
+                            ),
+                            verbose_only: false,
+                        })?;
+                        return Ok(());
+                    }
                 }
                 continue;
             }
 
             // Check for empty response
             if response.full_response.trim().is_empty() {
-                fuel_remaining =
-                    fuel_remaining.saturating_sub(resolved_config.fuel_empty_response_cost);
-                if fuel_remaining == 0 {
-                    sink.handle(ResponseEvent::Diagnostic {
-                        message: format!(
-                            "[fuel exhausted (0/{}), returning control to user]",
-                            fuel_total
-                        ),
-                        verbose_only: false,
-                    })?;
-                    return Ok(());
-                }
-                if verbose {
-                    sink.handle(ResponseEvent::Diagnostic {
-                        message: format!(
-                            "[empty response, fuel: {}/{}]",
-                            fuel_remaining, fuel_total
-                        ),
-                        verbose_only: true,
-                    })?;
+                if !fuel_unlimited {
+                    fuel_remaining =
+                        fuel_remaining.saturating_sub(resolved_config.fuel_empty_response_cost);
+                    if fuel_remaining == 0 {
+                        sink.handle(ResponseEvent::Diagnostic {
+                            message: format!(
+                                "[fuel exhausted (0/{}), returning control to user]",
+                                fuel_total
+                            ),
+                            verbose_only: false,
+                        })?;
+                        return Ok(());
+                    }
+                    if verbose {
+                        sink.handle(ResponseEvent::Diagnostic {
+                            message: format!(
+                                "[empty response, fuel: {}/{}]",
+                                fuel_remaining, fuel_total
+                            ),
+                            verbose_only: true,
+                        })?;
+                    }
                 }
                 continue;
             }
@@ -1992,37 +1997,46 @@ pub async fn send_prompt<S: ResponseSink>(
             )? {
                 FinalResponseAction::ReturnToUser => return Ok(()),
                 FinalResponseAction::ContinueWithPrompt(continue_prompt) => {
-                    fuel_remaining = fuel_remaining.saturating_sub(1);
-                    if fuel_remaining == 0 {
-                        sink.handle(ResponseEvent::Diagnostic {
-                            message: format!(
-                                "[fuel exhausted (0/{}), returning control to user]",
-                                fuel_total
-                            ),
-                            verbose_only: false,
-                        })?;
-                        return Ok(());
+                    if !fuel_unlimited {
+                        fuel_remaining = fuel_remaining.saturating_sub(1);
+                        if fuel_remaining == 0 {
+                            sink.handle(ResponseEvent::Diagnostic {
+                                message: format!(
+                                    "[fuel exhausted (0/{}), returning control to user]",
+                                    fuel_total
+                                ),
+                                verbose_only: false,
+                            })?;
+                            return Ok(());
+                        }
+                        if verbose {
+                            sink.handle(ResponseEvent::Diagnostic {
+                                message: format!(
+                                    "[continuing (fuel: {}/{}): {}]",
+                                    fuel_remaining,
+                                    fuel_total,
+                                    if continue_prompt.len() > 80 {
+                                        format!("{}...", &continue_prompt[..77])
+                                    } else {
+                                        continue_prompt.clone()
+                                    }
+                                ),
+                                verbose_only: true,
+                            })?;
+                        }
                     }
-                    if verbose {
-                        sink.handle(ResponseEvent::Diagnostic {
-                            message: format!(
-                                "[continuing (fuel: {}/{}): {}]",
-                                fuel_remaining,
-                                fuel_total,
-                                if continue_prompt.len() > 80 {
-                                    format!("{}...", &continue_prompt[..77])
-                                } else {
-                                    continue_prompt.clone()
-                                }
-                            ),
-                            verbose_only: true,
-                        })?;
-                    }
-                    // Prefix the continuation prompt with fuel info for the LLM
-                    current_prompt = format!(
-                        "[reengaged (fuel: {}/{}) via {}. call_user(<message>) to end turn.]\n{}",
-                        fuel_remaining, fuel_total, resolved_config.fallback_tool, continue_prompt
-                    );
+                    // Prefix the continuation prompt; omit fuel numbers when unlimited
+                    current_prompt = if fuel_unlimited {
+                        format!(
+                            "[reengaged via {}. call_user(<message>) to end turn.]\n{}",
+                            resolved_config.fallback_tool, continue_prompt
+                        )
+                    } else {
+                        format!(
+                            "[reengaged (fuel: {}/{}) via {}. call_user(<message>) to end turn.]\n{}",
+                            fuel_remaining, fuel_total, resolved_config.fallback_tool, continue_prompt
+                        )
+                    };
                     break; // break inner, continue outer
                 }
             }
