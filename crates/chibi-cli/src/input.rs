@@ -111,7 +111,7 @@ mod tests {
     fn test_default_input() {
         let input = ChibiInput::default();
         assert!(matches!(input.command, Command::NoOp));
-        assert!(!input.flags.verbose);
+        assert!(!input.flags.force_call_agent);
         assert!(!input.raw);
         assert!(matches!(input.context, ContextSelection::Current));
     }
@@ -214,10 +214,6 @@ mod tests {
                 thing: Inspectable::SystemPrompt,
             },
             flags: ExecutionFlags {
-                verbose: true,
-                hide_tool_calls: false,
-                show_thinking: false,
-                no_tool_calls: false,
                 force_call_user: true,
                 force_call_agent: false,
                 debug: vec![DebugKey::All],
@@ -239,7 +235,6 @@ mod tests {
         assert!(
             matches!(deserialized.command, Command::Inspect { context: Some(ref c), thing: Inspectable::SystemPrompt } if c == "test")
         );
-        assert!(deserialized.flags.verbose);
         assert!(deserialized.flags.force_call_user);
         assert_eq!(deserialized.flags.debug, vec![DebugKey::All]);
         assert!(deserialized.raw);

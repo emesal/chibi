@@ -171,7 +171,6 @@ fn resolve_cli_config(
     Ok(ResolvedConfig {
         core,
         render_markdown: cli.render_markdown,
-        show_thinking: cli.show_thinking,
         image: cli.image,
         markdown_style: cli.markdown_style,
     })
@@ -244,11 +243,14 @@ async fn execute_from_input(
     output: &dyn OutputSink,
     force_markdown: bool,
 ) -> io::Result<()> {
-    let verbose = input.flags.verbose;
-    let show_tool_calls = !input.flags.hide_tool_calls || verbose;
-    let show_thinking_flag = input.flags.show_thinking || verbose;
-
     let mut did_action = false;
+
+    // Pre-resolution verbose: CLI flag was pushed into config_overrides by cli.rs,
+    // but we need it for diagnostics before config is resolved.
+    let early_verbose = input
+        .config_overrides
+        .iter()
+        .any(|(k, v)| k == "verbose" && v == "true");
 
     // --- CLI-specific: context selection ---
     // working_context: the context we're actually operating on this invocation
@@ -260,7 +262,7 @@ async fn execute_from_input(
             chibi.app.ensure_context_dir(&actual_name)?;
             output.diagnostic(
                 &format!("[Using ephemeral context: {}]", actual_name),
-                verbose,
+                early_verbose,
             );
             actual_name
         }
@@ -279,7 +281,7 @@ async fn execute_from_input(
             }
             output.diagnostic(
                 &format!("[Switched to context: {}]", &session.implied_context),
-                verbose,
+                early_verbose,
             );
             did_action = true;
             session.implied_context.clone()
@@ -299,7 +301,7 @@ async fn execute_from_input(
                     "[Username '{}' saved to context '{}']",
                     username, working_context
                 ),
-                verbose,
+                early_verbose,
             );
             did_action = true;
             None // persistent was saved, no runtime override needed
@@ -335,6 +337,11 @@ async fn execute_from_input(
             .map_err(|e| io::Error::new(ErrorKind::InvalidInput, e))?;
     }
 
+    // Derive presentation flags from resolved config
+    let verbose = cli_config.core.verbose;
+    let show_tool_calls = !cli_config.core.hide_tool_calls || verbose;
+    let show_thinking = cli_config.core.show_thinking || verbose;
+
     let md_config = if cli_config.render_markdown && !input.raw {
         Some(md_config_from_resolved(
             &cli_config,
@@ -350,7 +357,7 @@ async fn execute_from_input(
         md_config,
         verbose,
         show_tool_calls,
-        show_thinking_flag || cli_config.show_thinking,
+        show_thinking,
     );
 
     // --- delegate to core ---
@@ -496,7 +503,7 @@ async fn main() -> io::Result<()> {
     let project_root_override = extract_project_root_override(&args);
 
     // Parse CLI arguments to ChibiInput
-    let mut input = cli::parse()?;
+    let input = cli::parse()?;
 
     // Handle --debug md=<FILENAME> early (renders markdown and quits, implies -x)
     if let Some(path) = &input.md_file {
@@ -515,22 +522,19 @@ async fn main() -> io::Result<()> {
     // Handle --debug force-markdown
     let force_markdown = input.force_markdown;
 
+    let load_verbose = input.config_overrides.iter().any(|(k, v)| k == "verbose" && v == "true");
+
     let mut chibi = Chibi::load_with_options(LoadOptions {
-        verbose: input.flags.verbose,
+        verbose: load_verbose,
         home: home_override,
         project_root: project_root_override,
     })?;
     chibi.set_permission_handler(select_permission_handler(trust_mode));
-    // CLI flags override config settings
-    let verbose = input.flags.verbose || chibi.app.config.verbose;
-    input.flags.verbose = verbose;
-    input.flags.hide_tool_calls = input.flags.hide_tool_calls || chibi.app.config.hide_tool_calls;
-    input.flags.no_tool_calls = input.flags.no_tool_calls || chibi.app.config.no_tool_calls;
     let mut session = Session::load(chibi.home_dir())?;
-    let output = OutputHandler::new(verbose);
+    let output = OutputHandler::new(load_verbose);
 
     // Print tool lists if verbose
-    if verbose {
+    if load_verbose {
         let builtin_names = chibi_core::tools::builtin_tool_names();
         output.diagnostic(
             &format!(
