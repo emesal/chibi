@@ -607,10 +607,12 @@ pub struct Config {
     /// Maximum characters for reflection tool output
     #[serde(default = "default_reflection_character_limit")]
     pub reflection_character_limit: usize,
-    /// Total fuel budget for the agentic loop (tool rounds, continuations, empty responses)
+    /// Total fuel budget for the agentic loop (tool rounds, continuations, empty responses).
+    /// Set to `0` to disable fuel tracking entirely (unlimited mode).
     #[serde(default = "default_fuel")]
     pub fuel: usize,
-    /// Fuel cost of an empty response (high cost prevents infinite empty loops)
+    /// Fuel cost of an empty response (high cost prevents infinite empty loops).
+    /// Ignored when `fuel = 0` (unlimited mode).
     #[serde(default = "default_fuel_empty_response_cost")]
     pub fuel_empty_response_cost: usize,
     #[serde(default = "default_username")]
@@ -670,9 +672,9 @@ pub struct LocalConfig {
     pub show_thinking: Option<bool>,
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
-    /// Per-context fuel budget override
+    /// Per-context fuel budget override. `0` means unlimited.
     pub fuel: Option<usize>,
-    /// Per-context fuel cost for empty responses
+    /// Per-context fuel cost for empty responses. Ignored when `fuel = 0`.
     pub fuel_empty_response_cost: Option<usize>,
     pub warn_threshold_percent: Option<f32>,
     pub context_window_limit: Option<usize>,
@@ -794,9 +796,9 @@ pub struct ResolvedConfig {
     pub show_thinking: bool,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
-    /// Total fuel budget for the agentic loop
+    /// Total fuel budget for the agentic loop. `0` means unlimited (no tracking).
     pub fuel: usize,
-    /// Fuel cost of an empty response
+    /// Fuel cost of an empty response. Ignored when `fuel = 0`.
     pub fuel_empty_response_cost: usize,
     pub username: String,
     pub reflection_enabled: bool,
