@@ -795,6 +795,11 @@ fn execute_file_edit_os(file_path: &Path, op: EditOperation) -> io::Result<Strin
 }
 
 /// Apply an edit operation to a VFS file.
+///
+/// Read is world-readable by design (all zones can read all zones — see
+/// `Vfs::check_read`). Write is zone-checked: only the owning zone or
+/// callers with explicit cross-zone write access may write. This asymmetry
+/// is intentional and documented in `docs/vfs.md`.
 fn execute_file_edit_vfs(
     vfs: &Vfs,
     caller: &str,
