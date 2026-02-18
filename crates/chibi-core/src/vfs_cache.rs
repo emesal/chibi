@@ -29,6 +29,9 @@ pub fn vfs_path_for(context_name: &str, cache_id: &str) -> String {
 }
 
 /// Return the `vfs:///` URI for a cache entry.
+///
+/// `vfs_path_for` always returns a path beginning with `/`, so `"vfs://"` +
+/// `"/sys/..."` concatenates to `"vfs:///sys/..."` — three slashes as required.
 pub fn vfs_uri_for(context_name: &str, cache_id: &str) -> String {
     format!("vfs://{}", vfs_path_for(context_name, cache_id))
 }
