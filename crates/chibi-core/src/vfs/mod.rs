@@ -26,6 +26,7 @@ pub mod local;
 pub mod path;
 pub mod permissions;
 pub mod types;
+#[allow(clippy::module_inception)]
 mod vfs;
 
 pub use backend::VfsBackend;

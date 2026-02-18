@@ -45,7 +45,7 @@ impl LocalBackend {
     }
 
     /// Ensure parent directory exists for a file path.
-    async fn ensure_parent(&self, os_path: &PathBuf) -> io::Result<()> {
+    async fn ensure_parent(&self, os_path: &std::path::Path) -> io::Result<()> {
         if let Some(parent) = os_path.parent() {
             fs::create_dir_all(parent).await?;
         }
