@@ -426,10 +426,13 @@ pub struct ToolsConfig {
     pub exclude_categories: Option<Vec<String>>,
 }
 
-/// VFS backend configuration.
+/// VFS (virtual file system) configuration.
 ///
-/// Backend selection is config-level. Plugins can register backends,
-/// but which one is active is determined here.
+/// Backend selection is config-level and intentionally global-only. The VFS
+/// is a singleton constructed once at startup in `AppState::load`. It is
+/// absent from `LocalConfig` (no per-context backend overrides) and from
+/// `ResolvedConfig` (not user-inspectable via `chibi config get vfs.*`).
+/// If introspection is needed in future, add it to `ResolvedConfig::list_fields`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VfsConfig {
     /// Backend name. Currently only "local" is built in.
@@ -673,7 +676,8 @@ pub struct Config {
     /// Global tool filtering configuration (include/exclude/exclude_categories)
     #[serde(default)]
     pub tools: ToolsConfig,
-    /// Virtual file system configuration
+    /// Global VFS configuration. Not in ResolvedConfig — the VFS backend is a
+    /// startup-time singleton and not per-context configurable.
     #[serde(default)]
     pub vfs: VfsConfig,
     /// URL security policy for sensitive URL handling
