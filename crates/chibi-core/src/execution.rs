@@ -118,7 +118,8 @@ pub async fn execute_command<S: ResponseSink>(
     if cleanup_config.auto_cleanup_cache {
         let removed = chibi
             .app
-            .cleanup_all_tool_caches(cleanup_config.tool_cache_max_age_days)?;
+            .cleanup_all_tool_caches(cleanup_config.tool_cache_max_age_days)
+            .await?;
         if removed > 0 {
             output.diagnostic(
                 &format!(
@@ -283,7 +284,7 @@ async fn dispatch_command<S: ResponseSink>(
         }
         Command::ClearCache { name } => {
             let ctx_name = name.as_deref().unwrap_or(context);
-            chibi.app.clear_tool_cache(ctx_name)?;
+            chibi.app.clear_tool_cache(ctx_name).await?;
             output.emit_result(&format!("Cleared tool cache for context '{}'", ctx_name));
             Ok(CommandEffect::None)
         }
@@ -291,7 +292,8 @@ async fn dispatch_command<S: ResponseSink>(
             let resolved = chibi.resolve_config(context, None)?;
             let removed = chibi
                 .app
-                .cleanup_all_tool_caches(resolved.tool_cache_max_age_days)?;
+                .cleanup_all_tool_caches(resolved.tool_cache_max_age_days)
+                .await?;
             output.emit_result(&format!(
                 "Removed {} old cache entries (older than {} days)",
                 removed,

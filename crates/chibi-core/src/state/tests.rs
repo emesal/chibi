@@ -1536,3 +1536,43 @@ fn test_appstate_rejects_unknown_vfs_backend() {
         }
     }
 }
+
+// === Tool cache VFS tests ===
+
+#[tokio::test]
+async fn test_clear_tool_cache_via_vfs() {
+    let (app, _temp) = create_test_app();
+    let ctx = "cleanup-ctx";
+
+    let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{}/entry1", ctx)).unwrap();
+    app.vfs
+        .write(crate::vfs::SYSTEM_CALLER, &path, b"data")
+        .await
+        .unwrap();
+
+    app.clear_tool_cache(ctx).await.unwrap();
+
+    let exists = app
+        .vfs
+        .exists(crate::vfs::SYSTEM_CALLER, &path)
+        .await
+        .unwrap();
+    assert!(!exists, "cache entry should be deleted after clear");
+}
+
+#[tokio::test]
+async fn test_cleanup_old_tool_caches_removes_expired() {
+    let (app, _temp) = create_test_app();
+    let ctx = "cleanup-ctx2";
+
+    let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{}/entry1", ctx)).unwrap();
+    app.vfs
+        .write(crate::vfs::SYSTEM_CALLER, &path, b"old data")
+        .await
+        .unwrap();
+
+    // max_age_days=0 means delete entries older than 1 day.
+    // Since this entry was just created, it should NOT be deleted.
+    let removed = app.cleanup_all_tool_caches(0).await.unwrap();
+    assert_eq!(removed, 0, "fresh entry should not be cleaned up");
+}
