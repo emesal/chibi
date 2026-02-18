@@ -88,7 +88,8 @@ impl VfsBackend for LocalBackend {
     fn delete<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
         Box::pin(async move {
             let os_path = self.os_path(path);
-            if os_path.is_dir() {
+            let meta = fs::metadata(&os_path).await?; // propagates NotFound cleanly
+            if meta.is_dir() {
                 fs::remove_dir_all(os_path).await
             } else {
                 fs::remove_file(os_path).await
@@ -99,7 +100,7 @@ impl VfsBackend for LocalBackend {
     fn list<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<Vec<VfsEntry>>> {
         Box::pin(async move {
             let os_path = self.os_path(path);
-            if !os_path.exists() {
+            if fs::metadata(&os_path).await.is_err() {
                 return Ok(Vec::new());
             }
             let mut entries = Vec::new();
@@ -120,7 +121,7 @@ impl VfsBackend for LocalBackend {
     }
 
     fn exists<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<bool>> {
-        Box::pin(async move { Ok(self.os_path(path).exists()) })
+        Box::pin(async move { Ok(fs::metadata(self.os_path(path)).await.is_ok()) })
     }
 
     fn mkdir<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
@@ -238,6 +239,19 @@ mod tests {
         let path = VfsPath::new("/shared/nope.txt").unwrap();
         let err = backend.delete(&path).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_delete_directory() {
+        let (_dir, backend) = setup();
+        let dir_path = VfsPath::new("/shared/subdir").unwrap();
+        backend.mkdir(&dir_path).await.unwrap();
+        backend
+            .write(&VfsPath::new("/shared/subdir/file.txt").unwrap(), b"x")
+            .await
+            .unwrap();
+        backend.delete(&dir_path).await.unwrap();
+        assert!(!backend.exists(&dir_path).await.unwrap());
     }
 
     #[tokio::test]
