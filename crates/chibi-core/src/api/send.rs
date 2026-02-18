@@ -976,7 +976,7 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools)
+                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools, &app.vfs, context_name)
                         .await
                     {
                         Some(Ok(r)) => r,
@@ -1000,7 +1000,7 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools)
+                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools, &app.vfs, context_name)
                         .await
                     {
                         Some(Ok(r)) => r,
@@ -1047,6 +1047,8 @@ async fn execute_tool_pure(
                             &args,
                             project_root,
                             tools,
+                            &app.vfs,
+                            context_name,
                         )
                         .await
                         {
@@ -1058,7 +1060,7 @@ async fn execute_tool_pure(
                     Err(reason) => format!("Permission denied: {}", reason),
                 }
             } else {
-                match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools).await
+                match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools, &app.vfs, context_name).await
                 {
                     Some(Ok(r)) => r,
                     Some(Err(e)) => format!("Error: {}", e),
@@ -1068,7 +1070,7 @@ async fn execute_tool_pure(
         } else {
             // Ungated coding tools: dir_list, glob_files, grep_files,
             // index_update, index_query, index_status
-            match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools).await {
+            match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools, &app.vfs, context_name).await {
                 Some(Ok(r)) => r,
                 Some(Err(e)) => format!("Error: {}", e),
                 None => format!("Error: Unknown coding tool '{}'", tool_call.name),

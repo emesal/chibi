@@ -11,7 +11,9 @@ use std::io::{self, BufRead, ErrorKind};
 use std::path::{Path, PathBuf};
 
 use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
+use super::file_tools::ResolvedPath;
 use crate::json_ext::JsonExt;
+use crate::vfs::{Vfs, VfsPath};
 
 // === Tool Name Constants ===
 
@@ -305,16 +307,38 @@ pub fn is_coding_tool(name: &str) -> bool {
 /// Resolve a path string relative to project_root.
 ///
 /// Absolute paths are returned as-is. Relative paths are joined with project_root.
-fn resolve_path(project_root: &Path, path_str: &str) -> PathBuf {
-    let p = Path::new(path_str);
-    if p.is_absolute() {
-        p.to_path_buf()
+/// Paths starting with `vfs:///` are resolved as VFS paths.
+fn resolve_path(project_root: &Path, path_str: &str) -> ResolvedPath {
+    if VfsPath::is_vfs_uri(path_str) {
+        match VfsPath::from_uri(path_str) {
+            Ok(vfs_path) => ResolvedPath::Vfs(vfs_path),
+            // Invalid VFS URI: fall through to OS path so the caller gets a
+            // clear filesystem error rather than a silent misroute.
+            Err(_) => ResolvedPath::Os(PathBuf::from(path_str)),
+        }
     } else {
-        project_root.join(p)
+        let p = Path::new(path_str);
+        if p.is_absolute() {
+            ResolvedPath::Os(p.to_path_buf())
+        } else {
+            ResolvedPath::Os(project_root.join(p))
+        }
     }
 }
 
-// === Parameter Helpers ===
+/// Extract an OS path from a `ResolvedPath`, returning an error for VFS paths.
+///
+/// Used by tools that operate on the OS filesystem (dir_list, glob_files,
+/// grep_files) and don't support VFS paths.
+fn require_os_path(resolved: ResolvedPath, tool_name: &str) -> io::Result<PathBuf> {
+    match resolved {
+        ResolvedPath::Os(p) => Ok(p),
+        ResolvedPath::Vfs(_) => Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("{} does not support vfs:// paths", tool_name),
+        )),
+    }
+}
 
 // === Tool Execution ===
 
@@ -324,18 +348,22 @@ fn resolve_path(project_root: &Path, path_str: &str) -> PathBuf {
 /// The `project_root` is used to resolve relative paths in all tools.
 /// The `tools` slice is forwarded to `index_update` for language plugin dispatch;
 /// pass `&[]` when the plugin list is unavailable.
+///
+/// `vfs` and `caller` are passed through to `execute_file_edit` for VFS path support.
 pub async fn execute_coding_tool(
     tool_name: &str,
     args: &serde_json::Value,
     project_root: &Path,
     tools: &[super::Tool],
+    vfs: &Vfs,
+    caller: &str,
 ) -> Option<io::Result<String>> {
     match tool_name {
         SHELL_EXEC_TOOL_NAME => Some(execute_shell_exec(args, project_root).await),
         DIR_LIST_TOOL_NAME => Some(execute_dir_list(args, project_root)),
         GLOB_FILES_TOOL_NAME => Some(execute_glob_files(args, project_root)),
         GREP_FILES_TOOL_NAME => Some(execute_grep_files(args, project_root)),
-        FILE_EDIT_TOOL_NAME => Some(execute_file_edit(args, project_root)),
+        FILE_EDIT_TOOL_NAME => Some(execute_file_edit(args, project_root, vfs, caller)),
         INDEX_UPDATE_TOOL_NAME => Some(execute_index_update(args, project_root, tools)),
         INDEX_QUERY_TOOL_NAME => Some(execute_index_query(args, project_root)),
         INDEX_STATUS_TOOL_NAME => Some(execute_index_status(project_root)),
@@ -407,7 +435,7 @@ fn execute_dir_list(args: &serde_json::Value, project_root: &Path) -> io::Result
     let depth = args.get_u64_or("depth", 1) as usize;
     let show_hidden = args.get_str_or("show_hidden", "false") == "true";
 
-    let root = resolve_path(project_root, path_str);
+    let root = require_os_path(resolve_path(project_root, path_str), "dir_list")?;
 
     if !root.exists() {
         return Err(io::Error::new(
@@ -521,7 +549,7 @@ fn execute_glob_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
     let path_str = args.get_str_or("path", ".");
     let max_results = args.get_u64_or("max_results", 100) as usize;
 
-    let root = resolve_path(project_root, path_str);
+    let root = require_os_path(resolve_path(project_root, path_str), "glob_files")?;
 
     if !root.exists() {
         return Err(io::Error::new(
@@ -594,7 +622,7 @@ fn execute_grep_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
         )
     })?;
 
-    let root = resolve_path(project_root, path_str);
+    let root = require_os_path(resolve_path(project_root, path_str), "grep_files")?;
 
     if !root.exists() {
         return Err(io::Error::new(
@@ -735,24 +763,71 @@ enum EditOperation {
 }
 
 /// Execute file_edit: apply a structured edit to a file atomically.
-fn execute_file_edit(args: &serde_json::Value, project_root: &Path) -> io::Result<String> {
+///
+/// For VFS paths (`vfs:///...`), reads via `vfs.read()`, applies the edit
+/// in memory, and writes back via `vfs.write()`.
+fn execute_file_edit(
+    args: &serde_json::Value,
+    project_root: &Path,
+    vfs: &Vfs,
+    caller: &str,
+) -> io::Result<String> {
     let path_str = require_str_param(args, "path")?;
     let operation_str = require_str_param(args, "operation")?;
-
-    let file_path = resolve_path(project_root, &path_str);
-
     let op = parse_edit_operation(&operation_str, args)?;
 
-    // Read current content
-    let content = std::fs::read_to_string(&file_path).map_err(|e| {
+    let resolved = resolve_path(project_root, &path_str);
+
+    match resolved {
+        ResolvedPath::Os(file_path) => {
+            execute_file_edit_os(&file_path, op)
+        }
+        ResolvedPath::Vfs(vfs_path) => {
+            execute_file_edit_vfs(vfs, caller, &vfs_path, op)
+        }
+    }
+}
+
+/// Apply an edit operation to an OS file.
+fn execute_file_edit_os(file_path: &Path, op: EditOperation) -> io::Result<String> {
+    let content = std::fs::read_to_string(file_path).map_err(|e| {
         io::Error::new(
             e.kind(),
             format!("Failed to read '{}': {}", file_path.display(), e),
         )
     })?;
-    let mut lines: Vec<String> = content.lines().map(String::from).collect();
 
-    // Preserve trailing newline so we don't silently strip it
+    let (new_content, summary) = apply_edit(op, &content, &file_path.display().to_string())?;
+    crate::safe_io::atomic_write_text(file_path, &new_content)?;
+    Ok(summary)
+}
+
+/// Apply an edit operation to a VFS file.
+fn execute_file_edit_vfs(
+    vfs: &Vfs,
+    caller: &str,
+    vfs_path: &VfsPath,
+    op: EditOperation,
+) -> io::Result<String> {
+    let data = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(vfs.read(caller, vfs_path))
+    })?;
+    let content = String::from_utf8_lossy(&data).into_owned();
+
+    let (new_content, summary) = apply_edit(op, &content, vfs_path.as_str())?;
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(vfs.write(caller, vfs_path, new_content.as_bytes()))
+    })?;
+    Ok(summary)
+}
+
+/// Apply an edit operation to content, returning (new_content, summary).
+///
+/// Shared by both OS and VFS edit paths — the edit logic is identical,
+/// only read/write differs.
+fn apply_edit(op: EditOperation, content: &str, display_path: &str) -> io::Result<(String, String)> {
+    let mut lines: Vec<String> = content.lines().map(String::from).collect();
     let had_trailing_newline = content.ends_with('\n');
 
     match op {
@@ -762,7 +837,6 @@ fn execute_file_edit(args: &serde_json::Value, project_root: &Path) -> io::Resul
             content: new_content,
         } => {
             validate_line_range(start, end, lines.len())?;
-            // splice is exclusive on the right; end is 1-indexed inclusive → index end
             let new_lines: Vec<String> = new_content.lines().map(String::from).collect();
             lines.splice((start - 1)..end, new_lines);
         }
@@ -783,7 +857,6 @@ fn execute_file_edit(args: &serde_json::Value, project_root: &Path) -> io::Resul
         } => {
             validate_line_number(line, lines.len())?;
             let new_lines: Vec<String> = new_content.lines().map(String::from).collect();
-            // After line N (1-indexed) means index N (0-based insert position)
             let insert_at = line;
             for (i, l) in new_lines.into_iter().enumerate() {
                 lines.insert(insert_at + i, l);
@@ -794,7 +867,6 @@ fn execute_file_edit(args: &serde_json::Value, project_root: &Path) -> io::Resul
             lines.drain((start - 1)..end);
         }
         EditOperation::ReplaceString { find, replace } => {
-            // Operate on full content string to support multiline find/replace
             if !content.contains(&find) {
                 return Err(io::Error::new(
                     ErrorKind::NotFound,
@@ -802,27 +874,28 @@ fn execute_file_edit(args: &serde_json::Value, project_root: &Path) -> io::Resul
                 ));
             }
             let new_content = content.replacen(&find, &replace, 1);
-            crate::safe_io::atomic_write_text(&file_path, &new_content)?;
-            return Ok(format!(
-                "Replaced string in {} ({} → {} bytes)",
-                file_path.display(),
-                find.len(),
-                replace.len()
+            return Ok((
+                new_content,
+                format!(
+                    "Replaced string in {} ({} → {} bytes)",
+                    display_path,
+                    find.len(),
+                    replace.len()
+                ),
             ));
         }
     }
 
     // Reassemble lines and restore trailing newline
+    let line_count = lines.len();
     let mut new_content = lines.join("\n");
     if had_trailing_newline || !new_content.is_empty() {
         new_content.push('\n');
     }
-    crate::safe_io::atomic_write_text(&file_path, &new_content)?;
 
-    Ok(format!(
-        "Edited {} ({} lines)",
-        file_path.display(),
-        lines.len()
+    Ok((
+        new_content,
+        format!("Edited {} ({} lines)", display_path, line_count),
     ))
 }
 
@@ -1037,6 +1110,13 @@ mod tests {
         path
     }
 
+    /// Create a Vfs backed by a temp directory for tests that need the signature
+    /// but won't actually route through VFS (OS path tests).
+    fn make_test_vfs(dir: &TempDir) -> crate::vfs::Vfs {
+        let backend = crate::vfs::LocalBackend::new(dir.path().to_path_buf());
+        crate::vfs::Vfs::new(Box::new(backend))
+    }
+
     fn args(pairs: &[(&str, serde_json::Value)]) -> serde_json::Value {
         let mut map = serde_json::Map::new();
         for (k, v) in pairs {
@@ -1093,15 +1173,28 @@ mod tests {
     #[test]
     fn test_resolve_path_absolute() {
         let root = Path::new("/some/root");
-        let result = resolve_path(root, "/absolute/path");
-        assert_eq!(result, PathBuf::from("/absolute/path"));
+        match resolve_path(root, "/absolute/path") {
+            ResolvedPath::Os(p) => assert_eq!(p, PathBuf::from("/absolute/path")),
+            ResolvedPath::Vfs(_) => panic!("expected Os path"),
+        }
     }
 
     #[test]
     fn test_resolve_path_relative() {
         let root = Path::new("/some/root");
-        let result = resolve_path(root, "relative/path");
-        assert_eq!(result, PathBuf::from("/some/root/relative/path"));
+        match resolve_path(root, "relative/path") {
+            ResolvedPath::Os(p) => assert_eq!(p, PathBuf::from("/some/root/relative/path")),
+            ResolvedPath::Vfs(_) => panic!("expected Os path"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_path_vfs_uri() {
+        let root = Path::new("/some/root");
+        match resolve_path(root, "vfs:///shared/file.txt") {
+            ResolvedPath::Vfs(p) => assert_eq!(p.as_str(), "/shared/file.txt"),
+            ResolvedPath::Os(_) => panic!("expected Vfs path"),
+        }
     }
 
     // --- dir_list ---
@@ -1281,7 +1374,7 @@ mod tests {
             ("line_end", serde_json::json!(2)),
             ("content", serde_json::json!("BBB")),
         ]);
-        execute_file_edit(&a, dir.path()).unwrap();
+        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nBBB\nccc\n");
     }
@@ -1297,7 +1390,7 @@ mod tests {
             ("line_start", serde_json::json!(2)),
             ("content", serde_json::json!("NEW")),
         ]);
-        execute_file_edit(&a, dir.path()).unwrap();
+        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nNEW\nbbb\n");
     }
@@ -1313,7 +1406,7 @@ mod tests {
             ("line_start", serde_json::json!(1)),
             ("content", serde_json::json!("NEW")),
         ]);
-        execute_file_edit(&a, dir.path()).unwrap();
+        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nNEW\nbbb\n");
     }
@@ -1329,7 +1422,7 @@ mod tests {
             ("line_start", serde_json::json!(2)),
             ("line_end", serde_json::json!(2)),
         ]);
-        execute_file_edit(&a, dir.path()).unwrap();
+        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nccc\n");
     }
@@ -1345,7 +1438,7 @@ mod tests {
             ("find", serde_json::json!("hello")),
             ("replace", serde_json::json!("goodbye")),
         ]);
-        execute_file_edit(&a, dir.path()).unwrap();
+        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         // Only first occurrence replaced
         assert_eq!(content, "goodbye world\nhello again\n");
@@ -1363,7 +1456,7 @@ mod tests {
             ("line_end", serde_json::json!(6)),
             ("content", serde_json::json!("x")),
         ]);
-        let result = execute_file_edit(&a, dir.path());
+        let result = execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
     }
@@ -1377,7 +1470,7 @@ mod tests {
             ("path", serde_json::json!("f.txt")),
             ("operation", serde_json::json!("teleport")),
         ]);
-        let result = execute_file_edit(&a, dir.path());
+        let result = execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test");
         assert!(result.is_err());
     }
 
@@ -1558,5 +1651,80 @@ mod tests {
         let a_force = args(&[("force", serde_json::json!("true"))]);
         let result = execute_index_update(&a_force, dir.path(), &[]).unwrap();
         assert!(result.contains("indexed: 1"));
+    }
+
+    // === VFS integration tests ===
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_file_edit_replace_lines_vfs() {
+        let dir = tempfile::tempdir().unwrap();
+        let vfs = make_test_vfs(&dir);
+        let path = crate::vfs::VfsPath::new("/shared/f.txt").unwrap();
+        vfs.write("ctx", &path, b"aaa\nbbb\nccc\n").await.unwrap();
+
+        let a = args(&[
+            ("path", serde_json::json!("vfs:///shared/f.txt")),
+            ("operation", serde_json::json!("replace_lines")),
+            ("line_start", serde_json::json!(2)),
+            ("line_end", serde_json::json!(2)),
+            ("content", serde_json::json!("BBB")),
+        ]);
+        execute_file_edit(&a, dir.path(), &vfs, "ctx").unwrap();
+        let data = vfs.read("ctx", &path).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&data), "aaa\nBBB\nccc\n");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_file_edit_replace_string_vfs() {
+        let dir = tempfile::tempdir().unwrap();
+        let vfs = make_test_vfs(&dir);
+        let path = crate::vfs::VfsPath::new("/shared/f.txt").unwrap();
+        vfs.write("ctx", &path, b"hello world\nhello again\n")
+            .await
+            .unwrap();
+
+        let a = args(&[
+            ("path", serde_json::json!("vfs:///shared/f.txt")),
+            ("operation", serde_json::json!("replace_string")),
+            ("find", serde_json::json!("hello")),
+            ("replace", serde_json::json!("goodbye")),
+        ]);
+        execute_file_edit(&a, dir.path(), &vfs, "ctx").unwrap();
+        let data = vfs.read("ctx", &path).await.unwrap();
+        // Only first occurrence replaced
+        assert_eq!(
+            String::from_utf8_lossy(&data),
+            "goodbye world\nhello again\n"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_file_edit_vfs_permission_denied() {
+        let dir = tempfile::tempdir().unwrap();
+        let vfs = make_test_vfs(&dir);
+        // Write as owner so the file exists
+        let path = crate::vfs::VfsPath::new("/home/coder/f.txt").unwrap();
+        vfs.write("coder", &path, b"data\n").await.unwrap();
+
+        let a = args(&[
+            ("path", serde_json::json!("vfs:///home/coder/f.txt")),
+            ("operation", serde_json::json!("replace_lines")),
+            ("line_start", serde_json::json!(1)),
+            ("line_end", serde_json::json!(1)),
+            ("content", serde_json::json!("hacked")),
+        ]);
+        // planner trying to write to coder's home — should be denied
+        let result = execute_file_edit(&a, dir.path(), &vfs, "planner");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn test_dir_list_rejects_vfs_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = args(&[("path", serde_json::json!("vfs:///shared"))]);
+        let result = execute_dir_list(&a, dir.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not support vfs://"));
     }
 }

@@ -364,7 +364,7 @@ impl Chibi {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
             if let Some(result) =
-                tools::execute_coding_tool(name, &args, &project_root, &self.tools).await
+                tools::execute_coding_tool(name, &args, &project_root, &self.tools, &self.app.vfs, context_name).await
             {
                 return result;
             }
