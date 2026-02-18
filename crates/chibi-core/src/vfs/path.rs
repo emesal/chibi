@@ -19,8 +19,11 @@ use std::io::{self, ErrorKind};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VfsPath(String);
 
-/// URI scheme prefix for VFS paths in tool arguments.
-const VFS_URI_PREFIX: &str = "vfs://";
+/// URI scheme prefix (`vfs://`). Note: valid URIs require a third slash
+/// (`vfs:///`) so that the path component always starts with `/`. The scheme
+/// prefix (two slashes) is stripped by `from_uri`, leaving the leading `/`
+/// for `VfsPath::new`.
+const VFS_URI_SCHEME: &str = "vfs://";
 
 impl VfsPath {
     /// Create a new VFS path, validating all invariants.
@@ -125,7 +128,7 @@ impl VfsPath {
                 format!("not a vfs:/// URI (requires three slashes): {}", uri),
             ));
         }
-        VfsPath::new(&uri[VFS_URI_PREFIX.len()..])
+        VfsPath::new(&uri[VFS_URI_SCHEME.len()..])
     }
 
     /// Check whether a string is a `vfs://` URI.
