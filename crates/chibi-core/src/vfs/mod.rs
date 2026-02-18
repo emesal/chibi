@@ -26,9 +26,11 @@ pub mod local;
 pub mod path;
 pub mod permissions;
 pub mod types;
+mod vfs;
 
 pub use backend::VfsBackend;
 pub use local::LocalBackend;
 pub use path::VfsPath;
 pub use permissions::{SYSTEM_CALLER, check_read, check_write, is_reserved_caller_name};
 pub use types::{VfsEntry, VfsEntryKind, VfsMetadata};
+pub use vfs::Vfs;

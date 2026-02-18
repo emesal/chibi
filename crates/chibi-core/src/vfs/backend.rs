@@ -14,49 +14,61 @@
 //! A future evolution (approach C) would wrap backends in composable
 //! middleware layers (logging, caching, etc.) a la tower. The trait
 //! signature is designed to be compatible with that transition.
+//!
+//! # Dyn-compatibility
+//!
+//! Methods return `Pin<Box<dyn Future>>` instead of `impl Future` so that
+//! `Box<dyn VfsBackend>` works. This enables multi-backend mounting where
+//! `Vfs` selects a backend at runtime via longest-prefix match.
+//!
+//! All input references share a single lifetime `'a` so the returned
+//! future can borrow from both `&self` and any path arguments.
 
+use std::future::Future;
 use std::io;
+use std::pin::Pin;
 
 use super::path::VfsPath;
 use super::types::{VfsEntry, VfsMetadata};
+
+/// Boxed, Send future — the return type for all backend methods.
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Storage backend for the virtual file system.
 ///
 /// All methods receive validated `VfsPath` values. Backends translate these
 /// to their native addressing (file paths, database keys, XMPP nodes, etc.).
 ///
-/// All methods are async to accommodate network-backed implementations.
+/// All methods are async (returning boxed futures) to accommodate
+/// network-backed implementations and dyn-compatibility.
 pub trait VfsBackend: Send + Sync {
     /// Read the full contents of a file.
-    fn read(&self, path: &VfsPath) -> impl Future<Output = io::Result<Vec<u8>>> + Send;
+    fn read<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<Vec<u8>>>;
 
     /// Write (create or overwrite) a file with the given contents.
-    fn write(&self, path: &VfsPath, data: &[u8]) -> impl Future<Output = io::Result<()>> + Send;
+    fn write<'a>(&'a self, path: &'a VfsPath, data: &'a [u8]) -> BoxFuture<'a, io::Result<()>>;
 
     /// Append data to an existing file, creating it if it doesn't exist.
-    fn append(&self, path: &VfsPath, data: &[u8]) -> impl Future<Output = io::Result<()>> + Send;
+    fn append<'a>(&'a self, path: &'a VfsPath, data: &'a [u8]) -> BoxFuture<'a, io::Result<()>>;
 
     /// Delete a file. Returns `NotFound` if the path doesn't exist.
-    fn delete(&self, path: &VfsPath) -> impl Future<Output = io::Result<()>> + Send;
+    fn delete<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<()>>;
 
     /// List entries in a directory. Returns empty vec if path doesn't exist.
-    fn list(&self, path: &VfsPath) -> impl Future<Output = io::Result<Vec<VfsEntry>>> + Send;
+    fn list<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<Vec<VfsEntry>>>;
 
     /// Check whether a path exists.
-    fn exists(&self, path: &VfsPath) -> impl Future<Output = io::Result<bool>> + Send;
+    fn exists<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<bool>>;
 
     /// Create a directory (and parents if needed).
-    fn mkdir(&self, path: &VfsPath) -> impl Future<Output = io::Result<()>> + Send;
+    fn mkdir<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<()>>;
 
     /// Copy a file from src to dst. Both paths are within this backend.
-    fn copy(&self, src: &VfsPath, dst: &VfsPath)
-        -> impl Future<Output = io::Result<()>> + Send;
+    fn copy<'a>(&'a self, src: &'a VfsPath, dst: &'a VfsPath) -> BoxFuture<'a, io::Result<()>>;
 
     /// Rename (move) a file from src to dst. Both paths are within this backend.
-    fn rename(&self, src: &VfsPath, dst: &VfsPath)
-        -> impl Future<Output = io::Result<()>> + Send;
+    fn rename<'a>(&'a self, src: &'a VfsPath, dst: &'a VfsPath) -> BoxFuture<'a, io::Result<()>>;
 
     /// Get metadata for a path.
-    fn metadata(&self, path: &VfsPath)
-        -> impl Future<Output = io::Result<VfsMetadata>> + Send;
+    fn metadata<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<VfsMetadata>>;
 }

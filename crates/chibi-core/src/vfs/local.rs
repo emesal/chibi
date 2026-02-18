@@ -3,8 +3,10 @@
 //! Maps `VfsPath` values to OS paths under a root directory (typically
 //! `~/.chibi/vfs/`). Uses `safe_io::atomic_write` for write operations.
 
+use std::future::Future;
 use std::io;
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use chrono::{DateTime, Utc};
 use tokio::fs;
@@ -12,6 +14,9 @@ use tokio::fs;
 use super::backend::VfsBackend;
 use super::path::VfsPath;
 use super::types::{VfsEntry, VfsEntryKind, VfsMetadata};
+
+/// Boxed, Send future — matches the backend trait's return type.
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Filesystem-backed VFS storage.
 ///
@@ -49,103 +54,115 @@ impl LocalBackend {
 }
 
 impl VfsBackend for LocalBackend {
-    async fn read(&self, path: &VfsPath) -> io::Result<Vec<u8>> {
-        fs::read(self.os_path(path)).await
+    fn read<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<Vec<u8>>> {
+        Box::pin(async move { fs::read(self.os_path(path)).await })
     }
 
-    async fn write(&self, path: &VfsPath, data: &[u8]) -> io::Result<()> {
-        let os_path = self.os_path(path);
-        self.ensure_parent(&os_path).await?;
-        // Use atomic write via spawn_blocking for safety
-        let data = data.to_vec();
-        tokio::task::spawn_blocking(move || {
-            crate::safe_io::atomic_write(&os_path, &data)
+    fn write<'a>(&'a self, path: &'a VfsPath, data: &'a [u8]) -> BoxFuture<'a, io::Result<()>> {
+        Box::pin(async move {
+            let os_path = self.os_path(path);
+            self.ensure_parent(&os_path).await?;
+            // Clone data for the blocking closure (needs 'static)
+            let data = data.to_vec();
+            tokio::task::spawn_blocking(move || crate::safe_io::atomic_write(&os_path, &data))
+                .await
+                .map_err(|e| io::Error::other(format!("join error: {}", e)))?
         })
-        .await
-        .map_err(|e| io::Error::other(format!("join error: {}", e)))?
     }
 
-    async fn append(&self, path: &VfsPath, data: &[u8]) -> io::Result<()> {
-        use tokio::io::AsyncWriteExt;
-        let os_path = self.os_path(path);
-        self.ensure_parent(&os_path).await?;
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(os_path)
-            .await?;
-        file.write_all(data).await?;
-        file.flush().await
+    fn append<'a>(&'a self, path: &'a VfsPath, data: &'a [u8]) -> BoxFuture<'a, io::Result<()>> {
+        Box::pin(async move {
+            use tokio::io::AsyncWriteExt;
+            let os_path = self.os_path(path);
+            self.ensure_parent(&os_path).await?;
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(os_path)
+                .await?;
+            file.write_all(data).await?;
+            file.flush().await
+        })
     }
 
-    async fn delete(&self, path: &VfsPath) -> io::Result<()> {
-        let os_path = self.os_path(path);
-        if os_path.is_dir() {
-            fs::remove_dir_all(os_path).await
-        } else {
-            fs::remove_file(os_path).await
-        }
+    fn delete<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
+        Box::pin(async move {
+            let os_path = self.os_path(path);
+            if os_path.is_dir() {
+                fs::remove_dir_all(os_path).await
+            } else {
+                fs::remove_file(os_path).await
+            }
+        })
     }
 
-    async fn list(&self, path: &VfsPath) -> io::Result<Vec<VfsEntry>> {
-        let os_path = self.os_path(path);
-        if !os_path.exists() {
-            return Ok(Vec::new());
-        }
-        let mut entries = Vec::new();
-        let mut read_dir = fs::read_dir(os_path).await?;
-        while let Some(entry) = read_dir.next_entry().await? {
-            let kind = if entry.file_type().await?.is_dir() {
+    fn list<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<Vec<VfsEntry>>> {
+        Box::pin(async move {
+            let os_path = self.os_path(path);
+            if !os_path.exists() {
+                return Ok(Vec::new());
+            }
+            let mut entries = Vec::new();
+            let mut read_dir = fs::read_dir(os_path).await?;
+            while let Some(entry) = read_dir.next_entry().await? {
+                let kind = if entry.file_type().await?.is_dir() {
+                    VfsEntryKind::Directory
+                } else {
+                    VfsEntryKind::File
+                };
+                entries.push(VfsEntry {
+                    name: entry.file_name().to_string_lossy().into_owned(),
+                    kind,
+                });
+            }
+            Ok(entries)
+        })
+    }
+
+    fn exists<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<bool>> {
+        Box::pin(async move { Ok(self.os_path(path).exists()) })
+    }
+
+    fn mkdir<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
+        Box::pin(async move { fs::create_dir_all(self.os_path(path)).await })
+    }
+
+    fn copy<'a>(&'a self, src: &'a VfsPath, dst: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
+        Box::pin(async move {
+            let src_os = self.os_path(src);
+            let dst_os = self.os_path(dst);
+            self.ensure_parent(&dst_os).await?;
+            fs::copy(src_os, dst_os).await?;
+            Ok(())
+        })
+    }
+
+    fn rename<'a>(&'a self, src: &'a VfsPath, dst: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
+        Box::pin(async move {
+            let src_os = self.os_path(src);
+            let dst_os = self.os_path(dst);
+            self.ensure_parent(&dst_os).await?;
+            fs::rename(src_os, dst_os).await
+        })
+    }
+
+    fn metadata<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<VfsMetadata>> {
+        Box::pin(async move {
+            let os_path = self.os_path(path);
+            let meta = fs::metadata(&os_path).await?;
+            let kind = if meta.is_dir() {
                 VfsEntryKind::Directory
             } else {
                 VfsEntryKind::File
             };
-            entries.push(VfsEntry {
-                name: entry.file_name().to_string_lossy().into_owned(),
+            let created = meta.created().ok().map(DateTime::<Utc>::from);
+            let modified = meta.modified().ok().map(DateTime::<Utc>::from);
+            Ok(VfsMetadata {
+                size: meta.len(),
+                created,
+                modified,
                 kind,
-            });
-        }
-        Ok(entries)
-    }
-
-    async fn exists(&self, path: &VfsPath) -> io::Result<bool> {
-        Ok(self.os_path(path).exists())
-    }
-
-    async fn mkdir(&self, path: &VfsPath) -> io::Result<()> {
-        fs::create_dir_all(self.os_path(path)).await
-    }
-
-    async fn copy(&self, src: &VfsPath, dst: &VfsPath) -> io::Result<()> {
-        let src_os = self.os_path(src);
-        let dst_os = self.os_path(dst);
-        self.ensure_parent(&dst_os).await?;
-        fs::copy(src_os, dst_os).await?;
-        Ok(())
-    }
-
-    async fn rename(&self, src: &VfsPath, dst: &VfsPath) -> io::Result<()> {
-        let src_os = self.os_path(src);
-        let dst_os = self.os_path(dst);
-        self.ensure_parent(&dst_os).await?;
-        fs::rename(src_os, dst_os).await
-    }
-
-    async fn metadata(&self, path: &VfsPath) -> io::Result<VfsMetadata> {
-        let os_path = self.os_path(path);
-        let meta = fs::metadata(&os_path).await?;
-        let kind = if meta.is_dir() {
-            VfsEntryKind::Directory
-        } else {
-            VfsEntryKind::File
-        };
-        let created = meta.created().ok().map(DateTime::<Utc>::from);
-        let modified = meta.modified().ok().map(DateTime::<Utc>::from);
-        Ok(VfsMetadata {
-            size: meta.len(),
-            created,
-            modified,
-            kind,
+            })
         })
     }
 }

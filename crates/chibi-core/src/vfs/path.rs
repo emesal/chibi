@@ -26,7 +26,10 @@ impl VfsPath {
     /// Create a new VFS path, validating all invariants.
     pub fn new(path: &str) -> io::Result<Self> {
         if path.is_empty() {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "VFS path cannot be empty"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "VFS path cannot be empty",
+            ));
         }
         if !path.starts_with('/') {
             return Err(io::Error::new(
