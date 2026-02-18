@@ -48,7 +48,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file (if not using cache_id)",
+                description: "Path to a file, or a vfs:/// URI for VFS storage (if not using cache_id)",
                 default: None,
             },
             ToolPropertyDef {
@@ -74,7 +74,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file (if not using cache_id)",
+                description: "Path to a file, or a vfs:/// URI for VFS storage (if not using cache_id)",
                 default: None,
             },
             ToolPropertyDef {
@@ -100,7 +100,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file (if not using cache_id)",
+                description: "Path to a file, or a vfs:/// URI for VFS storage (if not using cache_id)",
                 default: None,
             },
             ToolPropertyDef {
@@ -132,7 +132,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file (if not using cache_id)",
+                description: "Path to a file, or a vfs:/// URI for VFS storage (if not using cache_id)",
                 default: None,
             },
             ToolPropertyDef {
@@ -171,7 +171,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Absolute or relative path to write to",
+                description: "Absolute or relative path to write to, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -525,13 +525,17 @@ pub fn execute_write_file(
     ))
 }
 
-/// Block on an async VFS future from sync context.
+/// Bridge an async VFS future into synchronous tool dispatch.
 ///
 /// Uses `block_in_place` + `block_on` so that it works both from pure sync
-/// callers (where the current thread is free) and from sync code that
-/// happens to live inside a tokio runtime (e.g. tool dispatch in
-/// `execute_tool_pure`). The `block_in_place` call tells the runtime
-/// scheduler to move other tasks off this thread while we block.
+/// callers (where the current thread is free) and from sync code inside a
+/// tokio runtime (e.g. tool dispatch in `execute_tool_pure`). The
+/// `block_in_place` call tells the runtime scheduler to move other tasks off
+/// this thread while we block.
+///
+/// **Runtime requirement:** `block_in_place` panics on `current_thread`
+/// runtimes. Any test that calls VFS tools must use:
+/// `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`
 pub(crate) fn vfs_block_on<F: std::future::Future>(f: F) -> F::Output {
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
