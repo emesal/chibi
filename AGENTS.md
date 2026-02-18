@@ -49,4 +49,5 @@ LLM communication is delegated to ratatoskr; `gateway.rs` bridges chibi's types 
 - [docs/configuration.md](docs/configuration.md) — Config options
 - [docs/contexts.md](docs/contexts.md) — Context management
 - [docs/agentic.md](docs/agentic.md) — Agentic workflows, sub-agents, tool output caching
+- [docs/vfs.md](docs/vfs.md) — Virtual file system
 - [docs/cli-reference.md](docs/cli-reference.md) — CLI flags and usage

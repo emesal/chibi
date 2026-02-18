@@ -20,7 +20,8 @@ chibi-mcp-bridge (binary, async daemon)
 - `api/` — Request building, streaming, agentic loop (`send.rs`), compaction
 - `gateway.rs` — Type conversions between chibi and ratatoskr; context window auto-resolution
 - `model_info.rs` — Model metadata retrieval and formatting
-- `tools/` — Plugins, hooks, built-in tools (builtin, coding, file, agent categories), URL security policy, MCP bridge client (`mcp.rs`)
+- `tools/` — Plugins, hooks, built-in tools (builtin, coding, file, agent, vfs categories), URL security policy, MCP bridge client (`mcp.rs`)
+- `vfs/` — Virtual file system: path validation, backend trait, permission model, local backend, router
 - `partition.rs` — Partitioned transcript storage with bloom filters
 - `config.rs` — Core configuration types (`Config`, `LocalConfig`, `ResolvedConfig`)
 - `agents_md.rs` — AGENTS.md discovery and loading (VCS-aware hierarchy)
@@ -84,6 +85,10 @@ MCP tools use virtual `mcp://server/tool` paths and appear as regular `Tool` str
 ├── mcp-bridge.toml           # MCP server definitions
 ├── mcp-bridge.lock            # Bridge daemon lockfile (pid, address)
 ├── mcp-bridge/cache.jsonl     # LLM-generated tool summaries
+├── vfs/                       # Virtual file system (shared storage)
+│   ├── shared/                # World-writable zone
+│   ├── home/<context>/        # Per-context home directories
+│   └── sys/                   # System-only zone
 └── contexts/<name>/
     ├── context.jsonl          # LLM window (compaction-bounded)
     ├── transcript/            # Authoritative log (partitioned)
