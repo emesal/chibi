@@ -8,6 +8,8 @@
 use std::fmt;
 use std::io::{self, ErrorKind};
 
+use serde::{Deserialize, Serialize};
+
 /// Opaque path within the virtual file system.
 ///
 /// Invariants (enforced at construction):
@@ -16,7 +18,7 @@ use std::io::{self, ErrorKind};
 /// - No `//` sequences
 /// - No null bytes
 /// - No trailing `/` (except root `/`)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VfsPath(String);
 
 /// URI scheme prefix (`vfs://`). Note: valid URIs require a third slash
@@ -230,6 +232,16 @@ mod tests {
     fn test_join_rejects_dotdot() {
         let base = VfsPath::new("/shared").unwrap();
         assert!(base.join("../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_ord() {
+        let a = VfsPath::new("/shared/a.txt").unwrap();
+        let b = VfsPath::new("/shared/b.txt").unwrap();
+        assert!(a < b);
+        let mut paths = vec![b.clone(), a.clone()];
+        paths.sort();
+        assert_eq!(paths, vec![a, b]);
     }
 
     #[test]
