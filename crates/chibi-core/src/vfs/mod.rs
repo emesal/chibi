@@ -21,6 +21,12 @@
 //! - **Middleware layers**: Composable tower-style layers (logging, caching)
 //!   wrapping backends (approach C in the design doc). Refactor when needed.
 
+pub mod backend;
 pub mod path;
+pub mod permissions;
+pub mod types;
 
+pub use backend::VfsBackend;
 pub use path::VfsPath;
+pub use permissions::{SYSTEM_CALLER, check_read, check_write, is_reserved_caller_name};
+pub use types::{VfsEntry, VfsEntryKind, VfsMetadata};
