@@ -274,11 +274,11 @@ Chibi provides several built-in tools that don't require plugins:
 - `send_message` - Send messages between contexts
 
 **File tools** (for examining cached tool outputs and allowed paths):
-- `file_head` - Read first N lines
-- `file_tail` - Read last N lines
-- `file_lines` - Read specific line range
-- `file_grep` - Search for patterns
-- `cache_list` - List cached outputs
+- `file_head` - Read first N lines (accepts `vfs:///` URIs for cached outputs)
+- `file_tail` - Read last N lines (accepts `vfs:///` URIs)
+- `file_lines` - Read specific line range (accepts `vfs:///` URIs)
+- `file_grep` - Search for patterns (accepts `vfs:///` URIs)
+- `write_file` - Write content to a file or VFS path
 
 **Agent tools** (for spawning sub-agents):
 - `spawn_agent` - Spawn a sub-agent with a custom system prompt

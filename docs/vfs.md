@@ -5,9 +5,10 @@ sandboxed, shared file space for contexts. contexts can read and write without e
 ## namespace layout
 
 ```
-/shared/              all contexts: read + write
-/home/<context>/      owner: read + write; others: read only
-/sys/                 read only (SYSTEM-populated)
+/shared/                          all contexts: read + write
+/home/<context>/                  owner: read + write; others: read only
+/sys/                             read only (SYSTEM-populated)
+/sys/tool_cache/<context>/        cached tool outputs (SYSTEM-written, world-readable)
 ```
 
 ## permission model
@@ -57,7 +58,21 @@ all dedicated tools also bypass file hooks.
 {"tool": "file_head", "args": {"path": "vfs:///shared/tasks.md", "lines": 10}}
 {"tool": "vfs_list", "args": {"path": "vfs:///shared"}}
 {"tool": "vfs_copy", "args": {"src": "vfs:///shared/tasks.md", "dst": "vfs:///shared/backup.md"}}
+{"tool": "file_grep", "args": {"path": "vfs:///sys/tool_cache/myctx/web_fetch_abc123", "pattern": "error"}}
 ```
+
+### tool output caching
+
+large tool outputs are automatically cached under `/sys/tool_cache/<context>/<id>`. the LLM receives a truncated stub with the `vfs:///` URI and can examine the content using:
+
+```
+file_head(path="vfs:///sys/tool_cache/<ctx>/<id>", lines=50)
+file_tail(path="vfs:///sys/tool_cache/<ctx>/<id>", lines=50)
+file_lines(path="vfs:///sys/tool_cache/<ctx>/<id>", start=100, end=150)
+file_grep(path="vfs:///sys/tool_cache/<ctx>/<id>", pattern="error")
+```
+
+cache entries are written by SYSTEM and world-readable. they are cleaned up automatically based on `tool_cache_max_age_days`.
 
 ## configuration
 

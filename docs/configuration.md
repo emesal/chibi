@@ -182,8 +182,8 @@ tool_cache_preview_chars = 500
 # Built-in file operations
 # =============================================================================
 
-# Paths allowed for read-only file tools (default: empty = cache only)
-# When empty, file tools only work with cache_id. Add paths to allow file access.
+# Paths allowed for read-only file tools (default: empty = VFS only)
+# When empty, file tools only work with vfs:/// URIs. Add paths to allow OS file access.
 # file_tools_allowed_paths = ["~", "/tmp"]
 
 # =============================================================================
@@ -529,7 +529,7 @@ Chibi includes built-in coding tools that work out of the box — no plugins nee
 
 The interactive prompt defaults to **allow** (`[Y/n]`) — press Enter to approve, or type `n` to deny. This makes sense because if you gave the LLM tools, you probably want it to use them.
 
-**Read-only tools** execute without prompting: `dir_list`, `glob_files`, `grep_files`, `file_head`, `file_tail`, `file_lines`, `file_grep`, `cache_list`, `index_query`, `index_status`, `index_update`.
+**Read-only tools** execute without prompting: `dir_list`, `glob_files`, `grep_files`, `file_head`, `file_tail`, `file_lines`, `file_grep`, `index_query`, `index_status`, `index_update`.
 
 ### Headless / Automation Mode
 
@@ -600,7 +600,7 @@ include = ["update_todos", "update_goals", "update_reflection"]
 | Category | Tools |
 |----------|-------|
 | `builtin` | update_todos, update_goals, update_reflection, send_message |
-| `file` | file_head, file_tail, file_lines, file_grep, cache_list |
+| `file` | file_head, file_tail, file_lines, file_grep, write_file |
 | `agent` | spawn_agent, retrieve_content |
 | `coding` | shell_exec, dir_list, glob_files, grep_files, file_edit, index_update, index_query, index_status |
 | `plugin` | Tools loaded from the plugins directory |
