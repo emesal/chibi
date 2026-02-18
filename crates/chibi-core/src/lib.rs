@@ -48,6 +48,7 @@ pub mod safe_io;
 pub mod state;
 pub mod tools;
 pub mod vcs;
+pub mod vfs;
 
 /// System prompt used when processing inbox messages via -b/-B flags.
 pub const INBOX_CHECK_PROMPT: &str = "[System: You have received new message(s) above. Review and take appropriate action now — you may not be reactivated soon, so handle anything urgent immediately.]";

@@ -44,6 +44,8 @@ pub struct AppState {
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
     pub plugins_dir: PathBuf,
+    /// Shared virtual file system.
+    pub vfs: crate::vfs::Vfs,
     /// Cache of active partition state per context, avoiding repeated file scans.
     /// Uses interior mutability since caching is a side effect that doesn't change
     /// logical state.
@@ -74,6 +76,20 @@ impl AppState {
             contexts: Vec::new(),
         };
 
+        let vfs_root = chibi_dir.join("vfs");
+        if config.vfs.backend != "local" {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "unsupported VFS backend '{}' (only 'local' is built in)",
+                    config.vfs.backend
+                ),
+            ));
+        }
+        fs::create_dir_all(&vfs_root)?;
+        let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
+        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
+
         Ok(AppState {
             config,
             models_config: ModelsConfig::default(),
@@ -83,6 +99,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            vfs,
             active_state_cache: RefCell::new(HashMap::new()),
         })
     }
@@ -156,6 +173,20 @@ impl AppState {
             }
         };
 
+        let vfs_root = chibi_dir.join("vfs");
+        if config.vfs.backend != "local" {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "unsupported VFS backend '{}' (only 'local' is built in)",
+                    config.vfs.backend
+                ),
+            ));
+        }
+        fs::create_dir_all(&vfs_root)?;
+        let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
+        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
+
         let mut app = AppState {
             config,
             models_config,
@@ -165,6 +196,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            vfs,
             active_state_cache: RefCell::new(HashMap::new()),
         };
 

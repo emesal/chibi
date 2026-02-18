@@ -18,6 +18,7 @@ mod hooks;
 pub mod mcp;
 mod plugins;
 pub mod security;
+pub mod vfs_tools;
 
 use std::path::PathBuf;
 
@@ -68,6 +69,9 @@ pub use file_tools::{all_file_tools_to_api_format, get_file_tool_def};
 
 // Re-export file tool execution and utilities
 pub use file_tools::{execute_file_tool, is_file_tool};
+
+// Re-export VFS tool registry functions and execution
+pub use vfs_tools::{all_vfs_tools_to_api_format, execute_vfs_tool, is_vfs_tool};
 
 // Re-export file write tool names for permission gating
 pub use file_tools::WRITE_FILE_TOOL_NAME;
@@ -128,7 +132,7 @@ pub struct Tool {
     pub summary_params: Vec<String>,
 }
 
-/// Collect names of all built-in tools (core, file, agent).
+/// Collect names of all built-in tools (core, file, agent, coding, vfs).
 ///
 /// Returns a flat list of tool names from all internal registries.
 /// New tool categories should be added here when introduced.
@@ -138,6 +142,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         .chain(file_tools::FILE_TOOL_DEFS.iter())
         .chain(agent_tools::AGENT_TOOL_DEFS.iter())
         .chain(coding_tools::CODING_TOOL_DEFS.iter())
+        .chain(vfs_tools::VFS_TOOL_DEFS.iter())
         .map(|def| def.name)
         .collect()
 }
@@ -333,19 +338,21 @@ mod tests {
     fn test_builtin_tool_names_includes_all_registries() {
         let names = builtin_tool_names();
 
-        // Should include tools from all four registries
+        // Should include tools from all five registries
         assert!(names.contains(&"update_reflection")); // core builtin
         assert!(names.contains(&"model_info")); // core builtin
         assert!(names.contains(&"file_head")); // file tool
         assert!(names.contains(&"spawn_agent")); // agent tool
         assert!(names.contains(&"shell_exec")); // coding tool
         assert!(names.contains(&"file_edit")); // coding tool
+        assert!(names.contains(&"vfs_list")); // vfs tool
 
         // Should be the sum of all registries
         let expected_count = builtin::BUILTIN_TOOL_DEFS.len()
             + file_tools::FILE_TOOL_DEFS.len()
             + agent_tools::AGENT_TOOL_DEFS.len()
-            + coding_tools::CODING_TOOL_DEFS.len();
+            + coding_tools::CODING_TOOL_DEFS.len()
+            + vfs_tools::VFS_TOOL_DEFS.len();
         assert_eq!(names.len(), expected_count);
     }
 

@@ -426,6 +426,32 @@ pub struct ToolsConfig {
     pub exclude_categories: Option<Vec<String>>,
 }
 
+/// VFS (virtual file system) configuration.
+///
+/// Backend selection is config-level and intentionally global-only. The VFS
+/// is a singleton constructed once at startup in `AppState::load`. It is
+/// absent from `LocalConfig` (no per-context backend overrides) and from
+/// `ResolvedConfig` (not user-inspectable via `chibi config get vfs.*`).
+/// If introspection is needed in future, add it to `ResolvedConfig::list_fields`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VfsConfig {
+    /// Backend name. Currently only "local" is built in.
+    #[serde(default = "default_vfs_backend")]
+    pub backend: String,
+}
+
+fn default_vfs_backend() -> String {
+    "local".to_string()
+}
+
+impl Default for VfsConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_vfs_backend(),
+        }
+    }
+}
+
 /// Merge two optional string vecs: append `local` to `global`, deduplicating entries.
 fn merge_option_vecs(
     global: &Option<Vec<String>>,
@@ -650,6 +676,10 @@ pub struct Config {
     /// Global tool filtering configuration (include/exclude/exclude_categories)
     #[serde(default)]
     pub tools: ToolsConfig,
+    /// Global VFS configuration. Not in ResolvedConfig — the VFS backend is a
+    /// startup-time singleton and not per-context configurable.
+    #[serde(default)]
+    pub vfs: VfsConfig,
     /// URL security policy for sensitive URL handling
     #[serde(default)]
     pub url_policy: Option<UrlPolicy>,
@@ -1473,5 +1503,17 @@ mod tests {
         // first pair applied, second failed, third not reached
         assert_eq!(config.fuel, 50);
         assert_eq!(config.model, "test-model"); // unchanged
+    }
+
+    #[test]
+    fn test_vfs_config_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.vfs.backend, "local");
+    }
+
+    #[test]
+    fn test_vfs_config_custom_backend() {
+        let config: Config = toml::from_str("[vfs]\nbackend = \"fossil\"").unwrap();
+        assert_eq!(config.vfs.backend, "fossil");
     }
 }

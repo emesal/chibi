@@ -1,7 +1,7 @@
 //! Tests for state module.
 
 use super::*;
-use crate::config::{ApiParams, LocalConfig, ToolsConfig};
+use crate::config::{ApiParams, LocalConfig, ToolsConfig, VfsConfig};
 use crate::context::InboxEntry;
 use crate::partition::StorageConfig;
 use serde_json::json;
@@ -37,6 +37,7 @@ fn create_test_app() -> (AppState, TempDir) {
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
         tools: ToolsConfig::default(),
+        vfs: VfsConfig::default(),
         url_policy: None,
     };
     let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -564,6 +565,7 @@ fn test_resolve_config_model_level_api_params() {
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
         tools: ToolsConfig::default(),
+        vfs: VfsConfig::default(),
         url_policy: None,
     };
 
@@ -626,6 +628,7 @@ fn test_resolve_config_hierarchy_context_over_model() {
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
         tools: ToolsConfig::default(),
+        vfs: VfsConfig::default(),
         url_policy: None,
     };
 
@@ -1518,4 +1521,18 @@ fn test_backward_compat_old_context_jsonl_without_tool_call_id() {
     assert!(loaded.messages[1]["tool_calls"].is_array());
     assert_eq!(loaded.messages[2]["role"].as_str().unwrap(), "tool");
     assert_eq!(loaded.messages[3]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_appstate_rejects_unknown_vfs_backend() {
+    let dir = TempDir::new().unwrap();
+    let mut config = Config::default();
+    config.vfs.backend = "fossil".to_string();
+    match AppState::from_dir(dir.path().to_path_buf(), config) {
+        Ok(_) => panic!("should reject unknown VFS backend"),
+        Err(err) => {
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(err.to_string().contains("unsupported VFS backend"));
+        }
+    }
 }
