@@ -29,7 +29,6 @@
 
 pub mod agents_md;
 pub mod api;
-pub mod cache;
 pub mod vfs_cache;
 mod chibi;
 pub mod config;
