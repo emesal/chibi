@@ -2185,7 +2185,6 @@ mod tests {
             "file_tail",
             "file_lines",
             "file_grep",
-            "cache_list",
             "write_file",
         ] {
             assert_eq!(classify_tool_type(name, &[]), ToolType::File, "{name}");

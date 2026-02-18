@@ -1,15 +1,15 @@
-//! File access tools for examining cached tool outputs and files.
+//! File access tools for reading files and cached tool outputs via VFS.
 //!
-//! These tools provide surgical access to cached tool outputs, allowing the LLM
-//! to examine large outputs without overwhelming the context window.
+//! Large tool outputs are cached automatically by the system under
+//! `vfs:///sys/tool_cache/<context>/<id>`. Use these tools with
+//! `path="vfs:///sys/tool_cache/..."` to examine cached content.
 
 use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
-use crate::cache;
 use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;
-use crate::state::{AppState, StatePaths};
+use crate::state::AppState;
 use crate::vfs::VfsPath;
-use std::io::{self, ErrorKind};
+use std::io::{self, BufRead, ErrorKind};
 use std::path::{Path, PathBuf};
 
 /// A resolved tool path — either an OS path or a VFS path.
@@ -28,7 +28,6 @@ pub const FILE_HEAD_TOOL_NAME: &str = "file_head";
 pub const FILE_TAIL_TOOL_NAME: &str = "file_tail";
 pub const FILE_LINES_TOOL_NAME: &str = "file_lines";
 pub const FILE_GREP_TOOL_NAME: &str = "file_grep";
-pub const CACHE_LIST_TOOL_NAME: &str = "cache_list";
 pub const WRITE_FILE_TOOL_NAME: &str = "write_file";
 
 // === Tool Definition Registry ===
@@ -37,18 +36,12 @@ pub const WRITE_FILE_TOOL_NAME: &str = "write_file";
 pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
     BuiltinToolDef {
         name: FILE_HEAD_TOOL_NAME,
-        description: "Read the first N lines from a cached tool output or file. Use this to examine the beginning of large outputs.",
+        description: "Read the first N lines from a file or cached tool output. Use this to examine the beginning of large outputs.",
         properties: &[
-            ToolPropertyDef {
-                name: "cache_id",
-                prop_type: "string",
-                description: "ID of a cached tool output (from [Output cached: ID] messages)",
-                default: None,
-            },
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file, or a vfs:/// URI for VFS storage (if not using cache_id)",
+                description: "Absolute or relative path to a file, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -58,23 +51,17 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
                 default: Some(50),
             },
         ],
-        required: &[],
+        required: &["path"],
         summary_params: &["path"],
     },
     BuiltinToolDef {
         name: FILE_TAIL_TOOL_NAME,
-        description: "Read the last N lines from a cached tool output or file. Use this to examine the end of large outputs.",
+        description: "Read the last N lines from a file or cached tool output. Use this to examine the end of large outputs.",
         properties: &[
-            ToolPropertyDef {
-                name: "cache_id",
-                prop_type: "string",
-                description: "ID of a cached tool output (from [Output cached: ID] messages)",
-                default: None,
-            },
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file, or a vfs:/// URI for VFS storage (if not using cache_id)",
+                description: "Absolute or relative path to a file, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -84,23 +71,17 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
                 default: Some(50),
             },
         ],
-        required: &[],
+        required: &["path"],
         summary_params: &["path"],
     },
     BuiltinToolDef {
         name: FILE_LINES_TOOL_NAME,
-        description: "Read a specific range of lines from a cached tool output or file. Lines are 1-indexed.",
+        description: "Read a specific range of lines from a file or cached tool output. Lines are 1-indexed.",
         properties: &[
-            ToolPropertyDef {
-                name: "cache_id",
-                prop_type: "string",
-                description: "ID of a cached tool output (from [Output cached: ID] messages)",
-                default: None,
-            },
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file, or a vfs:/// URI for VFS storage (if not using cache_id)",
+                description: "Absolute or relative path to a file, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -116,23 +97,17 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
                 default: None,
             },
         ],
-        required: &["start", "end"],
+        required: &["path", "start", "end"],
         summary_params: &["path"],
     },
     BuiltinToolDef {
         name: FILE_GREP_TOOL_NAME,
-        description: "Search for a pattern in a cached tool output or file. Returns matching lines with optional context.",
+        description: "Search for a pattern in a file or cached tool output. Returns matching lines with optional context.",
         properties: &[
-            ToolPropertyDef {
-                name: "cache_id",
-                prop_type: "string",
-                description: "ID of a cached tool output (from [Output cached: ID] messages)",
-                default: None,
-            },
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file, or a vfs:/// URI for VFS storage (if not using cache_id)",
+                description: "Absolute or relative path to a file, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -154,15 +129,8 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
                 default: Some(2),
             },
         ],
-        required: &["pattern"],
+        required: &["path", "pattern"],
         summary_params: &["pattern", "path"],
-    },
-    BuiltinToolDef {
-        name: CACHE_LIST_TOOL_NAME,
-        description: "List all cached tool outputs for this context. Shows cache IDs, tool names, sizes, and timestamps.",
-        properties: &[],
-        required: &[],
-        summary_params: &[],
     },
     BuiltinToolDef {
         name: WRITE_FILE_TOOL_NAME,
@@ -202,7 +170,7 @@ pub fn get_file_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
 
 // === Path Resolution ===
 
-/// Resolve a file path from either cache_id or path argument.
+/// Resolve a file path from the `path` argument.
 ///
 /// When a relative `path` is provided, it is resolved against `project_root`
 /// before validation so that tools work correctly even when the process CWD
@@ -211,45 +179,28 @@ pub fn get_file_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
 /// Paths starting with `vfs:///` are resolved as VFS paths and bypass OS
 /// path validation entirely.
 fn resolve_file_path(
-    app: &AppState,
-    context_name: &str,
+    _app: &AppState,
+    _context_name: &str,
     args: &serde_json::Value,
     config: &ResolvedConfig,
     project_root: &Path,
 ) -> io::Result<ResolvedPath> {
-    let cache_id = args.get_str("cache_id");
-    let path = args.get_str("path");
+    let path = args.get_str("path").ok_or_else(|| {
+        io::Error::new(ErrorKind::InvalidInput, "Must provide path")
+    })?;
 
-    match (cache_id, path) {
-        (Some(id), None) => {
-            // Resolve from cache
-            let cache_dir = app.tool_cache_dir(context_name);
-            cache::resolve_cache_path(&cache_dir, id).map(ResolvedPath::Os)
-        }
-        (None, Some(p)) => {
-            // VFS paths bypass OS path resolution and security validation
-            if VfsPath::is_vfs_uri(p) {
-                let vfs_path = VfsPath::from_uri(p)?;
-                return Ok(ResolvedPath::Vfs(vfs_path));
-            }
-            // Resolve relative paths against project_root before validation
-            let resolved_path = if Path::new(p).is_relative() {
-                project_root.join(p).to_string_lossy().to_string()
-            } else {
-                p.to_string()
-            };
-            let resolved = super::security::validate_file_path(&resolved_path, config)?;
-            Ok(ResolvedPath::Os(resolved))
-        }
-        (Some(_), Some(_)) => Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "Provide either cache_id or path, not both",
-        )),
-        (None, None) => Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "Must provide either cache_id or path",
-        )),
+    if VfsPath::is_vfs_uri(path) {
+        let vfs_path = VfsPath::from_uri(path)?;
+        return Ok(ResolvedPath::Vfs(vfs_path));
     }
+
+    let resolved_path = if Path::new(path).is_relative() {
+        project_root.join(path).to_string_lossy().to_string()
+    } else {
+        path.to_string()
+    };
+    let resolved = super::security::validate_file_path(&resolved_path, config)?;
+    Ok(ResolvedPath::Os(resolved))
 }
 
 // === Tool Execution ===
@@ -290,8 +241,18 @@ fn execute_file_head_or_tail(
 
     match path {
         ResolvedPath::Os(p) => match direction {
-            ReadDirection::Head => cache::read_cache_head(&p, n),
-            ReadDirection::Tail => cache::read_cache_tail(&p, n),
+            ReadDirection::Head => {
+                let file = std::fs::File::open(&p)?;
+                let reader = std::io::BufReader::new(file);
+                let lines: Vec<String> = reader.lines().take(n).collect::<Result<_, _>>()?;
+                Ok(lines.join("\n"))
+            }
+            ReadDirection::Tail => {
+                let content = std::fs::read_to_string(&p)?;
+                let lines: Vec<&str> = content.lines().collect();
+                let start = lines.len().saturating_sub(n);
+                Ok(lines[start..].join("\n"))
+            }
         },
         ResolvedPath::Vfs(vfs_path) => {
             let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
@@ -372,11 +333,21 @@ pub fn execute_file_lines(
     }
 
     match path {
-        ResolvedPath::Os(p) => cache::read_cache_lines(&p, start, end),
+        ResolvedPath::Os(p) => {
+            let file = std::fs::File::open(&p)?;
+            let reader = std::io::BufReader::new(file);
+            let lines: Vec<String> = reader
+                .lines()
+                .enumerate()
+                .filter(|(i, _)| *i >= start.saturating_sub(1) && *i < end)
+                .map(|(_, line)| line)
+                .collect::<Result<_, _>>()?;
+            Ok(lines.join("\n"))
+        }
         ResolvedPath::Vfs(vfs_path) => {
             let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
             let content = String::from_utf8_lossy(&data);
-            // Same logic as cache::read_cache_lines — 1-indexed inclusive range
+            // 1-indexed inclusive range
             let lines: Vec<&str> = content
                 .lines()
                 .enumerate()
@@ -402,7 +373,10 @@ pub fn execute_file_grep(
     let context_after = args.get_u64_or("context_after", 2) as usize;
 
     let result = match path {
-        ResolvedPath::Os(p) => cache::read_cache_grep(&p, &pattern, context_before, context_after)?,
+        ResolvedPath::Os(p) => {
+            let content = std::fs::read_to_string(&p)?;
+            grep_in_memory(&content, &pattern, context_before, context_after)?
+        }
         ResolvedPath::Vfs(vfs_path) => {
             let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
             let content = String::from_utf8_lossy(&data).into_owned();
@@ -417,7 +391,7 @@ pub fn execute_file_grep(
     }
 }
 
-/// In-memory grep with context lines, matching `cache::read_cache_grep` output format.
+/// In-memory grep with context lines.
 fn grep_in_memory(
     content: &str,
     pattern: &str,
@@ -451,37 +425,6 @@ fn grep_in_memory(
     }
 
     Ok(result.join("\n"))
-}
-
-/// Execute cache_list tool
-pub fn execute_cache_list(app: &AppState, context_name: &str) -> io::Result<String> {
-    let cache_dir = app.tool_cache_dir(context_name);
-    let entries = cache::list_cache_entries(&cache_dir)?;
-
-    if entries.is_empty() {
-        return Ok("No cached outputs found.".to_string());
-    }
-
-    let mut output = String::from("Cached tool outputs:\n");
-    for entry in entries {
-        // Format timestamp
-        let timestamp = chrono::DateTime::from_timestamp(entry.timestamp as i64, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        output.push_str(&format!(
-            "\n  {} ({}):\n    Tool: {}\n    Size: {} chars (~{} tokens), {} lines\n    Cached: {}\n",
-            entry.id,
-            entry.tool_name,
-            entry.tool_name,
-            entry.char_count,
-            entry.token_estimate,
-            entry.line_count,
-            timestamp
-        ));
-    }
-
-    Ok(output)
 }
 
 /// Execute write_file tool
@@ -548,7 +491,6 @@ pub fn is_file_tool(name: &str) -> bool {
             | FILE_TAIL_TOOL_NAME
             | FILE_LINES_TOOL_NAME
             | FILE_GREP_TOOL_NAME
-            | CACHE_LIST_TOOL_NAME
             | WRITE_FILE_TOOL_NAME
     )
 }
@@ -556,7 +498,7 @@ pub fn is_file_tool(name: &str) -> bool {
 /// Execute a file tool by name.
 ///
 /// `project_root` is used to resolve relative paths in file read tools.
-/// `CACHE_LIST_TOOL_NAME` and `WRITE_FILE_TOOL_NAME` do not use it.
+/// `WRITE_FILE_TOOL_NAME` does not use it.
 pub fn execute_file_tool(
     app: &AppState,
     context_name: &str,
@@ -594,7 +536,6 @@ pub fn execute_file_tool(
             config,
             project_root,
         )),
-        CACHE_LIST_TOOL_NAME => Some(execute_cache_list(app, context_name)),
         WRITE_FILE_TOOL_NAME => {
             let path = require_str_param(args, "path");
             let content = require_str_param(args, "content");
@@ -655,19 +596,13 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_list_tool_api_format() {
-        let tool = get_tool_api(CACHE_LIST_TOOL_NAME);
-        assert_eq!(tool["function"]["name"], CACHE_LIST_TOOL_NAME);
-    }
-
-    #[test]
     fn test_is_file_tool() {
         assert!(is_file_tool(FILE_HEAD_TOOL_NAME));
         assert!(is_file_tool(FILE_TAIL_TOOL_NAME));
         assert!(is_file_tool(FILE_LINES_TOOL_NAME));
         assert!(is_file_tool(FILE_GREP_TOOL_NAME));
-        assert!(is_file_tool(CACHE_LIST_TOOL_NAME));
         assert!(is_file_tool(WRITE_FILE_TOOL_NAME));
+        assert!(!is_file_tool("cache_list"));
         assert!(!is_file_tool("other_tool"));
     }
 
@@ -677,7 +612,6 @@ mod tests {
         assert_eq!(FILE_TAIL_TOOL_NAME, "file_tail");
         assert_eq!(FILE_LINES_TOOL_NAME, "file_lines");
         assert_eq!(FILE_GREP_TOOL_NAME, "file_grep");
-        assert_eq!(CACHE_LIST_TOOL_NAME, "cache_list");
         assert_eq!(WRITE_FILE_TOOL_NAME, "write_file");
     }
 
@@ -685,13 +619,12 @@ mod tests {
 
     #[test]
     fn test_file_tool_registry_contains_all_tools() {
-        assert_eq!(FILE_TOOL_DEFS.len(), 6);
+        assert_eq!(FILE_TOOL_DEFS.len(), 5);
         let names: Vec<_> = FILE_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&FILE_HEAD_TOOL_NAME));
         assert!(names.contains(&FILE_TAIL_TOOL_NAME));
         assert!(names.contains(&FILE_LINES_TOOL_NAME));
         assert!(names.contains(&FILE_GREP_TOOL_NAME));
-        assert!(names.contains(&CACHE_LIST_TOOL_NAME));
         assert!(names.contains(&WRITE_FILE_TOOL_NAME));
     }
 
@@ -704,7 +637,7 @@ mod tests {
     #[test]
     fn test_all_file_tools_to_api_format() {
         let tools = all_file_tools_to_api_format();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 5);
         for tool in &tools {
             assert_eq!(tool["type"], "function");
             assert!(tool["function"]["name"].is_string());
@@ -751,29 +684,24 @@ mod tests {
 
     #[test]
     fn test_file_tool_required_fields() {
-        // file_lines requires start and end
+        // file_lines requires path, start, end
         let lines = get_tool_api(FILE_LINES_TOOL_NAME);
         let required = lines["function"]["parameters"]["required"]
             .as_array()
             .unwrap();
-        assert_eq!(required.len(), 2);
+        assert_eq!(required.len(), 3);
+        assert!(required.contains(&serde_json::json!("path")));
         assert!(required.contains(&serde_json::json!("start")));
         assert!(required.contains(&serde_json::json!("end")));
 
-        // file_grep requires pattern
+        // file_grep requires path, pattern
         let grep = get_tool_api(FILE_GREP_TOOL_NAME);
         let required = grep["function"]["parameters"]["required"]
             .as_array()
             .unwrap();
-        assert_eq!(required.len(), 1);
+        assert_eq!(required.len(), 2);
+        assert!(required.contains(&serde_json::json!("path")));
         assert!(required.contains(&serde_json::json!("pattern")));
-
-        // cache_list has no required
-        let cache = get_tool_api(CACHE_LIST_TOOL_NAME);
-        let required = cache["function"]["parameters"]["required"]
-            .as_array()
-            .unwrap();
-        assert!(required.is_empty());
     }
 
     #[test]
