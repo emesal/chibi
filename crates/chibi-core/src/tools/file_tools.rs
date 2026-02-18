@@ -497,8 +497,8 @@ pub fn execute_write_file(
 ) -> io::Result<String> {
     if VfsPath::is_vfs_uri(path) {
         let vfs_path = VfsPath::from_uri(path)?;
-        let (vfs, caller) = vfs
-            .ok_or_else(|| io::Error::new(ErrorKind::Other, "VFS not available for vfs:// path"))?;
+        let (vfs, caller) =
+            vfs.ok_or_else(|| io::Error::other("VFS not available for vfs:// path"))?;
         vfs_block_on(vfs.write(caller, &vfs_path, content.as_bytes()))?;
         return Ok(format!(
             "File written successfully: {} ({} bytes)",
