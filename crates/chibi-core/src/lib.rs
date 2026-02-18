@@ -29,7 +29,6 @@
 
 pub mod agents_md;
 pub mod api;
-pub mod vfs_cache;
 mod chibi;
 pub mod config;
 pub mod context;
@@ -49,6 +48,7 @@ pub mod state;
 pub mod tools;
 pub mod vcs;
 pub mod vfs;
+pub mod vfs_cache;
 
 /// System prompt used when processing inbox messages via -b/-B flags.
 pub const INBOX_CHECK_PROMPT: &str = "[System: You have received new message(s) above. Review and take appropriate action now — you may not be reactivated soon, so handle anything urgent immediately.]";

@@ -372,15 +372,19 @@ impl AppState {
                 Ok(p) => p,
                 Err(_) => continue,
             };
-            let meta = match self.vfs.metadata(crate::vfs::SYSTEM_CALLER, &file_path).await {
+            let meta = match self
+                .vfs
+                .metadata(crate::vfs::SYSTEM_CALLER, &file_path)
+                .await
+            {
                 Ok(m) => m,
                 Err(_) => continue,
             };
-            if let Some(created) = meta.created {
-                if created < cutoff {
-                    let _ = self.vfs.delete(crate::vfs::SYSTEM_CALLER, &file_path).await;
-                    removed += 1;
-                }
+            if let Some(created) = meta.created
+                && created < cutoff
+            {
+                let _ = self.vfs.delete(crate::vfs::SYSTEM_CALLER, &file_path).await;
+                removed += 1;
             }
         }
         Ok(removed)

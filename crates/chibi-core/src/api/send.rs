@@ -16,8 +16,8 @@ use crate::gateway::{
 };
 use crate::json_ext::JsonExt;
 use crate::state::{
-    AppState, create_assistant_message_entry, create_tool_call_entry,
-    create_tool_result_entry, create_user_message_entry,
+    AppState, create_assistant_message_entry, create_tool_call_entry, create_tool_result_entry,
+    create_user_message_entry,
 };
 use crate::tools::{self, Tool};
 use crate::vfs::path::VfsPath;

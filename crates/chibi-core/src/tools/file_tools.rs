@@ -185,9 +185,9 @@ fn resolve_file_path(
     config: &ResolvedConfig,
     project_root: &Path,
 ) -> io::Result<ResolvedPath> {
-    let path = args.get_str("path").ok_or_else(|| {
-        io::Error::new(ErrorKind::InvalidInput, "Must provide path")
-    })?;
+    let path = args
+        .get_str("path")
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Must provide path"))?;
 
     if VfsPath::is_vfs_uri(path) {
         let vfs_path = VfsPath::from_uri(path)?;
