@@ -6,7 +6,7 @@
 
 use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::vfs::{Vfs, VfsEntryKind, VfsPath};
-use std::io::{self, ErrorKind};
+use std::io;
 
 // === Tool Name Constants ===
 

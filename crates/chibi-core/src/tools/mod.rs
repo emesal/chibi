@@ -14,11 +14,11 @@ pub mod agent_tools;
 mod builtin;
 pub mod coding_tools;
 pub mod file_tools;
-pub mod vfs_tools;
 mod hooks;
 pub mod mcp;
 mod plugins;
 pub mod security;
+pub mod vfs_tools;
 
 use std::path::PathBuf;
 

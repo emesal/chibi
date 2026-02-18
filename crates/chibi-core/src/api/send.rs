@@ -21,6 +21,7 @@ use crate::state::{
     create_tool_result_entry, create_user_message_entry,
 };
 use crate::tools::{self, Tool};
+use crate::vfs::path::VfsPath;
 use futures_util::stream::StreamExt;
 // ModelGateway trait must be in scope to call chat_stream() on EmbeddedGateway
 use ratatoskr::{ChatEvent, ModelGateway};
@@ -836,11 +837,26 @@ async fn execute_tool_pure(
             None => "Error: missing required 'model' parameter".to_string(),
         }
     } else if tools::is_file_tool(&tool_call.name) {
+        // VFS paths bypass OS permission gating; zone-based permissions are enforced inside execute_file_tool.
+        let raw_path = args.get_str("path").unwrap_or("");
+        if VfsPath::is_vfs_uri(raw_path) {
+            match tools::execute_file_tool(
+                app,
+                context_name,
+                &tool_call.name,
+                &args,
+                resolved_config,
+                project_root,
+            ) {
+                Some(Ok(r)) => r,
+                Some(Err(e)) => format!("Error: {}", e),
+                None => format!("Error: Unknown file tool '{}'", tool_call.name),
+            }
         // Write tools need permission via pre_file_write hook
-        if tool_call.name == tools::WRITE_FILE_TOOL_NAME {
+        } else if tool_call.name == tools::WRITE_FILE_TOOL_NAME {
             let hook_data = serde_json::json!({
                 "tool_name": tool_call.name,
-                "path": args.get_str("path").unwrap_or(""),
+                "path": raw_path,
                 "content": args.get_str("content"),
             });
             match check_permission(
@@ -865,7 +881,6 @@ async fn execute_tool_pure(
             }
         } else {
             // Read-only file tools: auto-allow inside allowed paths, prompt outside
-            let raw_path = args.get_str("path").unwrap_or("");
             let resolved_path_str =
                 if !raw_path.is_empty() && std::path::Path::new(raw_path).is_relative() {
                     project_root.join(raw_path).to_string_lossy().to_string()
@@ -988,8 +1003,15 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools, &app.vfs, context_name)
-                        .await
+                    match tools::execute_coding_tool(
+                        &tool_call.name,
+                        &args,
+                        project_root,
+                        tools,
+                        &app.vfs,
+                        context_name,
+                    )
+                    .await
                     {
                         Some(Ok(r)) => r,
                         Some(Err(e)) => format!("Error: {}", e),
@@ -1012,8 +1034,15 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools, &app.vfs, context_name)
-                        .await
+                    match tools::execute_coding_tool(
+                        &tool_call.name,
+                        &args,
+                        project_root,
+                        tools,
+                        &app.vfs,
+                        context_name,
+                    )
+                    .await
                     {
                         Some(Ok(r)) => r,
                         Some(Err(e)) => format!("Error: {}", e),
@@ -1072,7 +1101,15 @@ async fn execute_tool_pure(
                     Err(reason) => format!("Permission denied: {}", reason),
                 }
             } else {
-                match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools, &app.vfs, context_name).await
+                match tools::execute_coding_tool(
+                    &tool_call.name,
+                    &args,
+                    project_root,
+                    tools,
+                    &app.vfs,
+                    context_name,
+                )
+                .await
                 {
                     Some(Ok(r)) => r,
                     Some(Err(e)) => format!("Error: {}", e),
@@ -1082,7 +1119,16 @@ async fn execute_tool_pure(
         } else {
             // Ungated coding tools: dir_list, glob_files, grep_files,
             // index_update, index_query, index_status
-            match tools::execute_coding_tool(&tool_call.name, &args, project_root, tools, &app.vfs, context_name).await {
+            match tools::execute_coding_tool(
+                &tool_call.name,
+                &args,
+                project_root,
+                tools,
+                &app.vfs,
+                context_name,
+            )
+            .await
+            {
                 Some(Ok(r)) => r,
                 Some(Err(e)) => format!("Error: {}", e),
                 None => format!("Error: Unknown coding tool '{}'", tool_call.name),
@@ -2489,6 +2535,101 @@ mod tests {
         );
         assert!(prompt.contains("reengaged via call_user"));
         assert!(prompt.contains("keep going"));
+    }
+
+    // ========================================================================
+    // execute_tool_pure VFS dispatch tests
+    //
+    // These tests exercise the full send.rs dispatch path (including OS
+    // permission gating) with vfs:// paths, to ensure the VFS early-exit
+    // fires before any OS path resolution or hook machinery.
+    // ========================================================================
+
+    fn fake_tool_call(name: &str, args: serde_json::Value) -> ratatoskr::ToolCall {
+        ratatoskr::ToolCall {
+            id: "tc_test".to_string(),
+            name: name.to_string(),
+            arguments: args.to_string(),
+        }
+    }
+
+    fn make_test_app() -> (AppState, tempfile::TempDir) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let app = AppState::from_dir(
+            temp_dir.path().to_path_buf(),
+            crate::config::Config::default(),
+        )
+        .unwrap();
+        (app, temp_dir)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_vfs_write_file_bypasses_os_permission_gate() {
+        let (app, _tmp) = make_test_app();
+        let resolved_config = app.resolve_config("default", None).unwrap();
+        let project_root = std::path::PathBuf::from("/tmp");
+
+        let tc = fake_tool_call(
+            "write_file",
+            serde_json::json!({"path": "vfs:///shared/hello.txt", "content": "hello vfs"}),
+        );
+        let result = execute_tool_pure(
+            &app,
+            "default",
+            &tc,
+            &[],
+            false,
+            &resolved_config,
+            false,
+            None,
+            &project_root,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result.original_result.contains("written"),
+            "write_file via vfs:// should succeed through dispatch, got: {}",
+            result.original_result
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_vfs_file_head_bypasses_os_permission_gate() {
+        let (app, _tmp) = make_test_app();
+        let resolved_config = app.resolve_config("default", None).unwrap();
+        let project_root = std::path::PathBuf::from("/tmp");
+
+        // Seed content directly through the VFS (use /shared/ — writable by any non-system context)
+        let vfs_path = crate::vfs::VfsPath::new("/shared/hello.txt").unwrap();
+        app.vfs
+            .write("default", &vfs_path, b"line1\nline2\nline3")
+            .await
+            .unwrap();
+
+        let tc = fake_tool_call(
+            "file_head",
+            serde_json::json!({"path": "vfs:///shared/hello.txt", "lines": 2}),
+        );
+        let result = execute_tool_pure(
+            &app,
+            "default",
+            &tc,
+            &[],
+            false,
+            &resolved_config,
+            false,
+            None,
+            &project_root,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result.original_result.contains("line1"),
+            "file_head via vfs:// should read file content through dispatch, got: {}",
+            result.original_result
+        );
     }
 
     #[test]

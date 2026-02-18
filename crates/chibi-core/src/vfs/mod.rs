@@ -97,10 +97,7 @@ mod integration_tests {
         assert_eq!(data, b"alice's private notes");
 
         // bob cannot write to alice's home
-        let err = vfs
-            .write("bob", &alice_notes, b"hacked")
-            .await
-            .unwrap_err();
+        let err = vfs.write("bob", &alice_notes, b"hacked").await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::PermissionDenied);
 
         // bob can write to /shared/

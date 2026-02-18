@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// Returned by `resolve_file_path` so callers can branch on OS vs VFS
 /// without re-parsing the URI.
 #[derive(Debug)]
-pub enum ResolvedPath {
+pub(crate) enum ResolvedPath {
     Os(PathBuf),
     Vfs(VfsPath),
 }
@@ -401,16 +401,12 @@ pub fn execute_file_grep(
     let context_before = args.get_u64_or("context_before", 2) as usize;
     let context_after = args.get_u64_or("context_after", 2) as usize;
 
-    let content_str;
-
-    let result = match &path {
-        ResolvedPath::Os(p) => {
-            cache::read_cache_grep(p, &pattern, context_before, context_after)?
-        }
+    let result = match path {
+        ResolvedPath::Os(p) => cache::read_cache_grep(&p, &pattern, context_before, context_after)?,
         ResolvedPath::Vfs(vfs_path) => {
-            let data = vfs_block_on(app.vfs.read(context_name, vfs_path))?;
-            content_str = String::from_utf8_lossy(&data).into_owned();
-            grep_in_memory(&content_str, &pattern, context_before, context_after)?
+            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let content = String::from_utf8_lossy(&data).into_owned();
+            grep_in_memory(&content, &pattern, context_before, context_after)?
         }
     };
 
@@ -429,9 +425,8 @@ fn grep_in_memory(
     context_after: usize,
 ) -> io::Result<String> {
     let lines: Vec<&str> = content.lines().collect();
-    let regex = regex::Regex::new(pattern).map_err(|e| {
-        io::Error::new(ErrorKind::InvalidInput, format!("Invalid regex: {}", e))
-    })?;
+    let regex = regex::Regex::new(pattern)
+        .map_err(|e| io::Error::new(ErrorKind::InvalidInput, format!("Invalid regex: {}", e)))?;
 
     let mut result = Vec::new();
     let mut last_end = 0;
@@ -502,13 +497,13 @@ pub fn execute_write_file(
 ) -> io::Result<String> {
     if VfsPath::is_vfs_uri(path) {
         let vfs_path = VfsPath::from_uri(path)?;
-        let (vfs, caller) = vfs.ok_or_else(|| {
-            io::Error::new(ErrorKind::Other, "VFS not available for vfs:// path")
-        })?;
+        let (vfs, caller) = vfs
+            .ok_or_else(|| io::Error::new(ErrorKind::Other, "VFS not available for vfs:// path"))?;
         vfs_block_on(vfs.write(caller, &vfs_path, content.as_bytes()))?;
         return Ok(format!(
             "File written successfully: {} ({} bytes)",
-            vfs_path, content.len()
+            vfs_path,
+            content.len()
         ));
     }
 
@@ -537,7 +532,7 @@ pub fn execute_write_file(
 /// happens to live inside a tokio runtime (e.g. tool dispatch in
 /// `execute_tool_pure`). The `block_in_place` call tells the runtime
 /// scheduler to move other tasks off this thread while we block.
-fn vfs_block_on<F: std::future::Future>(f: F) -> F::Output {
+pub(crate) fn vfs_block_on<F: std::future::Future>(f: F) -> F::Output {
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
@@ -600,9 +595,7 @@ pub fn execute_file_tool(
             let path = require_str_param(args, "path");
             let content = require_str_param(args, "content");
             match (path, content) {
-                (Ok(p), Ok(c)) => {
-                    Some(execute_write_file(&p, &c, Some((&app.vfs, context_name))))
-                }
+                (Ok(p), Ok(c)) => Some(execute_write_file(&p, &c, Some((&app.vfs, context_name)))),
                 (Err(e), _) | (_, Err(e)) => Some(Err(e)),
             }
         }
@@ -949,10 +942,7 @@ mod tests {
     use crate::vfs::{LocalBackend, Vfs};
 
     /// Create an AppState with a VFS backed by the given temp directory.
-    fn make_vfs_app(
-        home: &tempfile::TempDir,
-        vfs_dir: &tempfile::TempDir,
-    ) -> AppState {
+    fn make_vfs_app(home: &tempfile::TempDir, vfs_dir: &tempfile::TempDir) -> AppState {
         let mut app = AppState::load(Some(home.path().to_path_buf())).unwrap();
         let backend = LocalBackend::new(vfs_dir.path().to_path_buf());
         app.vfs = Vfs::new(Box::new(backend));
@@ -1073,7 +1063,11 @@ mod tests {
 
         let vfs_path = VfsPath::new("/shared/code.rs").unwrap();
         app.vfs
-            .write("ctx", &vfs_path, b"fn hello() {\n    println!(\"world\");\n}\n")
+            .write(
+                "ctx",
+                &vfs_path,
+                b"fn hello() {\n    println!(\"world\");\n}\n",
+            )
             .await
             .unwrap();
 

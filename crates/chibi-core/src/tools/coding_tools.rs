@@ -11,7 +11,7 @@ use std::io::{self, BufRead, ErrorKind};
 use std::path::{Path, PathBuf};
 
 use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
-use super::file_tools::ResolvedPath;
+use super::file_tools::{ResolvedPath, vfs_block_on};
 use crate::json_ext::JsonExt;
 use crate::vfs::{Vfs, VfsPath};
 
@@ -307,21 +307,17 @@ pub fn is_coding_tool(name: &str) -> bool {
 /// Resolve a path string relative to project_root.
 ///
 /// Absolute paths are returned as-is. Relative paths are joined with project_root.
-/// Paths starting with `vfs:///` are resolved as VFS paths.
-fn resolve_path(project_root: &Path, path_str: &str) -> ResolvedPath {
+/// Paths starting with `vfs:///` are resolved as VFS paths; a malformed VFS URI
+/// returns an error rather than silently falling back to an OS path.
+fn resolve_path(project_root: &Path, path_str: &str) -> io::Result<ResolvedPath> {
     if VfsPath::is_vfs_uri(path_str) {
-        match VfsPath::from_uri(path_str) {
-            Ok(vfs_path) => ResolvedPath::Vfs(vfs_path),
-            // Invalid VFS URI: fall through to OS path so the caller gets a
-            // clear filesystem error rather than a silent misroute.
-            Err(_) => ResolvedPath::Os(PathBuf::from(path_str)),
-        }
+        Ok(ResolvedPath::Vfs(VfsPath::from_uri(path_str)?))
     } else {
         let p = Path::new(path_str);
         if p.is_absolute() {
-            ResolvedPath::Os(p.to_path_buf())
+            Ok(ResolvedPath::Os(p.to_path_buf()))
         } else {
-            ResolvedPath::Os(project_root.join(p))
+            Ok(ResolvedPath::Os(project_root.join(p)))
         }
     }
 }
@@ -435,7 +431,7 @@ fn execute_dir_list(args: &serde_json::Value, project_root: &Path) -> io::Result
     let depth = args.get_u64_or("depth", 1) as usize;
     let show_hidden = args.get_str_or("show_hidden", "false") == "true";
 
-    let root = require_os_path(resolve_path(project_root, path_str), "dir_list")?;
+    let root = require_os_path(resolve_path(project_root, path_str)?, "dir_list")?;
 
     if !root.exists() {
         return Err(io::Error::new(
@@ -549,7 +545,7 @@ fn execute_glob_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
     let path_str = args.get_str_or("path", ".");
     let max_results = args.get_u64_or("max_results", 100) as usize;
 
-    let root = require_os_path(resolve_path(project_root, path_str), "glob_files")?;
+    let root = require_os_path(resolve_path(project_root, path_str)?, "glob_files")?;
 
     if !root.exists() {
         return Err(io::Error::new(
@@ -622,7 +618,7 @@ fn execute_grep_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
         )
     })?;
 
-    let root = require_os_path(resolve_path(project_root, path_str), "grep_files")?;
+    let root = require_os_path(resolve_path(project_root, path_str)?, "grep_files")?;
 
     if !root.exists() {
         return Err(io::Error::new(
@@ -776,15 +772,11 @@ fn execute_file_edit(
     let operation_str = require_str_param(args, "operation")?;
     let op = parse_edit_operation(&operation_str, args)?;
 
-    let resolved = resolve_path(project_root, &path_str);
+    let resolved = resolve_path(project_root, &path_str)?;
 
     match resolved {
-        ResolvedPath::Os(file_path) => {
-            execute_file_edit_os(&file_path, op)
-        }
-        ResolvedPath::Vfs(vfs_path) => {
-            execute_file_edit_vfs(vfs, caller, &vfs_path, op)
-        }
+        ResolvedPath::Os(file_path) => execute_file_edit_os(&file_path, op),
+        ResolvedPath::Vfs(vfs_path) => execute_file_edit_vfs(vfs, caller, &vfs_path, op),
     }
 }
 
@@ -809,16 +801,11 @@ fn execute_file_edit_vfs(
     vfs_path: &VfsPath,
     op: EditOperation,
 ) -> io::Result<String> {
-    let data = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(vfs.read(caller, vfs_path))
-    })?;
+    let data = vfs_block_on(vfs.read(caller, vfs_path))?;
     let content = String::from_utf8_lossy(&data).into_owned();
 
     let (new_content, summary) = apply_edit(op, &content, vfs_path.as_str())?;
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(vfs.write(caller, vfs_path, new_content.as_bytes()))
-    })?;
+    vfs_block_on(vfs.write(caller, vfs_path, new_content.as_bytes()))?;
     Ok(summary)
 }
 
@@ -826,7 +813,11 @@ fn execute_file_edit_vfs(
 ///
 /// Shared by both OS and VFS edit paths — the edit logic is identical,
 /// only read/write differs.
-fn apply_edit(op: EditOperation, content: &str, display_path: &str) -> io::Result<(String, String)> {
+fn apply_edit(
+    op: EditOperation,
+    content: &str,
+    display_path: &str,
+) -> io::Result<(String, String)> {
     let mut lines: Vec<String> = content.lines().map(String::from).collect();
     let had_trailing_newline = content.ends_with('\n');
 
@@ -873,6 +864,9 @@ fn apply_edit(op: EditOperation, content: &str, display_path: &str) -> io::Resul
                     format!("String not found in file: {:?}", find),
                 ));
             }
+            // `replacen` operates on the raw string, so the trailing newline is preserved
+            // naturally if the original had one. Early return is correct here; the line-based
+            // newline restoration below is not needed.
             let new_content = content.replacen(&find, &replace, 1);
             return Ok((
                 new_content,
@@ -1173,7 +1167,7 @@ mod tests {
     #[test]
     fn test_resolve_path_absolute() {
         let root = Path::new("/some/root");
-        match resolve_path(root, "/absolute/path") {
+        match resolve_path(root, "/absolute/path").unwrap() {
             ResolvedPath::Os(p) => assert_eq!(p, PathBuf::from("/absolute/path")),
             ResolvedPath::Vfs(_) => panic!("expected Os path"),
         }
@@ -1182,7 +1176,7 @@ mod tests {
     #[test]
     fn test_resolve_path_relative() {
         let root = Path::new("/some/root");
-        match resolve_path(root, "relative/path") {
+        match resolve_path(root, "relative/path").unwrap() {
             ResolvedPath::Os(p) => assert_eq!(p, PathBuf::from("/some/root/relative/path")),
             ResolvedPath::Vfs(_) => panic!("expected Os path"),
         }
@@ -1191,10 +1185,19 @@ mod tests {
     #[test]
     fn test_resolve_path_vfs_uri() {
         let root = Path::new("/some/root");
-        match resolve_path(root, "vfs:///shared/file.txt") {
+        match resolve_path(root, "vfs:///shared/file.txt").unwrap() {
             ResolvedPath::Vfs(p) => assert_eq!(p.as_str(), "/shared/file.txt"),
             ResolvedPath::Os(_) => panic!("expected Vfs path"),
         }
+    }
+
+    #[test]
+    fn test_resolve_path_invalid_vfs_uri_errors() {
+        let root = Path::new("/some/root");
+        // `is_vfs_uri` is true (starts with vfs:///) but path contains "//" making it invalid
+        assert!(resolve_path(root, "vfs:////etc").is_err());
+        // double-dot traversal is also invalid
+        assert!(resolve_path(root, "vfs:///../etc").is_err());
     }
 
     // --- dir_list ---
@@ -1725,6 +1728,11 @@ mod tests {
         let a = args(&[("path", serde_json::json!("vfs:///shared"))]);
         let result = execute_dir_list(&a, dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("does not support vfs://"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not support vfs://")
+        );
     }
 }
