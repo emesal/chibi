@@ -124,8 +124,8 @@ impl ContextState {
 }
 
 pub fn is_valid_context_name(name: &str) -> bool {
-    // Reject reserved name
-    if name == "-" {
+    // Reject reserved names
+    if name == "-" || crate::vfs::is_reserved_caller_name(name) {
         return false;
     }
     !name.is_empty()
@@ -451,6 +451,14 @@ mod tests {
         assert!(is_valid_context_name("new"));
         // "default" is the default context name
         assert!(is_valid_context_name("default"));
+    }
+
+    #[test]
+    fn test_context_name_rejects_system() {
+        assert!(!is_valid_context_name("SYSTEM"));
+        assert!(!is_valid_context_name("system"));
+        assert!(!is_valid_context_name("System"));
+        assert!(!is_valid_context_name("SyStEm"));
     }
 
     #[test]
