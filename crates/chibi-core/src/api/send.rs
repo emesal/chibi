@@ -2664,4 +2664,48 @@ mod tests {
             "fuel info must appear in limited mode"
         );
     }
+
+    // ========================================================================
+    // End-to-end VFS cache flow integration test
+    // ========================================================================
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_full_cache_flow_via_vfs() {
+        let (app, _tmp) = make_test_app();
+        let ctx_name = "vfs-cache-flow";
+
+        let large = "abcdefghijklmnop"; // 16 chars
+        let cache_id = crate::vfs_cache::generate_cache_id("test_tool", &serde_json::json!({}));
+        let vfs_path_str = crate::vfs_cache::vfs_path_for(ctx_name, &cache_id);
+        let vfs_uri = crate::vfs_cache::vfs_uri_for(ctx_name, &cache_id);
+        let vfs_path = crate::vfs::VfsPath::new(&vfs_path_str).unwrap();
+
+        // Write the cache entry
+        app.vfs
+            .write(crate::vfs::SYSTEM_CALLER, &vfs_path, large.as_bytes())
+            .await
+            .unwrap();
+
+        // Truncated stub references the VFS URI
+        let stub = crate::vfs_cache::truncated_message(&vfs_uri, "test_tool", large, 5);
+        assert!(stub.contains(&vfs_uri));
+        assert!(stub.contains("test_tool"));
+
+        // LLM can read content via vfs:/// path
+        let content = app.vfs.read(ctx_name, &vfs_path).await.unwrap();
+        assert_eq!(content, large.as_bytes());
+
+        // Fresh entry is NOT removed by cleanup (max_age_days=0 → delete after >1 day)
+        let removed = app.cleanup_all_tool_caches(0).await.unwrap();
+        assert_eq!(removed, 0, "fresh entry should survive cleanup");
+
+        // Clear removes the context directory
+        app.clear_tool_cache(ctx_name).await.unwrap();
+        let exists = app
+            .vfs
+            .exists(crate::vfs::SYSTEM_CALLER, &vfs_path)
+            .await
+            .unwrap();
+        assert!(!exists, "cache entry should be gone after clear");
+    }
 }
