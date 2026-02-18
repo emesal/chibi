@@ -1522,3 +1522,17 @@ fn test_backward_compat_old_context_jsonl_without_tool_call_id() {
     assert_eq!(loaded.messages[2]["role"].as_str().unwrap(), "tool");
     assert_eq!(loaded.messages[3]["role"].as_str().unwrap(), "assistant");
 }
+
+#[test]
+fn test_appstate_rejects_unknown_vfs_backend() {
+    let dir = TempDir::new().unwrap();
+    let mut config = Config::default();
+    config.vfs.backend = "fossil".to_string();
+    match AppState::from_dir(dir.path().to_path_buf(), config) {
+        Ok(_) => panic!("should reject unknown VFS backend"),
+        Err(err) => {
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(err.to_string().contains("unsupported VFS backend"));
+        }
+    }
+}

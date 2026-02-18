@@ -10,7 +10,7 @@
 use std::io::{self, BufRead, ErrorKind};
 use std::path::{Path, PathBuf};
 
-use super::builtin::{BuiltinToolDef, ToolPropertyDef};
+use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::json_ext::JsonExt;
 
 // === Tool Name Constants ===
@@ -315,16 +315,6 @@ fn resolve_path(project_root: &Path, path_str: &str) -> PathBuf {
 }
 
 // === Parameter Helpers ===
-
-/// Extract a required string parameter, returning a helpful error if missing.
-fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String> {
-    args.get_str(name).map(String::from).ok_or_else(|| {
-        io::Error::new(
-            ErrorKind::InvalidInput,
-            format!("Missing '{}' parameter", name),
-        )
-    })
-}
 
 // === Tool Execution ===
 

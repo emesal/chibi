@@ -77,6 +77,16 @@ impl AppState {
         };
 
         let vfs_root = chibi_dir.join("vfs");
+        if config.vfs.backend != "local" {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "unsupported VFS backend '{}' (only 'local' is built in)",
+                    config.vfs.backend
+                ),
+            ));
+        }
+        fs::create_dir_all(&vfs_root)?;
         let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
         let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
 
@@ -164,6 +174,16 @@ impl AppState {
         };
 
         let vfs_root = chibi_dir.join("vfs");
+        if config.vfs.backend != "local" {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "unsupported VFS backend '{}' (only 'local' is built in)",
+                    config.vfs.backend
+                ),
+            ));
+        }
+        fs::create_dir_all(&vfs_root)?;
         let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
         let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
 

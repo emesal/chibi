@@ -3,7 +3,7 @@
 //! These tools provide surgical access to cached tool outputs, allowing the LLM
 //! to examine large outputs without overwhelming the context window.
 
-use super::builtin::{BuiltinToolDef, ToolPropertyDef};
+use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::cache;
 use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;
@@ -236,17 +236,6 @@ fn resolve_file_path(
 // === Tool Execution ===
 
 // --- Helpers for parameter extraction ---
-
-/// Extract a required string parameter, returning a helpful error if missing.
-/// Use this pattern for required params in future file tools.
-fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String> {
-    args.get_str(name).map(String::from).ok_or_else(|| {
-        io::Error::new(
-            ErrorKind::InvalidInput,
-            format!("Missing '{}' parameter", name),
-        )
-    })
-}
 
 /// Extract a required u64 parameter, returning a helpful error if missing.
 /// Use this pattern for required numeric params in future file tools.

@@ -4,8 +4,7 @@
 //! Each tool parses `vfs://` URIs from JSON args and delegates to the
 //! appropriate `Vfs` method, returning human-readable result strings.
 
-use super::builtin::{BuiltinToolDef, ToolPropertyDef};
-use crate::json_ext::JsonExt;
+use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::vfs::{Vfs, VfsEntryKind, VfsPath};
 use std::io::{self, ErrorKind};
 
@@ -113,16 +112,6 @@ pub static VFS_TOOL_DEFS: &[BuiltinToolDef] = &[
 ];
 
 // === Helpers ===
-
-/// Extract a required string parameter, returning a helpful error if missing.
-fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String> {
-    args.get_str(name).map(String::from).ok_or_else(|| {
-        io::Error::new(
-            ErrorKind::InvalidInput,
-            format!("Missing '{}' parameter", name),
-        )
-    })
-}
 
 /// Parse a `vfs://` URI parameter into a `VfsPath`.
 fn require_vfs_path(args: &serde_json::Value, name: &str) -> io::Result<VfsPath> {
