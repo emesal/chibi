@@ -37,6 +37,7 @@ const MAX_TOOL_CALLS: usize = 100;
 enum ToolType {
     Builtin,
     File,
+    Vfs,
     Agent,
     Coding,
     Mcp,
@@ -48,6 +49,7 @@ impl ToolType {
         match self {
             ToolType::Builtin => "builtin",
             ToolType::File => "file",
+            ToolType::Vfs => "vfs",
             ToolType::Agent => "agent",
             ToolType::Coding => "coding",
             ToolType::Mcp => "mcp",
@@ -65,6 +67,8 @@ fn classify_tool_type(name: &str, plugin_tools: &[Tool]) -> ToolType {
         ToolType::Builtin
     } else if tools::is_file_tool(name) {
         ToolType::File
+    } else if tools::is_vfs_tool(name) {
+        ToolType::Vfs
     } else if tools::is_agent_tool(name) {
         ToolType::Agent
     } else if tools::is_coding_tool(name) {
@@ -907,6 +911,14 @@ async fn execute_tool_pure(
                     None => format!("Error: Unknown file tool '{}'", tool_call.name),
                 }
             }
+        }
+    } else if tools::is_vfs_tool(&tool_call.name) {
+        // VFS tools enforce their own zone-based permission model.
+        // No PreFileRead/PreFileWrite hooks needed.
+        match tools::execute_vfs_tool(&app.vfs, context_name, &tool_call.name, &args).await {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => format!("Error: {}", e),
+            None => format!("Error: Unknown VFS tool '{}'", tool_call.name),
         }
     } else if tools::is_agent_tool(&tool_call.name) {
         // URL policy / permission check for summarize_content
@@ -1841,6 +1853,7 @@ pub async fn send_prompt<S: ResponseSink>(
         all_tools.extend(tools::all_file_tools_to_api_format());
         all_tools.extend(tools::all_agent_tools_to_api_format());
         all_tools.extend(tools::all_coding_tools_to_api_format());
+        all_tools.extend(tools::all_vfs_tools_to_api_format());
         annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
         all_tools = filter_tools_by_config(all_tools, &resolved_config.tools, tools);
 
@@ -2143,6 +2156,20 @@ mod tests {
     }
 
     #[test]
+    fn test_classify_tool_type_vfs() {
+        for name in [
+            "vfs_list",
+            "vfs_info",
+            "vfs_copy",
+            "vfs_move",
+            "vfs_mkdir",
+            "vfs_delete",
+        ] {
+            assert_eq!(classify_tool_type(name, &[]), ToolType::Vfs, "{name}");
+        }
+    }
+
+    #[test]
     fn test_classify_tool_type_agent() {
         for name in ["spawn_agent", "summarize_content"] {
             assert_eq!(classify_tool_type(name, &[]), ToolType::Agent, "{name}");
@@ -2173,6 +2200,7 @@ mod tests {
     fn test_tool_type_as_str() {
         assert_eq!(ToolType::Builtin.as_str(), "builtin");
         assert_eq!(ToolType::File.as_str(), "file");
+        assert_eq!(ToolType::Vfs.as_str(), "vfs");
         assert_eq!(ToolType::Agent.as_str(), "agent");
         assert_eq!(ToolType::Coding.as_str(), "coding");
         assert_eq!(ToolType::Mcp.as_str(), "mcp");

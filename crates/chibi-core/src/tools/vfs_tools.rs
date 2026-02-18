@@ -216,6 +216,14 @@ pub async fn execute_vfs_move(
     Ok(format!("Moved {} -> {}", src.as_str(), dst.as_str()))
 }
 
+/// Convert all VFS tools to API format for LLM tool registration.
+pub fn all_vfs_tools_to_api_format() -> Vec<serde_json::Value> {
+    VFS_TOOL_DEFS
+        .iter()
+        .map(|def| def.to_api_format())
+        .collect()
+}
+
 // === Dispatch ===
 
 /// Check if a tool name is a VFS tool.
