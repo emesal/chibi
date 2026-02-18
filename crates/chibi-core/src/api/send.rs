@@ -8,7 +8,6 @@ use super::compact::compact_context_with_llm;
 use super::logging::{log_request_if_enabled, log_response_meta_if_enabled};
 use super::request::{PromptOptions, build_request_body};
 use super::sink::{ResponseEvent, ResponseSink};
-use crate::cache;
 use crate::chibi::PermissionHandler;
 use crate::config::{ResolvedConfig, ToolsConfig};
 use crate::context::{InboxEntry, now_timestamp};
@@ -1191,7 +1190,7 @@ async fn execute_tool_pure(
 
     // Check if output should be cached
     let (final_result, was_cached) = if !tool_result.starts_with("Error:")
-        && cache::should_cache(&tool_result, resolved_config.tool_output_cache_threshold)
+        && crate::vfs_cache::should_cache(&tool_result, resolved_config.tool_output_cache_threshold)
     {
         // Fire pre_cache_output hook (can block caching)
         let pre_cache_data = serde_json::json!({
@@ -1214,40 +1213,49 @@ async fn execute_tool_pure(
             }
             (tool_result.clone(), false)
         } else {
-            let cache_dir = app.tool_cache_dir(context_name);
-            match cache::cache_output(&cache_dir, &tool_call.name, &tool_result, &args) {
-                Ok(entry) => {
-                    match cache::generate_truncated_message(
-                        &entry,
+            let cache_id = crate::vfs_cache::generate_cache_id(&tool_call.name, &args);
+            let vfs_path_str = crate::vfs_cache::vfs_path_for(context_name, &cache_id);
+            let vfs_uri = crate::vfs_cache::vfs_uri_for(context_name, &cache_id);
+            let vfs_path = crate::vfs::VfsPath::new(&vfs_path_str).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
+            })?;
+
+            match app
+                .vfs
+                .write(crate::vfs::SYSTEM_CALLER, &vfs_path, tool_result.as_bytes())
+                .await
+            {
+                Ok(()) => {
+                    let truncated = crate::vfs_cache::truncated_message(
+                        &vfs_uri,
+                        &tool_call.name,
+                        &tool_result,
                         resolved_config.tool_cache_preview_chars,
-                    ) {
-                        Ok(truncated) => {
-                            if verbose {
-                                diagnostics.push(format!(
-                                    "[Cached {} chars from {} as {}]",
-                                    tool_result.len(),
-                                    tool_call.name,
-                                    entry.metadata.id
-                                ));
-                            }
+                    );
 
-                            // Fire post_cache_output hook (notification only)
-                            let post_cache_data = serde_json::json!({
-                                "tool_name": tool_call.name,
-                                "cache_id": entry.metadata.id,
-                                "output_size": tool_result.len(),
-                                "preview_size": truncated.len(),
-                            });
-                            let _ = tools::execute_hook(
-                                tools,
-                                tools::HookPoint::PostCacheOutput,
-                                &post_cache_data,
-                            );
-
-                            (truncated, true)
-                        }
-                        Err(_) => (tool_result.clone(), false),
+                    if verbose {
+                        diagnostics.push(format!(
+                            "[Cached {} chars from {} at {}]",
+                            tool_result.len(),
+                            tool_call.name,
+                            vfs_uri,
+                        ));
                     }
+
+                    // Fire post_cache_output hook (notification only)
+                    let post_cache_data = serde_json::json!({
+                        "tool_name": tool_call.name,
+                        "cache_id": cache_id,
+                        "output_size": tool_result.len(),
+                        "preview_size": truncated.len(),
+                    });
+                    let _ = tools::execute_hook(
+                        tools,
+                        tools::HookPoint::PostCacheOutput,
+                        &post_cache_data,
+                    );
+
+                    (truncated, true)
                 }
                 Err(e) => {
                     if verbose {
