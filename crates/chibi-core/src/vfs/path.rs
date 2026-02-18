@@ -103,10 +103,10 @@ impl VfsPath {
                 "join segment must be relative",
             ));
         }
-        if segment.split('/').any(|c| c == "..") {
+        if segment.split('/').any(|c| c == ".." || c == ".") {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
-                "join segment cannot contain '..'",
+                "join segment cannot contain '.' or '..'",
             ));
         }
         let combined = if self.0 == "/" {
@@ -227,6 +227,13 @@ mod tests {
     fn test_join_rejects_dotdot() {
         let base = VfsPath::new("/shared").unwrap();
         assert!(base.join("../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_join_rejects_single_dot() {
+        let base = VfsPath::new("/shared").unwrap();
+        assert!(base.join("./file.txt").is_err());
+        assert!(base.join("sub/./file.txt").is_err());
     }
 
     #[test]
