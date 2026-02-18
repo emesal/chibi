@@ -468,7 +468,7 @@ pub fn project_index_db_path(root: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::StatePaths;
-    use crate::config::{ApiParams, ToolsConfig};
+    use crate::config::{ApiParams, ToolsConfig, VfsConfig};
     use crate::partition::StorageConfig;
     use tempfile::TempDir;
 
@@ -506,6 +506,7 @@ mod tests {
             storage: StorageConfig::default(),
             fallback_tool: "call_user".to_string(),
             tools: ToolsConfig::default(),
+            vfs: VfsConfig::default(),
             url_policy: None,
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();

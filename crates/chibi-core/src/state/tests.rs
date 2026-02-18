@@ -1,7 +1,7 @@
 //! Tests for state module.
 
 use super::*;
-use crate::config::{ApiParams, LocalConfig, ToolsConfig};
+use crate::config::{ApiParams, LocalConfig, ToolsConfig, VfsConfig};
 use crate::context::InboxEntry;
 use crate::partition::StorageConfig;
 use serde_json::json;
@@ -37,6 +37,7 @@ fn create_test_app() -> (AppState, TempDir) {
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
         tools: ToolsConfig::default(),
+        vfs: VfsConfig::default(),
         url_policy: None,
     };
     let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -564,6 +565,7 @@ fn test_resolve_config_model_level_api_params() {
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
         tools: ToolsConfig::default(),
+        vfs: VfsConfig::default(),
         url_policy: None,
     };
 
@@ -626,6 +628,7 @@ fn test_resolve_config_hierarchy_context_over_model() {
         storage: StorageConfig::default(),
         fallback_tool: "call_user".to_string(),
         tools: ToolsConfig::default(),
+        vfs: VfsConfig::default(),
         url_policy: None,
     };
 
