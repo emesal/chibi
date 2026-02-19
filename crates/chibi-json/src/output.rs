@@ -3,6 +3,18 @@ use chibi_core::context::TranscriptEntry;
 use chibi_core::output::CommandEvent;
 use std::io::{self, Write};
 
+/// Map `io::ErrorKind` to a stable coarse-grained error code string.
+fn error_code(e: &io::Error) -> &'static str {
+    match e.kind() {
+        io::ErrorKind::NotFound => "not_found",
+        io::ErrorKind::InvalidInput => "invalid_input",
+        io::ErrorKind::PermissionDenied => "permission_denied",
+        io::ErrorKind::InvalidData => "invalid_data",
+        io::ErrorKind::AlreadyExists => "already_exists",
+        _ => "internal_error",
+    }
+}
+
 /// JSONL output sink for chibi-json.
 ///
 /// Results go to stdout as JSONL, diagnostics go to stderr as JSONL.
@@ -107,5 +119,60 @@ impl OutputSink for JsonOutputSink {
     fn emit_markdown(&self, content: &str) -> io::Result<()> {
         self.emit_result(content);
         Ok(())
+    }
+
+    fn emit_done(&self, result: &io::Result<()>) {
+        let json = match result {
+            Ok(()) => serde_json::json!({"type": "done", "ok": true}),
+            Err(e) => serde_json::json!({
+                "type": "done",
+                "ok": false,
+                "code": error_code(e),
+                "message": e.to_string(),
+            }),
+        };
+        eprintln!("{}", json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn error_code_not_found() {
+        let e = io::Error::new(io::ErrorKind::NotFound, "x");
+        assert_eq!(error_code(&e), "not_found");
+    }
+
+    #[test]
+    fn error_code_invalid_input() {
+        let e = io::Error::new(io::ErrorKind::InvalidInput, "x");
+        assert_eq!(error_code(&e), "invalid_input");
+    }
+
+    #[test]
+    fn error_code_permission_denied() {
+        let e = io::Error::new(io::ErrorKind::PermissionDenied, "x");
+        assert_eq!(error_code(&e), "permission_denied");
+    }
+
+    #[test]
+    fn error_code_invalid_data() {
+        let e = io::Error::new(io::ErrorKind::InvalidData, "x");
+        assert_eq!(error_code(&e), "invalid_data");
+    }
+
+    #[test]
+    fn error_code_already_exists() {
+        let e = io::Error::new(io::ErrorKind::AlreadyExists, "x");
+        assert_eq!(error_code(&e), "already_exists");
+    }
+
+    #[test]
+    fn error_code_fallback() {
+        let e = io::Error::new(io::ErrorKind::BrokenPipe, "x");
+        assert_eq!(error_code(&e), "internal_error");
     }
 }
