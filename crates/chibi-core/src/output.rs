@@ -88,6 +88,52 @@ pub trait OutputSink {
         self.emit_result(content);
         Ok(())
     }
+
+    /// Signal command completion. Called once, after all output has been emitted.
+    ///
+    /// Default: no-op — chibi-cli handles completion via its own UX.
+    fn emit_done(&self, result: &io::Result<()>) {
+        let _ = result;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct RecordingSink {
+        done_called: std::cell::Cell<bool>,
+    }
+
+    impl RecordingSink {
+        fn new() -> Self { Self { done_called: std::cell::Cell::new(false) } }
+    }
+
+    impl OutputSink for RecordingSink {
+        fn emit_result(&self, _: &str) {}
+        fn emit_event(&self, _: CommandEvent) {}
+        fn newline(&self) {}
+        fn emit_entry(&self, _: &TranscriptEntry) -> std::io::Result<()> { Ok(()) }
+        fn confirm(&self, _: &str) -> bool { true }
+        fn emit_done(&self, _: &std::io::Result<()>) {
+            self.done_called.set(true);
+        }
+    }
+
+    #[test]
+    fn emit_done_default_is_noop() {
+        // NoopSink uses the default impl — calling it must not panic
+        let sink = NoopSink;
+        sink.emit_done(&Ok(()));
+        sink.emit_done(&Err(std::io::Error::new(std::io::ErrorKind::NotFound, "x")));
+    }
+
+    #[test]
+    fn emit_done_can_be_overridden() {
+        let sink = RecordingSink::new();
+        sink.emit_done(&Ok(()));
+        assert!(sink.done_called.get());
+    }
 }
 
 /// A no-op output sink for call sites that don't need command-path output.
