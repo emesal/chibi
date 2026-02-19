@@ -80,13 +80,19 @@ impl OutputSink for OutputHandler {
                 context, archived, remaining
             ),
             CommandEvent::RollingCompactionDecision { archived } => {
-                format!("[Rolling compaction: LLM selected {} messages to archive]", archived)
+                format!(
+                    "[Rolling compaction: LLM selected {} messages to archive]",
+                    archived
+                )
             }
             CommandEvent::RollingCompactionFallback { drop_percentage } => format!(
                 "[Rolling compaction: LLM decision failed, falling back to dropping oldest {}%]",
                 drop_percentage
             ),
-            CommandEvent::RollingCompactionComplete { archived, remaining } => format!(
+            CommandEvent::RollingCompactionComplete {
+                archived,
+                remaining,
+            } => format!(
                 "[Rolling compaction complete: {} archived, {} remaining]",
                 archived, remaining
             ),

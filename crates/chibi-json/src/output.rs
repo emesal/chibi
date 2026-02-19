@@ -67,7 +67,10 @@ impl OutputSink for JsonOutputSink {
                 serde_json::json!({"type": "rolling_compaction_fallback",
                                    "drop_percentage": drop_percentage})
             }
-            CommandEvent::RollingCompactionComplete { archived, remaining } => {
+            CommandEvent::RollingCompactionComplete {
+                archived,
+                remaining,
+            } => {
                 serde_json::json!({"type": "rolling_compaction_complete",
                                    "archived": archived, "remaining": remaining})
             }

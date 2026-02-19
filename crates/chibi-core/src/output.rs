@@ -36,9 +36,16 @@ pub enum CommandEvent {
         plugin_names: Vec<String>,
     },
     /// LLM-based compaction started (verbose-tier).
-    CompactionStarted { context: String, message_count: usize },
+    CompactionStarted {
+        context: String,
+        message_count: usize,
+    },
     /// LLM-based compaction completed (verbose-tier).
-    CompactionComplete { context: String, archived: usize, remaining: usize },
+    CompactionComplete {
+        context: String,
+        archived: usize,
+        remaining: usize,
+    },
     /// Rolling compaction: LLM selected N messages to archive (verbose-tier).
     RollingCompactionDecision { archived: usize },
     /// Rolling compaction fallback: dropping oldest N% (verbose-tier).

@@ -5,7 +5,6 @@
 //! decouple from presentation concerns.
 
 use super::compact::compact_context_with_llm;
-use crate::output::NoopSink;
 use super::logging::{log_request_if_enabled, log_response_meta_if_enabled};
 use super::request::{PromptOptions, build_request_body};
 use super::sink::{ResponseEvent, ResponseSink};
@@ -16,6 +15,7 @@ use crate::gateway::{
     build_gateway, json_tool_to_definition, to_chat_options, to_ratatoskr_message,
 };
 use crate::json_ext::JsonExt;
+use crate::output::NoopSink;
 use crate::state::{
     AppState, create_assistant_message_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
@@ -1497,14 +1497,14 @@ async fn process_tool_calls<S: ResponseSink>(
 
         // Pre-log diagnostics for parallel-executed tools only.
         // Sequential tools have already emitted their diagnostics in execute_single_tool.
-        if parallel_indices.contains(&i) {
-            if let Some(result) = &results[i] {
-                for diag in &result.diagnostics {
-                    sink.handle(ResponseEvent::ToolDiagnostic {
-                        tool: tc.name.clone(),
-                        message: diag.clone(),
-                    })?;
-                }
+        if parallel_indices.contains(&i)
+            && let Some(result) = &results[i]
+        {
+            for diag in &result.diagnostics {
+                sink.handle(ResponseEvent::ToolDiagnostic {
+                    tool: tc.name.clone(),
+                    message: diag.clone(),
+                })?;
             }
         }
     }
