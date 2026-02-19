@@ -42,18 +42,6 @@ impl OutputSink for JsonOutputSink {
         eprintln!("{}", json);
     }
 
-    fn diagnostic(&self, message: &str, verbose: bool) {
-        if verbose {
-            let json = serde_json::json!({"type": "diagnostic", "content": message});
-            eprintln!("{}", json);
-        }
-    }
-
-    fn diagnostic_always(&self, message: &str) {
-        let json = serde_json::json!({"type": "diagnostic", "content": message});
-        eprintln!("{}", json);
-    }
-
     fn newline(&self) {
         // no-op in JSON mode -- whitespace is meaningless
     }

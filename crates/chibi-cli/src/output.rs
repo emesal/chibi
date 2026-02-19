@@ -57,16 +57,6 @@ impl OutputSink for OutputHandler {
         }
     }
 
-    fn diagnostic(&self, message: &str, verbose: bool) {
-        if verbose {
-            eprintln!("{}", message);
-        }
-    }
-
-    fn diagnostic_always(&self, message: &str) {
-        eprintln!("{}", message);
-    }
-
     fn newline(&self) {
         println!();
     }
@@ -238,17 +228,4 @@ mod tests {
         handler.emit_entry(&entry).unwrap();
     }
 
-    #[test]
-    fn test_diagnostic_verbose_false() {
-        let handler = OutputHandler::new(false);
-        // Should not panic (no output when verbose is false)
-        handler.diagnostic("Test message", false);
-    }
-
-    #[test]
-    fn test_diagnostic_verbose_true() {
-        let handler = OutputHandler::new(false);
-        // Should not panic
-        handler.diagnostic("Test message", true);
-    }
 }

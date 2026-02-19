@@ -39,18 +39,6 @@ pub trait OutputSink {
     /// Emit a typed command-path event. Clients filter and format as appropriate.
     fn emit_event(&self, event: CommandEvent);
 
-    /// Emit a diagnostic message. Only shown when `verbose` is true.
-    ///
-    /// Used by response sinks for tool call display (show_tool_calls gating).
-    /// Will be removed in a future task once all callers are migrated to emit_event.
-    fn diagnostic(&self, message: &str, verbose: bool);
-
-    /// Emit a diagnostic message unconditionally.
-    ///
-    /// Used by response sinks for formatting typed events.
-    /// Will be removed in a future task once all callers are migrated to emit_event.
-    fn diagnostic_always(&self, message: &str);
-
     /// Emit a blank line.
     fn newline(&self);
 

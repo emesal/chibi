@@ -109,16 +109,17 @@ impl ResponseSink for CliResponseSink<'_> {
                 self.output.newline();
             }
             ResponseEvent::ToolStart { name, summary } => {
-                let msg = match summary {
-                    Some(s) => format!("\n[Tool: {}] {}", name, s),
-                    None => format!("\n[Tool: {}]", name),
-                };
-                self.output.diagnostic(&msg, self.show_tool_calls);
+                if self.show_tool_calls {
+                    let msg = match summary {
+                        Some(s) => format!("\n[Tool: {}] {}", name, s),
+                        None => format!("\n[Tool: {}]", name),
+                    };
+                    eprintln!("{}", msg);
+                }
             }
             ResponseEvent::ToolResult { name, cached, .. } => {
-                if cached {
-                    self.output
-                        .diagnostic(&format!("\n[Tool {} (cached)]", name), self.show_tool_calls);
+                if cached && self.show_tool_calls {
+                    eprintln!("\n[Tool {} (cached)]", name);
                 }
             }
             ResponseEvent::StartResponse => {
@@ -131,7 +132,7 @@ impl ResponseSink for CliResponseSink<'_> {
             }
             ResponseEvent::HookDebug { message, .. } => {
                 if self.verbose {
-                    self.output.diagnostic_always(&message);
+                    eprintln!("{}", message);
                 }
             }
             ResponseEvent::FuelStatus { remaining, total, event } => {
@@ -147,31 +148,25 @@ impl ResponseSink for CliResponseSink<'_> {
                         FuelEvent::EmptyResponse =>
                             format!("[empty response, fuel: {}/{}]", remaining, total),
                     };
-                    self.output.diagnostic_always(&msg);
+                    eprintln!("{}", msg);
                 }
             }
             ResponseEvent::FuelExhausted { total } => {
-                self.output.diagnostic_always(
-                    &format!("[fuel exhausted (0/{}), returning control to user]", total),
-                );
+                eprintln!("[fuel exhausted (0/{}), returning control to user]", total);
             }
             ResponseEvent::ContextWarning { tokens_remaining } => {
                 if self.verbose {
-                    self.output.diagnostic_always(
-                        &format!("[Context window warning: {} tokens remaining]", tokens_remaining),
-                    );
+                    eprintln!("[Context window warning: {} tokens remaining]", tokens_remaining);
                 }
             }
             ResponseEvent::ToolDiagnostic { message, .. } => {
                 if self.verbose {
-                    self.output.diagnostic_always(&message);
+                    eprintln!("{}", message);
                 }
             }
             ResponseEvent::InboxInjected { count } => {
                 if self.verbose {
-                    self.output.diagnostic_always(
-                        &format!("[Inbox: {} message(s) injected]", count),
-                    );
+                    eprintln!("[Inbox: {} message(s) injected]", count);
                 }
             }
         }
