@@ -1466,6 +1466,9 @@ async fn process_tool_calls<S: ResponseSink>(
         }
     }
 
+    let parallel_indices: std::collections::HashSet<usize> =
+        parallel_batch.iter().map(|(idx, _)| *idx).collect();
+
     // Execute sequential batch one at a time (these may mutate handoff)
     for (idx, tc) in &sequential_batch {
         let result = execute_single_tool(
@@ -1491,13 +1494,16 @@ async fn process_tool_calls<S: ResponseSink>(
         app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
-        // Pre-log diagnostics for parallel-executed tools
-        if let Some(result) = &results[i] {
-            for diag in &result.diagnostics {
-                sink.handle(ResponseEvent::ToolDiagnostic {
-                    tool: tc.name.clone(),
-                    message: diag.clone(),
-                })?;
+        // Pre-log diagnostics for parallel-executed tools only.
+        // Sequential tools have already emitted their diagnostics in execute_single_tool.
+        if parallel_indices.contains(&i) {
+            if let Some(result) = &results[i] {
+                for diag in &result.diagnostics {
+                    sink.handle(ResponseEvent::ToolDiagnostic {
+                        tool: tc.name.clone(),
+                        message: diag.clone(),
+                    })?;
+                }
             }
         }
     }
