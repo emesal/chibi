@@ -265,6 +265,12 @@ pub struct ResolvedConfig {
     pub core: CoreResolvedConfig,
     /// Render LLM output as formatted markdown in the terminal
     pub render_markdown: bool,
+    /// Show verbose diagnostics
+    pub verbose: bool,
+    /// Hide tool call display (verbose overrides)
+    pub hide_tool_calls: bool,
+    /// Show thinking/reasoning content (verbose overrides)
+    pub show_thinking: bool,
     /// Image rendering, fetching, and caching configuration
     pub image: ImageConfig,
     /// Markdown rendering color scheme
@@ -369,6 +375,12 @@ struct RawCliConfig {
     #[serde(default = "default_true_val")]
     pub render_markdown: bool,
     #[serde(default)]
+    pub verbose: bool,
+    #[serde(default)]
+    pub hide_tool_calls: bool,
+    #[serde(default)]
+    pub show_thinking: bool,
+    #[serde(default)]
     pub image: ImageConfig,
     #[serde(default)]
     pub markdown_style: MarkdownStyleOverride,
@@ -378,6 +390,12 @@ struct RawCliConfig {
 #[derive(Debug, Clone)]
 pub struct CliConfig {
     pub render_markdown: bool,
+    /// Show verbose diagnostics (hook debug, fuel status, etc.)
+    pub verbose: bool,
+    /// Hide tool call display by default (verbose overrides)
+    pub hide_tool_calls: bool,
+    /// Show thinking/reasoning content (verbose overrides)
+    pub show_thinking: bool,
     pub image: ImageConfig,
     pub markdown_style: MarkdownStyle,
 }
@@ -386,6 +404,9 @@ impl Default for CliConfig {
     fn default() -> Self {
         Self {
             render_markdown: true,
+            verbose: false,
+            hide_tool_calls: false,
+            show_thinking: false,
             image: ImageConfig::default(),
             markdown_style: default_markdown_style(),
         }
@@ -397,6 +418,9 @@ impl CliConfig {
     pub fn merge_with(&self, overrides: &CliConfigOverride) -> Self {
         Self {
             render_markdown: overrides.render_markdown.unwrap_or(self.render_markdown),
+            verbose: overrides.verbose.unwrap_or(self.verbose),
+            hide_tool_calls: overrides.hide_tool_calls.unwrap_or(self.hide_tool_calls),
+            show_thinking: overrides.show_thinking.unwrap_or(self.show_thinking),
             image: self.image.merge_with(&overrides.image),
             markdown_style: merge_markdown_style(&self.markdown_style, &overrides.markdown_style),
         }
@@ -407,6 +431,9 @@ impl CliConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CliConfigOverride {
     pub render_markdown: Option<bool>,
+    pub verbose: Option<bool>,
+    pub hide_tool_calls: Option<bool>,
+    pub show_thinking: Option<bool>,
     #[serde(default)]
     pub image: ImageConfigOverride,
     #[serde(default)]
@@ -496,6 +523,9 @@ pub fn load_cli_config(home: &Path, context_name: Option<&str>) -> io::Result<Cl
         // Convert raw config to resolved config by merging with defaults
         CliConfig {
             render_markdown: raw.render_markdown,
+            verbose: raw.verbose,
+            hide_tool_calls: raw.hide_tool_calls,
+            show_thinking: raw.show_thinking,
             image: raw.image,
             markdown_style: merge_markdown_style(&default_markdown_style(), &raw.markdown_style),
         }
@@ -632,6 +662,9 @@ max_height_lines = 10
     fn test_cli_config_merge_with() {
         let base = CliConfig {
             render_markdown: true,
+            verbose: false,
+            hide_tool_calls: false,
+            show_thinking: false,
             image: ImageConfig {
                 max_height_lines: 25,
                 ..Default::default()
@@ -649,6 +682,7 @@ max_height_lines = 10
                 h2: Some("#00FF00".to_string()),
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         let merged = base.merge_with(&overrides);

@@ -19,7 +19,7 @@ use crate::markdown::{MarkdownConfig, MarkdownStream};
 use crate::output::OutputHandler;
 use crate::session::Session;
 use crate::sink::CliResponseSink;
-use chibi_core::{Chibi, CommandEffect, LoadOptions, OutputSink, PermissionHandler, StatePaths};
+use chibi_core::{Chibi, CommandEffect, CommandEvent, LoadOptions, OutputSink, PermissionHandler, StatePaths};
 use std::io::{self, ErrorKind, Write};
 use std::path::PathBuf;
 
@@ -171,6 +171,9 @@ fn resolve_cli_config(
     Ok(ResolvedConfig {
         core,
         render_markdown: cli.render_markdown,
+        verbose: cli.verbose,
+        hide_tool_calls: cli.hide_tool_calls,
+        show_thinking: cli.show_thinking,
         image: cli.image,
         markdown_style: cli.markdown_style,
     })
@@ -245,12 +248,8 @@ async fn execute_from_input(
 ) -> io::Result<()> {
     let mut did_action = false;
 
-    // Pre-resolution verbose: CLI flag was pushed into config_overrides by cli.rs,
-    // but we need it for diagnostics before config is resolved.
-    let early_verbose = input
-        .config_overrides
-        .iter()
-        .any(|(k, v)| k == "verbose" && v == "true");
+    // Pre-resolution verbose: used for diagnostics before full config is resolved.
+    let early_verbose = input.verbose_flag;
 
     // --- CLI-specific: context selection ---
     // working_context: the context we're actually operating on this invocation
@@ -296,13 +295,10 @@ async fn execute_from_input(
             chibi
                 .app
                 .save_local_config(&working_context, &local_config)?;
-            output.diagnostic(
-                &format!(
-                    "[Username '{}' saved to context '{}']",
-                    username, working_context
-                ),
-                early_verbose,
-            );
+            output.emit_event(CommandEvent::UsernameSaved {
+                username: username.clone(),
+                context: working_context.clone(),
+            });
             did_action = true;
             None // persistent was saved, no runtime override needed
         }
@@ -337,10 +333,15 @@ async fn execute_from_input(
             .map_err(|e| io::Error::new(ErrorKind::InvalidInput, e))?;
     }
 
-    // Derive presentation flags from resolved config
-    let verbose = cli_config.core.verbose;
-    let show_tool_calls = !cli_config.core.hide_tool_calls || verbose;
-    let show_thinking = cli_config.core.show_thinking || verbose;
+    // CLI flags override cli.toml values
+    if input.verbose_flag { cli_config.verbose = true; }
+    if input.hide_tool_calls_flag { cli_config.hide_tool_calls = true; }
+    if input.show_thinking_flag { cli_config.show_thinking = true; }
+
+    // Derive presentation flags from CLI config
+    let verbose = cli_config.verbose;
+    let show_tool_calls = !cli_config.hide_tool_calls || verbose;
+    let show_thinking = cli_config.show_thinking || verbose;
 
     let md_config = if cli_config.render_markdown && !input.raw {
         Some(md_config_from_resolved(
@@ -516,10 +517,7 @@ async fn main() -> io::Result<()> {
     // Handle --debug force-markdown
     let force_markdown = input.force_markdown;
 
-    let load_verbose = input
-        .config_overrides
-        .iter()
-        .any(|(k, v)| k == "verbose" && v == "true");
+    let load_verbose = input.verbose_flag;
 
     let mut chibi = Chibi::load_with_options(LoadOptions {
         verbose: load_verbose,

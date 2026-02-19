@@ -4,6 +4,7 @@
 //! text results and diagnostics for the terminal.
 //! Implements `OutputSink` directly — all output goes through trait methods.
 
+use chibi_core::output::CommandEvent;
 use chibi_core::OutputSink;
 use chibi_core::context::TranscriptEntry;
 use std::io::{self, IsTerminal, Write};
@@ -27,6 +28,33 @@ impl OutputHandler {
 impl OutputSink for OutputHandler {
     fn emit_result(&self, content: &str) {
         println!("{}", content);
+    }
+
+    fn emit_event(&self, event: CommandEvent) {
+        let (text, verbose_only) = match &event {
+            CommandEvent::AutoDestroyed { count } =>
+                (format!("[Auto-destroyed {} expired context(s)]", count), true),
+            CommandEvent::CacheCleanup { removed, max_age_days } =>
+                (format!("[Auto-cleanup: removed {} old cache entries (older than {} days)]",
+                    removed, max_age_days + 1), true),
+            CommandEvent::SystemPromptSet { context } =>
+                (format!("[System prompt set for context '{}']", context), true),
+            CommandEvent::UsernameSaved { username, context } =>
+                (format!("[Username '{}' saved to context '{}']", username, context), true),
+            CommandEvent::InboxEmpty { context } =>
+                (format!("[No messages in inbox for '{}']", context), true),
+            CommandEvent::InboxProcessing { count, context } =>
+                (format!("[Processing {} message(s) from inbox for '{}']", count, context), true),
+            CommandEvent::AllInboxesEmpty =>
+                ("[No messages in any inbox.]".to_string(), true),
+            CommandEvent::InboxesProcessed { count } =>
+                (format!("[Processed inboxes for {} context(s).]", count), true),
+            CommandEvent::ContextLoaded { tool_count } =>
+                (format!("[Loaded {} tool(s)]", tool_count), true),
+        };
+        if !verbose_only || self.verbose {
+            eprintln!("{}", text);
+        }
     }
 
     fn diagnostic(&self, message: &str, verbose: bool) {
