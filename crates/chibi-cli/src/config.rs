@@ -406,7 +406,7 @@ impl Default for CliConfig {
             render_markdown: true,
             verbose: false,
             hide_tool_calls: false,
-            show_thinking: false,
+            show_thinking: true,
             image: ImageConfig::default(),
             markdown_style: default_markdown_style(),
         }
