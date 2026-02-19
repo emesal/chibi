@@ -389,7 +389,7 @@ impl Chibi {
                 return tools::mcp::execute_mcp_tool(tool, &args, &self.app.chibi_dir);
             }
             // Regular plugin
-            return tools::execute_tool(tool, &args, false);
+            return tools::execute_tool(tool, &args);
         }
 
         Err(io::Error::new(

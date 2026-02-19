@@ -221,7 +221,7 @@ async fn dispatch_command<S: ResponseSink>(
                 crate::api::compact_context_by_name(&chibi.app, ctx_name, verbose).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
-                crate::api::compact_context_with_llm_manual(&chibi.app, context, config, verbose)
+                crate::api::compact_context_with_llm_manual(&chibi.app, context, config)
                     .await?;
             }
             Ok(CommandEffect::None)
@@ -278,7 +278,7 @@ async fn dispatch_command<S: ResponseSink>(
                 )
             })?;
             let args_json = serde_json::json!({ "args": args });
-            let result = crate::tools::execute_tool(tool, &args_json, verbose)?;
+            let result = crate::tools::execute_tool(tool, &args_json)?;
             output.emit_result(&result);
             Ok(CommandEffect::None)
         }

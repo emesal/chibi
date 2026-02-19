@@ -349,10 +349,9 @@ pub async fn compact_context_with_llm(
     app: &AppState,
     context_name: &str,
     resolved_config: &ResolvedConfig,
-    verbose: bool,
 ) -> io::Result<()> {
     // Use rolling compaction for auto-triggered compaction
-    rolling_compact(app, context_name, resolved_config, verbose).await
+    rolling_compact(app, context_name, resolved_config, resolved_config.verbose).await
 }
 
 /// Full compaction: summarizes all messages and starts fresh (manual -c flag)
@@ -360,9 +359,15 @@ pub async fn compact_context_with_llm_manual(
     app: &AppState,
     context_name: &str,
     resolved_config: &ResolvedConfig,
-    verbose: bool,
 ) -> io::Result<()> {
-    compact_context_with_llm_internal(app, context_name, resolved_config, true, verbose).await
+    compact_context_with_llm_internal(
+        app,
+        context_name,
+        resolved_config,
+        true,
+        resolved_config.verbose,
+    )
+    .await
 }
 
 /// Compact a specific context by name (for -Z flag)

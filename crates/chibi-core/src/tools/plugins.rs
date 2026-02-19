@@ -255,7 +255,6 @@ pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
 pub fn execute_tool(
     tool: &Tool,
     arguments: &serde_json::Value,
-    verbose: bool,
 ) -> io::Result<String> {
     let mut cmd = Command::new(&tool.path);
     cmd.stdin(Stdio::piped())
@@ -264,11 +263,6 @@ pub fn execute_tool(
 
     // Pass tool name for multi-tool plugins
     cmd.env("CHIBI_TOOL_NAME", &tool.name);
-
-    // Pass verbosity to tool via environment variable
-    if verbose {
-        cmd.env("CHIBI_VERBOSE", "1");
-    }
 
     let mut child = cmd
         .spawn()
@@ -428,10 +422,9 @@ mod tests {
     fn execute_tool_with_retry(
         tool: &Tool,
         arguments: &serde_json::Value,
-        verbose: bool,
     ) -> io::Result<String> {
         for attempt in 0..5 {
-            match execute_tool(tool, arguments, verbose) {
+            match execute_tool(tool, arguments) {
                 Ok(result) => return Ok(result),
                 Err(e) if e.to_string().contains("Text file busy") && attempt < 4 => {
                     std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1) as u64));
@@ -459,7 +452,7 @@ mod tests {
         };
 
         let params = serde_json::json!({"key": "value", "num": 42});
-        let result = execute_tool_with_retry(&tool, &params, false).unwrap();
+        let result = execute_tool_with_retry(&tool, &params).unwrap();
 
         // Result should be the JSON params we sent
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -473,7 +466,7 @@ mod tests {
         let script_path = create_test_script(
             dir.path(),
             "env_check.sh",
-            b"#!/bin/bash\ncat > /dev/null\necho \"name=$CHIBI_TOOL_NAME,verbose=$CHIBI_VERBOSE\"\n",
+            b"#!/bin/bash\ncat > /dev/null\necho \"name=$CHIBI_TOOL_NAME\"\n",
         );
 
         let tool = Tool {
@@ -486,15 +479,8 @@ mod tests {
             summary_params: vec![],
         };
 
-        // Test without verbose
-        let result = execute_tool_with_retry(&tool, &serde_json::json!({}), false).unwrap();
+        let result = execute_tool_with_retry(&tool, &serde_json::json!({})).unwrap();
         assert!(result.contains("name=env_checker"));
-        assert!(result.contains("verbose="));
-        assert!(!result.contains("verbose=1"));
-
-        // Test with verbose
-        let result = execute_tool_with_retry(&tool, &serde_json::json!({}), true).unwrap();
-        assert!(result.contains("verbose=1"));
     }
 
     #[test]
@@ -515,7 +501,7 @@ mod tests {
         // Note: can't use execute_tool_with_retry here since failure is expected
         // and we don't want to retry ETXTBSY separately from the expected error
         for attempt in 0..5 {
-            match execute_tool(&tool, &serde_json::json!({}), false) {
+            match execute_tool(&tool, &serde_json::json!({})) {
                 Err(e) if e.to_string().contains("Text file busy") && attempt < 4 => {
                     std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1) as u64));
                     continue;
@@ -554,7 +540,7 @@ echo 'OK'
             summary_params: vec![],
         };
 
-        let result = execute_tool_with_retry(&tool, &serde_json::json!({}), false).unwrap();
+        let result = execute_tool_with_retry(&tool, &serde_json::json!({})).unwrap();
         assert_eq!(result.trim(), "OK");
     }
 
