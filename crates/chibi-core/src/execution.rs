@@ -451,7 +451,6 @@ async fn send_prompt_inner<S: ResponseSink>(
         crate::lock::ContextLock::acquire(&context_dir, chibi.app.config.lock_heartbeat_seconds)?;
 
     let mut options = PromptOptions::new(
-        config.verbose,
         use_reflection,
         &flags.debug,
         false, // force_render is a CLI concern

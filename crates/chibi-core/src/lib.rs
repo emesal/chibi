@@ -16,7 +16,7 @@
 //! async fn main() -> std::io::Result<()> {
 //!     let chibi = Chibi::load()?;
 //!     let config = chibi.resolve_config("default", None)?;
-//!     let options = PromptOptions::new(false, false, &[], false);
+//!     let options = PromptOptions::new(false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
 //!     chibi.send_prompt_streaming("default", "Hello!", &config, &options, &mut sink).await?;
