@@ -103,3 +103,35 @@ Home directory: `--home` flag > `CHIBI_HOME` env > `~/.chibi`
 - stdout: LLM output only (pipeable); markdown-rendered when TTY
 - stderr: Diagnostics (with `-v`)
 - `--raw` disables markdown rendering
+
+## JSON Conventions (chibi-json)
+
+stdout is a pure result stream; stderr is the diagnostic channel.
+
+| Stream | Content |
+|--------|---------|
+| stdout | `result` lines, transcript entries — silent on error |
+| stderr | Events (`mcp_tools_loaded`, `tool_start`, …) + terminal `done` signal |
+
+The `done` signal is always the last line on stderr:
+
+```jsonc
+// success
+{"type": "done", "ok": true}
+
+// failure
+{"type": "done", "ok": false, "code": "invalid_input", "message": "…"}
+```
+
+Error codes map `io::ErrorKind` to a stable coarse-grained string:
+
+| Code | Meaning |
+|------|---------|
+| `not_found` | requested resource does not exist |
+| `invalid_input` | malformed request (bad JSON, missing field, bad override) |
+| `permission_denied` | filesystem permission error |
+| `invalid_data` | corrupt or unreadable data |
+| `already_exists` | conflict with existing resource |
+| `internal_error` | catch-all for anything else |
+
+Fine-grained semantic codes (e.g. `context_not_found`) are future work requiring typed error variants in chibi-core.
