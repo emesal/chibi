@@ -29,19 +29,6 @@ impl ResponseSink for JsonResponseSink {
                 io::stdout().flush()?;
             }
             ResponseEvent::Finished => {}
-            ResponseEvent::Diagnostic {
-                message,
-                verbose_only,
-            } => {
-                // Always emit diagnostics in JSON mode — programmatic consumers can filter
-                // on the `verbose_only` field. Silently dropping them loses information.
-                let json = serde_json::json!({
-                    "type": "diagnostic",
-                    "content": message,
-                    "verbose_only": verbose_only,
-                });
-                eprintln!("{}", json);
-            }
             ResponseEvent::ToolStart { name, summary } => {
                 let json = serde_json::json!({
                     "type": "tool_start",
@@ -64,6 +51,57 @@ impl ResponseSink for JsonResponseSink {
                 eprintln!("{}", json);
             }
             ResponseEvent::Newline | ResponseEvent::StartResponse => {}
+            ResponseEvent::HookDebug { hook, message } => {
+                eprintln!("{}", serde_json::json!({
+                    "type": "hook_debug",
+                    "hook": hook,
+                    "message": message,
+                }));
+            }
+            ResponseEvent::FuelStatus { remaining, total, event } => {
+                use chibi_core::api::sink::FuelEvent;
+                let event_str = match &event {
+                    FuelEvent::EnteringTurn => "entering_turn",
+                    FuelEvent::AfterToolBatch => "after_tool_batch",
+                    FuelEvent::AfterContinuation { .. } => "after_continuation",
+                    FuelEvent::EmptyResponse => "empty_response",
+                };
+                let mut j = serde_json::json!({
+                    "type": "fuel_status",
+                    "remaining": remaining,
+                    "total": total,
+                    "event": event_str,
+                });
+                if let FuelEvent::AfterContinuation { prompt_preview } = event {
+                    j["prompt_preview"] = serde_json::json!(prompt_preview);
+                }
+                eprintln!("{}", j);
+            }
+            ResponseEvent::FuelExhausted { total } => {
+                eprintln!("{}", serde_json::json!({
+                    "type": "fuel_exhausted",
+                    "total": total,
+                }));
+            }
+            ResponseEvent::ContextWarning { tokens_remaining } => {
+                eprintln!("{}", serde_json::json!({
+                    "type": "context_warning",
+                    "tokens_remaining": tokens_remaining,
+                }));
+            }
+            ResponseEvent::ToolDiagnostic { tool, message } => {
+                eprintln!("{}", serde_json::json!({
+                    "type": "tool_diagnostic",
+                    "tool": tool,
+                    "message": message,
+                }));
+            }
+            ResponseEvent::InboxInjected { count } => {
+                eprintln!("{}", serde_json::json!({
+                    "type": "inbox_injected",
+                    "count": count,
+                }));
+            }
         }
         Ok(())
     }
