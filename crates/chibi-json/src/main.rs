@@ -9,16 +9,11 @@ mod sink;
 
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-    match rt.block_on(run()) {
-        Ok(()) => {}
-        Err(e) => {
-            let json = serde_json::json!({
-                "type": "error",
-                "message": e.to_string(),
-            });
-            println!("{}", json);
-            std::process::exit(1);
-        }
+    let result = rt.block_on(run());
+    let output = output::JsonOutputSink;
+    output.emit_done(&result);
+    if result.is_err() {
+        std::process::exit(1);
     }
 }
 

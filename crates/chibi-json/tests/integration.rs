@@ -93,11 +93,15 @@ fn test_version_flag() {
 
 #[test]
 fn test_invalid_json_input() {
-    let (stdout, _, success) = run_chibi_json("not json");
+    let (_, stderr, success) = run_chibi_json("not json");
     assert!(!success);
+    // done signal is the last line on stderr
+    let done_line = stderr.lines().last().expect("stderr should not be empty");
     let parsed: serde_json::Value =
-        serde_json::from_str(stdout.trim()).expect("error output should be valid JSON");
-    assert_eq!(parsed["type"], "error");
+        serde_json::from_str(done_line).expect("done signal should be valid JSON");
+    assert_eq!(parsed["type"], "done");
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["code"], "invalid_input");
     assert!(
         parsed["message"]
             .as_str()
@@ -403,27 +407,37 @@ fn test_archive_history() {
 
 #[test]
 fn test_missing_command_field() {
-    let (stdout, _, success) = run_chibi_json(r#"{"context": "default"}"#);
+    let (stdout, stderr, success) = run_chibi_json(r#"{"context": "default"}"#);
     assert!(!success, "missing command should fail");
-    assert_valid_jsonl(&stdout);
-    assert!(stdout.contains("error"), "should contain error type");
+    assert!(stdout.is_empty(), "stdout should be empty on error");
+    // done signal on stderr
+    let done_line = stderr.lines().last().expect("stderr should not be empty");
+    let parsed: serde_json::Value = serde_json::from_str(done_line).expect("done should be JSON");
+    assert_eq!(parsed["type"], "done");
+    assert_eq!(parsed["ok"], false);
 }
 
 #[test]
 fn test_missing_context_field() {
-    let (stdout, _, success) = run_chibi_json(r#"{"command": "no_op"}"#);
+    let (stdout, stderr, success) = run_chibi_json(r#"{"command": "no_op"}"#);
     assert!(!success, "missing context should fail");
-    assert_valid_jsonl(&stdout);
-    assert!(stdout.contains("error"), "should contain error type");
+    assert!(stdout.is_empty(), "stdout should be empty on error");
+    let done_line = stderr.lines().last().expect("stderr should not be empty");
+    let parsed: serde_json::Value = serde_json::from_str(done_line).expect("done should be JSON");
+    assert_eq!(parsed["type"], "done");
+    assert_eq!(parsed["ok"], false);
 }
 
 #[test]
 fn test_unknown_command_variant() {
-    let (stdout, _, success) =
+    let (stdout, stderr, success) =
         run_chibi_json(r#"{"command": "nonexistent_thing", "context": "default"}"#);
     assert!(!success, "unknown command should fail");
-    assert_valid_jsonl(&stdout);
-    assert!(stdout.contains("error"), "should contain error type");
+    assert!(stdout.is_empty(), "stdout should be empty on error");
+    let done_line = stderr.lines().last().expect("stderr should not be empty");
+    let parsed: serde_json::Value = serde_json::from_str(done_line).expect("done should be JSON");
+    assert_eq!(parsed["type"], "done");
+    assert_eq!(parsed["ok"], false);
 }
 
 // === JSONL format validation tests ===
@@ -441,17 +455,22 @@ fn test_output_is_valid_jsonl() {
 
 #[test]
 fn test_error_output_format() {
-    let (stdout, _, success) = run_chibi_json(r#"{"command": "bogus", "context": "x"}"#);
+    let (stdout, stderr, success) = run_chibi_json(r#"{"command": "bogus", "context": "x"}"#);
     assert!(!success);
+    assert!(stdout.is_empty(), "stdout should be empty on error");
+    // done signal is the last line on stderr
+    let done_line = stderr.lines().last().expect("stderr should not be empty");
     let parsed: serde_json::Value =
-        serde_json::from_str(stdout.trim()).expect("error output should be valid JSON");
-    assert_eq!(
-        parsed["type"], "error",
-        "error output should have type=error"
+        serde_json::from_str(done_line).expect("done signal should be valid JSON");
+    assert_eq!(parsed["type"], "done", "done signal should have type=done");
+    assert_eq!(parsed["ok"], false, "done signal should have ok=false");
+    assert!(
+        parsed.get("code").is_some(),
+        "done signal should have a code field"
     );
     assert!(
         parsed.get("message").is_some(),
-        "error output should have a message field"
+        "done signal should have a message field"
     );
 }
 
@@ -558,7 +577,7 @@ fn test_invalid_string_override_errors() {
     let tmp = tempfile::tempdir().expect("failed to create tempdir");
     setup_context(tmp.path(), "default");
 
-    let (stdout, _, success) = run_chibi_json_with_home(
+    let (stdout, stderr, success) = run_chibi_json_with_home(
         serde_json::json!({
             "command": "no_op",
             "context": "default",
@@ -567,8 +586,9 @@ fn test_invalid_string_override_errors() {
         tmp.path(),
     );
     assert!(!success, "invalid override should fail");
-    assert!(
-        stdout.contains("error"),
-        "should report error for invalid override"
-    );
+    assert!(stdout.is_empty(), "stdout should be empty on error");
+    let done_line = stderr.lines().last().expect("stderr should not be empty");
+    let parsed: serde_json::Value = serde_json::from_str(done_line).expect("done should be JSON");
+    assert_eq!(parsed["type"], "done");
+    assert_eq!(parsed["ok"], false);
 }
