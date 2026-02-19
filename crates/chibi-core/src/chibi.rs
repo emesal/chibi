@@ -36,6 +36,7 @@ use std::path::Path;
 use crate::api::sink::ResponseSink;
 use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
+use crate::output::{CommandEvent, OutputSink};
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 
@@ -62,21 +63,17 @@ pub type PermissionHandler = Box<dyn Fn(&serde_json::Value) -> io::Result<bool>>
 ///
 /// // Default options use ~/.chibi or CHIBI_HOME
 /// let default_opts = LoadOptions::default();
-/// assert!(!default_opts.verbose);
 /// assert!(default_opts.home.is_none());
 /// assert!(default_opts.project_root.is_none());
 ///
-/// // Custom options with verbose output and custom home
+/// // Custom options with a custom home
 /// let custom_opts = LoadOptions {
-///     verbose: true,
 ///     home: Some(PathBuf::from("/custom/chibi")),
 ///     project_root: Some(PathBuf::from("/my/project")),
 /// };
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
-    /// Print diagnostic info about tool loading to stderr.
-    pub verbose: bool,
     /// Override the chibi home directory.
     /// If `None`, uses `CHIBI_HOME` env var or `~/.chibi`.
     pub home: Option<PathBuf>,
@@ -111,61 +108,82 @@ impl Chibi {
     /// 1. `CHIBI_HOME` environment variable
     /// 2. `~/.chibi` default
     pub fn load() -> io::Result<Self> {
-        Self::load_with_options(LoadOptions::default())
+        struct NoopSink;
+        impl OutputSink for NoopSink {
+            fn emit_result(&self, _: &str) {}
+            fn emit_event(&self, _: CommandEvent) {}
+            fn newline(&self) {}
+            fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> { Ok(()) }
+            fn confirm(&self, _: &str) -> bool { false }
+        }
+        Self::load_with_options(LoadOptions::default(), &NoopSink)
     }
 
     /// Load chibi from a specific home directory.
     ///
-    /// Convenience method for `load_with_options(LoadOptions { home: Some(...), ..Default::default() })`.
+    /// Convenience method for `load_with_options(LoadOptions { home: Some(...), ..Default::default() }, sink)`.
     /// Kept as a shortcut for library users who only need to override the home directory.
     ///
     /// This overrides both `CHIBI_HOME` and the default `~/.chibi`.
     pub fn from_home(home: &Path) -> io::Result<Self> {
-        Self::load_with_options(LoadOptions {
-            home: Some(home.to_path_buf()),
-            ..Default::default()
-        })
+        struct NoopSink;
+        impl OutputSink for NoopSink {
+            fn emit_result(&self, _: &str) {}
+            fn emit_event(&self, _: CommandEvent) {}
+            fn newline(&self) {}
+            fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> { Ok(()) }
+            fn confirm(&self, _: &str) -> bool { false }
+        }
+        Self::load_with_options(
+            LoadOptions { home: Some(home.to_path_buf()), ..Default::default() },
+            &NoopSink,
+        )
     }
 
     /// Load chibi with custom options.
-    ///
-    /// This is the most flexible way to load chibi, allowing control over
-    /// both the home directory and verbose output.
     ///
     /// Project root resolution order: `options.project_root` > `CHIBI_PROJECT_ROOT` env > cwd.
     ///
     /// Sets `CHIBI_PROJECT_ROOT` and `CHIBI_INDEX_DB` environment variables so
     /// plugins and hooks can discover the project root and index database path.
     ///
+    /// Load-time events (`McpToolsLoaded`, `McpBridgeUnavailable`, `LoadSummary`) are emitted
+    /// to `output` unconditionally; clients filter based on verbose mode.
+    ///
     /// # Example
     ///
     /// ```no_run
     /// // Requires a chibi home directory with config.toml and models.toml.
-    /// use chibi_core::{Chibi, LoadOptions};
+    /// use chibi_core::{Chibi, LoadOptions, OutputSink, CommandEvent};
+    /// use chibi_core::context::TranscriptEntry;
+    /// use std::io;
     ///
-    /// let chibi = Chibi::load_with_options(LoadOptions {
-    ///     verbose: true,
-    ///     home: Some("/custom/path".into()),
-    ///     ..Default::default()
-    /// })?;
+    /// struct NoopSink;
+    /// impl OutputSink for NoopSink {
+    ///     fn emit_result(&self, _: &str) {}
+    ///     fn emit_event(&self, _: CommandEvent) {}
+    ///     fn newline(&self) {}
+    ///     fn emit_entry(&self, _: &TranscriptEntry) -> io::Result<()> { Ok(()) }
+    ///     fn confirm(&self, _: &str) -> bool { false }
+    /// }
+    ///
+    /// let chibi = Chibi::load_with_options(LoadOptions::default(), &NoopSink)?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn load_with_options(options: LoadOptions) -> io::Result<Self> {
+    pub fn load_with_options(options: LoadOptions, output: &dyn OutputSink) -> io::Result<Self> {
         let app = AppState::load(options.home)?;
         let mut tools = tools::load_tools(&app.plugins_dir)?;
 
         // Load MCP bridge tools (non-fatal: bridge may not be configured)
         match tools::mcp::load_mcp_tools(&app.chibi_dir) {
             Ok(mcp_tools) => {
-                if options.verbose && !mcp_tools.is_empty() {
-                    eprintln!("[MCP: {} tools loaded]", mcp_tools.len());
+                if !mcp_tools.is_empty() {
+                    output.emit_event(CommandEvent::McpToolsLoaded { count: mcp_tools.len() });
                 }
                 tools.extend(mcp_tools);
             }
             Err(e) => {
-                if options.verbose {
-                    eprintln!("[MCP: bridge unavailable: {e}]");
-                }
+                output.emit_event(CommandEvent::McpBridgeUnavailable { reason: e.to_string() });
             }
         }
 
@@ -178,6 +196,18 @@ impl Chibi {
             std::env::set_var("CHIBI_PROJECT_ROOT", &project_root);
             std::env::set_var("CHIBI_INDEX_DB", project_index_db_path(&project_root));
         }
+
+        let builtin_names: Vec<String> = tools::builtin_tool_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let plugin_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+        output.emit_event(CommandEvent::LoadSummary {
+            builtin_count: builtin_names.len(),
+            builtin_names,
+            plugin_count: plugin_names.len(),
+            plugin_names,
+        });
 
         Ok(Self {
             app,
@@ -538,18 +568,8 @@ mod tests {
     #[test]
     fn test_load_options_default() {
         let opts = LoadOptions::default();
-        assert!(!opts.verbose);
         assert!(opts.home.is_none());
         assert!(opts.project_root.is_none());
-    }
-
-    #[test]
-    fn test_load_options_with_verbose() {
-        let opts = LoadOptions {
-            verbose: true,
-            ..Default::default()
-        };
-        assert!(opts.verbose);
     }
 
     #[test]

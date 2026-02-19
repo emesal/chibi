@@ -514,32 +514,14 @@ async fn main() -> io::Result<()> {
     // Handle --debug force-markdown
     let force_markdown = input.force_markdown;
 
-    let load_verbose = input.verbose_flag;
+    let output = OutputHandler::new(input.verbose_flag);
 
-    let mut chibi = Chibi::load_with_options(LoadOptions {
-        verbose: load_verbose,
-        home: home_override,
-        project_root: project_root_override,
-    })?;
+    let mut chibi = Chibi::load_with_options(
+        LoadOptions { home: home_override, project_root: project_root_override },
+        &output,
+    )?;
     chibi.set_permission_handler(select_permission_handler(trust_mode));
     let mut session = Session::load(chibi.home_dir())?;
-    let output = OutputHandler::new(load_verbose);
-
-    // Print tool lists if verbose
-    if load_verbose {
-        let builtin_names = chibi_core::tools::builtin_tool_names();
-        eprintln!("[Built-in ({}): {}]", builtin_names.len(), builtin_names.join(", "));
-
-        if chibi.tools.is_empty() {
-            eprintln!("[No plugins loaded]");
-        } else {
-            eprintln!(
-                "[Plugins ({}): {}]",
-                chibi.tool_count(),
-                chibi.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
-            );
-        }
-    }
 
     execute_from_input(input, &mut chibi, &mut session, &output, force_markdown).await
 }

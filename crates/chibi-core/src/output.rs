@@ -26,6 +26,12 @@ pub enum CommandEvent {
     InboxesProcessed { count: usize },
     /// Context loaded with N tools (verbose-tier).
     ContextLoaded { tool_count: usize },
+    /// MCP bridge tools loaded successfully (verbose-tier).
+    McpToolsLoaded { count: usize },
+    /// MCP bridge unavailable at load time (verbose-tier).
+    McpBridgeUnavailable { reason: String },
+    /// Summary of all tools available after load (verbose-tier).
+    LoadSummary { builtin_count: usize, builtin_names: Vec<String>, plugin_count: usize, plugin_names: Vec<String> },
 }
 
 /// Abstraction over how command results and diagnostics are presented.

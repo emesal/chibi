@@ -52,12 +52,10 @@ async fn run() -> io::Result<()> {
 
     let output = output::JsonOutputSink;
 
-    // Pre-resolution verbose: check typed config and string-keyed overrides
-    let mut chibi = Chibi::load_with_options(LoadOptions {
-        verbose: false,
-        home: json_input.home.clone(),
-        project_root: json_input.project_root.clone(),
-    })?;
+    let mut chibi = Chibi::load_with_options(
+        LoadOptions { home: json_input.home.clone(), project_root: json_input.project_root.clone() },
+        &output,
+    )?;
 
     // Trust mode -- programmatic callers have already decided
     chibi.set_permission_handler(Box::new(|_| Ok(true)));

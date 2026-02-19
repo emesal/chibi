@@ -38,6 +38,14 @@ impl OutputSink for JsonOutputSink {
                 serde_json::json!({"type": "inboxes_processed", "count": count}),
             CommandEvent::ContextLoaded { tool_count } =>
                 serde_json::json!({"type": "context_loaded", "tool_count": tool_count}),
+            CommandEvent::McpToolsLoaded { count } =>
+                serde_json::json!({"type": "mcp_tools_loaded", "count": count}),
+            CommandEvent::McpBridgeUnavailable { reason } =>
+                serde_json::json!({"type": "mcp_bridge_unavailable", "reason": reason}),
+            CommandEvent::LoadSummary { builtin_count, builtin_names, plugin_count, plugin_names } =>
+                serde_json::json!({"type": "load_summary", "builtin_count": builtin_count,
+                                   "builtin_names": builtin_names, "plugin_count": plugin_count,
+                                   "plugin_names": plugin_names}),
         };
         eprintln!("{}", json);
     }

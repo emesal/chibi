@@ -51,6 +51,19 @@ impl OutputSink for OutputHandler {
                 (format!("[Processed inboxes for {} context(s).]", count), true),
             CommandEvent::ContextLoaded { tool_count } =>
                 (format!("[Loaded {} tool(s)]", tool_count), true),
+            CommandEvent::McpToolsLoaded { count } =>
+                (format!("[MCP: {} tools loaded]", count), true),
+            CommandEvent::McpBridgeUnavailable { reason } =>
+                (format!("[MCP: bridge unavailable: {}]", reason), true),
+            CommandEvent::LoadSummary { builtin_count, builtin_names, plugin_count, plugin_names } => {
+                let mut lines = format!("[Built-in ({}): {}]", builtin_count, builtin_names.join(", "));
+                if *plugin_count == 0 {
+                    lines.push_str("\n[No plugins loaded]");
+                } else {
+                    lines.push_str(&format!("\n[Plugins ({}): {}]", plugin_count, plugin_names.join(", ")));
+                }
+                (lines, true)
+            }
         };
         if !verbose_only || self.verbose {
             eprintln!("{}", text);
