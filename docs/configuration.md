@@ -99,17 +99,8 @@ All fields are optional. chibi works with no config file at all (free-tier OpenR
 # Default username shown to the LLM (default: "user")
 username = "user"
 
-# Enable verbose output by default, equivalent to -v (default: false)
-verbose = false
-
-# Hide tool call display by default (default: false, verbose overrides)
-hide_tool_calls = false
-
 # Omit tools from API requests entirely for pure text mode (default: false)
 no_tool_calls = false
-
-# Show thinking/reasoning content (default: false, verbose overrides)
-show_thinking = true
 
 # Fallback tool when LLM doesn't explicitly call call_agent/call_user
 # Options: "call_user" (return to user) or "call_agent" (continue loop)
@@ -303,11 +294,8 @@ context_window_limit = 128000
 # Override warning threshold
 warn_threshold_percent = 90.0
 
-# Override verbose, tool call display, tool omission, or thinking display
-verbose = true
-hide_tool_calls = false
+# Override tool omission
 no_tool_calls = false
-show_thinking = true
 
 # Override auto-compact behavior
 auto_compact = true
@@ -370,6 +358,22 @@ CLI-specific presentation settings live in `~/.chibi/cli.toml`. These control ho
 render_markdown = true
 
 # =============================================================================
+# Diagnostics and Display
+# =============================================================================
+
+# Show extra diagnostic info: tools loaded, warnings, fuel, etc. (default: false)
+# Equivalent to the -v / --verbose flag
+verbose = false
+
+# Hide tool call display (default: false — tool calls shown by default)
+# Equivalent to the --hide-tool-calls flag
+hide_tool_calls = false
+
+# Show thinking/reasoning content from models that support extended thinking (default: false)
+# Equivalent to the --show-thinking flag
+show_thinking = false
+
+# =============================================================================
 # Image Configuration
 # =============================================================================
 
@@ -430,6 +434,12 @@ Create `~/.chibi/contexts/<name>/cli.toml` to override CLI settings for specific
 ```toml
 # Disable markdown rendering for this context
 render_markdown = false
+
+# Always show verbose output in this context
+verbose = true
+
+# Always show thinking in this context
+show_thinking = true
 
 [image]
 # Taller images in this context

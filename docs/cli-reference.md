@@ -106,7 +106,7 @@ chibi -M openai/gpt-4o                   # Full metadata including pricing
 | `-v, --verbose` | Show extra info (tools loaded, warnings, etc.) |
 | `-t, --trust` | Auto-approve all permission checks (for automation/headless) |
 | `--show-thinking` | Display thinking/reasoning content from models that support extended thinking |
-| `--hide-tool-calls` | Hide tool call display (tool calls are shown by default; verbose overrides) |
+| `--hide-tool-calls` | Hide tool call display (tool calls are shown by default) |
 | `--no-tool-calls` | Omit tools from API requests entirely (pure text mode) |
 | `-x, --force-call-user` | Force return to user after operations (skip LLM) |
 | `-X, --force-call-agent` | Force agent continuation (overrides implied -x) |
@@ -134,13 +134,13 @@ chibi-json --version
   "command": { "send_prompt": { "prompt": "Hello" } },
   "context": { "switch": { "name": "coding" } },
   "flags": { "force_call_agent": true },
-  "overrides": { "verbose": "true" }
+  "overrides": { "no_tool_calls": "true" }
 }
 ```
 
 **Flags** (ephemeral command modifiers): `"force_call_user"`, `"force_call_agent"`
 
-**Config overrides** (via `"overrides"` map or `"config"` object): `"verbose"`, `"hide_tool_calls"`, `"no_tool_calls"`, `"show_thinking"`
+**Config overrides** (via `"overrides"` map or `"config"` object): `"no_tool_calls"`, `"fuel"`, `"model"`, and other core config fields. Presentation fields (`verbose`, `hide_tool_calls`, `show_thinking`) are CLI-only and not available via `chibi-json`.
 
 **Simple commands:** `"list_contexts"`, `"list_current_context"`, `"no_op"`
 
