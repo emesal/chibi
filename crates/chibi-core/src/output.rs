@@ -24,8 +24,6 @@ pub enum CommandEvent {
     AllInboxesEmpty,
     /// Processed N context inboxes (verbose-tier).
     InboxesProcessed { count: usize },
-    /// Context loaded with N tools (verbose-tier).
-    ContextLoaded { tool_count: usize },
     /// MCP bridge tools loaded successfully (verbose-tier).
     McpToolsLoaded { count: usize },
     /// MCP bridge unavailable at load time (verbose-tier).

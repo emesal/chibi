@@ -63,9 +63,6 @@ impl OutputSink for OutputHandler {
             CommandEvent::InboxesProcessed { count } => {
                 format!("[Processed inboxes for {} context(s).]", count)
             }
-            CommandEvent::ContextLoaded { tool_count } => {
-                format!("[Loaded {} tool(s)]", tool_count)
-            }
             CommandEvent::McpToolsLoaded { count } => format!("[MCP: {} tools loaded]", count),
             CommandEvent::McpBridgeUnavailable { reason } => {
                 format!("[MCP: bridge unavailable: {}]", reason)

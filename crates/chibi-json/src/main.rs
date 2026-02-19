@@ -1,7 +1,6 @@
 use std::io::{self, Read};
 
 use chibi_core::input::Command;
-use chibi_core::output::CommandEvent;
 use chibi_core::{Chibi, LoadOptions, OutputSink};
 
 mod input;
@@ -64,10 +63,6 @@ async fn run() -> io::Result<()> {
     chibi.set_permission_handler(Box::new(|_| Ok(true)));
 
     let context = &json_input.context;
-
-    output.emit_event(CommandEvent::ContextLoaded {
-        tool_count: chibi.tool_count(),
-    });
 
     // Intercept binary-specific commands before delegating to core
     match &json_input.command {

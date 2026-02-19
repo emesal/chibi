@@ -43,9 +43,6 @@ impl OutputSink for JsonOutputSink {
             CommandEvent::InboxesProcessed { count } => {
                 serde_json::json!({"type": "inboxes_processed", "count": count})
             }
-            CommandEvent::ContextLoaded { tool_count } => {
-                serde_json::json!({"type": "context_loaded", "tool_count": tool_count})
-            }
             CommandEvent::McpToolsLoaded { count } => {
                 serde_json::json!({"type": "mcp_tools_loaded", "count": count})
             }
