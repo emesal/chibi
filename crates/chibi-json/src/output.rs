@@ -1,3 +1,4 @@
+use chibi_core::output::CommandEvent;
 use chibi_core::OutputSink;
 use chibi_core::context::TranscriptEntry;
 use std::io::{self, Write};
@@ -12,6 +13,33 @@ impl OutputSink for JsonOutputSink {
     fn emit_result(&self, content: &str) {
         let json = serde_json::json!({"type": "result", "content": content});
         println!("{}", json);
+    }
+
+    fn emit_event(&self, event: CommandEvent) {
+        let json = match event {
+            CommandEvent::AutoDestroyed { count } =>
+                serde_json::json!({"type": "auto_destroyed", "count": count}),
+            CommandEvent::CacheCleanup { removed, max_age_days } =>
+                serde_json::json!({"type": "cache_cleanup", "removed": removed,
+                                   "max_age_days": max_age_days}),
+            CommandEvent::SystemPromptSet { context } =>
+                serde_json::json!({"type": "system_prompt_set", "context": context}),
+            CommandEvent::UsernameSaved { username, context } =>
+                serde_json::json!({"type": "username_saved", "username": username,
+                                   "context": context}),
+            CommandEvent::InboxEmpty { context } =>
+                serde_json::json!({"type": "inbox_empty", "context": context}),
+            CommandEvent::InboxProcessing { count, context } =>
+                serde_json::json!({"type": "inbox_processing", "count": count,
+                                   "context": context}),
+            CommandEvent::AllInboxesEmpty =>
+                serde_json::json!({"type": "all_inboxes_empty"}),
+            CommandEvent::InboxesProcessed { count } =>
+                serde_json::json!({"type": "inboxes_processed", "count": count}),
+            CommandEvent::ContextLoaded { tool_count } =>
+                serde_json::json!({"type": "context_loaded", "tool_count": tool_count}),
+        };
+        eprintln!("{}", json);
     }
 
     fn diagnostic(&self, message: &str, verbose: bool) {

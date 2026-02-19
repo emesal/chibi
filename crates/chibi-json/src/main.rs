@@ -1,6 +1,7 @@
 use std::io::{self, Read};
 
 use chibi_core::input::Command;
+use chibi_core::output::CommandEvent;
 use chibi_core::{Chibi, LoadOptions, OutputSink};
 
 mod input;
@@ -52,16 +53,8 @@ async fn run() -> io::Result<()> {
     let output = output::JsonOutputSink;
 
     // Pre-resolution verbose: check typed config and string-keyed overrides
-    let load_verbose = json_input
-        .overrides
-        .as_ref()
-        .and_then(|o| o.get("verbose"))
-        .map(|v| v == "true")
-        .or_else(|| json_input.config.as_ref().and_then(|c| c.verbose))
-        .unwrap_or(false);
-
     let mut chibi = Chibi::load_with_options(LoadOptions {
-        verbose: load_verbose,
+        verbose: false,
         home: json_input.home.clone(),
         project_root: json_input.project_root.clone(),
     })?;
@@ -71,10 +64,7 @@ async fn run() -> io::Result<()> {
 
     let context = &json_input.context;
 
-    output.diagnostic(
-        &format!("[Loaded {} tool(s)]", chibi.tool_count()),
-        load_verbose,
-    );
+    output.emit_event(CommandEvent::ContextLoaded { tool_count: chibi.tool_count() });
 
     // Intercept binary-specific commands before delegating to core
     match &json_input.command {
