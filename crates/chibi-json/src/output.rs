@@ -52,6 +52,31 @@ impl OutputSink for JsonOutputSink {
             CommandEvent::McpBridgeUnavailable { reason } => {
                 serde_json::json!({"type": "mcp_bridge_unavailable", "reason": reason})
             }
+            CommandEvent::CompactionStarted {
+                context,
+                message_count,
+            } => serde_json::json!({"type": "compaction_started", "context": context,
+                                   "message_count": message_count}),
+            CommandEvent::CompactionComplete {
+                context,
+                archived,
+                remaining,
+            } => serde_json::json!({"type": "compaction_complete", "context": context,
+                                   "archived": archived, "remaining": remaining}),
+            CommandEvent::RollingCompactionDecision { archived } => {
+                serde_json::json!({"type": "rolling_compaction_decision", "archived": archived})
+            }
+            CommandEvent::RollingCompactionFallback { drop_percentage } => {
+                serde_json::json!({"type": "rolling_compaction_fallback",
+                                   "drop_percentage": drop_percentage})
+            }
+            CommandEvent::RollingCompactionComplete { archived, remaining } => {
+                serde_json::json!({"type": "rolling_compaction_complete",
+                                   "archived": archived, "remaining": remaining})
+            }
+            CommandEvent::CompactionNoPrompt => {
+                serde_json::json!({"type": "compaction_no_prompt"})
+            }
             CommandEvent::LoadSummary {
                 builtin_count,
                 builtin_names,

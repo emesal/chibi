@@ -37,6 +37,18 @@ pub enum CommandEvent {
         plugin_count: usize,
         plugin_names: Vec<String>,
     },
+    /// LLM-based compaction started (verbose-tier).
+    CompactionStarted { context: String, message_count: usize },
+    /// LLM-based compaction completed (verbose-tier).
+    CompactionComplete { context: String, archived: usize, remaining: usize },
+    /// Rolling compaction: LLM selected N messages to archive (verbose-tier).
+    RollingCompactionDecision { archived: usize },
+    /// Rolling compaction fallback: dropping oldest N% (verbose-tier).
+    RollingCompactionFallback { drop_percentage: f64 },
+    /// Rolling compaction completed (verbose-tier).
+    RollingCompactionComplete { archived: usize, remaining: usize },
+    /// No compaction prompt found — using default (verbose-tier).
+    CompactionNoPrompt,
 }
 
 /// Abstraction over how command results and diagnostics are presented.
@@ -70,5 +82,20 @@ pub trait OutputSink {
     fn emit_markdown(&self, content: &str) -> io::Result<()> {
         self.emit_result(content);
         Ok(())
+    }
+}
+
+/// A no-op output sink for call sites that don't need command-path output.
+pub(crate) struct NoopSink;
+
+impl OutputSink for NoopSink {
+    fn emit_result(&self, _: &str) {}
+    fn emit_event(&self, _: CommandEvent) {}
+    fn newline(&self) {}
+    fn emit_entry(&self, _: &TranscriptEntry) -> io::Result<()> {
+        Ok(())
+    }
+    fn confirm(&self, _: &str) -> bool {
+        false
     }
 }

@@ -5,6 +5,7 @@
 //! decouple from presentation concerns.
 
 use super::compact::compact_context_with_llm;
+use crate::output::NoopSink;
 use super::logging::{log_request_if_enabled, log_response_meta_if_enabled};
 use super::request::{PromptOptions, build_request_body};
 use super::sink::{ResponseEvent, ResponseSink};
@@ -1791,7 +1792,7 @@ pub async fn send_prompt<S: ResponseSink>(
 
         // === Auto-compaction Check ===
         if app.should_auto_compact(&context, &resolved_config) {
-            return compact_context_with_llm(app, context_name, &resolved_config).await;
+            return compact_context_with_llm(app, context_name, &resolved_config, &NoopSink).await;
         }
 
         // === Build System Prompt ===

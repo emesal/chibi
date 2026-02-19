@@ -70,6 +70,32 @@ impl OutputSink for OutputHandler {
             CommandEvent::McpBridgeUnavailable { reason } => {
                 format!("[MCP: bridge unavailable: {}]", reason)
             }
+            CommandEvent::CompactionStarted {
+                context,
+                message_count,
+            } => format!("[Compacting '{}': {} messages]", context, message_count),
+            CommandEvent::CompactionComplete {
+                context,
+                archived,
+                remaining,
+            } => format!(
+                "[Compaction complete '{}': {} archived, {} remaining]",
+                context, archived, remaining
+            ),
+            CommandEvent::RollingCompactionDecision { archived } => {
+                format!("[Rolling compaction: LLM selected {} messages to archive]", archived)
+            }
+            CommandEvent::RollingCompactionFallback { drop_percentage } => format!(
+                "[Rolling compaction: LLM decision failed, falling back to dropping oldest {}%]",
+                drop_percentage
+            ),
+            CommandEvent::RollingCompactionComplete { archived, remaining } => format!(
+                "[Rolling compaction complete: {} archived, {} remaining]",
+                archived, remaining
+            ),
+            CommandEvent::CompactionNoPrompt => {
+                "[No compaction prompt found — using default]".to_string()
+            }
             CommandEvent::LoadSummary {
                 builtin_count,
                 builtin_names,

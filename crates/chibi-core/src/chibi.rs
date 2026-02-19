@@ -36,7 +36,7 @@ use std::path::Path;
 use crate::api::sink::ResponseSink;
 use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
-use crate::output::{CommandEvent, OutputSink};
+use crate::output::{CommandEvent, NoopSink, OutputSink};
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 
@@ -96,21 +96,6 @@ pub struct Chibi {
     /// Optional permission handler for gated operations.
     /// If `None`, gated operations fail-safe to deny (unless a plugin approves).
     permission_handler: Option<PermissionHandler>,
-}
-
-/// A no-op output sink for callers that don't need load-time output.
-struct NoopSink;
-
-impl OutputSink for NoopSink {
-    fn emit_result(&self, _: &str) {}
-    fn emit_event(&self, _: CommandEvent) {}
-    fn newline(&self) {}
-    fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> {
-        Ok(())
-    }
-    fn confirm(&self, _: &str) -> bool {
-        false
-    }
 }
 
 impl Chibi {

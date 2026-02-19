@@ -209,10 +209,11 @@ async fn dispatch_command<S: ResponseSink>(
         }
         Command::CompactContext { name } => {
             if let Some(ctx_name) = name {
-                crate::api::compact_context_by_name(&chibi.app, ctx_name).await?;
+                crate::api::compact_context_by_name(&chibi.app, ctx_name, output).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
-                crate::api::compact_context_with_llm_manual(&chibi.app, context, config).await?;
+                crate::api::compact_context_with_llm_manual(&chibi.app, context, config, output)
+                    .await?;
             }
             Ok(CommandEffect::None)
         }
