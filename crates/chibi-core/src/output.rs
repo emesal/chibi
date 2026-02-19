@@ -97,6 +97,21 @@ pub trait OutputSink {
     }
 }
 
+/// A no-op output sink for call sites that don't need command-path output.
+pub(crate) struct NoopSink;
+
+impl OutputSink for NoopSink {
+    fn emit_result(&self, _: &str) {}
+    fn emit_event(&self, _: CommandEvent) {}
+    fn newline(&self) {}
+    fn emit_entry(&self, _: &TranscriptEntry) -> io::Result<()> {
+        Ok(())
+    }
+    fn confirm(&self, _: &str) -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,15 +121,23 @@ mod tests {
     }
 
     impl RecordingSink {
-        fn new() -> Self { Self { done_called: std::cell::Cell::new(false) } }
+        fn new() -> Self {
+            Self {
+                done_called: std::cell::Cell::new(false),
+            }
+        }
     }
 
     impl OutputSink for RecordingSink {
         fn emit_result(&self, _: &str) {}
         fn emit_event(&self, _: CommandEvent) {}
         fn newline(&self) {}
-        fn emit_entry(&self, _: &TranscriptEntry) -> std::io::Result<()> { Ok(()) }
-        fn confirm(&self, _: &str) -> bool { true }
+        fn emit_entry(&self, _: &TranscriptEntry) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn confirm(&self, _: &str) -> bool {
+            true
+        }
         fn emit_done(&self, _: &std::io::Result<()>) {
             self.done_called.set(true);
         }
@@ -133,20 +156,5 @@ mod tests {
         let sink = RecordingSink::new();
         sink.emit_done(&Ok(()));
         assert!(sink.done_called.get());
-    }
-}
-
-/// A no-op output sink for call sites that don't need command-path output.
-pub(crate) struct NoopSink;
-
-impl OutputSink for NoopSink {
-    fn emit_result(&self, _: &str) {}
-    fn emit_event(&self, _: CommandEvent) {}
-    fn newline(&self) {}
-    fn emit_entry(&self, _: &TranscriptEntry) -> io::Result<()> {
-        Ok(())
-    }
-    fn confirm(&self, _: &str) -> bool {
-        false
     }
 }
