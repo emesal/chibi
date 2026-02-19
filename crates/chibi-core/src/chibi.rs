@@ -98,6 +98,21 @@ pub struct Chibi {
     permission_handler: Option<PermissionHandler>,
 }
 
+/// A no-op output sink for callers that don't need load-time output.
+struct NoopSink;
+
+impl OutputSink for NoopSink {
+    fn emit_result(&self, _: &str) {}
+    fn emit_event(&self, _: CommandEvent) {}
+    fn newline(&self) {}
+    fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> {
+        Ok(())
+    }
+    fn confirm(&self, _: &str) -> bool {
+        false
+    }
+}
+
 impl Chibi {
     /// Load chibi from default home directory.
     ///
@@ -108,18 +123,6 @@ impl Chibi {
     /// 1. `CHIBI_HOME` environment variable
     /// 2. `~/.chibi` default
     pub fn load() -> io::Result<Self> {
-        struct NoopSink;
-        impl OutputSink for NoopSink {
-            fn emit_result(&self, _: &str) {}
-            fn emit_event(&self, _: CommandEvent) {}
-            fn newline(&self) {}
-            fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> {
-                Ok(())
-            }
-            fn confirm(&self, _: &str) -> bool {
-                false
-            }
-        }
         Self::load_with_options(LoadOptions::default(), &NoopSink)
     }
 
@@ -130,18 +133,6 @@ impl Chibi {
     ///
     /// This overrides both `CHIBI_HOME` and the default `~/.chibi`.
     pub fn from_home(home: &Path) -> io::Result<Self> {
-        struct NoopSink;
-        impl OutputSink for NoopSink {
-            fn emit_result(&self, _: &str) {}
-            fn emit_event(&self, _: CommandEvent) {}
-            fn newline(&self) {}
-            fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> {
-                Ok(())
-            }
-            fn confirm(&self, _: &str) -> bool {
-                false
-            }
-        }
         Self::load_with_options(
             LoadOptions {
                 home: Some(home.to_path_buf()),
