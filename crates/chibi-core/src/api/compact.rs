@@ -14,6 +14,64 @@ use crate::tools;
 use serde_json::json;
 use std::io;
 
+/// Calculate how many messages to drop during rolling compaction.
+///
+/// Formula: `(count * percentage / 100).round().max(1)`
+pub(crate) fn drop_count(message_count: usize, drop_percentage: f32) -> usize {
+    ((message_count as f32 * drop_percentage / 100.0).round() as usize).max(1)
+}
+
+/// Collect `tool_call_id`s from messages that have `tool_calls` arrays.
+///
+/// Used to atomically drop tool results when their assistant message is dropped.
+pub(crate) fn collect_tool_call_ids(
+    messages: &[serde_json::Value],
+) -> std::collections::HashSet<String> {
+    let mut ids = std::collections::HashSet::new();
+    for m in messages {
+        if let Some(tool_calls) = m["tool_calls"].as_array() {
+            for tc in tool_calls {
+                if let Some(id) = tc["id"].as_str() {
+                    ids.insert(id.to_string());
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Filter messages for compaction: keep system messages unconditionally,
+/// drop messages whose `_id` is in `drop_ids`, and drop tool results whose
+/// `tool_call_id` matches a dropped assistant message's tool call.
+pub(crate) fn filter_messages(
+    messages: &[serde_json::Value],
+    drop_ids: &std::collections::HashSet<String>,
+    drop_tool_call_ids: &std::collections::HashSet<String>,
+) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .filter(|m| {
+            let role = m["role"].as_str().unwrap_or("");
+            if role == "system" {
+                return true;
+            }
+            let id = m["_id"].as_str().unwrap_or("");
+            if drop_ids.contains(id) {
+                return false;
+            }
+            // Atomic tool exchange: drop tool results whose call was dropped
+            if role == "tool"
+                && let Some(tc_id) = m["tool_call_id"].as_str()
+                && drop_tool_call_ids.contains(tc_id)
+            {
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect()
+}
+
 /// Rolling compaction: strips messages and integrates them into the summary
 /// This is triggered automatically when context exceeds threshold
 /// The LLM decides which messages to drop based on goals/todos, with fallback to percentage
@@ -83,8 +141,7 @@ pub async fn rolling_compact(
 
     // Calculate target drop count based on config percentage
     let drop_percentage = resolved_config.rolling_compact_drop_percentage;
-    let target_drop_count =
-        ((non_system_messages.len() as f32 * drop_percentage / 100.0).round() as usize).max(1);
+    let target_drop_count = drop_count(non_system_messages.len(), drop_percentage);
 
     // Ask LLM which messages to drop
     let decision_prompt = format!(
@@ -208,19 +265,10 @@ No explanation, just the JSON array."#,
         .filter_map(|m| m["_id"].as_str().map(|s| s.to_string()))
         .collect();
 
-    // Also collect tool_call_ids from dropped assistant messages so we can
-    // atomically drop their tool results
-    let mut drop_tool_call_ids: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    for m in &messages_to_drop {
-        if let Some(tool_calls) = m["tool_calls"].as_array() {
-            for tc in tool_calls {
-                if let Some(id) = tc["id"].as_str() {
-                    drop_tool_call_ids.insert(id.to_string());
-                }
-            }
-        }
-    }
+    // Atomically drop tool results whose assistant message was dropped
+    let dropped_msgs: Vec<serde_json::Value> =
+        messages_to_drop.iter().map(|m| (*m).clone()).collect();
+    let drop_tool_call_ids = collect_tool_call_ids(&dropped_msgs);
 
     // Second LLM call: update summary with dropped content
     let update_prompt = format!(
@@ -276,31 +324,8 @@ Output ONLY the updated summary, no preamble."#,
     // Drop the borrow by ending use of messages_to_drop
     drop(messages_to_drop);
 
-    // Filter out dropped messages, keeping system messages and non-dropped messages.
-    // Tool results whose tool_call_id matches a dropped assistant message are also dropped.
-    let remaining_messages: Vec<serde_json::Value> = context
-        .messages
-        .iter()
-        .filter(|m| {
-            let role = m["role"].as_str().unwrap_or("");
-            if role == "system" {
-                return true;
-            }
-            let id = m["_id"].as_str().unwrap_or("");
-            if drop_ids.contains(id) {
-                return false;
-            }
-            // Atomic tool exchange: drop tool results whose call was dropped
-            if role == "tool"
-                && let Some(tc_id) = m["tool_call_id"].as_str()
-                && drop_tool_call_ids.contains(tc_id)
-            {
-                return false;
-            }
-            true
-        })
-        .cloned()
-        .collect();
+    // Filter out dropped messages (system messages always preserved)
+    let remaining_messages = filter_messages(&context.messages, &drop_ids, &drop_tool_call_ids);
 
     // Update context with new summary and remaining messages
     context.summary = new_summary.clone();
@@ -555,4 +580,313 @@ async fn compact_context_with_llm_internal(
     let _ = tools::execute_hook(&tools, tools::HookPoint::PostCompact, &hook_data);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
+    use crate::output::NoopSink;
+    use crate::partition::StorageConfig;
+    use serde_json::json;
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    // === Helper constructors ===
+
+    /// Build a minimal message with role and _id.
+    fn msg(role: &str, id: &str) -> serde_json::Value {
+        json!({ "role": role, "_id": id, "content": format!("msg-{id}") })
+    }
+
+    /// Build a system message (no _id needed for filtering logic).
+    fn system_msg(id: &str) -> serde_json::Value {
+        json!({ "role": "system", "_id": id, "content": "system prompt" })
+    }
+
+    /// Build an assistant message with tool_calls.
+    fn assistant_with_tools(id: &str, tool_call_ids: &[&str]) -> serde_json::Value {
+        let calls: Vec<serde_json::Value> = tool_call_ids
+            .iter()
+            .map(|tc_id| {
+                json!({
+                    "id": tc_id,
+                    "function": { "name": format!("tool_{tc_id}") }
+                })
+            })
+            .collect();
+        json!({ "role": "assistant", "_id": id, "tool_calls": calls })
+    }
+
+    /// Build a tool result message.
+    fn tool_result(id: &str, tool_call_id: &str) -> serde_json::Value {
+        json!({
+            "role": "tool",
+            "_id": id,
+            "tool_call_id": tool_call_id,
+            "content": format!("result for {tool_call_id}")
+        })
+    }
+
+    /// Create a test AppState with a temporary directory.
+    fn create_test_app() -> (AppState, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config {
+            api_key: Some("test-key".to_string()),
+            model: Some("test-model".to_string()),
+            context_window_limit: Some(8000),
+            warn_threshold_percent: 75.0,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            fuel: 0,
+            fuel_empty_response_cost: 15,
+            username: "testuser".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: true,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api: ApiParams::default(),
+            storage: StorageConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            tools: ToolsConfig::default(),
+            vfs: VfsConfig::default(),
+            url_policy: None,
+        };
+        let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+        (app, temp_dir)
+    }
+
+    // === drop_count tests ===
+
+    #[test]
+    fn drop_count_basic_percentage() {
+        assert_eq!(drop_count(10, 50.0), 5);
+    }
+
+    #[test]
+    fn drop_count_rounds_correctly() {
+        // 7 * 30% = 2.1, rounds to 2
+        assert_eq!(drop_count(7, 30.0), 2);
+    }
+
+    #[test]
+    fn drop_count_floor_is_one() {
+        // 1 * 10% = 0.1, rounds to 0, .max(1) → 1
+        assert_eq!(drop_count(1, 10.0), 1);
+    }
+
+    #[test]
+    fn drop_count_hundred_percent() {
+        assert_eq!(drop_count(10, 100.0), 10);
+    }
+
+    #[test]
+    fn drop_count_small_percentage_large_set() {
+        // 100 * 3% = 3.0
+        assert_eq!(drop_count(100, 3.0), 3);
+    }
+
+    #[test]
+    fn drop_count_zero_count_gives_one() {
+        // 0 * 50% = 0, .max(1) → 1
+        assert_eq!(drop_count(0, 50.0), 1);
+    }
+
+    // === collect_tool_call_ids tests ===
+
+    #[test]
+    fn collect_tool_call_ids_extracts_ids() {
+        let messages = vec![
+            assistant_with_tools("a1", &["tc-1", "tc-2"]),
+            msg("user", "u1"),
+            assistant_with_tools("a2", &["tc-3"]),
+        ];
+        let ids = collect_tool_call_ids(&messages);
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains("tc-1"));
+        assert!(ids.contains("tc-2"));
+        assert!(ids.contains("tc-3"));
+    }
+
+    #[test]
+    fn collect_tool_call_ids_ignores_no_tool_calls() {
+        let messages = vec![msg("user", "u1"), msg("assistant", "a1")];
+        let ids = collect_tool_call_ids(&messages);
+        assert!(ids.is_empty());
+    }
+
+    // === filter_messages tests ===
+
+    #[test]
+    fn filter_preserves_system_messages() {
+        let messages = vec![system_msg("s1"), msg("user", "u1"), msg("assistant", "a1")];
+        let drop_ids: HashSet<String> = ["s1", "u1", "a1"].iter().map(|s| s.to_string()).collect();
+        let result = filter_messages(&messages, &drop_ids, &HashSet::new());
+        // system message preserved despite its ID being in drop_ids
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["role"], "system");
+    }
+
+    #[test]
+    fn filter_drops_matching_ids() {
+        let messages = vec![msg("user", "u1"), msg("assistant", "a1"), msg("user", "u2")];
+        let drop_ids: HashSet<String> = ["u1", "a1"].iter().map(|s| s.to_string()).collect();
+        let result = filter_messages(&messages, &drop_ids, &HashSet::new());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["_id"], "u2");
+    }
+
+    #[test]
+    fn filter_retains_non_matching() {
+        let messages = vec![msg("user", "u1"), msg("user", "u2")];
+        let drop_ids: HashSet<String> = ["u1"].iter().map(|s| s.to_string()).collect();
+        let result = filter_messages(&messages, &drop_ids, &HashSet::new());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["_id"], "u2");
+    }
+
+    #[test]
+    fn filter_drops_tool_results_for_dropped_calls() {
+        let messages = vec![
+            assistant_with_tools("a1", &["tc-1"]),
+            tool_result("t1", "tc-1"),
+            msg("user", "u1"),
+        ];
+        // Drop the assistant message
+        let drop_ids: HashSet<String> = ["a1"].iter().map(|s| s.to_string()).collect();
+        // Its tool call IDs should cause the tool result to be dropped too
+        let drop_tc_ids: HashSet<String> = ["tc-1"].iter().map(|s| s.to_string()).collect();
+        let result = filter_messages(&messages, &drop_ids, &drop_tc_ids);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["_id"], "u1");
+    }
+
+    #[test]
+    fn filter_retains_tool_results_for_kept_calls() {
+        let messages = vec![
+            assistant_with_tools("a1", &["tc-1"]),
+            tool_result("t1", "tc-1"),
+            msg("user", "u1"),
+        ];
+        // Don't drop the assistant — tool result should also stay
+        let result = filter_messages(&messages, &HashSet::new(), &HashSet::new());
+        assert_eq!(result.len(), 3);
+    }
+
+    // === rolling_compact early return ===
+
+    #[tokio::test]
+    async fn rolling_compact_early_return_few_messages() {
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-compact";
+
+        // Create context with ≤4 non-system messages (should early-return)
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("s1"),
+            msg("user", "u1"),
+            msg("assistant", "a1"),
+            msg("user", "u2"),
+            msg("assistant", "a2"),
+        ];
+        app.save_context(&context).unwrap();
+
+        // Build a dummy ResolvedConfig — we never reach the LLM call
+        let resolved = dummy_resolved_config();
+
+        // Should return Ok without calling LLM (4 non-system messages, threshold is ≤4)
+        let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok());
+
+        // Context should be unchanged (system messages are not persisted via save_context)
+        let after = app.get_or_create_context(ctx_name).unwrap();
+        assert_eq!(after.messages.len(), 4);
+    }
+
+    // === compact_context_by_name tests ===
+
+    #[test]
+    fn compact_by_name_noop_for_few_messages() {
+        let (app, _tmp) = create_test_app();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let ctx_name = "test-compact-name";
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![msg("user", "u1"), msg("assistant", "a1")];
+        app.save_context(&context).unwrap();
+
+        rt.block_on(async {
+            let result = compact_context_by_name(&app, ctx_name, &NoopSink).await;
+            assert!(result.is_ok());
+        });
+
+        // ≤2 messages → context unchanged
+        let after = app.load_context(ctx_name).unwrap();
+        assert_eq!(after.messages.len(), 2);
+    }
+
+    #[test]
+    fn compact_by_name_clears_messages_preserves_summary() {
+        let (app, _tmp) = create_test_app();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let ctx_name = "test-compact-clear";
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.summary = "existing summary".to_string();
+        context.messages = vec![msg("user", "u1"), msg("assistant", "a1"), msg("user", "u2")];
+        app.save_context(&context).unwrap();
+
+        rt.block_on(async {
+            let result = compact_context_by_name(&app, ctx_name, &NoopSink).await;
+            assert!(result.is_ok());
+        });
+
+        let after = app.load_context(ctx_name).unwrap();
+        assert!(after.messages.is_empty());
+        assert_eq!(after.summary, "existing summary");
+    }
+
+    // === helpers ===
+
+    /// Minimal ResolvedConfig for tests that never reach the LLM.
+    fn dummy_resolved_config() -> ResolvedConfig {
+        ResolvedConfig {
+            api_key: None,
+            model: "test-model".to_string(),
+            context_window_limit: 8000,
+            warn_threshold_percent: 75.0,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            fuel: 0,
+            fuel_empty_response_cost: 15,
+            username: "testuser".to_string(),
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: true,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api: ApiParams::default(),
+            tools: ToolsConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            storage: StorageConfig::default(),
+            url_policy: None,
+            extra: std::collections::BTreeMap::new(),
+        }
+    }
 }
