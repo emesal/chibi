@@ -289,7 +289,7 @@ impl AppState {
     ///
     /// Note: This now destroys ALL expired contexts. The CLI is responsible for
     /// checking if the session's current context was destroyed and handling it.
-    pub fn auto_destroy_expired_contexts(&mut self, verbose: bool) -> io::Result<Vec<String>> {
+    pub fn auto_destroy_expired_contexts(&mut self) -> io::Result<Vec<String>> {
         let mut destroyed = Vec::new();
 
         // Collect contexts to destroy
@@ -303,9 +303,6 @@ impl AppState {
 
         // Destroy each one
         for name in to_destroy {
-            if verbose {
-                eprintln!("[DEBUG] Auto-destroying expired context: {}", name);
-            }
             // Remove directory
             let dir = self.context_dir(&name);
             if dir.exists() {

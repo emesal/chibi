@@ -10,8 +10,11 @@ use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// Load all tools from the plugins directory by calling each with --schema
-pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
+/// Load all tools from the plugins directory by calling each with --schema.
+///
+/// Emits warnings unconditionally for plugin loading issues (missing executables,
+/// security violations, schema errors). These are always relevant to the user.
+pub fn load_tools(plugins_dir: &PathBuf) -> io::Result<Vec<Tool>> {
     let mut tools = Vec::new();
 
     if !plugins_dir.exists() {
@@ -37,9 +40,7 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
             // Directory plugin: look for plugins/[name]/[name]
             let inner = path.join(file_name);
             if !inner.exists() || inner.is_dir() {
-                if verbose {
-                    eprintln!("[WARN] Plugin directory {:?} missing executable", file_name);
-                }
+                eprintln!("[WARN] Plugin directory {:?} missing executable", file_name);
                 continue;
             }
             inner
@@ -54,20 +55,16 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
         let canonical_exec = match exec_path.canonicalize() {
             Ok(canonical) => {
                 if !canonical.starts_with(&plugins_dir_canonical) {
-                    if verbose {
-                        eprintln!(
-                            "[WARN] Skipping plugin outside plugins directory: {:?}",
-                            exec_path
-                        );
-                    }
+                    eprintln!(
+                        "[WARN] Skipping plugin outside plugins directory: {:?}",
+                        exec_path
+                    );
                     continue;
                 }
                 canonical
             }
             Err(e) => {
-                if verbose {
-                    eprintln!("[WARN] Cannot verify plugin path {:?}: {}", exec_path, e);
-                }
+                eprintln!("[WARN] Cannot verify plugin path {:?}: {}", exec_path, e);
                 continue;
             }
         };
@@ -84,16 +81,14 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
         }
 
         // Try to get schema(s) from the tool (using canonical path)
-        match get_tool_schemas(&canonical_exec, verbose) {
+        match get_tool_schemas(&canonical_exec) {
             Ok(new_tools) => tools.extend(new_tools),
             Err(e) => {
-                if verbose {
-                    eprintln!(
-                        "[WARN] Failed to load tool {:?}: {}",
-                        exec_path.file_name(),
-                        e
-                    );
-                }
+                eprintln!(
+                    "[WARN] Failed to load tool {:?}: {}",
+                    exec_path.file_name(),
+                    e
+                );
             }
         }
     }
@@ -103,7 +98,7 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
 
 /// Get tool schema(s) by calling plugin with --schema
 /// Returns Vec<Tool> to support plugins that provide multiple tools
-fn get_tool_schemas(path: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
+fn get_tool_schemas(path: &PathBuf) -> io::Result<Vec<Tool>> {
     let output = Command::new(path)
         .arg("--schema")
         .output()
@@ -139,16 +134,14 @@ fn get_tool_schemas(path: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
 
     let mut tools = Vec::new();
     for s in schemas {
-        match parse_single_tool_schema(s, path, verbose) {
+        match parse_single_tool_schema(s, path) {
             Ok(tool) => tools.push(tool),
             Err(e) => {
-                if verbose {
-                    eprintln!(
-                        "[WARN] Failed to parse tool in {:?}: {}",
-                        path.file_name(),
-                        e
-                    );
-                }
+                eprintln!(
+                    "[WARN] Failed to parse tool in {:?}: {}",
+                    path.file_name(),
+                    e
+                );
             }
         }
     }
@@ -163,11 +156,7 @@ fn get_tool_schemas(path: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
     Ok(tools)
 }
 
-fn parse_single_tool_schema(
-    schema: &serde_json::Value,
-    path: &Path,
-    verbose: bool,
-) -> io::Result<Tool> {
+fn parse_single_tool_schema(schema: &serde_json::Value, path: &Path) -> io::Result<Tool> {
     let name = schema["name"]
         .as_str()
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Schema missing 'name' field"))?
@@ -191,9 +180,7 @@ fn parse_single_tool_schema(
                 match hook_str.parse::<HookPoint>() {
                     Ok(hook) => Some(hook),
                     Err(_) => {
-                        if verbose {
-                            eprintln!("[WARN] Unknown hook '{}' in tool '{}'", hook_str, name);
-                        }
+                        eprintln!("[WARN] Unknown hook '{}' in tool '{}'", hook_str, name);
                         None
                     }
                 }

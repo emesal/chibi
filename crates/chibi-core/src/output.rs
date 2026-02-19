@@ -1,6 +1,33 @@
 use crate::context::TranscriptEntry;
 use std::io;
 
+/// Semantic events emitted on the command path (non-streaming).
+///
+/// Core emits all variants unconditionally; clients decide which to display
+/// and how to format them. Verbose-tier events are shown only when the client
+/// has verbose mode enabled.
+#[derive(Debug, Clone)]
+pub enum CommandEvent {
+    /// Expired contexts auto-destroyed on startup (verbose-tier).
+    AutoDestroyed { count: usize },
+    /// Old cache entries removed on startup (verbose-tier).
+    CacheCleanup { removed: usize, max_age_days: u64 },
+    /// System prompt saved for a context (verbose-tier).
+    SystemPromptSet { context: String },
+    /// Username saved for a context (verbose-tier).
+    UsernameSaved { username: String, context: String },
+    /// No inbox messages for context (verbose-tier).
+    InboxEmpty { context: String },
+    /// Inbox messages being processed (verbose-tier).
+    InboxProcessing { count: usize, context: String },
+    /// All inboxes empty (verbose-tier).
+    AllInboxesEmpty,
+    /// Processed N context inboxes (verbose-tier).
+    InboxesProcessed { count: usize },
+    /// Context loaded with N tools (verbose-tier).
+    ContextLoaded { tool_count: usize },
+}
+
 /// Abstraction over how command results and diagnostics are presented.
 ///
 /// chibi-cli implements this with OutputHandler (text to stdout/stderr, interactive TTY).
@@ -9,10 +36,19 @@ pub trait OutputSink {
     /// Emit a result string (the primary output of a command).
     fn emit_result(&self, content: &str);
 
+    /// Emit a typed command-path event. Clients filter and format as appropriate.
+    fn emit_event(&self, event: CommandEvent);
+
     /// Emit a diagnostic message. Only shown when `verbose` is true.
+    ///
+    /// Used by response sinks for tool call display (show_tool_calls gating).
+    /// Will be removed in a future task once all callers are migrated to emit_event.
     fn diagnostic(&self, message: &str, verbose: bool);
 
     /// Emit a diagnostic message unconditionally.
+    ///
+    /// Used by response sinks for formatting typed events.
+    /// Will be removed in a future task once all callers are migrated to emit_event.
     fn diagnostic_always(&self, message: &str);
 
     /// Emit a blank line.

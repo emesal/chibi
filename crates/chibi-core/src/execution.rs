@@ -13,7 +13,7 @@ use crate::api::sink::ResponseSink;
 use crate::config::ResolvedConfig;
 use crate::context;
 use crate::input::{Command, DebugKey, ExecutionFlags, Inspectable};
-use crate::output::OutputSink;
+use crate::output::{CommandEvent, OutputSink};
 use crate::state::StatePaths;
 
 /// Side effects of command execution that binaries may need to act on.
@@ -55,21 +55,16 @@ pub async fn execute_command<S: ResponseSink>(
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
-    let verbose = config.verbose;
-
     // --- pre-command lifecycle ---
 
     // Initialize (OnStart hooks)
     let _ = chibi.init();
 
     // Auto-destroy expired contexts
-    let destroyed = chibi.app.auto_destroy_expired_contexts(verbose)?;
+    let destroyed = chibi.app.auto_destroy_expired_contexts()?;
     if !destroyed.is_empty() {
         chibi.save()?;
-        output.diagnostic(
-            &format!("[Auto-destroyed {} expired context(s)]", destroyed.len()),
-            verbose,
-        );
+        output.emit_event(CommandEvent::AutoDestroyed { count: destroyed.len() });
     }
 
     // Ensure context dir + ContextEntry exist
@@ -121,14 +116,10 @@ pub async fn execute_command<S: ResponseSink>(
             .cleanup_all_tool_caches(cleanup_config.tool_cache_max_age_days)
             .await?;
         if removed > 0 {
-            output.diagnostic(
-                &format!(
-                    "[Auto-cleanup: removed {} old cache entries (older than {} days)]",
-                    removed,
-                    cleanup_config.tool_cache_max_age_days + 1
-                ),
-                verbose,
-            );
+            output.emit_event(CommandEvent::CacheCleanup {
+                removed,
+                max_age_days: cleanup_config.tool_cache_max_age_days,
+            });
         }
     }
 
@@ -150,8 +141,6 @@ async fn dispatch_command<S: ResponseSink>(
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
-    let verbose = config.verbose;
-
     match command {
         Command::ShowHelp | Command::ShowVersion => {
             // Binary-specific — should be intercepted before reaching core.
@@ -218,7 +207,7 @@ async fn dispatch_command<S: ResponseSink>(
         }
         Command::CompactContext { name } => {
             if let Some(ctx_name) = name {
-                crate::api::compact_context_by_name(&chibi.app, ctx_name, verbose).await?;
+                crate::api::compact_context_by_name(&chibi.app, ctx_name).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
                 crate::api::compact_context_with_llm_manual(&chibi.app, context, config)
@@ -264,10 +253,7 @@ async fn dispatch_command<S: ResponseSink>(
                 prompt.clone()
             };
             chibi.app.set_system_prompt_for(ctx_name, &content)?;
-            output.diagnostic(
-                &format!("[System prompt set for context '{}']", ctx_name),
-                verbose,
-            );
+            output.emit_event(CommandEvent::SystemPromptSet { context: ctx_name.to_string() });
             Ok(CommandEffect::None)
         }
         Command::RunPlugin { name, args } => {
@@ -360,16 +346,12 @@ async fn dispatch_command<S: ResponseSink>(
         Command::CheckInbox { context: ctx } => {
             let messages = chibi.app.peek_inbox(ctx)?;
             if messages.is_empty() {
-                output.diagnostic(&format!("[No messages in inbox for '{}']", ctx), verbose);
+                output.emit_event(CommandEvent::InboxEmpty { context: ctx.to_string() });
             } else {
-                output.diagnostic(
-                    &format!(
-                        "[Processing {} message(s) from inbox for '{}']",
-                        messages.len(),
-                        ctx
-                    ),
-                    verbose,
-                );
+                output.emit_event(CommandEvent::InboxProcessing {
+                    count: messages.len(),
+                    context: ctx.to_string(),
+                });
                 if !chibi.app.context_dir(ctx).exists() {
                     let new_context = context::Context::new(ctx.clone());
                     chibi.app.save_and_register_context(&new_context)?;
@@ -396,14 +378,10 @@ async fn dispatch_command<S: ResponseSink>(
                 if messages.is_empty() {
                     continue;
                 }
-                output.diagnostic(
-                    &format!(
-                        "[Processing {} message(s) from inbox for '{}']",
-                        messages.len(),
-                        ctx_name
-                    ),
-                    verbose,
-                );
+                output.emit_event(CommandEvent::InboxProcessing {
+                    count: messages.len(),
+                    context: ctx_name.clone(),
+                });
                 let inbox_config = chibi.resolve_config(&ctx_name, None)?;
                 send_prompt_inner(
                     chibi,
@@ -418,12 +396,9 @@ async fn dispatch_command<S: ResponseSink>(
                 processed_count += 1;
             }
             if processed_count == 0 {
-                output.diagnostic("[No messages in any inbox.]", verbose);
+                output.emit_event(CommandEvent::AllInboxesEmpty);
             } else {
-                output.diagnostic(
-                    &format!("[Processed inboxes for {} context(s).]", processed_count),
-                    verbose,
-                );
+                output.emit_event(CommandEvent::InboxesProcessed { count: processed_count });
             }
             Ok(CommandEffect::None)
         }

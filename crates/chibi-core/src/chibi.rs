@@ -152,20 +152,18 @@ impl Chibi {
     /// ```
     pub fn load_with_options(options: LoadOptions) -> io::Result<Self> {
         let app = AppState::load(options.home)?;
-        // CLI flag overrides config setting
-        let verbose = options.verbose || app.config.verbose;
-        let mut tools = tools::load_tools(&app.plugins_dir, verbose)?;
+        let mut tools = tools::load_tools(&app.plugins_dir)?;
 
         // Load MCP bridge tools (non-fatal: bridge may not be configured)
         match tools::mcp::load_mcp_tools(&app.chibi_dir) {
             Ok(mcp_tools) => {
-                if verbose && !mcp_tools.is_empty() {
+                if options.verbose && !mcp_tools.is_empty() {
                     eprintln!("[MCP: {} tools loaded]", mcp_tools.len());
                 }
                 tools.extend(mcp_tools);
             }
             Err(e) => {
-                if verbose {
+                if options.verbose {
                     eprintln!("[MCP: bridge unavailable: {e}]");
                 }
             }
@@ -491,10 +489,7 @@ mod tests {
             model: Some("test-model".to_string()),
             context_window_limit: Some(8000),
             warn_threshold_percent: 75.0,
-            verbose: false,
-            hide_tool_calls: false,
             no_tool_calls: false,
-            show_thinking: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
             reflection_enabled: true,
@@ -716,7 +711,7 @@ mod tests {
         assert_eq!(config.username, "testuser");
         assert_eq!(config.fuel, 15);
         assert_eq!(config.context_window_limit, 8000);
-        assert!(!config.verbose);
+        assert!(!config.no_tool_calls);
     }
 
     #[test]

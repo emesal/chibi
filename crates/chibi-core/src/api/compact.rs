@@ -20,7 +20,6 @@ pub async fn rolling_compact(
     app: &AppState,
     context_name: &str,
     resolved_config: &ResolvedConfig,
-    verbose: bool,
 ) -> io::Result<()> {
     let mut context = app.get_or_create_context(context_name)?;
 
@@ -37,7 +36,7 @@ pub async fn rolling_compact(
     }
 
     // Execute pre_rolling_compact hook
-    let tools = tools::load_tools(&app.plugins_dir, verbose)?;
+    let tools = tools::load_tools(&app.plugins_dir)?;
     let hook_data = serde_json::json!({
         "context_name": context.name,
         "message_count": context.messages.len(),
@@ -155,24 +154,20 @@ No explanation, just the JSON array."#,
     // if the assistant message is dropped, drop associated tool results too.
     let messages_to_drop: Vec<&serde_json::Value> = if ids_to_drop.is_empty() {
         // Fallback: drop oldest N messages based on percentage
-        if verbose {
-            eprintln!(
-                "[Rolling compaction: LLM decision failed, falling back to dropping oldest {}%]",
-                drop_percentage
-            );
-        }
+        eprintln!(
+            "[Rolling compaction: LLM decision failed, falling back to dropping oldest {}%]",
+            drop_percentage
+        );
         non_system_messages
             .iter()
             .take(target_drop_count)
             .copied()
             .collect()
     } else {
-        if verbose {
-            eprintln!(
-                "[Rolling compaction: LLM selected {} messages to archive]",
-                ids_to_drop.len()
-            );
-        }
+        eprintln!(
+            "[Rolling compaction: LLM selected {} messages to archive]",
+            ids_to_drop.len()
+        );
         non_system_messages
             .iter()
             .filter(|m| {
@@ -184,9 +179,7 @@ No explanation, just the JSON array."#,
     };
 
     if messages_to_drop.is_empty() {
-        if verbose {
-            eprintln!("[Rolling compaction: no messages to drop]");
-        }
+        eprintln!("[Rolling compaction: no messages to drop]");
         return Ok(());
     }
 
@@ -275,9 +268,7 @@ Output ONLY the updated summary, no preamble."#,
     let new_summary = gateway::chat(resolved_config, &summary_messages).await?;
 
     if new_summary.is_empty() {
-        if verbose {
-            eprintln!("[WARN] Rolling compaction returned empty summary, keeping old state");
-        }
+        eprintln!("[WARN] Rolling compaction returned empty summary, keeping old state");
         return Ok(());
     }
 
@@ -324,13 +315,11 @@ Output ONLY the updated summary, no preamble."#,
     // Save updated context (summary.md, context_meta.json, etc.)
     app.save_context(&context)?;
 
-    if verbose {
-        eprintln!(
-            "[Rolling compaction complete: {} messages remaining, {} archived]",
-            context.messages.len(),
-            archived_count
-        );
-    }
+    eprintln!(
+        "[Rolling compaction complete: {} messages remaining, {} archived]",
+        context.messages.len(),
+        archived_count
+    );
 
     // Execute post_rolling_compact hook
     let hook_data = serde_json::json!({
@@ -351,7 +340,7 @@ pub async fn compact_context_with_llm(
     resolved_config: &ResolvedConfig,
 ) -> io::Result<()> {
     // Use rolling compaction for auto-triggered compaction
-    rolling_compact(app, context_name, resolved_config, resolved_config.verbose).await
+    rolling_compact(app, context_name, resolved_config).await
 }
 
 /// Full compaction: summarizes all messages and starts fresh (manual -c flag)
@@ -360,39 +349,27 @@ pub async fn compact_context_with_llm_manual(
     context_name: &str,
     resolved_config: &ResolvedConfig,
 ) -> io::Result<()> {
-    compact_context_with_llm_internal(
-        app,
-        context_name,
-        resolved_config,
-        true,
-        resolved_config.verbose,
-    )
-    .await
+    compact_context_with_llm_internal(app, context_name, resolved_config, true).await
 }
 
 /// Compact a specific context by name (for -Z flag)
 pub async fn compact_context_by_name(
     app: &AppState,
     context_name: &str,
-    verbose: bool,
 ) -> io::Result<()> {
     // Load the context
     let context = app.load_context(context_name)?;
 
     if context.messages.is_empty() {
-        if verbose {
-            eprintln!("[Context '{}' is already empty]", context_name);
-        }
+        eprintln!("[Context '{}' is already empty]", context_name);
         return Ok(());
     }
 
     if context.messages.len() <= 2 {
-        if verbose {
-            eprintln!(
-                "[Context '{}' is already compact (2 or fewer messages)]",
-                context_name
-            );
-        }
+        eprintln!(
+            "[Context '{}' is already compact (2 or fewer messages)]",
+            context_name
+        );
         return Ok(());
     }
 
@@ -414,13 +391,11 @@ pub async fn compact_context_by_name(
 
     app.save_context(&new_context)?;
 
-    if verbose {
-        eprintln!(
-            "[Context '{}' compacted: {} messages archived]",
-            context_name,
-            context.messages.len()
-        );
-    }
+    eprintln!(
+        "[Context '{}' compacted: {} messages archived]",
+        context_name,
+        context.messages.len()
+    );
 
     Ok(())
 }
@@ -430,7 +405,6 @@ async fn compact_context_with_llm_internal(
     context_name: &str,
     resolved_config: &ResolvedConfig,
     print_message: bool,
-    verbose: bool,
 ) -> io::Result<()> {
     let context = app.get_or_create_context(context_name)?;
 
@@ -449,7 +423,7 @@ async fn compact_context_with_llm_internal(
     }
 
     // Execute pre_compact hook
-    let tools = tools::load_tools(&app.plugins_dir, verbose)?;
+    let tools = tools::load_tools(&app.plugins_dir)?;
     let hook_data = serde_json::json!({
         "context_name": context.name,
         "message_count": context.messages.len(),
@@ -457,7 +431,7 @@ async fn compact_context_with_llm_internal(
     });
     let _ = tools::execute_hook(&tools, tools::HookPoint::PreCompact, &hook_data);
 
-    if print_message && verbose {
+    if print_message {
         eprintln!(
             "[Compacting] Messages: {} -> requesting summary...",
             context.messages.len()
@@ -468,11 +442,9 @@ async fn compact_context_with_llm_internal(
     let compaction_prompt = app.load_prompt("compaction")?;
     let default_compaction_prompt = "Please summarize the following conversation into a concise summary. Capture the key points, decisions, and context.";
     let compaction_prompt = if compaction_prompt.is_empty() {
-        if verbose {
-            eprintln!(
-                "[WARN] No compaction prompt found at ~/.chibi/prompts/compaction.md. Using default."
-            );
-        }
+        eprintln!(
+            "[WARN] No compaction prompt found at ~/.chibi/prompts/compaction.md. Using default."
+        );
         default_compaction_prompt
     } else {
         &compaction_prompt
