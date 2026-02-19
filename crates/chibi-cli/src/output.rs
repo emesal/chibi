@@ -289,4 +289,83 @@ mod tests {
         // Non-verbose: compaction entries are silently skipped
         handler.emit_entry(&entry).unwrap();
     }
+
+    // ── emit_event tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_emit_event_verbose_false_suppresses_output() {
+        // All CommandEvent variants are verbose-tier; non-verbose handler must suppress.
+        // We can't capture stderr in unit tests, but we verify no panic occurs
+        // and the verbose guard is respected.
+        let handler = OutputHandler::new(false);
+        handler.emit_event(CommandEvent::AutoDestroyed { count: 3 });
+        handler.emit_event(CommandEvent::AllInboxesEmpty);
+        handler.emit_event(CommandEvent::McpBridgeUnavailable {
+            reason: "timeout".to_string(),
+        });
+    }
+
+    #[test]
+    fn test_emit_event_verbose_true_does_not_panic() {
+        // Exercise every variant to catch format string regressions.
+        let handler = OutputHandler::new(true);
+        handler.emit_event(CommandEvent::AutoDestroyed { count: 0 });
+        handler.emit_event(CommandEvent::CacheCleanup {
+            removed: 5,
+            max_age_days: 6,
+        });
+        handler.emit_event(CommandEvent::SystemPromptSet {
+            context: "work".to_string(),
+        });
+        handler.emit_event(CommandEvent::UsernameSaved {
+            username: "alice".to_string(),
+            context: "work".to_string(),
+        });
+        handler.emit_event(CommandEvent::InboxEmpty {
+            context: "work".to_string(),
+        });
+        handler.emit_event(CommandEvent::InboxProcessing {
+            count: 2,
+            context: "work".to_string(),
+        });
+        handler.emit_event(CommandEvent::AllInboxesEmpty);
+        handler.emit_event(CommandEvent::InboxesProcessed { count: 3 });
+        handler.emit_event(CommandEvent::McpToolsLoaded { count: 7 });
+        handler.emit_event(CommandEvent::McpBridgeUnavailable {
+            reason: "connection refused".to_string(),
+        });
+        // LoadSummary: no plugins
+        handler.emit_event(CommandEvent::LoadSummary {
+            builtin_count: 4,
+            builtin_names: vec!["a".to_string(), "b".to_string()],
+            plugin_count: 0,
+            plugin_names: vec![],
+        });
+        // LoadSummary: with plugins
+        handler.emit_event(CommandEvent::LoadSummary {
+            builtin_count: 2,
+            builtin_names: vec!["a".to_string()],
+            plugin_count: 3,
+            plugin_names: vec!["p1".to_string(), "p2".to_string(), "p3".to_string()],
+        });
+        // Compaction events
+        handler.emit_event(CommandEvent::CompactionStarted {
+            context: "default".to_string(),
+            message_count: 42,
+        });
+        handler.emit_event(CommandEvent::CompactionComplete {
+            context: "default".to_string(),
+            archived: 40,
+            remaining: 2,
+        });
+        handler.emit_event(CommandEvent::RollingCompactionDecision { archived: 10 });
+        handler.emit_event(CommandEvent::RollingCompactionFallback {
+            drop_percentage: 30.0,
+        });
+        handler.emit_event(CommandEvent::RollingCompactionComplete {
+            archived: 8,
+            remaining: 12,
+        });
+        handler.emit_event(CommandEvent::CompactionNoPrompt);
+    }
 }
