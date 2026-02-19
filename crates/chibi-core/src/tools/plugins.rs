@@ -238,7 +238,6 @@ pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
 /// Execute a tool with the given arguments (as JSON)
 ///
 /// Tools receive arguments via stdin (JSON), leaving stdout for results.
-/// Tools also receive CHIBI_VERBOSE=1 env var when verbose mode is enabled.
 pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value) -> io::Result<String> {
     let mut cmd = Command::new(&tool.path);
     cmd.stdin(Stdio::piped())
