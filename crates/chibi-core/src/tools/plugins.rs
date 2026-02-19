@@ -239,10 +239,7 @@ pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
 ///
 /// Tools receive arguments via stdin (JSON), leaving stdout for results.
 /// Tools also receive CHIBI_VERBOSE=1 env var when verbose mode is enabled.
-pub fn execute_tool(
-    tool: &Tool,
-    arguments: &serde_json::Value,
-) -> io::Result<String> {
+pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value) -> io::Result<String> {
     let mut cmd = Command::new(&tool.path);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -406,10 +403,7 @@ mod tests {
 
     /// Execute a tool with retry on ETXTBSY (text file busy).
     /// This can happen when the kernel hasn't finished loading the script.
-    fn execute_tool_with_retry(
-        tool: &Tool,
-        arguments: &serde_json::Value,
-    ) -> io::Result<String> {
+    fn execute_tool_with_retry(tool: &Tool, arguments: &serde_json::Value) -> io::Result<String> {
         for attempt in 0..5 {
             match execute_tool(tool, arguments) {
                 Ok(result) => return Ok(result),

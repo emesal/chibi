@@ -37,10 +37,17 @@ pub enum ResponseEvent<'a> {
     TranscriptEntry(TranscriptEntry),
 
     /// A tool has started execution.
-    ToolStart { name: String, summary: Option<String> },
+    ToolStart {
+        name: String,
+        summary: Option<String>,
+    },
 
     /// A tool has completed execution.
-    ToolResult { name: String, result: String, cached: bool },
+    ToolResult {
+        name: String,
+        result: String,
+        cached: bool,
+    },
 
     /// The response stream has finished.
     Finished,
@@ -55,7 +62,11 @@ pub enum ResponseEvent<'a> {
     HookDebug { hook: String, message: String },
 
     /// Fuel budget status update (verbose-tier in CLI).
-    FuelStatus { remaining: usize, total: usize, event: FuelEvent },
+    FuelStatus {
+        remaining: usize,
+        total: usize,
+        event: FuelEvent,
+    },
 
     /// Fuel budget exhausted — always shown in CLI.
     FuelExhausted { total: usize },
@@ -171,7 +182,8 @@ mod tests {
     #[test]
     fn test_collecting_sink_ignores_fuel_exhausted() {
         let mut sink = CollectingSink::new();
-        sink.handle(ResponseEvent::FuelExhausted { total: 10 }).unwrap();
+        sink.handle(ResponseEvent::FuelExhausted { total: 10 })
+            .unwrap();
         assert_eq!(sink.text, "");
         assert_eq!(sink.reasoning, "");
         assert!(sink.entries.is_empty());

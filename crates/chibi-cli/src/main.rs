@@ -19,7 +19,9 @@ use crate::markdown::{MarkdownConfig, MarkdownStream};
 use crate::output::OutputHandler;
 use crate::session::Session;
 use crate::sink::CliResponseSink;
-use chibi_core::{Chibi, CommandEffect, CommandEvent, LoadOptions, OutputSink, PermissionHandler, StatePaths};
+use chibi_core::{
+    Chibi, CommandEffect, CommandEvent, LoadOptions, OutputSink, PermissionHandler, StatePaths,
+};
 use std::io::{self, ErrorKind, Write};
 use std::path::PathBuf;
 
@@ -332,9 +334,15 @@ async fn execute_from_input(
     }
 
     // CLI flags override cli.toml values
-    if input.verbose_flag { cli_config.verbose = true; }
-    if input.hide_tool_calls_flag { cli_config.hide_tool_calls = true; }
-    if input.show_thinking_flag { cli_config.show_thinking = true; }
+    if input.verbose_flag {
+        cli_config.verbose = true;
+    }
+    if input.hide_tool_calls_flag {
+        cli_config.hide_tool_calls = true;
+    }
+    if input.show_thinking_flag {
+        cli_config.show_thinking = true;
+    }
 
     // Derive presentation flags from CLI config
     let verbose = cli_config.verbose;
@@ -517,7 +525,10 @@ async fn main() -> io::Result<()> {
     let output = OutputHandler::new(input.verbose_flag);
 
     let mut chibi = Chibi::load_with_options(
-        LoadOptions { home: home_override, project_root: project_root_override },
+        LoadOptions {
+            home: home_override,
+            project_root: project_root_override,
+        },
         &output,
     )?;
     chibi.set_permission_handler(select_permission_handler(trust_mode));

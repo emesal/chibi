@@ -52,13 +52,20 @@ impl ResponseSink for JsonResponseSink {
             }
             ResponseEvent::Newline | ResponseEvent::StartResponse => {}
             ResponseEvent::HookDebug { hook, message } => {
-                eprintln!("{}", serde_json::json!({
-                    "type": "hook_debug",
-                    "hook": hook,
-                    "message": message,
-                }));
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "type": "hook_debug",
+                        "hook": hook,
+                        "message": message,
+                    })
+                );
             }
-            ResponseEvent::FuelStatus { remaining, total, event } => {
+            ResponseEvent::FuelStatus {
+                remaining,
+                total,
+                event,
+            } => {
                 use chibi_core::api::sink::FuelEvent;
                 let event_str = match &event {
                     FuelEvent::EnteringTurn => "entering_turn",
@@ -78,29 +85,41 @@ impl ResponseSink for JsonResponseSink {
                 eprintln!("{}", j);
             }
             ResponseEvent::FuelExhausted { total } => {
-                eprintln!("{}", serde_json::json!({
-                    "type": "fuel_exhausted",
-                    "total": total,
-                }));
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "type": "fuel_exhausted",
+                        "total": total,
+                    })
+                );
             }
             ResponseEvent::ContextWarning { tokens_remaining } => {
-                eprintln!("{}", serde_json::json!({
-                    "type": "context_warning",
-                    "tokens_remaining": tokens_remaining,
-                }));
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "type": "context_warning",
+                        "tokens_remaining": tokens_remaining,
+                    })
+                );
             }
             ResponseEvent::ToolDiagnostic { tool, message } => {
-                eprintln!("{}", serde_json::json!({
-                    "type": "tool_diagnostic",
-                    "tool": tool,
-                    "message": message,
-                }));
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "type": "tool_diagnostic",
+                        "tool": tool,
+                        "message": message,
+                    })
+                );
             }
             ResponseEvent::InboxInjected { count } => {
-                eprintln!("{}", serde_json::json!({
-                    "type": "inbox_injected",
-                    "count": count,
-                }));
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "type": "inbox_injected",
+                        "count": count,
+                    })
+                );
             }
         }
         Ok(())

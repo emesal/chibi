@@ -1598,13 +1598,7 @@ async fn process_tool_calls<S: ResponseSink>(
         hook_data["fuel_total"] = json!(fuel_total);
     }
     let hook_results = tools::execute_hook(tools, tools::HookPoint::PostToolBatch, &hook_data)?;
-    apply_hook_overrides(
-        handoff,
-        fuel_remaining,
-        fuel_unlimited,
-        &hook_results,
-        sink,
-    )?;
+    apply_hook_overrides(handoff, fuel_remaining, fuel_unlimited, &hook_results, sink)?;
 
     Ok(())
 }
@@ -1915,8 +1909,7 @@ pub async fn send_prompt<S: ResponseSink>(
             log_request_if_enabled(app, context_name, debug, &request_body);
 
             let response =
-                collect_streaming_response(&resolved_config, &messages, &all_tools, sink)
-                    .await?;
+                collect_streaming_response(&resolved_config, &messages, &all_tools, sink).await?;
 
             // Log response metadata
             if let Some(ref meta) = response.response_meta {
@@ -2010,7 +2003,9 @@ pub async fn send_prompt<S: ResponseSink>(
                         sink.handle(ResponseEvent::FuelStatus {
                             remaining: fuel_remaining,
                             total: fuel_total,
-                            event: crate::api::sink::FuelEvent::AfterContinuation { prompt_preview },
+                            event: crate::api::sink::FuelEvent::AfterContinuation {
+                                prompt_preview,
+                            },
                         })?;
                     }
                     // Prefix the continuation prompt; omit fuel numbers when unlimited

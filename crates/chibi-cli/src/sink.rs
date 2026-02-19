@@ -135,18 +135,27 @@ impl ResponseSink for CliResponseSink<'_> {
                     eprintln!("{}", message);
                 }
             }
-            ResponseEvent::FuelStatus { remaining, total, event } => {
+            ResponseEvent::FuelStatus {
+                remaining,
+                total,
+                event,
+            } => {
                 if self.verbose {
                     use chibi_core::api::sink::FuelEvent;
                     let msg = match event {
-                        FuelEvent::EnteringTurn =>
-                            format!("[fuel: {}/{} entering turn]", remaining, total),
-                        FuelEvent::AfterToolBatch =>
-                            format!("[fuel: {}/{} after tool batch]", remaining, total),
-                        FuelEvent::AfterContinuation { prompt_preview } =>
-                            format!("[continuing (fuel: {}/{}): {}]", remaining, total, prompt_preview),
-                        FuelEvent::EmptyResponse =>
-                            format!("[empty response, fuel: {}/{}]", remaining, total),
+                        FuelEvent::EnteringTurn => {
+                            format!("[fuel: {}/{} entering turn]", remaining, total)
+                        }
+                        FuelEvent::AfterToolBatch => {
+                            format!("[fuel: {}/{} after tool batch]", remaining, total)
+                        }
+                        FuelEvent::AfterContinuation { prompt_preview } => format!(
+                            "[continuing (fuel: {}/{}): {}]",
+                            remaining, total, prompt_preview
+                        ),
+                        FuelEvent::EmptyResponse => {
+                            format!("[empty response, fuel: {}/{}]", remaining, total)
+                        }
                     };
                     eprintln!("{}", msg);
                 }
@@ -156,7 +165,10 @@ impl ResponseSink for CliResponseSink<'_> {
             }
             ResponseEvent::ContextWarning { tokens_remaining } => {
                 if self.verbose {
-                    eprintln!("[Context window warning: {} tokens remaining]", tokens_remaining);
+                    eprintln!(
+                        "[Context window warning: {} tokens remaining]",
+                        tokens_remaining
+                    );
                 }
             }
             ResponseEvent::ToolDiagnostic { message, .. } => {
@@ -239,7 +251,8 @@ mod tests {
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
         // FuelExhausted is always shown regardless of verbose
-        sink.handle(ResponseEvent::FuelExhausted { total: 10 }).unwrap();
+        sink.handle(ResponseEvent::FuelExhausted { total: 10 })
+            .unwrap();
     }
 
     #[test]

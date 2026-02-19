@@ -4,9 +4,9 @@
 //! text results and diagnostics for the terminal.
 //! Implements `OutputSink` directly — all output goes through trait methods.
 
-use chibi_core::output::CommandEvent;
 use chibi_core::OutputSink;
 use chibi_core::context::TranscriptEntry;
+use chibi_core::output::CommandEvent;
 use std::io::{self, IsTerminal, Write};
 
 /// CLI output handler — text to stdout, diagnostics to stderr.
@@ -32,35 +32,72 @@ impl OutputSink for OutputHandler {
 
     fn emit_event(&self, event: CommandEvent) {
         let (text, verbose_only) = match &event {
-            CommandEvent::AutoDestroyed { count } =>
-                (format!("[Auto-destroyed {} expired context(s)]", count), true),
-            CommandEvent::CacheCleanup { removed, max_age_days } =>
-                (format!("[Auto-cleanup: removed {} old cache entries (older than {} days)]",
-                    removed, max_age_days + 1), true),
-            CommandEvent::SystemPromptSet { context } =>
-                (format!("[System prompt set for context '{}']", context), true),
-            CommandEvent::UsernameSaved { username, context } =>
-                (format!("[Username '{}' saved to context '{}']", username, context), true),
-            CommandEvent::InboxEmpty { context } =>
-                (format!("[No messages in inbox for '{}']", context), true),
-            CommandEvent::InboxProcessing { count, context } =>
-                (format!("[Processing {} message(s) from inbox for '{}']", count, context), true),
-            CommandEvent::AllInboxesEmpty =>
-                ("[No messages in any inbox.]".to_string(), true),
-            CommandEvent::InboxesProcessed { count } =>
-                (format!("[Processed inboxes for {} context(s).]", count), true),
-            CommandEvent::ContextLoaded { tool_count } =>
-                (format!("[Loaded {} tool(s)]", tool_count), true),
-            CommandEvent::McpToolsLoaded { count } =>
-                (format!("[MCP: {} tools loaded]", count), true),
-            CommandEvent::McpBridgeUnavailable { reason } =>
-                (format!("[MCP: bridge unavailable: {}]", reason), true),
-            CommandEvent::LoadSummary { builtin_count, builtin_names, plugin_count, plugin_names } => {
-                let mut lines = format!("[Built-in ({}): {}]", builtin_count, builtin_names.join(", "));
+            CommandEvent::AutoDestroyed { count } => (
+                format!("[Auto-destroyed {} expired context(s)]", count),
+                true,
+            ),
+            CommandEvent::CacheCleanup {
+                removed,
+                max_age_days,
+            } => (
+                format!(
+                    "[Auto-cleanup: removed {} old cache entries (older than {} days)]",
+                    removed,
+                    max_age_days + 1
+                ),
+                true,
+            ),
+            CommandEvent::SystemPromptSet { context } => (
+                format!("[System prompt set for context '{}']", context),
+                true,
+            ),
+            CommandEvent::UsernameSaved { username, context } => (
+                format!("[Username '{}' saved to context '{}']", username, context),
+                true,
+            ),
+            CommandEvent::InboxEmpty { context } => {
+                (format!("[No messages in inbox for '{}']", context), true)
+            }
+            CommandEvent::InboxProcessing { count, context } => (
+                format!(
+                    "[Processing {} message(s) from inbox for '{}']",
+                    count, context
+                ),
+                true,
+            ),
+            CommandEvent::AllInboxesEmpty => ("[No messages in any inbox.]".to_string(), true),
+            CommandEvent::InboxesProcessed { count } => (
+                format!("[Processed inboxes for {} context(s).]", count),
+                true,
+            ),
+            CommandEvent::ContextLoaded { tool_count } => {
+                (format!("[Loaded {} tool(s)]", tool_count), true)
+            }
+            CommandEvent::McpToolsLoaded { count } => {
+                (format!("[MCP: {} tools loaded]", count), true)
+            }
+            CommandEvent::McpBridgeUnavailable { reason } => {
+                (format!("[MCP: bridge unavailable: {}]", reason), true)
+            }
+            CommandEvent::LoadSummary {
+                builtin_count,
+                builtin_names,
+                plugin_count,
+                plugin_names,
+            } => {
+                let mut lines = format!(
+                    "[Built-in ({}): {}]",
+                    builtin_count,
+                    builtin_names.join(", ")
+                );
                 if *plugin_count == 0 {
                     lines.push_str("\n[No plugins loaded]");
                 } else {
-                    lines.push_str(&format!("\n[Plugins ({}): {}]", plugin_count, plugin_names.join(", ")));
+                    lines.push_str(&format!(
+                        "\n[Plugins ({}): {}]",
+                        plugin_count,
+                        plugin_names.join(", ")
+                    ));
                 }
                 (lines, true)
             }
@@ -240,5 +277,4 @@ mod tests {
         // Non-verbose: compaction entries are silently skipped
         handler.emit_entry(&entry).unwrap();
     }
-
 }

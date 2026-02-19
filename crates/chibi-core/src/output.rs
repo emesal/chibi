@@ -31,7 +31,12 @@ pub enum CommandEvent {
     /// MCP bridge unavailable at load time (verbose-tier).
     McpBridgeUnavailable { reason: String },
     /// Summary of all tools available after load (verbose-tier).
-    LoadSummary { builtin_count: usize, builtin_names: Vec<String>, plugin_count: usize, plugin_names: Vec<String> },
+    LoadSummary {
+        builtin_count: usize,
+        builtin_names: Vec<String>,
+        plugin_count: usize,
+        plugin_names: Vec<String>,
+    },
 }
 
 /// Abstraction over how command results and diagnostics are presented.

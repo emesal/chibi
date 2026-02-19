@@ -64,7 +64,9 @@ pub async fn execute_command<S: ResponseSink>(
     let destroyed = chibi.app.auto_destroy_expired_contexts()?;
     if !destroyed.is_empty() {
         chibi.save()?;
-        output.emit_event(CommandEvent::AutoDestroyed { count: destroyed.len() });
+        output.emit_event(CommandEvent::AutoDestroyed {
+            count: destroyed.len(),
+        });
     }
 
     // Ensure context dir + ContextEntry exist
@@ -210,8 +212,7 @@ async fn dispatch_command<S: ResponseSink>(
                 crate::api::compact_context_by_name(&chibi.app, ctx_name).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
-                crate::api::compact_context_with_llm_manual(&chibi.app, context, config)
-                    .await?;
+                crate::api::compact_context_with_llm_manual(&chibi.app, context, config).await?;
             }
             Ok(CommandEffect::None)
         }
@@ -253,7 +254,9 @@ async fn dispatch_command<S: ResponseSink>(
                 prompt.clone()
             };
             chibi.app.set_system_prompt_for(ctx_name, &content)?;
-            output.emit_event(CommandEvent::SystemPromptSet { context: ctx_name.to_string() });
+            output.emit_event(CommandEvent::SystemPromptSet {
+                context: ctx_name.to_string(),
+            });
             Ok(CommandEffect::None)
         }
         Command::RunPlugin { name, args } => {
@@ -346,7 +349,9 @@ async fn dispatch_command<S: ResponseSink>(
         Command::CheckInbox { context: ctx } => {
             let messages = chibi.app.peek_inbox(ctx)?;
             if messages.is_empty() {
-                output.emit_event(CommandEvent::InboxEmpty { context: ctx.to_string() });
+                output.emit_event(CommandEvent::InboxEmpty {
+                    context: ctx.to_string(),
+                });
             } else {
                 output.emit_event(CommandEvent::InboxProcessing {
                     count: messages.len(),
@@ -398,7 +403,9 @@ async fn dispatch_command<S: ResponseSink>(
             if processed_count == 0 {
                 output.emit_event(CommandEvent::AllInboxesEmpty);
             } else {
-                output.emit_event(CommandEvent::InboxesProcessed { count: processed_count });
+                output.emit_event(CommandEvent::InboxesProcessed {
+                    count: processed_count,
+                });
             }
             Ok(CommandEffect::None)
         }

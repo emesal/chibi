@@ -353,10 +353,7 @@ pub async fn compact_context_with_llm_manual(
 }
 
 /// Compact a specific context by name (for -Z flag)
-pub async fn compact_context_by_name(
-    app: &AppState,
-    context_name: &str,
-) -> io::Result<()> {
+pub async fn compact_context_by_name(app: &AppState, context_name: &str) -> io::Result<()> {
     // Load the context
     let context = app.load_context(context_name)?;
 

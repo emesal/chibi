@@ -113,8 +113,12 @@ impl Chibi {
             fn emit_result(&self, _: &str) {}
             fn emit_event(&self, _: CommandEvent) {}
             fn newline(&self) {}
-            fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> { Ok(()) }
-            fn confirm(&self, _: &str) -> bool { false }
+            fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> {
+                Ok(())
+            }
+            fn confirm(&self, _: &str) -> bool {
+                false
+            }
         }
         Self::load_with_options(LoadOptions::default(), &NoopSink)
     }
@@ -131,11 +135,18 @@ impl Chibi {
             fn emit_result(&self, _: &str) {}
             fn emit_event(&self, _: CommandEvent) {}
             fn newline(&self) {}
-            fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> { Ok(()) }
-            fn confirm(&self, _: &str) -> bool { false }
+            fn emit_entry(&self, _: &crate::context::TranscriptEntry) -> io::Result<()> {
+                Ok(())
+            }
+            fn confirm(&self, _: &str) -> bool {
+                false
+            }
         }
         Self::load_with_options(
-            LoadOptions { home: Some(home.to_path_buf()), ..Default::default() },
+            LoadOptions {
+                home: Some(home.to_path_buf()),
+                ..Default::default()
+            },
             &NoopSink,
         )
     }
@@ -178,12 +189,16 @@ impl Chibi {
         match tools::mcp::load_mcp_tools(&app.chibi_dir) {
             Ok(mcp_tools) => {
                 if !mcp_tools.is_empty() {
-                    output.emit_event(CommandEvent::McpToolsLoaded { count: mcp_tools.len() });
+                    output.emit_event(CommandEvent::McpToolsLoaded {
+                        count: mcp_tools.len(),
+                    });
                 }
                 tools.extend(mcp_tools);
             }
             Err(e) => {
-                output.emit_event(CommandEvent::McpBridgeUnavailable { reason: e.to_string() });
+                output.emit_event(CommandEvent::McpBridgeUnavailable {
+                    reason: e.to_string(),
+                });
             }
         }
 

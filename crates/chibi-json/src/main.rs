@@ -53,7 +53,10 @@ async fn run() -> io::Result<()> {
     let output = output::JsonOutputSink;
 
     let mut chibi = Chibi::load_with_options(
-        LoadOptions { home: json_input.home.clone(), project_root: json_input.project_root.clone() },
+        LoadOptions {
+            home: json_input.home.clone(),
+            project_root: json_input.project_root.clone(),
+        },
         &output,
     )?;
 
@@ -62,7 +65,9 @@ async fn run() -> io::Result<()> {
 
     let context = &json_input.context;
 
-    output.emit_event(CommandEvent::ContextLoaded { tool_count: chibi.tool_count() });
+    output.emit_event(CommandEvent::ContextLoaded {
+        tool_count: chibi.tool_count(),
+    });
 
     // Intercept binary-specific commands before delegating to core
     match &json_input.command {
