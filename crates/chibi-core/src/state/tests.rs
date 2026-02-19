@@ -1564,3 +1564,151 @@ async fn test_cleanup_old_tool_caches_removes_expired() {
     let removed = app.cleanup_all_tool_caches(0).await.unwrap();
     assert_eq!(removed, 0, "fresh entry should not be cleaned up");
 }
+
+// === is_cache_entry_expired pure logic tests ===
+
+#[test]
+fn test_is_cache_entry_expired_fresh_entry() {
+    // Entry created now with max_age_days=0 → cutoff is 1 day ago → not expired.
+    assert!(!super::is_cache_entry_expired(chrono::Utc::now(), 0));
+}
+
+#[test]
+fn test_is_cache_entry_expired_within_range() {
+    // Entry created 3 days ago with max_age_days=7 → cutoff is 8 days ago → not expired.
+    let created = chrono::Utc::now() - chrono::Duration::days(3);
+    assert!(!super::is_cache_entry_expired(created, 7));
+}
+
+#[test]
+fn test_is_cache_entry_expired_beyond_range() {
+    // Entry created 10 days ago with max_age_days=7 → cutoff is 8 days ago → expired.
+    let created = chrono::Utc::now() - chrono::Duration::days(10);
+    assert!(super::is_cache_entry_expired(created, 7));
+}
+
+#[test]
+fn test_is_cache_entry_expired_boundary() {
+    // Entry created 2 days ago with max_age_days=0 → cutoff is 1 day ago → expired.
+    let created = chrono::Utc::now() - chrono::Duration::days(2);
+    assert!(super::is_cache_entry_expired(created, 0));
+}
+
+// === cache lifecycle integration tests ===
+
+#[tokio::test]
+async fn test_cache_write_then_read_hit() {
+    let (app, _temp) = create_test_app();
+    let path = crate::vfs::VfsPath::new("/sys/tool_cache/ctx/entry1").unwrap();
+
+    app.vfs
+        .write(crate::vfs::SYSTEM_CALLER, &path, b"cached output")
+        .await
+        .unwrap();
+
+    let data = app
+        .vfs
+        .read(crate::vfs::SYSTEM_CALLER, &path)
+        .await
+        .unwrap();
+    assert_eq!(data, b"cached output");
+}
+
+#[tokio::test]
+async fn test_cache_read_miss() {
+    let (app, _temp) = create_test_app();
+    let path = crate::vfs::VfsPath::new("/sys/tool_cache/ctx/nonexistent").unwrap();
+
+    let err = app
+        .vfs
+        .read(crate::vfs::SYSTEM_CALLER, &path)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+}
+
+#[tokio::test]
+async fn test_cache_per_context_isolation() {
+    let (app, _temp) = create_test_app();
+
+    let path_a = crate::vfs::VfsPath::new("/sys/tool_cache/ctx-a/entry1").unwrap();
+    app.vfs
+        .write(crate::vfs::SYSTEM_CALLER, &path_a, b"data-a")
+        .await
+        .unwrap();
+
+    let dir_b = crate::vfs::VfsPath::new("/sys/tool_cache/ctx-b").unwrap();
+    let result = app.vfs.list(crate::vfs::SYSTEM_CALLER, &dir_b).await;
+    match result {
+        Ok(entries) => assert!(entries.is_empty(), "ctx-b should have no entries"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // also fine
+        Err(e) => panic!("unexpected error: {e}"),
+    }
+}
+
+#[tokio::test]
+async fn test_clear_tool_cache_removes_all_entries() {
+    let (app, _temp) = create_test_app();
+    let ctx = "clear-ctx";
+
+    for name in ["e1", "e2", "e3"] {
+        let path =
+            crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
+        app.vfs
+            .write(crate::vfs::SYSTEM_CALLER, &path, b"data")
+            .await
+            .unwrap();
+    }
+
+    app.clear_tool_cache(ctx).await.unwrap();
+
+    for name in ["e1", "e2", "e3"] {
+        let path =
+            crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
+        let exists = app
+            .vfs
+            .exists(crate::vfs::SYSTEM_CALLER, &path)
+            .await
+            .unwrap();
+        assert!(!exists, "entry {name} should be gone after clear");
+    }
+}
+
+#[tokio::test]
+async fn test_cleanup_tool_cache_fresh_entries_survive() {
+    let (app, _temp) = create_test_app();
+    let ctx = "cleanup-fresh";
+
+    let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
+    app.vfs
+        .write(crate::vfs::SYSTEM_CALLER, &path, b"fresh")
+        .await
+        .unwrap();
+
+    let removed = app.cleanup_tool_cache(ctx, 0).await.unwrap();
+    assert_eq!(removed, 0, "fresh entry should not be removed");
+
+    let exists = app
+        .vfs
+        .exists(crate::vfs::SYSTEM_CALLER, &path)
+        .await
+        .unwrap();
+    assert!(exists, "fresh entry should still exist");
+}
+
+#[tokio::test]
+async fn test_cleanup_all_tool_caches_fresh_entries_survive() {
+    let (app, _temp) = create_test_app();
+
+    for ctx in ["ctx-x", "ctx-y"] {
+        let path =
+            crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
+        app.vfs
+            .write(crate::vfs::SYSTEM_CALLER, &path, b"fresh")
+            .await
+            .unwrap();
+    }
+
+    let removed = app.cleanup_all_tool_caches(0).await.unwrap();
+    assert_eq!(removed, 0, "no fresh entries should be removed");
+}

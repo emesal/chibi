@@ -341,7 +341,6 @@ impl AppState {
         max_age_days: u64,
     ) -> io::Result<usize> {
         use crate::vfs::VfsEntryKind;
-        use chrono::Utc;
 
         let dir_str = format!("/sys/tool_cache/{}", context_name);
         let dir = match crate::vfs::VfsPath::new(&dir_str) {
@@ -354,10 +353,6 @@ impl AppState {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
             Err(e) => return Err(e),
         };
-
-        // +1 so max_age_days=0 means <1 day (not "delete immediately")
-        let max_age = chrono::Duration::days((max_age_days + 1) as i64);
-        let cutoff = Utc::now() - max_age;
 
         let mut removed = 0;
         for entry in entries {
@@ -378,7 +373,7 @@ impl AppState {
                 Err(_) => continue,
             };
             if let Some(created) = meta.created
-                && created < cutoff
+                && is_cache_entry_expired(created, max_age_days)
             {
                 let _ = self.vfs.delete(crate::vfs::SYSTEM_CALLER, &file_path).await;
                 removed += 1;
@@ -1092,6 +1087,19 @@ impl AppState {
 
         Ok(())
     }
+}
+
+/// Check whether a cache entry's creation timestamp is older than `max_age_days`.
+///
+/// The `+1` offset means `max_age_days=0` tolerates entries less than 1 day old,
+/// preventing accidental deletion of entries created during the current session.
+pub(crate) fn is_cache_entry_expired(
+    created: chrono::DateTime<chrono::Utc>,
+    max_age_days: u64,
+) -> bool {
+    let max_age = chrono::Duration::days((max_age_days + 1) as i64);
+    let cutoff = chrono::Utc::now() - max_age;
+    created < cutoff
 }
 
 #[cfg(test)]
