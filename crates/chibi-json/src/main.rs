@@ -51,30 +51,18 @@ async fn run() -> io::Result<()> {
 
     let output = output::JsonOutputSink;
 
-    // Pre-resolution verbose: check typed config and string-keyed overrides
-    let load_verbose = json_input
-        .overrides
-        .as_ref()
-        .and_then(|o| o.get("verbose"))
-        .map(|v| v == "true")
-        .or_else(|| json_input.config.as_ref().and_then(|c| c.verbose))
-        .unwrap_or(false);
-
-    let mut chibi = Chibi::load_with_options(LoadOptions {
-        verbose: load_verbose,
-        home: json_input.home.clone(),
-        project_root: json_input.project_root.clone(),
-    })?;
+    let mut chibi = Chibi::load_with_options(
+        LoadOptions {
+            home: json_input.home.clone(),
+            project_root: json_input.project_root.clone(),
+        },
+        &output,
+    )?;
 
     // Trust mode -- programmatic callers have already decided
     chibi.set_permission_handler(Box::new(|_| Ok(true)));
 
     let context = &json_input.context;
-
-    output.diagnostic(
-        &format!("[Loaded {} tool(s)]", chibi.tool_count()),
-        load_verbose,
-    );
 
     // Intercept binary-specific commands before delegating to core
     match &json_input.command {

@@ -16,7 +16,7 @@
 //! async fn main() -> std::io::Result<()> {
 //!     let chibi = Chibi::load()?;
 //!     let config = chibi.resolve_config("default", None)?;
-//!     let options = PromptOptions::new(false, false, &[], false);
+//!     let options = PromptOptions::new(false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
 //!     chibi.send_prompt_streaming("default", "Hello!", &config, &options, &mut sink).await?;
@@ -62,7 +62,7 @@ pub use config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, T
 pub use context::{Context, ContextEntry, TranscriptEntry};
 pub use execution::{CommandEffect, execute_command};
 pub use input::{Command, ExecutionFlags, Inspectable};
-pub use output::OutputSink;
+pub use output::{CommandEvent, OutputSink};
 pub use partition::StorageConfig;
 pub use state::{AppState, StatePaths};
 pub use tools::{HookPoint, SpawnOptions, Tool, spawn_agent};

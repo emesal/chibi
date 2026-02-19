@@ -6,6 +6,7 @@
 
 use chibi_core::OutputSink;
 use chibi_core::context::TranscriptEntry;
+use chibi_core::output::CommandEvent;
 use std::io::{self, IsTerminal, Write};
 
 /// CLI output handler — text to stdout, diagnostics to stderr.
@@ -29,14 +30,99 @@ impl OutputSink for OutputHandler {
         println!("{}", content);
     }
 
-    fn diagnostic(&self, message: &str, verbose: bool) {
-        if verbose {
-            eprintln!("{}", message);
+    fn emit_event(&self, event: CommandEvent) {
+        if !self.verbose {
+            return;
         }
-    }
-
-    fn diagnostic_always(&self, message: &str) {
-        eprintln!("{}", message);
+        let text = match &event {
+            CommandEvent::AutoDestroyed { count } => {
+                format!("[Auto-destroyed {} expired context(s)]", count)
+            }
+            CommandEvent::CacheCleanup {
+                removed,
+                max_age_days,
+            } => format!(
+                "[Auto-cleanup: removed {} old cache entries (older than {} days)]",
+                removed,
+                max_age_days + 1
+            ),
+            CommandEvent::SystemPromptSet { context } => {
+                format!("[System prompt set for context '{}']", context)
+            }
+            CommandEvent::UsernameSaved { username, context } => {
+                format!("[Username '{}' saved to context '{}']", username, context)
+            }
+            CommandEvent::InboxEmpty { context } => {
+                format!("[No messages in inbox for '{}']", context)
+            }
+            CommandEvent::InboxProcessing { count, context } => format!(
+                "[Processing {} message(s) from inbox for '{}']",
+                count, context
+            ),
+            CommandEvent::AllInboxesEmpty => "[No messages in any inbox.]".to_string(),
+            CommandEvent::InboxesProcessed { count } => {
+                format!("[Processed inboxes for {} context(s).]", count)
+            }
+            CommandEvent::McpToolsLoaded { count } => format!("[MCP: {} tools loaded]", count),
+            CommandEvent::McpBridgeUnavailable { reason } => {
+                format!("[MCP: bridge unavailable: {}]", reason)
+            }
+            CommandEvent::CompactionStarted {
+                context,
+                message_count,
+            } => format!("[Compacting '{}': {} messages]", context, message_count),
+            CommandEvent::CompactionComplete {
+                context,
+                archived,
+                remaining,
+            } => format!(
+                "[Compaction complete '{}': {} archived, {} remaining]",
+                context, archived, remaining
+            ),
+            CommandEvent::RollingCompactionDecision { archived } => {
+                format!(
+                    "[Rolling compaction: LLM selected {} messages to archive]",
+                    archived
+                )
+            }
+            CommandEvent::RollingCompactionFallback { drop_percentage } => format!(
+                "[Rolling compaction: LLM decision failed, falling back to dropping oldest {}%]",
+                drop_percentage
+            ),
+            CommandEvent::RollingCompactionComplete {
+                archived,
+                remaining,
+            } => format!(
+                "[Rolling compaction complete: {} archived, {} remaining]",
+                archived, remaining
+            ),
+            CommandEvent::CompactionNoPrompt => {
+                "[No compaction prompt found — using default]".to_string()
+            }
+            CommandEvent::LoadSummary {
+                builtin_count,
+                builtin_names,
+                plugin_count,
+                plugin_names,
+            } => {
+                let mut lines = format!(
+                    "[Built-in ({}): {}]",
+                    builtin_count,
+                    builtin_names.join(", ")
+                );
+                if *plugin_count == 0 {
+                    lines.push_str("\n[No plugins loaded]");
+                } else {
+                    lines.push_str(&format!(
+                        "\n[Plugins ({}): {}]",
+                        plugin_count,
+                        plugin_names.join(", ")
+                    ));
+                }
+                lines
+            }
+        };
+        eprintln!("{}", text);
     }
 
     fn newline(&self) {
@@ -210,17 +296,82 @@ mod tests {
         handler.emit_entry(&entry).unwrap();
     }
 
+    // ── emit_event tests ─────────────────────────────────────────────────────
+
     #[test]
-    fn test_diagnostic_verbose_false() {
+    fn test_emit_event_verbose_false_suppresses_output() {
+        // All CommandEvent variants are verbose-tier; non-verbose handler must suppress.
+        // We can't capture stderr in unit tests, but we verify no panic occurs
+        // and the verbose guard is respected.
         let handler = OutputHandler::new(false);
-        // Should not panic (no output when verbose is false)
-        handler.diagnostic("Test message", false);
+        handler.emit_event(CommandEvent::AutoDestroyed { count: 3 });
+        handler.emit_event(CommandEvent::AllInboxesEmpty);
+        handler.emit_event(CommandEvent::McpBridgeUnavailable {
+            reason: "timeout".to_string(),
+        });
     }
 
     #[test]
-    fn test_diagnostic_verbose_true() {
-        let handler = OutputHandler::new(false);
-        // Should not panic
-        handler.diagnostic("Test message", true);
+    fn test_emit_event_verbose_true_does_not_panic() {
+        // Exercise every variant to catch format string regressions.
+        let handler = OutputHandler::new(true);
+        handler.emit_event(CommandEvent::AutoDestroyed { count: 0 });
+        handler.emit_event(CommandEvent::CacheCleanup {
+            removed: 5,
+            max_age_days: 6,
+        });
+        handler.emit_event(CommandEvent::SystemPromptSet {
+            context: "work".to_string(),
+        });
+        handler.emit_event(CommandEvent::UsernameSaved {
+            username: "alice".to_string(),
+            context: "work".to_string(),
+        });
+        handler.emit_event(CommandEvent::InboxEmpty {
+            context: "work".to_string(),
+        });
+        handler.emit_event(CommandEvent::InboxProcessing {
+            count: 2,
+            context: "work".to_string(),
+        });
+        handler.emit_event(CommandEvent::AllInboxesEmpty);
+        handler.emit_event(CommandEvent::InboxesProcessed { count: 3 });
+        handler.emit_event(CommandEvent::McpToolsLoaded { count: 7 });
+        handler.emit_event(CommandEvent::McpBridgeUnavailable {
+            reason: "connection refused".to_string(),
+        });
+        // LoadSummary: no plugins
+        handler.emit_event(CommandEvent::LoadSummary {
+            builtin_count: 4,
+            builtin_names: vec!["a".to_string(), "b".to_string()],
+            plugin_count: 0,
+            plugin_names: vec![],
+        });
+        // LoadSummary: with plugins
+        handler.emit_event(CommandEvent::LoadSummary {
+            builtin_count: 2,
+            builtin_names: vec!["a".to_string()],
+            plugin_count: 3,
+            plugin_names: vec!["p1".to_string(), "p2".to_string(), "p3".to_string()],
+        });
+        // Compaction events
+        handler.emit_event(CommandEvent::CompactionStarted {
+            context: "default".to_string(),
+            message_count: 42,
+        });
+        handler.emit_event(CommandEvent::CompactionComplete {
+            context: "default".to_string(),
+            archived: 40,
+            remaining: 2,
+        });
+        handler.emit_event(CommandEvent::RollingCompactionDecision { archived: 10 });
+        handler.emit_event(CommandEvent::RollingCompactionFallback {
+            drop_percentage: 30.0,
+        });
+        handler.emit_event(CommandEvent::RollingCompactionComplete {
+            archived: 8,
+            remaining: 12,
+        });
+        handler.emit_event(CommandEvent::CompactionNoPrompt);
     }
 }

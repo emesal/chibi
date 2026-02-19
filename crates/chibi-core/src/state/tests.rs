@@ -15,10 +15,7 @@ fn create_test_app() -> (AppState, TempDir) {
         model: Some("test-model".to_string()),
         context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
-        verbose: false,
-        hide_tool_calls: false,
         no_tool_calls: false,
-        show_thinking: false,
         auto_compact: false,
         auto_compact_threshold: 80.0,
         reflection_enabled: true,
@@ -543,10 +540,7 @@ fn test_resolve_config_model_level_api_params() {
         model: Some("test-model".to_string()),
         context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
-        verbose: false,
-        hide_tool_calls: false,
         no_tool_calls: false,
-        show_thinking: false,
         auto_compact: false,
         auto_compact_threshold: 80.0,
         reflection_enabled: true,
@@ -606,10 +600,7 @@ fn test_resolve_config_hierarchy_context_over_model() {
         model: Some("test-model".to_string()),
         context_window_limit: Some(8000),
         warn_threshold_percent: 75.0,
-        verbose: false,
-        hide_tool_calls: false,
         no_tool_calls: false,
-        show_thinking: false,
         auto_compact: false,
         auto_compact_threshold: 80.0,
         reflection_enabled: true,
@@ -679,10 +670,7 @@ fn test_resolve_config_all_local_overrides() {
         model: Some("local-model".to_string()),
         api_key: Some("local-key".to_string()),
         username: Some("localuser".to_string()),
-        verbose: None,
-        hide_tool_calls: None,
         no_tool_calls: None,
-        show_thinking: None,
         auto_compact: Some(true),
         auto_compact_threshold: Some(90.0),
         fuel: Some(50),
@@ -1135,7 +1123,7 @@ fn test_auto_destroy_expired_contexts_by_timestamp() {
     app.state.contexts.push(entry);
 
     // Run auto-destroy
-    let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
+    let destroyed = app.auto_destroy_expired_contexts().unwrap();
     assert_eq!(destroyed, vec!["to-destroy".to_string()]);
     assert!(!app.context_dir("to-destroy").exists());
 }
@@ -1155,7 +1143,7 @@ fn test_auto_destroy_expired_contexts_by_inactivity() {
     app.state.contexts.push(entry);
 
     // Run auto-destroy
-    let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
+    let destroyed = app.auto_destroy_expired_contexts().unwrap();
     assert_eq!(destroyed, vec!["to-destroy".to_string()]);
     assert!(!app.context_dir("to-destroy").exists());
 }
@@ -1183,7 +1171,7 @@ fn test_auto_destroy_respects_disabled_settings() {
     app.state.contexts.push(entry);
 
     // Run auto-destroy - should NOT destroy since both are disabled
-    let destroyed = app.auto_destroy_expired_contexts(false).unwrap();
+    let destroyed = app.auto_destroy_expired_contexts().unwrap();
     assert!(destroyed.is_empty());
     assert!(app.context_dir("keep-context").exists());
 }

@@ -506,10 +506,7 @@ pub struct ConfigDefaults;
 
 impl ConfigDefaults {
     // Boolean defaults
-    pub const VERBOSE: bool = false;
-    pub const HIDE_TOOL_CALLS: bool = false;
     pub const NO_TOOL_CALLS: bool = false;
-    pub const SHOW_THINKING: bool = true;
     pub const AUTO_COMPACT: bool = false;
     pub const REFLECTION_ENABLED: bool = true;
     pub const AUTO_CLEANUP_CACHE: bool = true;
@@ -536,17 +533,8 @@ impl ConfigDefaults {
 }
 
 // Thin wrappers for serde's #[serde(default = "...")] requirement
-fn default_verbose() -> bool {
-    ConfigDefaults::VERBOSE
-}
-fn default_hide_tool_calls() -> bool {
-    ConfigDefaults::HIDE_TOOL_CALLS
-}
 fn default_no_tool_calls() -> bool {
     ConfigDefaults::NO_TOOL_CALLS
-}
-fn default_show_thinking() -> bool {
-    ConfigDefaults::SHOW_THINKING
 }
 fn default_auto_compact() -> bool {
     ConfigDefaults::AUTO_COMPACT
@@ -612,18 +600,9 @@ pub struct Config {
     pub context_window_limit: Option<usize>,
     #[serde(default = "default_warn_threshold_percent")]
     pub warn_threshold_percent: f32,
-    /// Enable verbose output (equivalent to -v flag)
-    #[serde(default = "default_verbose")]
-    pub verbose: bool,
-    /// Hide tool call display by default (verbose overrides)
-    #[serde(default = "default_hide_tool_calls")]
-    pub hide_tool_calls: bool,
     /// Omit tools from API requests entirely (pure text mode)
     #[serde(default = "default_no_tool_calls")]
     pub no_tool_calls: bool,
-    /// Show thinking/reasoning content (default: false, verbose overrides)
-    #[serde(default = "default_show_thinking")]
-    pub show_thinking: bool,
     #[serde(default = "default_auto_compact")]
     pub auto_compact: bool,
     #[serde(default = "default_auto_compact_threshold")]
@@ -692,14 +671,8 @@ pub struct LocalConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub username: Option<String>,
-    /// Per-context verbose override
-    pub verbose: Option<bool>,
-    /// Per-context hide tool calls override
-    pub hide_tool_calls: Option<bool>,
     /// Per-context no tool calls override
     pub no_tool_calls: Option<bool>,
-    /// Per-context show thinking override
-    pub show_thinking: Option<bool>,
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
     /// Per-context fuel budget override. `0` means unlimited.
@@ -764,10 +737,7 @@ impl LocalConfig {
             username,
             fallback_tool,
             file_tools_allowed_paths,
-            verbose,
-            hide_tool_calls,
             no_tool_calls,
-            show_thinking,
             auto_compact,
             auto_compact_threshold,
             fuel,
@@ -816,14 +786,8 @@ pub struct ResolvedConfig {
     pub model: String,
     pub context_window_limit: usize,
     pub warn_threshold_percent: f32,
-    /// Verbose output (from config, may be overridden by CLI flag)
-    pub verbose: bool,
-    /// Hide tool call display (from config, may be overridden by CLI flag)
-    pub hide_tool_calls: bool,
     /// Omit tools from API requests (pure text mode, from config/flag)
     pub no_tool_calls: bool,
-    /// Show thinking/reasoning content (default: false, verbose overrides)
-    pub show_thinking: bool,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
     /// Total fuel budget for the agentic loop. `0` means unlimited (no tracking).
@@ -869,7 +833,7 @@ impl ResolvedConfig {
     pub fn get_field(&self, path: &str) -> Option<String> {
         // Macro handles standard fields with uniform display logic
         config_get_field!(self, path,
-            display: verbose, hide_tool_calls, no_tool_calls, show_thinking, auto_compact,
+            display: no_tool_calls, auto_compact,
                      reflection_enabled, auto_cleanup_cache,
                      context_window_limit, reflection_character_limit,
                      fuel, fuel_empty_response_cost,
@@ -952,10 +916,7 @@ impl ResolvedConfig {
         &[
             // Top-level fields
             "api_key",
-            "verbose",
-            "hide_tool_calls",
             "no_tool_calls",
-            "show_thinking",
             "model",
             "username",
             "context_window_limit",
@@ -1006,7 +967,7 @@ impl ResolvedConfig {
     pub fn set_field(&mut self, path: &str, value: &str) -> Result<(), String> {
         // Macro handles standard top-level fields
         config_set_field!(self, path, value,
-            bool: verbose, hide_tool_calls, no_tool_calls, show_thinking, auto_compact,
+            bool: no_tool_calls, auto_compact,
                   reflection_enabled, auto_cleanup_cache;
             usize: context_window_limit, reflection_character_limit,
                    fuel, fuel_empty_response_cost,
@@ -1233,10 +1194,7 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,
-            verbose: false,
-            hide_tool_calls: false,
             no_tool_calls: false,
-            show_thinking: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
             fuel: 30,
@@ -1364,10 +1322,7 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,
-            verbose: false,
-            hide_tool_calls: false,
             no_tool_calls: false,
-            show_thinking: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
             fuel: 30,
@@ -1482,12 +1437,12 @@ mod tests {
         let pairs = vec![
             ("fuel".to_string(), "50".to_string()),
             ("model".to_string(), "gpt-4".to_string()),
-            ("verbose".to_string(), "true".to_string()),
+            ("no_tool_calls".to_string(), "true".to_string()),
         ];
         config.apply_overrides_from_pairs(&pairs).unwrap();
         assert_eq!(config.fuel, 50);
         assert_eq!(config.model, "gpt-4");
-        assert!(config.verbose);
+        assert!(config.no_tool_calls);
     }
 
     #[test]
@@ -1495,7 +1450,7 @@ mod tests {
         let mut config = test_resolved_config();
         let pairs = vec![
             ("fuel".to_string(), "50".to_string()),
-            ("verbose".to_string(), "notabool".to_string()),
+            ("no_tool_calls".to_string(), "notabool".to_string()),
             ("model".to_string(), "should-not-reach".to_string()),
         ];
         let result = config.apply_overrides_from_pairs(&pairs);

@@ -93,16 +93,6 @@ impl ResponseSink for CliResponseSink<'_> {
                     md.write_chunk(chunk)?;
                 }
             }
-            ResponseEvent::Diagnostic {
-                message,
-                verbose_only,
-            } => {
-                if verbose_only {
-                    self.output.diagnostic(&message, self.verbose);
-                } else {
-                    self.output.diagnostic_always(&message);
-                }
-            }
             ResponseEvent::TranscriptEntry(_entry) => {
                 // CLI displays content via streaming events (TextChunk, ToolStart, ToolResult).
                 // TranscriptEntry is for structured consumers (JSON mode, show_log).
@@ -119,16 +109,17 @@ impl ResponseSink for CliResponseSink<'_> {
                 self.output.newline();
             }
             ResponseEvent::ToolStart { name, summary } => {
-                let msg = match summary {
-                    Some(s) => format!("\n[Tool: {}] {}", name, s),
-                    None => format!("\n[Tool: {}]", name),
-                };
-                self.output.diagnostic(&msg, self.show_tool_calls);
+                if self.show_tool_calls {
+                    let msg = match summary {
+                        Some(s) => format!("\n[Tool: {}] {}", name, s),
+                        None => format!("\n[Tool: {}]", name),
+                    };
+                    eprintln!("{}", msg);
+                }
             }
             ResponseEvent::ToolResult { name, cached, .. } => {
-                if cached {
-                    self.output
-                        .diagnostic(&format!("\n[Tool {} (cached)]", name), self.show_tool_calls);
+                if cached && self.show_tool_calls {
+                    eprintln!("\n[Tool {} (cached)]", name);
                 }
             }
             ResponseEvent::StartResponse => {
@@ -138,6 +129,57 @@ impl ResponseSink for CliResponseSink<'_> {
                     .as_ref()
                     .map(|cfg| MarkdownStream::new(cfg.clone()));
                 self.in_reasoning = false;
+            }
+            ResponseEvent::HookDebug { message, .. } => {
+                if self.verbose {
+                    eprintln!("{}", message);
+                }
+            }
+            ResponseEvent::FuelStatus {
+                remaining,
+                total,
+                event,
+            } => {
+                if self.verbose {
+                    use chibi_core::api::sink::FuelEvent;
+                    let msg = match event {
+                        FuelEvent::EnteringTurn => {
+                            format!("[fuel: {}/{} entering turn]", remaining, total)
+                        }
+                        FuelEvent::AfterToolBatch => {
+                            format!("[fuel: {}/{} after tool batch]", remaining, total)
+                        }
+                        FuelEvent::AfterContinuation { prompt_preview } => format!(
+                            "[continuing (fuel: {}/{}): {}]",
+                            remaining, total, prompt_preview
+                        ),
+                        FuelEvent::EmptyResponse => {
+                            format!("[empty response, fuel: {}/{}]", remaining, total)
+                        }
+                    };
+                    eprintln!("{}", msg);
+                }
+            }
+            ResponseEvent::FuelExhausted { total } => {
+                eprintln!("[fuel exhausted (0/{}), returning control to user]", total);
+            }
+            ResponseEvent::ContextWarning { tokens_remaining } => {
+                if self.verbose {
+                    eprintln!(
+                        "[Context window warning: {} tokens remaining]",
+                        tokens_remaining
+                    );
+                }
+            }
+            ResponseEvent::ToolDiagnostic { message, .. } => {
+                if self.verbose {
+                    eprintln!("{}", message);
+                }
+            }
+            ResponseEvent::InboxInjected { count } => {
+                if self.verbose {
+                    eprintln!("[Inbox: {} message(s) injected]", count);
+                }
             }
         }
         Ok(())
@@ -189,29 +231,28 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_diagnostic_verbose_false() {
+    fn test_handle_fuel_status_verbose_false() {
         let output = OutputHandler::new(false);
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
-        // Should not panic (verbose is false, message should be suppressed)
-        sink.handle(ResponseEvent::Diagnostic {
-            message: "test".to_string(),
-            verbose_only: true,
+        // Verbose is false — FuelStatus should be suppressed (no panic)
+        use chibi_core::api::sink::FuelEvent;
+        sink.handle(ResponseEvent::FuelStatus {
+            remaining: 3,
+            total: 10,
+            event: FuelEvent::EnteringTurn,
         })
         .unwrap();
     }
 
     #[test]
-    fn test_handle_diagnostic_always() {
+    fn test_handle_fuel_exhausted_always_shown() {
         let output = OutputHandler::new(false);
         let mut sink = CliResponseSink::new(&output, None, false, true, false);
 
-        // Should not panic (verbose_only: false means always show)
-        sink.handle(ResponseEvent::Diagnostic {
-            message: "error".to_string(),
-            verbose_only: false,
-        })
-        .unwrap();
+        // FuelExhausted is always shown regardless of verbose
+        sink.handle(ResponseEvent::FuelExhausted { total: 10 })
+            .unwrap();
     }
 
     #[test]

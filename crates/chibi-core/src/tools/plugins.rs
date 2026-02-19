@@ -10,8 +10,11 @@ use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// Load all tools from the plugins directory by calling each with --schema
-pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
+/// Load all tools from the plugins directory by calling each with --schema.
+///
+/// Emits warnings unconditionally for plugin loading issues (missing executables,
+/// security violations, schema errors). These are always relevant to the user.
+pub fn load_tools(plugins_dir: &PathBuf) -> io::Result<Vec<Tool>> {
     let mut tools = Vec::new();
 
     if !plugins_dir.exists() {
@@ -37,9 +40,7 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
             // Directory plugin: look for plugins/[name]/[name]
             let inner = path.join(file_name);
             if !inner.exists() || inner.is_dir() {
-                if verbose {
-                    eprintln!("[WARN] Plugin directory {:?} missing executable", file_name);
-                }
+                eprintln!("[WARN] Plugin directory {:?} missing executable", file_name);
                 continue;
             }
             inner
@@ -54,20 +55,16 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
         let canonical_exec = match exec_path.canonicalize() {
             Ok(canonical) => {
                 if !canonical.starts_with(&plugins_dir_canonical) {
-                    if verbose {
-                        eprintln!(
-                            "[WARN] Skipping plugin outside plugins directory: {:?}",
-                            exec_path
-                        );
-                    }
+                    eprintln!(
+                        "[WARN] Skipping plugin outside plugins directory: {:?}",
+                        exec_path
+                    );
                     continue;
                 }
                 canonical
             }
             Err(e) => {
-                if verbose {
-                    eprintln!("[WARN] Cannot verify plugin path {:?}: {}", exec_path, e);
-                }
+                eprintln!("[WARN] Cannot verify plugin path {:?}: {}", exec_path, e);
                 continue;
             }
         };
@@ -84,16 +81,14 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
         }
 
         // Try to get schema(s) from the tool (using canonical path)
-        match get_tool_schemas(&canonical_exec, verbose) {
+        match get_tool_schemas(&canonical_exec) {
             Ok(new_tools) => tools.extend(new_tools),
             Err(e) => {
-                if verbose {
-                    eprintln!(
-                        "[WARN] Failed to load tool {:?}: {}",
-                        exec_path.file_name(),
-                        e
-                    );
-                }
+                eprintln!(
+                    "[WARN] Failed to load tool {:?}: {}",
+                    exec_path.file_name(),
+                    e
+                );
             }
         }
     }
@@ -103,7 +98,7 @@ pub fn load_tools(plugins_dir: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>>
 
 /// Get tool schema(s) by calling plugin with --schema
 /// Returns Vec<Tool> to support plugins that provide multiple tools
-fn get_tool_schemas(path: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
+fn get_tool_schemas(path: &PathBuf) -> io::Result<Vec<Tool>> {
     let output = Command::new(path)
         .arg("--schema")
         .output()
@@ -139,16 +134,14 @@ fn get_tool_schemas(path: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
 
     let mut tools = Vec::new();
     for s in schemas {
-        match parse_single_tool_schema(s, path, verbose) {
+        match parse_single_tool_schema(s, path) {
             Ok(tool) => tools.push(tool),
             Err(e) => {
-                if verbose {
-                    eprintln!(
-                        "[WARN] Failed to parse tool in {:?}: {}",
-                        path.file_name(),
-                        e
-                    );
-                }
+                eprintln!(
+                    "[WARN] Failed to parse tool in {:?}: {}",
+                    path.file_name(),
+                    e
+                );
             }
         }
     }
@@ -163,11 +156,7 @@ fn get_tool_schemas(path: &PathBuf, verbose: bool) -> io::Result<Vec<Tool>> {
     Ok(tools)
 }
 
-fn parse_single_tool_schema(
-    schema: &serde_json::Value,
-    path: &Path,
-    verbose: bool,
-) -> io::Result<Tool> {
+fn parse_single_tool_schema(schema: &serde_json::Value, path: &Path) -> io::Result<Tool> {
     let name = schema["name"]
         .as_str()
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Schema missing 'name' field"))?
@@ -191,9 +180,7 @@ fn parse_single_tool_schema(
                 match hook_str.parse::<HookPoint>() {
                     Ok(hook) => Some(hook),
                     Err(_) => {
-                        if verbose {
-                            eprintln!("[WARN] Unknown hook '{}' in tool '{}'", hook_str, name);
-                        }
+                        eprintln!("[WARN] Unknown hook '{}' in tool '{}'", hook_str, name);
                         None
                     }
                 }
@@ -251,12 +238,7 @@ pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
 /// Execute a tool with the given arguments (as JSON)
 ///
 /// Tools receive arguments via stdin (JSON), leaving stdout for results.
-/// Tools also receive CHIBI_VERBOSE=1 env var when verbose mode is enabled.
-pub fn execute_tool(
-    tool: &Tool,
-    arguments: &serde_json::Value,
-    verbose: bool,
-) -> io::Result<String> {
+pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value) -> io::Result<String> {
     let mut cmd = Command::new(&tool.path);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -264,11 +246,6 @@ pub fn execute_tool(
 
     // Pass tool name for multi-tool plugins
     cmd.env("CHIBI_TOOL_NAME", &tool.name);
-
-    // Pass verbosity to tool via environment variable
-    if verbose {
-        cmd.env("CHIBI_VERBOSE", "1");
-    }
 
     let mut child = cmd
         .spawn()
@@ -425,13 +402,9 @@ mod tests {
 
     /// Execute a tool with retry on ETXTBSY (text file busy).
     /// This can happen when the kernel hasn't finished loading the script.
-    fn execute_tool_with_retry(
-        tool: &Tool,
-        arguments: &serde_json::Value,
-        verbose: bool,
-    ) -> io::Result<String> {
+    fn execute_tool_with_retry(tool: &Tool, arguments: &serde_json::Value) -> io::Result<String> {
         for attempt in 0..5 {
-            match execute_tool(tool, arguments, verbose) {
+            match execute_tool(tool, arguments) {
                 Ok(result) => return Ok(result),
                 Err(e) if e.to_string().contains("Text file busy") && attempt < 4 => {
                     std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1) as u64));
@@ -459,7 +432,7 @@ mod tests {
         };
 
         let params = serde_json::json!({"key": "value", "num": 42});
-        let result = execute_tool_with_retry(&tool, &params, false).unwrap();
+        let result = execute_tool_with_retry(&tool, &params).unwrap();
 
         // Result should be the JSON params we sent
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -473,7 +446,7 @@ mod tests {
         let script_path = create_test_script(
             dir.path(),
             "env_check.sh",
-            b"#!/bin/bash\ncat > /dev/null\necho \"name=$CHIBI_TOOL_NAME,verbose=$CHIBI_VERBOSE\"\n",
+            b"#!/bin/bash\ncat > /dev/null\necho \"name=$CHIBI_TOOL_NAME\"\n",
         );
 
         let tool = Tool {
@@ -486,15 +459,8 @@ mod tests {
             summary_params: vec![],
         };
 
-        // Test without verbose
-        let result = execute_tool_with_retry(&tool, &serde_json::json!({}), false).unwrap();
+        let result = execute_tool_with_retry(&tool, &serde_json::json!({})).unwrap();
         assert!(result.contains("name=env_checker"));
-        assert!(result.contains("verbose="));
-        assert!(!result.contains("verbose=1"));
-
-        // Test with verbose
-        let result = execute_tool_with_retry(&tool, &serde_json::json!({}), true).unwrap();
-        assert!(result.contains("verbose=1"));
     }
 
     #[test]
@@ -515,7 +481,7 @@ mod tests {
         // Note: can't use execute_tool_with_retry here since failure is expected
         // and we don't want to retry ETXTBSY separately from the expected error
         for attempt in 0..5 {
-            match execute_tool(&tool, &serde_json::json!({}), false) {
+            match execute_tool(&tool, &serde_json::json!({})) {
                 Err(e) if e.to_string().contains("Text file busy") && attempt < 4 => {
                     std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1) as u64));
                     continue;
@@ -554,7 +520,7 @@ echo 'OK'
             summary_params: vec![],
         };
 
-        let result = execute_tool_with_retry(&tool, &serde_json::json!({}), false).unwrap();
+        let result = execute_tool_with_retry(&tool, &serde_json::json!({})).unwrap();
         assert_eq!(result.trim(), "OK");
     }
 

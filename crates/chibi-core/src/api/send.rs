@@ -15,6 +15,7 @@ use crate::gateway::{
     build_gateway, json_tool_to_definition, to_chat_options, to_ratatoskr_message,
 };
 use crate::json_ext::JsonExt;
+use crate::output::NoopSink;
 use crate::state::{
     AppState, create_assistant_message_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
@@ -230,7 +231,6 @@ fn filter_tools_by_config(
 fn filter_tools_from_hook_results<S: ResponseSink>(
     tools: Vec<serde_json::Value>,
     hook_results: &[(String, serde_json::Value)],
-    verbose: bool,
     sink: &mut S,
 ) -> io::Result<Vec<serde_json::Value>> {
     if hook_results.is_empty() {
@@ -251,15 +251,13 @@ fn filter_tools_from_hook_results<S: ResponseSink>(
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect();
 
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook pre_api_tools: {} include filter: {:?}]",
-                        hook_name, include_names
-                    ),
-                    verbose_only: true,
-                })?;
-            }
+            sink.handle(ResponseEvent::HookDebug {
+                hook: hook_name.clone(),
+                message: format!(
+                    "[Hook pre_api_tools: {} include filter: {:?}]",
+                    hook_name, include_names
+                ),
+            })?;
 
             all_includes = Some(match all_includes {
                 Some(existing) => existing
@@ -277,15 +275,13 @@ fn filter_tools_from_hook_results<S: ResponseSink>(
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect();
 
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook pre_api_tools: {} exclude filter: {:?}]",
-                        hook_name, exclude_names
-                    ),
-                    verbose_only: true,
-                })?;
-            }
+            sink.handle(ResponseEvent::HookDebug {
+                hook: hook_name.clone(),
+                message: format!(
+                    "[Hook pre_api_tools: {} exclude filter: {:?}]",
+                    hook_name, exclude_names
+                ),
+            })?;
 
             for name in exclude_names {
                 if !all_excludes.contains(&name) {
@@ -323,23 +319,20 @@ fn filter_tools_from_hook_results<S: ResponseSink>(
 fn apply_request_modifications<S: ResponseSink>(
     mut request_body: serde_json::Value,
     hook_results: &[(String, serde_json::Value)],
-    verbose: bool,
     sink: &mut S,
 ) -> io::Result<serde_json::Value> {
     for (hook_name, hook_result) in hook_results {
         if let Some(modifications) = hook_result.get("request_body")
             && let Some(mods_obj) = modifications.as_object()
         {
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook pre_api_request: {} modifying request (keys: {:?})]",
-                        hook_name,
-                        mods_obj.keys().collect::<Vec<_>>()
-                    ),
-                    verbose_only: true,
-                })?;
-            }
+            sink.handle(ResponseEvent::HookDebug {
+                hook: hook_name.clone(),
+                message: format!(
+                    "[Hook pre_api_request: {} modifying request (keys: {:?})]",
+                    hook_name,
+                    mods_obj.keys().collect::<Vec<_>>()
+                ),
+            })?;
 
             // Merge modifications into request body
             if let Some(body_obj) = request_body.as_object_mut() {
@@ -367,7 +360,6 @@ fn apply_hook_overrides<S: ResponseSink>(
     fuel_remaining: &mut usize,
     fuel_unlimited: bool,
     hook_results: &[(String, serde_json::Value)],
-    verbose: bool,
     sink: &mut S,
 ) -> io::Result<()> {
     for (hook_name, hook_result) in hook_results {
@@ -384,22 +376,18 @@ fn apply_hook_overrides<S: ResponseSink>(
                 }
             };
             handoff.set_fallback(new_fallback);
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!("[Hook {} set fallback to {}]", hook_name, fallback_str),
-                    verbose_only: true,
-                })?;
-            }
+            sink.handle(ResponseEvent::HookDebug {
+                hook: hook_name.clone(),
+                message: format!("[Hook {} set fallback to {}]", hook_name, fallback_str),
+            })?;
         }
         if !fuel_unlimited {
             if let Some(fuel) = hook_result.get("fuel").and_then(|v| v.as_u64()) {
                 *fuel_remaining = fuel as usize;
-                if verbose {
-                    sink.handle(ResponseEvent::Diagnostic {
-                        message: format!("[Hook {} set fuel to {}]", hook_name, fuel),
-                        verbose_only: true,
-                    })?;
-                }
+                sink.handle(ResponseEvent::HookDebug {
+                    hook: hook_name.clone(),
+                    message: format!("[Hook {} set fuel to {}]", hook_name, fuel),
+                })?;
             }
             if let Some(delta) = hook_result.get("fuel_delta").and_then(|v| v.as_i64()) {
                 if delta < 0 {
@@ -407,12 +395,10 @@ fn apply_hook_overrides<S: ResponseSink>(
                 } else {
                     *fuel_remaining = fuel_remaining.saturating_add(delta as usize);
                 }
-                if verbose {
-                    sink.handle(ResponseEvent::Diagnostic {
-                        message: format!("[Hook {} adjusted fuel by {}]", hook_name, delta),
-                        verbose_only: true,
-                    })?;
-                }
+                sink.handle(ResponseEvent::HookDebug {
+                    hook: hook_name.clone(),
+                    message: format!("[Hook {} adjusted fuel by {}]", hook_name, delta),
+                })?;
             }
         }
     }
@@ -435,7 +421,6 @@ fn build_full_system_prompt<S: ResponseSink>(
     use_reflection: bool,
     tools: &[Tool],
     resolved_config: &ResolvedConfig,
-    verbose: bool,
     sink: &mut S,
     home_dir: &Path,
     project_root: &Path,
@@ -470,15 +455,13 @@ fn build_full_system_prompt<S: ResponseSink>(
         if let Some(inject) = result.get_str("inject")
             && !inject.is_empty()
         {
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook pre_system_prompt: {} injected content]",
-                        hook_tool_name
-                    ),
-                    verbose_only: true,
-                })?;
-            }
+            sink.handle(ResponseEvent::HookDebug {
+                hook: hook_tool_name.clone(),
+                message: format!(
+                    "[Hook pre_system_prompt: {} injected content]",
+                    hook_tool_name
+                ),
+            })?;
             full_system_prompt = format!("{}\n\n{}", inject, full_system_prompt);
         }
     }
@@ -548,15 +531,13 @@ fn build_full_system_prompt<S: ResponseSink>(
         if let Some(inject) = result.get_str("inject")
             && !inject.is_empty()
         {
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!(
-                        "[Hook post_system_prompt: {} injected content]",
-                        hook_tool_name
-                    ),
-                    verbose_only: true,
-                })?;
-            }
+            sink.handle(ResponseEvent::HookDebug {
+                hook: hook_tool_name.clone(),
+                message: format!(
+                    "[Hook post_system_prompt: {} injected content]",
+                    hook_tool_name
+                ),
+            })?;
             full_system_prompt.push_str("\n\n");
             full_system_prompt.push_str(inject);
         }
@@ -590,7 +571,6 @@ async fn collect_streaming_response<S: ResponseSink>(
     resolved_config: &ResolvedConfig,
     messages: &[serde_json::Value],
     all_tools: &[serde_json::Value],
-    verbose: bool,
     sink: &mut S,
 ) -> io::Result<StreamingResponse> {
     let gateway = build_gateway(resolved_config)?;
@@ -660,12 +640,10 @@ async fn collect_streaming_response<S: ResponseSink>(
 
                 // Prevent memory exhaustion
                 if index >= MAX_TOOL_CALLS {
-                    if verbose {
-                        eprintln!(
-                            "[WARN] Tool call index {} exceeds limit {}, skipping",
-                            index, MAX_TOOL_CALLS
-                        );
-                    }
+                    eprintln!(
+                        "[WARN] Tool call index {} exceeds limit {}, skipping",
+                        index, MAX_TOOL_CALLS
+                    );
                     continue;
                 }
 
@@ -734,7 +712,6 @@ async fn execute_tool_pure(
     tools: &[Tool],
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
-    verbose: bool,
     permission_handler: Option<&PermissionHandler>,
     project_root: &Path,
 ) -> io::Result<ToolExecutionResult> {
@@ -763,23 +740,19 @@ async fn execute_tool_pure(
             block_message = result
                 .get_str_or("message", "Tool call blocked by hook")
                 .to_string();
-            if verbose {
-                diagnostics.push(format!(
-                    "[Hook pre_tool: {} blocked {} - {}]",
-                    hook_tool_name, tool_call.name, block_message
-                ));
-            }
+            diagnostics.push(format!(
+                "[Hook pre_tool: {} blocked {} - {}]",
+                hook_tool_name, tool_call.name, block_message
+            ));
             break;
         }
 
         // Check for argument modification
         if let Some(modified_args) = result.get("arguments") {
-            if verbose {
-                diagnostics.push(format!(
-                    "[Hook pre_tool: {} modified arguments for {}]",
-                    hook_tool_name, tool_call.name
-                ));
-            }
+            diagnostics.push(format!(
+                "[Hook pre_tool: {} modified arguments for {}]",
+                hook_tool_name, tool_call.name
+            ));
             args = modified_args.clone();
         }
     }
@@ -819,7 +792,7 @@ async fn execute_tool_pure(
             Err(e) => format!("Error: {}", e),
         }
     } else if tool_call.name == tools::SEND_MESSAGE_TOOL_NAME {
-        execute_send_message_pure(app, context_name, tools, &args, verbose, &mut diagnostics)?
+        execute_send_message_pure(app, context_name, tools, &args, &mut diagnostics)?
     } else if tool_call.name == tools::MODEL_INFO_TOOL_NAME {
         match args.get_str("model") {
             Some(model) => {
@@ -1140,7 +1113,7 @@ async fn execute_tool_pure(
                 Err(e) => format!("Error: {}", e),
             }
         } else {
-            match tools::execute_tool(tool, &args, verbose) {
+            match tools::execute_tool(tool, &args) {
                 Ok(r) => r,
                 Err(e) => format!("Error: {}", e),
             }
@@ -1167,23 +1140,19 @@ async fn execute_tool_pure(
             let replacement = result
                 .get_str_or("message", "Output blocked by hook")
                 .to_string();
-            if verbose {
-                diagnostics.push(format!(
-                    "[Hook pre_tool_output: {} blocked output from {}]",
-                    hook_tool_name, tool_call.name
-                ));
-            }
+            diagnostics.push(format!(
+                "[Hook pre_tool_output: {} blocked output from {}]",
+                hook_tool_name, tool_call.name
+            ));
             tool_result = replacement;
             break;
         }
 
         if let Some(modified_output) = result.get_str("output") {
-            if verbose {
-                diagnostics.push(format!(
-                    "[Hook pre_tool_output: {} modified output from {}]",
-                    hook_tool_name, tool_call.name
-                ));
-            }
+            diagnostics.push(format!(
+                "[Hook pre_tool_output: {} modified output from {}]",
+                hook_tool_name, tool_call.name
+            ));
             tool_result = modified_output.to_string();
         }
     }
@@ -1205,12 +1174,10 @@ async fn execute_tool_pure(
             .any(|(_, r)| r.get_bool_or("block", false));
 
         if cache_blocked {
-            if verbose {
-                diagnostics.push(format!(
-                    "[Caching blocked by pre_cache_output hook for {}]",
-                    tool_call.name
-                ));
-            }
+            diagnostics.push(format!(
+                "[Caching blocked by pre_cache_output hook for {}]",
+                tool_call.name
+            ));
             (tool_result.clone(), false)
         } else {
             let cache_id = crate::vfs_cache::generate_cache_id(&tool_call.name, &args);
@@ -1233,14 +1200,12 @@ async fn execute_tool_pure(
                         resolved_config.tool_cache_preview_chars,
                     );
 
-                    if verbose {
-                        diagnostics.push(format!(
-                            "[Cached {} chars from {} at {}]",
-                            tool_result.len(),
-                            tool_call.name,
-                            vfs_uri,
-                        ));
-                    }
+                    diagnostics.push(format!(
+                        "[Cached {} chars from {} at {}]",
+                        tool_result.len(),
+                        tool_call.name,
+                        vfs_uri,
+                    ));
 
                     // Fire post_cache_output hook (notification only)
                     let post_cache_data = serde_json::json!({
@@ -1258,9 +1223,7 @@ async fn execute_tool_pure(
                     (truncated, true)
                 }
                 Err(e) => {
-                    if verbose {
-                        diagnostics.push(format!("[Failed to cache output: {}]", e));
-                    }
+                    diagnostics.push(format!("[Failed to cache output: {}]", e));
                     (tool_result.clone(), false)
                 }
             }
@@ -1305,7 +1268,6 @@ async fn execute_single_tool<S: ResponseSink>(
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
     permission_handler: Option<&PermissionHandler>,
-    verbose: bool,
     sink: &mut S,
     project_root: &Path,
 ) -> io::Result<ToolExecutionResult> {
@@ -1328,7 +1290,6 @@ async fn execute_single_tool<S: ResponseSink>(
         tools,
         use_reflection,
         resolved_config,
-        verbose,
         permission_handler,
         project_root,
     )
@@ -1336,9 +1297,9 @@ async fn execute_single_tool<S: ResponseSink>(
 
     // Emit collected diagnostics to sink
     for diag in &result.diagnostics {
-        sink.handle(ResponseEvent::Diagnostic {
+        sink.handle(ResponseEvent::ToolDiagnostic {
+            tool: tool_call.name.clone(),
             message: diag.clone(),
-            verbose_only: true,
         })?;
     }
 
@@ -1352,7 +1313,6 @@ fn execute_send_message_pure(
     context_name: &str,
     tools: &[Tool],
     args: &serde_json::Value,
-    verbose: bool,
     diagnostics: &mut Vec<String>,
 ) -> io::Result<String> {
     let to = args.get_str_or("to", "");
@@ -1382,12 +1342,10 @@ fn execute_send_message_pure(
         if hook_result.get_bool_or("delivered", false) {
             let via = hook_result.get_str_or("via", hook_tool_name);
             delivered_via = Some(via.to_string());
-            if verbose {
-                diagnostics.push(format!(
-                    "[Hook pre_send_message: {} intercepted delivery]",
-                    hook_tool_name
-                ));
-            }
+            diagnostics.push(format!(
+                "[Hook pre_send_message: {} intercepted delivery]",
+                hook_tool_name
+            ));
             break;
         }
     }
@@ -1440,7 +1398,6 @@ async fn process_tool_calls<S: ResponseSink>(
     fuel_remaining: &mut usize,
     fuel_total: usize,
     fuel_unlimited: bool,
-    verbose: bool,
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
     project_root: &Path,
@@ -1497,7 +1454,6 @@ async fn process_tool_calls<S: ResponseSink>(
                     tools,
                     use_reflection,
                     resolved_config,
-                    verbose,
                     permission_handler,
                     project_root,
                 )
@@ -1511,6 +1467,9 @@ async fn process_tool_calls<S: ResponseSink>(
         }
     }
 
+    let parallel_indices: std::collections::HashSet<usize> =
+        parallel_batch.iter().map(|(idx, _)| *idx).collect();
+
     // Execute sequential batch one at a time (these may mutate handoff)
     for (idx, tc) in &sequential_batch {
         let result = execute_single_tool(
@@ -1522,7 +1481,6 @@ async fn process_tool_calls<S: ResponseSink>(
             use_reflection,
             resolved_config,
             permission_handler,
-            verbose,
             sink,
             project_root,
         )
@@ -1537,12 +1495,15 @@ async fn process_tool_calls<S: ResponseSink>(
         app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
-        // Pre-log verbose diagnostic while we're iterating
-        if verbose && let Some(result) = &results[i] {
+        // Pre-log diagnostics for parallel-executed tools only.
+        // Sequential tools have already emitted their diagnostics in execute_single_tool.
+        if parallel_indices.contains(&i)
+            && let Some(result) = &results[i]
+        {
             for diag in &result.diagnostics {
-                sink.handle(ResponseEvent::Diagnostic {
+                sink.handle(ResponseEvent::ToolDiagnostic {
+                    tool: tc.name.clone(),
                     message: diag.clone(),
-                    verbose_only: true,
                 })?;
             }
         }
@@ -1554,22 +1515,10 @@ async fn process_tool_calls<S: ResponseSink>(
             .take()
             .expect("all tool results should be populated");
 
-        if verbose {
-            sink.handle(ResponseEvent::Diagnostic {
-                message: format!("[Tool: {}]", tc.name),
-                verbose_only: true,
-            })?;
-        }
-
-        // Emit diagnostics collected during parallel execution (if not already emitted)
-        if !verbose {
-            for diag in &result.diagnostics {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: diag.clone(),
-                    verbose_only: true,
-                })?;
-            }
-        }
+        sink.handle(ResponseEvent::ToolDiagnostic {
+            tool: tc.name.clone(),
+            message: format!("[Tool: {}]", tc.name),
+        })?;
 
         let summary = tools::tool_call_summary(tools, &tc.name, &tc.arguments);
         sink.handle(ResponseEvent::ToolStart {
@@ -1594,15 +1543,14 @@ async fn process_tool_calls<S: ResponseSink>(
             cached: result.was_cached,
         })?;
 
-        // Show full content of todos/goals updates in verbose mode
-        if verbose
-            && matches!(tc.name.as_str(), "update_todos" | "update_goals")
+        // Show full content of todos/goals updates
+        if matches!(tc.name.as_str(), "update_todos" | "update_goals")
             && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments)
             && let Some(content) = args["content"].as_str()
         {
-            sink.handle(ResponseEvent::Diagnostic {
+            sink.handle(ResponseEvent::ToolDiagnostic {
+                tool: tc.name.clone(),
                 message: format!("[{}]\n{}", tc.name, content),
-                verbose_only: true,
             })?;
         }
 
@@ -1657,14 +1605,7 @@ async fn process_tool_calls<S: ResponseSink>(
         hook_data["fuel_total"] = json!(fuel_total);
     }
     let hook_results = tools::execute_hook(tools, tools::HookPoint::PostToolBatch, &hook_data)?;
-    apply_hook_overrides(
-        handoff,
-        fuel_remaining,
-        fuel_unlimited,
-        &hook_results,
-        verbose,
-        sink,
-    )?;
+    apply_hook_overrides(handoff, fuel_remaining, fuel_unlimited, &hook_results, sink)?;
 
     Ok(())
 }
@@ -1690,7 +1631,6 @@ fn handle_final_response<S: ResponseSink>(
     mut handoff: tools::Handoff,
     tools: &[Tool],
     _resolved_config: &ResolvedConfig,
-    verbose: bool,
     sink: &mut S,
 ) -> io::Result<FinalResponseAction> {
     // Get or create context to add the message
@@ -1717,12 +1657,9 @@ fn handle_final_response<S: ResponseSink>(
 
     if app.should_warn(&context.messages) {
         let remaining = app.remaining_tokens(&context.messages);
-        if verbose {
-            sink.handle(ResponseEvent::Diagnostic {
-                message: format!("[Context window warning: {} tokens remaining]", remaining),
-                verbose_only: true,
-            })?;
-        }
+        sink.handle(ResponseEvent::ContextWarning {
+            tokens_remaining: remaining,
+        })?;
     }
 
     sink.handle(ResponseEvent::Newline)?;
@@ -1790,12 +1727,11 @@ pub async fn send_prompt<S: ResponseSink>(
 
         app.validate_config(&resolved_config, tools)?;
 
-        let verbose = options.verbose;
-
-        if verbose && !fuel_unlimited {
-            sink.handle(ResponseEvent::Diagnostic {
-                message: format!("[fuel: {}/{} entering turn]", fuel_remaining, fuel_total),
-                verbose_only: true,
+        if !fuel_unlimited {
+            sink.handle(ResponseEvent::FuelStatus {
+                remaining: fuel_remaining,
+                total: fuel_total,
+                event: crate::api::sink::FuelEvent::EnteringTurn,
             })?;
         }
         let use_reflection = options.use_reflection;
@@ -1813,9 +1749,10 @@ pub async fn send_prompt<S: ResponseSink>(
         let hook_results = tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data)?;
         for (tool_name, result) in hook_results {
             if let Some(modified) = result.get_str("prompt") {
-                if verbose {
-                    eprintln!("[Hook pre_message: {} modified prompt]", tool_name);
-                }
+                sink.handle(ResponseEvent::HookDebug {
+                    hook: tool_name.clone(),
+                    message: format!("[Hook pre_message: {} modified prompt]", tool_name),
+                })?;
                 final_prompt = modified.to_string();
             }
         }
@@ -1829,12 +1766,9 @@ pub async fn send_prompt<S: ResponseSink>(
             }
             inbox_content.push_str("--- END INBOX ---\n\n");
             final_prompt = format!("{}{}", inbox_content, final_prompt);
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!("[Inbox: {} message(s) injected]", inbox_messages.len()),
-                    verbose_only: true,
-                })?;
-            }
+            sink.handle(ResponseEvent::InboxInjected {
+                count: inbox_messages.len(),
+            })?;
         }
 
         // Add datetime prefix to user message
@@ -1851,17 +1785,14 @@ pub async fn send_prompt<S: ResponseSink>(
         // Context window warning
         if app.should_warn(&context.messages) {
             let remaining = app.remaining_tokens(&context.messages);
-            if verbose {
-                sink.handle(ResponseEvent::Diagnostic {
-                    message: format!("[Context window warning: {} tokens remaining]", remaining),
-                    verbose_only: true,
-                })?;
-            }
+            sink.handle(ResponseEvent::ContextWarning {
+                tokens_remaining: remaining,
+            })?;
         }
 
         // === Auto-compaction Check ===
         if app.should_auto_compact(&context, &resolved_config) {
-            return compact_context_with_llm(app, context_name, &resolved_config, verbose).await;
+            return compact_context_with_llm(app, context_name, &resolved_config, &NoopSink).await;
         }
 
         // === Build System Prompt ===
@@ -1872,7 +1803,6 @@ pub async fn send_prompt<S: ResponseSink>(
             use_reflection,
             tools,
             &resolved_config,
-            verbose,
             sink,
             home_dir,
             project_root,
@@ -1922,7 +1852,7 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_total"] = json!(fuel_total);
         }
         let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiTools, &hook_data)?;
-        all_tools = filter_tools_from_hook_results(all_tools, &hook_results, verbose, sink)?;
+        all_tools = filter_tools_from_hook_results(all_tools, &hook_results, sink)?;
 
         // === Build Request ===
         let tools_for_request = if resolved_config.no_tool_calls {
@@ -1943,7 +1873,7 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_total"] = json!(fuel_total);
         }
         let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
-        request_body = apply_request_modifications(request_body, &hook_results, verbose, sink)?;
+        request_body = apply_request_modifications(request_body, &hook_results, sink)?;
 
         // === Initialize Handoff ===
         let fallback = options.fallback_override.clone().unwrap_or_else(|| {
@@ -1977,7 +1907,6 @@ pub async fn send_prompt<S: ResponseSink>(
             &mut fuel_remaining,
             fuel_unlimited,
             &hook_results,
-            verbose,
             sink,
         )?;
 
@@ -1987,8 +1916,7 @@ pub async fn send_prompt<S: ResponseSink>(
             log_request_if_enabled(app, context_name, debug, &request_body);
 
             let response =
-                collect_streaming_response(&resolved_config, &messages, &all_tools, verbose, sink)
-                    .await?;
+                collect_streaming_response(&resolved_config, &messages, &all_tools, sink).await?;
 
             // Log response metadata
             if let Some(ref meta) = response.response_meta {
@@ -2012,7 +1940,6 @@ pub async fn send_prompt<S: ResponseSink>(
                     &mut fuel_remaining,
                     fuel_total,
                     fuel_unlimited,
-                    verbose,
                     sink,
                     permission_handler,
                     project_root,
@@ -2025,23 +1952,13 @@ pub async fn send_prompt<S: ResponseSink>(
                 // Tool call round costs 1 fuel
                 if !fuel_unlimited {
                     fuel_remaining = fuel_remaining.saturating_sub(1);
-                    if verbose {
-                        sink.handle(ResponseEvent::Diagnostic {
-                            message: format!(
-                                "[fuel: {}/{} after tool batch]",
-                                fuel_remaining, fuel_total
-                            ),
-                            verbose_only: true,
-                        })?;
-                    }
+                    sink.handle(ResponseEvent::FuelStatus {
+                        remaining: fuel_remaining,
+                        total: fuel_total,
+                        event: crate::api::sink::FuelEvent::AfterToolBatch,
+                    })?;
                     if fuel_remaining == 0 {
-                        sink.handle(ResponseEvent::Diagnostic {
-                            message: format!(
-                                "[fuel exhausted (0/{}), returning control to user]",
-                                fuel_total
-                            ),
-                            verbose_only: false,
-                        })?;
+                        sink.handle(ResponseEvent::FuelExhausted { total: fuel_total })?;
                         return Ok(());
                     }
                 }
@@ -2054,24 +1971,14 @@ pub async fn send_prompt<S: ResponseSink>(
                     fuel_remaining =
                         fuel_remaining.saturating_sub(resolved_config.fuel_empty_response_cost);
                     if fuel_remaining == 0 {
-                        sink.handle(ResponseEvent::Diagnostic {
-                            message: format!(
-                                "[fuel exhausted (0/{}), returning control to user]",
-                                fuel_total
-                            ),
-                            verbose_only: false,
-                        })?;
+                        sink.handle(ResponseEvent::FuelExhausted { total: fuel_total })?;
                         return Ok(());
                     }
-                    if verbose {
-                        sink.handle(ResponseEvent::Diagnostic {
-                            message: format!(
-                                "[empty response, fuel: {}/{}]",
-                                fuel_remaining, fuel_total
-                            ),
-                            verbose_only: true,
-                        })?;
-                    }
+                    sink.handle(ResponseEvent::FuelStatus {
+                        remaining: fuel_remaining,
+                        total: fuel_total,
+                        event: crate::api::sink::FuelEvent::EmptyResponse,
+                    })?;
                 }
                 continue;
             }
@@ -2085,7 +1992,6 @@ pub async fn send_prompt<S: ResponseSink>(
                 handoff,
                 tools,
                 &resolved_config,
-                verbose,
                 sink,
             )? {
                 FinalResponseAction::ReturnToUser => return Ok(()),
@@ -2093,30 +1999,21 @@ pub async fn send_prompt<S: ResponseSink>(
                     if !fuel_unlimited {
                         fuel_remaining = fuel_remaining.saturating_sub(1);
                         if fuel_remaining == 0 {
-                            sink.handle(ResponseEvent::Diagnostic {
-                                message: format!(
-                                    "[fuel exhausted (0/{}), returning control to user]",
-                                    fuel_total
-                                ),
-                                verbose_only: false,
-                            })?;
+                            sink.handle(ResponseEvent::FuelExhausted { total: fuel_total })?;
                             return Ok(());
                         }
-                        if verbose {
-                            sink.handle(ResponseEvent::Diagnostic {
-                                message: format!(
-                                    "[continuing (fuel: {}/{}): {}]",
-                                    fuel_remaining,
-                                    fuel_total,
-                                    if continue_prompt.len() > 80 {
-                                        format!("{}...", &continue_prompt[..77])
-                                    } else {
-                                        continue_prompt.clone()
-                                    }
-                                ),
-                                verbose_only: true,
-                            })?;
-                        }
+                        let prompt_preview = if continue_prompt.len() > 80 {
+                            format!("{}...", &continue_prompt[..77])
+                        } else {
+                            continue_prompt.clone()
+                        };
+                        sink.handle(ResponseEvent::FuelStatus {
+                            remaining: fuel_remaining,
+                            total: fuel_total,
+                            event: crate::api::sink::FuelEvent::AfterContinuation {
+                                prompt_preview,
+                            },
+                        })?;
                     }
                     // Prefix the continuation prompt; omit fuel numbers when unlimited
                     current_prompt = if fuel_unlimited {
@@ -2587,7 +2484,6 @@ mod tests {
             &[],
             false,
             &resolved_config,
-            false,
             None,
             &project_root,
         )
@@ -2625,7 +2521,6 @@ mod tests {
             &[],
             false,
             &resolved_config,
-            false,
             None,
             &project_root,
         )

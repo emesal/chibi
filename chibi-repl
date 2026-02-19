@@ -1,6 +1,6 @@
 #!/bin/bash
 
-chibi=target/release/chibi
+chibi=chibi
 
 HISTFILE="${XDG_STATE_HOME:-$HOME/.local/state}/chibi_repl_history"
 mkdir -p "$(dirname "$HISTFILE")"
