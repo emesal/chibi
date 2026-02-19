@@ -31,53 +31,44 @@ impl OutputSink for OutputHandler {
     }
 
     fn emit_event(&self, event: CommandEvent) {
-        let (text, verbose_only) = match &event {
-            CommandEvent::AutoDestroyed { count } => (
-                format!("[Auto-destroyed {} expired context(s)]", count),
-                true,
-            ),
+        if !self.verbose {
+            return;
+        }
+        let text = match &event {
+            CommandEvent::AutoDestroyed { count } => {
+                format!("[Auto-destroyed {} expired context(s)]", count)
+            }
             CommandEvent::CacheCleanup {
                 removed,
                 max_age_days,
-            } => (
-                format!(
-                    "[Auto-cleanup: removed {} old cache entries (older than {} days)]",
-                    removed,
-                    max_age_days + 1
-                ),
-                true,
+            } => format!(
+                "[Auto-cleanup: removed {} old cache entries (older than {} days)]",
+                removed,
+                max_age_days + 1
             ),
-            CommandEvent::SystemPromptSet { context } => (
-                format!("[System prompt set for context '{}']", context),
-                true,
-            ),
-            CommandEvent::UsernameSaved { username, context } => (
-                format!("[Username '{}' saved to context '{}']", username, context),
-                true,
-            ),
+            CommandEvent::SystemPromptSet { context } => {
+                format!("[System prompt set for context '{}']", context)
+            }
+            CommandEvent::UsernameSaved { username, context } => {
+                format!("[Username '{}' saved to context '{}']", username, context)
+            }
             CommandEvent::InboxEmpty { context } => {
-                (format!("[No messages in inbox for '{}']", context), true)
+                format!("[No messages in inbox for '{}']", context)
             }
-            CommandEvent::InboxProcessing { count, context } => (
-                format!(
-                    "[Processing {} message(s) from inbox for '{}']",
-                    count, context
-                ),
-                true,
+            CommandEvent::InboxProcessing { count, context } => format!(
+                "[Processing {} message(s) from inbox for '{}']",
+                count, context
             ),
-            CommandEvent::AllInboxesEmpty => ("[No messages in any inbox.]".to_string(), true),
-            CommandEvent::InboxesProcessed { count } => (
-                format!("[Processed inboxes for {} context(s).]", count),
-                true,
-            ),
+            CommandEvent::AllInboxesEmpty => "[No messages in any inbox.]".to_string(),
+            CommandEvent::InboxesProcessed { count } => {
+                format!("[Processed inboxes for {} context(s).]", count)
+            }
             CommandEvent::ContextLoaded { tool_count } => {
-                (format!("[Loaded {} tool(s)]", tool_count), true)
+                format!("[Loaded {} tool(s)]", tool_count)
             }
-            CommandEvent::McpToolsLoaded { count } => {
-                (format!("[MCP: {} tools loaded]", count), true)
-            }
+            CommandEvent::McpToolsLoaded { count } => format!("[MCP: {} tools loaded]", count),
             CommandEvent::McpBridgeUnavailable { reason } => {
-                (format!("[MCP: bridge unavailable: {}]", reason), true)
+                format!("[MCP: bridge unavailable: {}]", reason)
             }
             CommandEvent::LoadSummary {
                 builtin_count,
@@ -99,12 +90,10 @@ impl OutputSink for OutputHandler {
                         plugin_names.join(", ")
                     ));
                 }
-                (lines, true)
+                lines
             }
         };
-        if !verbose_only || self.verbose {
-            eprintln!("{}", text);
-        }
+        eprintln!("{}", text);
     }
 
     fn newline(&self) {
