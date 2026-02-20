@@ -1085,7 +1085,9 @@ mod tests {
         // ModelSet event should be emitted
         let events = sink.events.borrow();
         assert!(
-            events.iter().any(|e| matches!(e, CommandEvent::ModelSet { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, CommandEvent::ModelSet { .. })),
             "ModelSet event should be emitted"
         );
     }
