@@ -85,18 +85,33 @@ chibi -c -            # current='work', previous='personal'
 | `--clear-cache-for <CTX>` | Clear the tool output cache for specified context |
 | `--cleanup-cache` | Remove old cache entries across all contexts |
 
+## Model
+
+| Flag | Description |
+|------|-------------|
+| `-m, --set-model <MODEL>` | Set model for current context (persists to local.toml, validated live) |
+| `-M, --set-model-for-context <CTX> <MODEL>` | Set model for specified context |
+
+Model names are validated live against the OpenRouter API before being written. An unknown model ID returns an error and no write occurs.
+
+```bash
+chibi -m anthropic/claude-sonnet-4          # Set model for current context
+chibi -M research openai/o3                 # Set model for 'research' context
+chibi -m anthropic/claude-sonnet-4 "Hello"  # Set model, then chat
+```
+
 ## Model Metadata
 
 | Flag | Description |
 |------|-------------|
-| `-m, --model-metadata <MODEL>` | Show model metadata in TOML format (settable fields only) |
-| `-M, --model-metadata-full <MODEL>` | Show full model metadata (with pricing, capabilities, parameter ranges) |
+| `--model-metadata <MODEL>` | Show model metadata in TOML format (settable fields only) |
+| `--model-metadata-full <MODEL>` | Show full model metadata (with pricing, capabilities, parameter ranges) |
 
-Model metadata is fetched via ratatoskr's gateway (embedded registry → cache → OpenRouter API on miss). The `-m` flag shows only fields you can set in `models.toml`, while `-M` includes everything (pricing, capabilities, parameter ranges).
+Model metadata is fetched via ratatoskr's gateway (embedded registry → cache → OpenRouter API on miss). `--model-metadata` shows only fields you can set in `models.toml`, while `--model-metadata-full` includes everything (pricing, capabilities, parameter ranges).
 
 ```bash
-chibi -m anthropic/claude-sonnet-4       # Settable fields only
-chibi -M openai/gpt-4o                   # Full metadata including pricing
+chibi --model-metadata anthropic/claude-sonnet-4       # Settable fields only
+chibi --model-metadata-full openai/gpt-4o              # Full metadata including pricing
 ```
 
 ## Control Flags
@@ -153,6 +168,7 @@ chibi-json --version
 - `{ "show_log": { "context": "...", "count": 10 } }`
 - `{ "inspect": { "context": "...", "thing": "todos" } }`
 - `{ "set_system_prompt": { "context": "...", "prompt": "..." } }`
+- `{ "set_model": { "context": "...", "model": "..." } }` (context optional)
 - `{ "run_plugin": { "name": "...", "args": [...] } }`
 - `{ "call_tool": { "name": "...", "args": [...] } }`
 
@@ -266,13 +282,13 @@ Auto-destroy runs automatically at every chibi invocation. It checks all non-cur
 
 These flags produce output or operate on other contexts, so they imply `-x`:
 
-`-l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -p, -P`
+`-l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -M, -p, -P, --model-metadata, --model-metadata-full`
 
 ### Combinable with Prompt
 
 These flags can be combined with a prompt (execute operation, then invoke LLM):
 
-`-c, -C, -a, -z, -r, -y, -u, -U, -v`
+`-c, -C, -a, -z, -r, -m, -y, -u, -U, -v`
 
 ### Force Override
 
