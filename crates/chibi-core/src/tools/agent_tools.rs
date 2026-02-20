@@ -58,6 +58,12 @@ pub static AGENT_TOOL_DEFS: &[BuiltinToolDef] = &[
                 description: "Max tokens override for the sub-agent",
                 default: None,
             },
+            ToolPropertyDef {
+                name: "preset",
+                prop_type: "string",
+                description: "PRESET_DESCRIPTION_PLACEHOLDER",
+                default: None,
+            },
         ],
         required: &["system_prompt", "input"],
         summary_params: &[],
@@ -355,10 +361,34 @@ pub async fn execute_agent_tool(
 }
 
 /// Convert all agent tools to API format.
-pub fn all_agent_tools_to_api_format() -> Vec<serde_json::Value> {
+///
+/// `preset_capabilities`: capability names available via the configured cost tier.
+/// If empty, the `preset` param description notes no presets are configured.
+/// Explicit capability names are injected into the `spawn_agent` tool description
+/// at runtime so the LLM knows which values are valid.
+pub fn all_agent_tools_to_api_format(preset_capabilities: &[&str]) -> Vec<serde_json::Value> {
+    let preset_desc = if preset_capabilities.is_empty() {
+        "Preset capability name (no presets configured for this tier)".to_string()
+    } else {
+        format!(
+            "Preset capability name — one of: {} (cost tier set by config). \
+             Sets the model and default parameters for the sub-agent. \
+             Explicit model/temperature/max_tokens override preset defaults.",
+            preset_capabilities.join(", ")
+        )
+    };
+
     AGENT_TOOL_DEFS
         .iter()
-        .map(|def| def.to_api_format())
+        .map(|def| {
+            let mut json = def.to_api_format();
+            // Inject dynamic preset description into spawn_agent only
+            if def.name == SPAWN_AGENT_TOOL_NAME {
+                json["function"]["parameters"]["properties"]["preset"]["description"] =
+                    serde_json::Value::String(preset_desc.clone());
+            }
+            json
+        })
         .collect()
 }
 
@@ -411,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_all_agent_tools_to_api_format() {
-        let tools = all_agent_tools_to_api_format();
+        let tools = all_agent_tools_to_api_format(&[]);
         assert_eq!(tools.len(), 2);
         for tool in &tools {
             assert_eq!(tool["type"], "function");
@@ -635,6 +665,48 @@ mod tests {
         api.temperature = Some(0.9); // caller already set this
         apply_preset_defaults(&params, &mut api);
         assert_eq!(api.temperature, Some(0.9)); // caller wins
+    }
+
+    // === Dynamic tool description ===
+
+    #[test]
+    fn test_agent_tool_schema_has_preset_param() {
+        let spawn = get_tool_api(SPAWN_AGENT_TOOL_NAME);
+        let params = &spawn["function"]["parameters"]["properties"];
+        assert!(params.get("preset").is_some(), "spawn_agent should have preset param");
+    }
+
+    #[test]
+    fn test_agent_tools_description_lists_capabilities() {
+        let tools = all_agent_tools_to_api_format(&["fast", "reasoning"]);
+        let spawn = tools
+            .iter()
+            .find(|t| t["function"]["name"].as_str() == Some(SPAWN_AGENT_TOOL_NAME))
+            .expect("spawn_agent in list");
+        let preset_desc = spawn["function"]["parameters"]["properties"]["preset"]["description"]
+            .as_str()
+            .unwrap_or("");
+        assert!(preset_desc.contains("fast"), "description should list 'fast'");
+        assert!(
+            preset_desc.contains("reasoning"),
+            "description should list 'reasoning'"
+        );
+    }
+
+    #[test]
+    fn test_agent_tools_description_no_capabilities() {
+        let tools = all_agent_tools_to_api_format(&[]);
+        let spawn = tools
+            .iter()
+            .find(|t| t["function"]["name"].as_str() == Some(SPAWN_AGENT_TOOL_NAME))
+            .expect("spawn_agent in list");
+        let preset_desc = spawn["function"]["parameters"]["properties"]["preset"]["description"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            preset_desc.contains("no presets"),
+            "should mention no presets configured"
+        );
     }
 
     // === Gateway preset wiring ===
