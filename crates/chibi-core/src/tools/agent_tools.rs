@@ -114,6 +114,9 @@ pub struct SpawnOptions {
     pub temperature: Option<f32>,
     /// Max tokens override
     pub max_tokens: Option<usize>,
+    /// Preset capability name (e.g. "fast", "reasoning").
+    /// Resolved against `config.subagent_cost_tier`. Explicit model/temperature/max_tokens win over preset defaults.
+    pub preset: Option<String>,
 }
 
 impl SpawnOptions {
@@ -129,13 +132,65 @@ impl SpawnOptions {
                 .get("max_tokens")
                 .and_then(|v| v.as_u64())
                 .map(|n| n as usize),
+            preset: args.get_str("preset").map(String::from),
         }
     }
 }
 
+/// Apply `PresetParameters` as defaults to `ApiParams`.
+/// Fills `None` fields only — never overwrites `Some` values set by the caller.
+fn apply_preset_defaults(
+    params: &ratatoskr::PresetParameters,
+    api: &mut crate::config::ApiParams,
+) {
+    macro_rules! fill {
+        ($field:ident) => {
+            if api.$field.is_none() {
+                api.$field = params.$field.clone();
+            }
+        };
+    }
+    fill!(temperature);
+    fill!(top_p);
+    fill!(max_tokens);
+    fill!(frequency_penalty);
+    fill!(presence_penalty);
+    fill!(seed);
+    fill!(stop);
+    fill!(parallel_tool_calls);
+    // Note: top_k, reasoning, tool_choice, response_format, cache_prompt,
+    // raw_provider_options are in PresetParameters but not in ApiParams — skip.
+}
+
 /// Apply spawn options to a cloned config, returning the effective config.
-fn apply_spawn_options(config: &ResolvedConfig, opts: &SpawnOptions) -> ResolvedConfig {
+/// `gateway` is used for preset resolution when `opts.preset` is set.
+fn apply_spawn_options(
+    config: &ResolvedConfig,
+    opts: &SpawnOptions,
+    gateway: Option<&ratatoskr::EmbeddedGateway>,
+) -> ResolvedConfig {
     let mut c = config.clone();
+
+    // Resolve preset first (explicit opts override preset defaults)
+    if let (Some(capability), Some(gw)) = (opts.preset.as_deref(), gateway) {
+        use ratatoskr::ModelGateway;
+        match gw.resolve_preset(&config.subagent_cost_tier, capability) {
+            Some(resolution) => {
+                c.model = resolution.model;
+                if let Some(params) = resolution.parameters {
+                    apply_preset_defaults(&params, &mut c.api);
+                }
+            }
+            None => {
+                eprintln!(
+                    "[WARN] spawn_agent: no preset for tier '{}' / capability '{}' — using parent model",
+                    config.subagent_cost_tier, capability
+                );
+            }
+        }
+    }
+
+    // Explicit overrides win over preset defaults
     if let Some(ref model) = opts.model {
         c.model = model.clone();
     }
@@ -180,7 +235,7 @@ pub async fn spawn_agent(
     options: &SpawnOptions,
     tools: &[Tool],
 ) -> io::Result<String> {
-    let effective_config = apply_spawn_options(config, options);
+    let effective_config = apply_spawn_options(config, options, None);
 
     // Fire pre_spawn_agent hook
     let hook_data = json!({
@@ -434,7 +489,7 @@ mod tests {
             model: Some("new-model".to_string()),
             ..Default::default()
         };
-        let result = apply_spawn_options(&config, &opts);
+        let result = apply_spawn_options(&config, &opts, None);
         assert_eq!(result.model, "new-model");
         // Other fields unchanged
         assert_eq!(result.api.temperature, config.api.temperature);
@@ -447,7 +502,7 @@ mod tests {
             temperature: Some(0.9),
             ..Default::default()
         };
-        let result = apply_spawn_options(&config, &opts);
+        let result = apply_spawn_options(&config, &opts, None);
         assert_eq!(result.api.temperature, Some(0.9));
         assert_eq!(result.model, config.model);
     }
@@ -456,7 +511,7 @@ mod tests {
     fn test_apply_spawn_options_no_overrides() {
         let config = make_test_config();
         let opts = SpawnOptions::default();
-        let result = apply_spawn_options(&config, &opts);
+        let result = apply_spawn_options(&config, &opts, None);
         assert_eq!(result.model, config.model);
         assert_eq!(result.api.temperature, config.api.temperature);
         assert_eq!(result.api.max_tokens, config.api.max_tokens);
@@ -533,6 +588,51 @@ mod tests {
         let config = make_test_config(); // empty allowed_paths
         let result = read_file(file.to_str().unwrap(), &config);
         assert!(result.is_err());
+    }
+
+    // === preset / apply_preset_defaults ===
+
+    #[test]
+    fn test_spawn_options_preset_from_args() {
+        let args = json!({ "preset": "fast" });
+        let opts = SpawnOptions::from_args(&args);
+        assert_eq!(opts.preset, Some("fast".to_string()));
+    }
+
+    #[test]
+    fn test_spawn_options_no_preset() {
+        let args = json!({ "model": "some/model" });
+        let opts = SpawnOptions::from_args(&args);
+        assert!(opts.preset.is_none());
+        assert_eq!(opts.model, Some("some/model".to_string()));
+    }
+
+    #[test]
+    fn test_apply_preset_defaults_fills_none() {
+        use ratatoskr::PresetParameters;
+        let params = PresetParameters {
+            temperature: Some(0.3),
+            max_tokens: Some(2048),
+            ..Default::default()
+        };
+        let mut api = crate::config::ApiParams::defaults();
+        assert!(api.temperature.is_none());
+        apply_preset_defaults(&params, &mut api);
+        assert_eq!(api.temperature, Some(0.3));
+        assert_eq!(api.max_tokens, Some(2048));
+    }
+
+    #[test]
+    fn test_apply_preset_defaults_preserves_existing() {
+        use ratatoskr::PresetParameters;
+        let params = PresetParameters {
+            temperature: Some(0.3),
+            ..Default::default()
+        };
+        let mut api = crate::config::ApiParams::defaults();
+        api.temperature = Some(0.9); // caller already set this
+        apply_preset_defaults(&params, &mut api);
+        assert_eq!(api.temperature, Some(0.9)); // caller wins
     }
 
     // === Source classification ===
