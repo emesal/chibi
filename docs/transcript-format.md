@@ -1,6 +1,6 @@
 # Transcript Format
 
-Chibi maintains conversation history using partitioned storage plus a human-readable markdown archive.
+Chibi maintains conversation history using partitioned storage.
 
 ## File Roles
 
@@ -12,7 +12,6 @@ transcript/           # Authoritative, append-only log (partitioned)
     ├── <ts>-<ts>.jsonl
     └── <ts>-<ts>.bloom  # Bloom filter for search
 context.jsonl         # LLM context window (derived from transcript)
-transcript.md         # Human-readable archive (append-only)
 ```
 
 ### transcript/ (Authoritative)
@@ -32,16 +31,6 @@ Structure:
 1. **Entry 0**: Anchor entry (`context_created`, `compaction`, or `archival`)
 2. **Entry 1**: System prompt entry (`system_prompt`)
 3. **Remaining**: Conversation entries (messages, tool calls, tool results)
-
-### transcript.md
-
-Human-readable markdown archive. Appended during compaction operations.
-
-```
-[USER]: What is Rust?
-
-[ASSISTANT]: Rust is a systems programming language...
-```
 
 ## Entry Format
 

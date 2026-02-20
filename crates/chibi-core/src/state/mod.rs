@@ -44,6 +44,8 @@ pub struct AppState {
     pub contexts_dir: PathBuf,
     pub prompts_dir: PathBuf,
     pub plugins_dir: PathBuf,
+    /// Shared virtual file system.
+    pub vfs: crate::vfs::Vfs,
     /// Cache of active partition state per context, avoiding repeated file scans.
     /// Uses interior mutability since caching is a side effect that doesn't change
     /// logical state.
@@ -74,6 +76,20 @@ impl AppState {
             contexts: Vec::new(),
         };
 
+        let vfs_root = chibi_dir.join("vfs");
+        if config.vfs.backend != "local" {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "unsupported VFS backend '{}' (only 'local' is built in)",
+                    config.vfs.backend
+                ),
+            ));
+        }
+        fs::create_dir_all(&vfs_root)?;
+        let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
+        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
+
         Ok(AppState {
             config,
             models_config: ModelsConfig::default(),
@@ -83,6 +99,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            vfs,
             active_state_cache: RefCell::new(HashMap::new()),
         })
     }
@@ -156,6 +173,20 @@ impl AppState {
             }
         };
 
+        let vfs_root = chibi_dir.join("vfs");
+        if config.vfs.backend != "local" {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "unsupported VFS backend '{}' (only 'local' is built in)",
+                    config.vfs.backend
+                ),
+            ));
+        }
+        fs::create_dir_all(&vfs_root)?;
+        let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
+        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
+
         let mut app = AppState {
             config,
             models_config,
@@ -165,6 +196,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            vfs,
             active_state_cache: RefCell::new(HashMap::new()),
         };
 
@@ -257,7 +289,7 @@ impl AppState {
     ///
     /// Note: This now destroys ALL expired contexts. The CLI is responsible for
     /// checking if the session's current context was destroyed and handling it.
-    pub fn auto_destroy_expired_contexts(&mut self, verbose: bool) -> io::Result<Vec<String>> {
+    pub fn auto_destroy_expired_contexts(&mut self) -> io::Result<Vec<String>> {
         let mut destroyed = Vec::new();
 
         // Collect contexts to destroy
@@ -271,9 +303,6 @@ impl AppState {
 
         // Destroy each one
         for name in to_destroy {
-            if verbose {
-                eprintln!("[DEBUG] Auto-destroying expired context: {}", name);
-            }
             // Remove directory
             let dir = self.context_dir(&name);
             if dir.exists() {
@@ -292,33 +321,87 @@ impl AppState {
         fs::create_dir_all(&dir)
     }
 
-    /// Ensure tool cache directory exists (kept for potential future use)
-    #[allow(dead_code)]
-    pub fn ensure_tool_cache_dir(&self, name: &str) -> io::Result<()> {
-        let dir = self.tool_cache_dir(name);
-        fs::create_dir_all(&dir)
-    }
-
-    /// Clear the tool cache for a context
-    pub fn clear_tool_cache(&self, name: &str) -> io::Result<()> {
-        let cache_dir = self.tool_cache_dir(name);
-        crate::cache::clear_cache(&cache_dir)
-    }
-
-    /// Cleanup old cache entries for a context (based on max age)
-    pub fn cleanup_tool_cache(&self, name: &str, max_age_days: u64) -> io::Result<usize> {
-        let cache_dir = self.tool_cache_dir(name);
-        crate::cache::cleanup_old_cache(&cache_dir, max_age_days)
-    }
-
-    /// Cleanup old cache entries for all contexts
-    pub fn cleanup_all_tool_caches(&self, max_age_days: u64) -> io::Result<usize> {
-        let mut total_removed = 0;
-        for context_entry in &self.state.contexts {
-            let removed = self.cleanup_tool_cache(&context_entry.name, max_age_days)?;
-            total_removed += removed;
+    /// Clear the tool cache for a context (deletes all entries from VFS).
+    pub async fn clear_tool_cache(&self, name: &str) -> io::Result<()> {
+        let dir_str = format!("/sys/tool_cache/{}", name);
+        let dir = crate::vfs::VfsPath::new(&dir_str)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+        match self.vfs.delete(crate::vfs::SYSTEM_CALLER, &dir).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
         }
-        Ok(total_removed)
+    }
+
+    /// Clean up tool cache entries older than `max_age_days` for a single context.
+    /// Returns the number of entries removed.
+    pub async fn cleanup_tool_cache(
+        &self,
+        context_name: &str,
+        max_age_days: u64,
+    ) -> io::Result<usize> {
+        use crate::vfs::VfsEntryKind;
+
+        let dir_str = format!("/sys/tool_cache/{}", context_name);
+        let dir = match crate::vfs::VfsPath::new(&dir_str) {
+            Ok(p) => p,
+            Err(_) => return Ok(0),
+        };
+
+        let entries = match self.vfs.list(crate::vfs::SYSTEM_CALLER, &dir).await {
+            Ok(e) => e,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e),
+        };
+
+        let mut removed = 0;
+        for entry in entries {
+            if entry.kind != VfsEntryKind::File {
+                continue;
+            }
+            let file_path_str = format!("{}/{}", dir_str, entry.name);
+            let file_path = match crate::vfs::VfsPath::new(&file_path_str) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let meta = match self
+                .vfs
+                .metadata(crate::vfs::SYSTEM_CALLER, &file_path)
+                .await
+            {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if let Some(created) = meta.created
+                && is_cache_entry_expired(created, max_age_days)
+            {
+                let _ = self.vfs.delete(crate::vfs::SYSTEM_CALLER, &file_path).await;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Clean up tool cache entries for all contexts. Returns total entries removed.
+    pub async fn cleanup_all_tool_caches(&self, max_age_days: u64) -> io::Result<usize> {
+        use crate::vfs::VfsEntryKind;
+
+        let root = crate::vfs::VfsPath::new("/sys/tool_cache")
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+
+        let ctx_dirs = match self.vfs.list(crate::vfs::SYSTEM_CALLER, &root).await {
+            Ok(e) => e,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e),
+        };
+
+        let mut total = 0;
+        for dir in ctx_dirs {
+            if dir.kind == VfsEntryKind::Directory {
+                total += self.cleanup_tool_cache(&dir.name, max_age_days).await?;
+            }
+        }
+        Ok(total)
     }
 
     // === Context Dirty/Clean State ===
@@ -878,38 +961,6 @@ impl AppState {
         Ok(())
     }
 
-    /// Append all context messages to human-readable transcript.md
-    pub fn append_to_transcript_md(&self, context: &Context) -> io::Result<()> {
-        self.ensure_context_dir(&context.name)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.transcript_md_file(&context.name))?;
-
-        for msg in &context.messages {
-            let role = msg["role"].as_str().unwrap_or("unknown");
-            // Skip system messages to avoid cluttering transcript with boilerplate
-            if role == "system" {
-                continue;
-            }
-            if let Some(tool_calls) = msg["tool_calls"].as_array() {
-                let names: Vec<&str> = tool_calls
-                    .iter()
-                    .filter_map(|tc| tc["function"]["name"].as_str())
-                    .collect();
-                writeln!(file, "[ASSISTANT]: [called tools: {}]\n", names.join(", "))?;
-            } else if role == "tool" {
-                let content = msg["content"].as_str().unwrap_or("");
-                writeln!(file, "[TOOL RESULT]: {}\n", content)?;
-            } else {
-                let content = msg["content"].as_str().unwrap_or("");
-                writeln!(file, "[{}]: {}\n", role.to_uppercase(), content)?;
-            }
-        }
-
-        Ok(())
-    }
-
     /// Append a single entry to transcript (the authoritative log, using partitioned storage)
     ///
     /// Uses cached active state when available to avoid repeated file scans.
@@ -1036,6 +1087,19 @@ impl AppState {
 
         Ok(())
     }
+}
+
+/// Check whether a cache entry's creation timestamp is older than `max_age_days`.
+///
+/// The `+1` offset means `max_age_days=0` tolerates entries less than 1 day old,
+/// preventing accidental deletion of entries created during the current session.
+pub(crate) fn is_cache_entry_expired(
+    created: chrono::DateTime<chrono::Utc>,
+    max_age_days: u64,
+) -> bool {
+    let max_age = chrono::Duration::days((max_age_days + 1) as i64);
+    let cutoff = chrono::Utc::now() - max_age;
+    created < cutoff
 }
 
 #[cfg(test)]

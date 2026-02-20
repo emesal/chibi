@@ -396,8 +396,6 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 128000,
             warn_threshold_percent: 0.8,
-            verbose: false,
-            hide_tool_calls: false,
             no_tool_calls: false,
             auto_compact: false,
             auto_compact_threshold: 0.9,

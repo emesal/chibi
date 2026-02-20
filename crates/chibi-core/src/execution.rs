@@ -13,7 +13,7 @@ use crate::api::sink::ResponseSink;
 use crate::config::ResolvedConfig;
 use crate::context;
 use crate::input::{Command, DebugKey, ExecutionFlags, Inspectable};
-use crate::output::OutputSink;
+use crate::output::{CommandEvent, OutputSink};
 use crate::state::StatePaths;
 
 /// Side effects of command execution that binaries may need to act on.
@@ -55,21 +55,18 @@ pub async fn execute_command<S: ResponseSink>(
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
-    let verbose = flags.verbose;
-
     // --- pre-command lifecycle ---
 
     // Initialize (OnStart hooks)
     let _ = chibi.init();
 
     // Auto-destroy expired contexts
-    let destroyed = chibi.app.auto_destroy_expired_contexts(verbose)?;
+    let destroyed = chibi.app.auto_destroy_expired_contexts()?;
     if !destroyed.is_empty() {
         chibi.save()?;
-        output.diagnostic(
-            &format!("[Auto-destroyed {} expired context(s)]", destroyed.len()),
-            verbose,
-        );
+        output.emit_event(CommandEvent::AutoDestroyed {
+            count: destroyed.len(),
+        });
     }
 
     // Ensure context dir + ContextEntry exist
@@ -118,16 +115,13 @@ pub async fn execute_command<S: ResponseSink>(
     if cleanup_config.auto_cleanup_cache {
         let removed = chibi
             .app
-            .cleanup_all_tool_caches(cleanup_config.tool_cache_max_age_days)?;
+            .cleanup_all_tool_caches(cleanup_config.tool_cache_max_age_days)
+            .await?;
         if removed > 0 {
-            output.diagnostic(
-                &format!(
-                    "[Auto-cleanup: removed {} old cache entries (older than {} days)]",
-                    removed,
-                    cleanup_config.tool_cache_max_age_days + 1
-                ),
-                verbose,
-            );
+            output.emit_event(CommandEvent::CacheCleanup {
+                removed,
+                max_age_days: cleanup_config.tool_cache_max_age_days,
+            });
         }
     }
 
@@ -149,8 +143,6 @@ async fn dispatch_command<S: ResponseSink>(
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
-    let verbose = flags.verbose;
-
     match command {
         Command::ShowHelp | Command::ShowVersion => {
             // Binary-specific — should be intercepted before reaching core.
@@ -217,10 +209,10 @@ async fn dispatch_command<S: ResponseSink>(
         }
         Command::CompactContext { name } => {
             if let Some(ctx_name) = name {
-                crate::api::compact_context_by_name(&chibi.app, ctx_name, verbose).await?;
+                crate::api::compact_context_by_name(&chibi.app, ctx_name, output).await?;
                 output.emit_result(&format!("Context '{}' compacted", ctx_name));
             } else {
-                crate::api::compact_context_with_llm_manual(&chibi.app, context, config, verbose)
+                crate::api::compact_context_with_llm_manual(&chibi.app, context, config, output)
                     .await?;
             }
             Ok(CommandEffect::None)
@@ -239,7 +231,7 @@ async fn dispatch_command<S: ResponseSink>(
             count,
         } => {
             let ctx_name = ctx.as_deref().unwrap_or(context);
-            show_log(chibi, ctx_name, *count, verbose, output)?;
+            show_log(chibi, ctx_name, *count, output)?;
             Ok(CommandEffect::None)
         }
         Command::Inspect {
@@ -263,10 +255,9 @@ async fn dispatch_command<S: ResponseSink>(
                 prompt.clone()
             };
             chibi.app.set_system_prompt_for(ctx_name, &content)?;
-            output.diagnostic(
-                &format!("[System prompt set for context '{}']", ctx_name),
-                verbose,
-            );
+            output.emit_event(CommandEvent::SystemPromptSet {
+                context: ctx_name.to_string(),
+            });
             Ok(CommandEffect::None)
         }
         Command::RunPlugin { name, args } => {
@@ -277,13 +268,13 @@ async fn dispatch_command<S: ResponseSink>(
                 )
             })?;
             let args_json = serde_json::json!({ "args": args });
-            let result = crate::tools::execute_tool(tool, &args_json, verbose)?;
+            let result = crate::tools::execute_tool(tool, &args_json)?;
             output.emit_result(&result);
             Ok(CommandEffect::None)
         }
         Command::ClearCache { name } => {
             let ctx_name = name.as_deref().unwrap_or(context);
-            chibi.app.clear_tool_cache(ctx_name)?;
+            chibi.app.clear_tool_cache(ctx_name).await?;
             output.emit_result(&format!("Cleared tool cache for context '{}'", ctx_name));
             Ok(CommandEffect::None)
         }
@@ -291,7 +282,8 @@ async fn dispatch_command<S: ResponseSink>(
             let resolved = chibi.resolve_config(context, None)?;
             let removed = chibi
                 .app
-                .cleanup_all_tool_caches(resolved.tool_cache_max_age_days)?;
+                .cleanup_all_tool_caches(resolved.tool_cache_max_age_days)
+                .await?;
             output.emit_result(&format!(
                 "Removed {} old cache entries (older than {} days)",
                 removed,
@@ -358,16 +350,14 @@ async fn dispatch_command<S: ResponseSink>(
         Command::CheckInbox { context: ctx } => {
             let messages = chibi.app.peek_inbox(ctx)?;
             if messages.is_empty() {
-                output.diagnostic(&format!("[No messages in inbox for '{}']", ctx), verbose);
+                output.emit_event(CommandEvent::InboxEmpty {
+                    context: ctx.to_string(),
+                });
             } else {
-                output.diagnostic(
-                    &format!(
-                        "[Processing {} message(s) from inbox for '{}']",
-                        messages.len(),
-                        ctx
-                    ),
-                    verbose,
-                );
+                output.emit_event(CommandEvent::InboxProcessing {
+                    count: messages.len(),
+                    context: ctx.to_string(),
+                });
                 if !chibi.app.context_dir(ctx).exists() {
                     let new_context = context::Context::new(ctx.clone());
                     chibi.app.save_and_register_context(&new_context)?;
@@ -394,14 +384,10 @@ async fn dispatch_command<S: ResponseSink>(
                 if messages.is_empty() {
                     continue;
                 }
-                output.diagnostic(
-                    &format!(
-                        "[Processing {} message(s) from inbox for '{}']",
-                        messages.len(),
-                        ctx_name
-                    ),
-                    verbose,
-                );
+                output.emit_event(CommandEvent::InboxProcessing {
+                    count: messages.len(),
+                    context: ctx_name.clone(),
+                });
                 let inbox_config = chibi.resolve_config(&ctx_name, None)?;
                 send_prompt_inner(
                     chibi,
@@ -416,12 +402,11 @@ async fn dispatch_command<S: ResponseSink>(
                 processed_count += 1;
             }
             if processed_count == 0 {
-                output.diagnostic("[No messages in any inbox.]", verbose);
+                output.emit_event(CommandEvent::AllInboxesEmpty);
             } else {
-                output.diagnostic(
-                    &format!("[Processed inboxes for {} context(s).]", processed_count),
-                    verbose,
-                );
+                output.emit_event(CommandEvent::InboxesProcessed {
+                    count: processed_count,
+                });
             }
             Ok(CommandEffect::None)
         }
@@ -441,9 +426,6 @@ async fn send_prompt_inner<S: ResponseSink>(
     sink: &mut S,
 ) -> io::Result<()> {
     let mut resolved = config.clone();
-    if flags.no_tool_calls {
-        resolved.no_tool_calls = true;
-    }
     crate::gateway::ensure_context_window(&mut resolved);
     let use_reflection = resolved.reflection_enabled;
 
@@ -452,7 +434,6 @@ async fn send_prompt_inner<S: ResponseSink>(
         crate::lock::ContextLock::acquire(&context_dir, chibi.app.config.lock_heartbeat_seconds)?;
 
     let mut options = PromptOptions::new(
-        flags.verbose,
         use_reflection,
         &flags.debug,
         false, // force_render is a CLI concern
@@ -468,15 +449,9 @@ async fn send_prompt_inner<S: ResponseSink>(
 
 /// Show log entries for a context.
 ///
-/// Renders message content via `emit_markdown()`. Tool calls and results
-/// are emitted as plain text. In JSON mode, entries are emitted via `emit_entry()`.
-fn show_log(
-    chibi: &Chibi,
-    context: &str,
-    count: isize,
-    verbose: bool,
-    output: &dyn OutputSink,
-) -> io::Result<()> {
+/// Selects entries by count and emits each via `emit_entry()`.
+/// Formatting is the responsibility of the sink implementation.
+fn show_log(chibi: &Chibi, context: &str, count: isize, output: &dyn OutputSink) -> io::Result<()> {
     let entries = chibi.app.read_jsonl_transcript(context)?;
 
     let selected: Vec<_> = if count == 0 {
@@ -496,65 +471,8 @@ fn show_log(
         entries.iter().take(n).collect()
     };
 
-    // JSON mode: emit structured entries directly
-    if output.is_json_mode() {
-        for entry in selected {
-            output.emit_entry(entry)?;
-        }
-        return Ok(());
-    }
-
-    // Text mode: format for human reading
     for entry in selected {
-        match entry.entry_type.as_str() {
-            context::ENTRY_TYPE_MESSAGE => {
-                output.emit_result(&format!("[{}]", entry.from.to_uppercase()));
-                output.emit_markdown(&entry.content)?;
-                output.newline();
-            }
-            context::ENTRY_TYPE_TOOL_CALL => {
-                if verbose {
-                    output.emit_result(&format!("[TOOL CALL: {}]\n{}\n", entry.to, entry.content));
-                } else {
-                    let args_preview = if entry.content.len() > 60 {
-                        format!("{}...", &entry.content[..60])
-                    } else {
-                        entry.content.clone()
-                    };
-                    output.emit_result(&format!("[TOOL: {}] {}", entry.to, args_preview));
-                }
-            }
-            context::ENTRY_TYPE_TOOL_RESULT => {
-                if verbose {
-                    output.emit_result(&format!(
-                        "[TOOL RESULT: {}]\n{}\n",
-                        entry.from, entry.content
-                    ));
-                } else {
-                    let size = entry.content.len();
-                    let size_str = if size > 1024 {
-                        format!("{:.1}kb", size as f64 / 1024.0)
-                    } else {
-                        format!("{}b", size)
-                    };
-                    output.emit_result(&format!("  -> {}", size_str));
-                }
-            }
-            "compaction" => {
-                if verbose {
-                    output.emit_result(&format!("[COMPACTION]: {}\n", entry.content));
-                }
-            }
-            _ => {
-                if verbose {
-                    output.emit_result(&format!(
-                        "[{}]: {}\n",
-                        entry.entry_type.to_uppercase(),
-                        entry.content
-                    ));
-                }
-            }
-        }
+        output.emit_entry(entry)?;
     }
     Ok(())
 }
@@ -618,5 +536,498 @@ fn inspect_context(
             context: context.to_string(),
             field: field_path.clone(),
         })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::CollectingSink;
+    use crate::context::{Context, ContextEntry, now_timestamp};
+    use crate::output::CaptureSink;
+    use crate::test_support::create_test_chibi;
+    use crate::vfs::{SYSTEM_CALLER, VfsPath};
+
+    // === pre-command lifecycle ===
+
+    #[tokio::test]
+    async fn execute_command_registers_new_context_in_state() {
+        let (mut chibi, _dir) = create_test_chibi();
+        let config = chibi.resolve_config("myctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            "myctx",
+            &Command::NoOp,
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            chibi.app.state.contexts.iter().any(|e| e.name == "myctx"),
+            "context 'myctx' should be registered in state"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_command_auto_destroys_expired_contexts() {
+        let (mut chibi, _dir) = create_test_chibi();
+
+        // Register a context that expired an hour ago
+        chibi.app.ensure_context_dir("old-ctx").unwrap();
+        let entry = ContextEntry {
+            name: "old-ctx".to_string(),
+            created_at: now_timestamp() - 3600,
+            last_activity_at: now_timestamp() - 3600,
+            destroy_after_seconds_inactive: 0,
+            destroy_at: now_timestamp() - 1800,
+        };
+        chibi.app.state.contexts.push(entry);
+        chibi.save().unwrap();
+
+        let config = chibi.resolve_config("myctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            "myctx",
+            &Command::NoOp,
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !chibi.app.state.contexts.iter().any(|e| e.name == "old-ctx"),
+            "expired context should be auto-destroyed"
+        );
+        let events = sink.events.borrow();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, CommandEvent::AutoDestroyed { .. })),
+            "AutoDestroyed event should be emitted"
+        );
+    }
+
+    // === dispatch_command: non-send variants ===
+
+    #[tokio::test]
+    async fn dispatch_no_op_returns_none_effect() {
+        let (mut chibi, _dir) = create_test_chibi();
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        let effect = execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::NoOp,
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(effect, CommandEffect::None);
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_contexts_marks_current_with_star() {
+        let (mut chibi, _dir) = create_test_chibi();
+        // Pre-create two contexts
+        chibi.app.ensure_context_dir("alpha").unwrap();
+        chibi.app.ensure_context_dir("beta").unwrap();
+        chibi
+            .app
+            .state
+            .contexts
+            .push(ContextEntry::with_created_at("alpha", now_timestamp()));
+        chibi
+            .app
+            .state
+            .contexts
+            .push(ContextEntry::with_created_at("beta", now_timestamp()));
+
+        let config = chibi.resolve_config("alpha", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            "alpha",
+            &Command::ListContexts,
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        let results = sink.results.borrow();
+        let alpha_line = results.iter().find(|r| r.contains("alpha")).unwrap();
+        let beta_line = results.iter().find(|r| r.contains("beta")).unwrap();
+        assert!(
+            alpha_line.starts_with("* "),
+            "current context should be marked with '* '"
+        );
+        assert!(
+            beta_line.starts_with("  "),
+            "non-current context should have '  ' prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_rename_context_returns_renamed_effect() {
+        let (mut chibi, _dir) = create_test_chibi();
+        chibi.app.ensure_context_dir("old").unwrap();
+        chibi
+            .app
+            .state
+            .contexts
+            .push(ContextEntry::with_created_at("old", now_timestamp()));
+        chibi.save().unwrap();
+
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        let effect = execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::RenameContext {
+                old: Some("old".to_string()),
+                new: "new".to_string(),
+            },
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            effect,
+            CommandEffect::ContextRenamed {
+                old: "old".to_string(),
+                new: "new".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_destroy_context_confirmed_returns_destroyed_effect() {
+        let (mut chibi, _dir) = create_test_chibi();
+        chibi.app.ensure_context_dir("doomed").unwrap();
+        chibi
+            .app
+            .state
+            .contexts
+            .push(ContextEntry::with_created_at("doomed", now_timestamp()));
+        chibi.save().unwrap();
+
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::confirming(); // confirm() returns true
+        let mut response = CollectingSink::default();
+
+        let effect = execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::DestroyContext {
+                name: Some("doomed".to_string()),
+            },
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            effect,
+            CommandEffect::ContextDestroyed("doomed".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_destroy_context_aborted_returns_none_effect() {
+        let (mut chibi, _dir) = create_test_chibi();
+        chibi.app.ensure_context_dir("safe").unwrap();
+        chibi
+            .app
+            .state
+            .contexts
+            .push(ContextEntry::with_created_at("safe", now_timestamp()));
+        chibi.save().unwrap();
+
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new(); // confirm() returns false
+        let mut response = CollectingSink::default();
+
+        let effect = execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::DestroyContext {
+                name: Some("safe".to_string()),
+            },
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(effect, CommandEffect::None);
+        assert!(
+            chibi.app.context_dir("safe").exists(),
+            "aborted destroy should leave context intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_archive_history_clears_messages() {
+        let (mut chibi, _dir) = create_test_chibi();
+        // Populate context with a message
+        let mut ctx = Context::new("arc");
+        ctx.messages
+            .push(serde_json::json!({"role": "user", "content": "hello"}));
+        chibi.app.save_and_register_context(&ctx).unwrap();
+
+        let config = chibi.resolve_config("arc", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            "arc",
+            &Command::ArchiveHistory { name: None },
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        let reloaded = chibi.app.get_or_create_context("arc").unwrap();
+        assert!(
+            reloaded.messages.is_empty(),
+            "ArchiveHistory should clear active messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_set_system_prompt_emits_event() {
+        let (mut chibi, _dir) = create_test_chibi();
+
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::SetSystemPrompt {
+                context: None,
+                prompt: "You are a helpful assistant.".to_string(),
+            },
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        let events = sink.events.borrow();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, CommandEvent::SystemPromptSet { .. })),
+            "SystemPromptSet event should be emitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_call_tool_invalid_json_returns_error() {
+        let (mut chibi, _dir) = create_test_chibi();
+
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        let result = execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::CallTool {
+                name: "some_tool".to_string(),
+                args: vec!["{not valid json}".to_string()],
+            },
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await;
+
+        assert!(result.is_err(), "invalid JSON args should return an error");
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[tokio::test]
+    async fn dispatch_show_log_on_empty_context_succeeds() {
+        let (mut chibi, _dir) = create_test_chibi();
+        chibi.app.ensure_context_dir("logctx").unwrap();
+
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        // count=0 on an empty transcript should return no entries and not error
+        let effect = execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::ShowLog {
+                context: Some("logctx".to_string()),
+                count: 0,
+            },
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(effect, CommandEffect::None);
+        // ShowLog emits via emit_entry (not emit_result), so results should be empty
+        assert!(sink.results.borrow().is_empty());
+    }
+
+    // === post-command lifecycle: auto-cleanup cache (#175) ===
+
+    #[tokio::test]
+    async fn execute_command_auto_cleanup_fresh_entry_survives() {
+        let (mut chibi, _dir) = create_test_chibi();
+        chibi.app.config.auto_cleanup_cache = true;
+        chibi.app.config.tool_cache_max_age_days = 7;
+
+        let ctx_name = "cachectx";
+        chibi.app.ensure_context_dir(ctx_name).unwrap();
+
+        // Write a fresh cache entry via VFS (age ~0s, well within 7-day limit)
+        let path = VfsPath::new(&format!("/sys/tool_cache/{}/entry1", ctx_name)).unwrap();
+        chibi
+            .app
+            .vfs
+            .write(SYSTEM_CALLER, &path, b"cached result")
+            .await
+            .unwrap();
+
+        let config = chibi.resolve_config(ctx_name, None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            ctx_name,
+            &Command::NoOp,
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        // Fresh entry should not be removed — no CacheCleanup event
+        {
+            let events = sink.events.borrow();
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| matches!(e, CommandEvent::CacheCleanup { .. })),
+                "CacheCleanup should not fire when no entries are expired"
+            );
+        }
+
+        // Entry must still be present
+        assert!(
+            chibi.app.vfs.exists(SYSTEM_CALLER, &path).await.unwrap(),
+            "fresh cache entry should survive cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_command_no_auto_cleanup_when_disabled() {
+        let (mut chibi, _dir) = create_test_chibi();
+        chibi.app.config.auto_cleanup_cache = false;
+
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::NoOp,
+            &flags,
+            &config,
+            None,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        let events = sink.events.borrow();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, CommandEvent::CacheCleanup { .. })),
+            "CacheCleanup should not fire when auto_cleanup_cache is disabled"
+        );
     }
 }

@@ -189,7 +189,7 @@ Called before tools are sent to the API. Allows dynamic filtering of which tools
 
 Tool types are:
 - `builtin`: update_todos, update_goals, update_reflection, send_message
-- `file`: file_head, file_tail, file_lines, file_grep, cache_list
+- `file`: file_head, file_tail, file_lines, file_grep, write_file
 - `agent`: spawn_agent, retrieve_content
 - `plugin`: Tools loaded from the plugins directory
 
@@ -410,17 +410,18 @@ Called before caching a large tool output. Can provide a custom summary.
 
 ### post_cache_output
 
-Notification after output has been cached.
+Notification after output has been cached to VFS.
 
 ```json
 {
   "tool_name": "fetch_url",
   "cache_id": "fetch_url_abc123_def456",
-  "char_count": 50000,
-  "token_estimate": 12500,
-  "line_count": 1200
+  "output_size": 50000,
+  "preview_size": 800
 }
 ```
+
+`cache_id` is the filename under `vfs:///sys/tool_cache/<context>/`. access cached content with `file_head`, `file_tail`, `file_lines`, `file_grep` using the full URI.
 
 ### pre_send_message
 

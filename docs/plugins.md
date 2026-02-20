@@ -274,14 +274,44 @@ Chibi provides several built-in tools that don't require plugins:
 - `send_message` - Send messages between contexts
 
 **File tools** (for examining cached tool outputs and allowed paths):
-- `file_head` - Read first N lines
-- `file_tail` - Read last N lines
-- `file_lines` - Read specific line range
-- `file_grep` - Search for patterns
-- `cache_list` - List cached outputs
+- `file_head` - Read first N lines (accepts `vfs:///` URIs for cached outputs)
+- `file_tail` - Read last N lines (accepts `vfs:///` URIs)
+- `file_lines` - Read specific line range (accepts `vfs:///` URIs)
+- `file_grep` - Search for patterns (accepts `vfs:///` URIs)
+- `write_file` - Write content to a file or VFS path
 
 **Agent tools** (for spawning sub-agents):
 - `spawn_agent` - Spawn a sub-agent with a custom system prompt
 - `retrieve_content` - Read a file/URL and process it through a sub-agent
 
 These are always available to the LLM. See [agentic.md](agentic.md) for details on sub-agents and tool output caching.
+
+## Language Plugins
+
+Language plugins provide symbol extraction for the codebase index. Core handles all database writes.
+
+**Convention:** plugins named `lang_<language>` (e.g. `lang_rust`, `lang_python`).
+
+**Input** (stdin, JSON):
+```json
+{"files": [{"path": "src/foo.rs", "content": "..."}]}
+```
+
+**Output** (stdout, JSON):
+```json
+{
+  "symbols": [
+    {"name": "parse", "kind": "function", "parent": "Parser",
+     "line_start": 42, "line_end": 67, "signature": "fn parse(&self) -> Result<AST>", "visibility": "public"}
+  ],
+  "refs": [
+    {"from_line": 55, "to_name": "TokenStream::new", "kind": "call"}
+  ]
+}
+```
+
+**Symbol fields:** `name` (required), `kind` (required), `line_start`/`line_end` (optional), `parent` (optional, for nesting), `signature`/`visibility` (optional).
+
+**Ref fields:** `from_line`, `to_name`, `kind` (all optional but recommended).
+
+The `post_index_file` hook fires after each file is indexed with `{"path", "lang", "symbol_count", "ref_count"}`.

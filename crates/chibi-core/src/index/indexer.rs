@@ -232,7 +232,7 @@ pub fn update_index(
                     "files": [{"path": rel_path, "content": content}]
                 });
 
-                match execute_tool(plugin, &input, false) {
+                match execute_tool(plugin, &input) {
                     Ok(output) => {
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&output) {
                             stats.symbols_added += insert_symbols(conn, file_id, &parsed);

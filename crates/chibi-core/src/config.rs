@@ -426,6 +426,32 @@ pub struct ToolsConfig {
     pub exclude_categories: Option<Vec<String>>,
 }
 
+/// VFS (virtual file system) configuration.
+///
+/// Backend selection is config-level and intentionally global-only. The VFS
+/// is a singleton constructed once at startup in `AppState::load`. It is
+/// absent from `LocalConfig` (no per-context backend overrides) and from
+/// `ResolvedConfig` (not user-inspectable via `chibi config get vfs.*`).
+/// If introspection is needed in future, add it to `ResolvedConfig::list_fields`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VfsConfig {
+    /// Backend name. Currently only "local" is built in.
+    #[serde(default = "default_vfs_backend")]
+    pub backend: String,
+}
+
+fn default_vfs_backend() -> String {
+    "local".to_string()
+}
+
+impl Default for VfsConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_vfs_backend(),
+        }
+    }
+}
+
 /// Merge two optional string vecs: append `local` to `global`, deduplicating entries.
 fn merge_option_vecs(
     global: &Option<Vec<String>>,
@@ -480,8 +506,6 @@ pub struct ConfigDefaults;
 
 impl ConfigDefaults {
     // Boolean defaults
-    pub const VERBOSE: bool = false;
-    pub const HIDE_TOOL_CALLS: bool = false;
     pub const NO_TOOL_CALLS: bool = false;
     pub const AUTO_COMPACT: bool = false;
     pub const REFLECTION_ENABLED: bool = true;
@@ -509,12 +533,6 @@ impl ConfigDefaults {
 }
 
 // Thin wrappers for serde's #[serde(default = "...")] requirement
-fn default_verbose() -> bool {
-    ConfigDefaults::VERBOSE
-}
-fn default_hide_tool_calls() -> bool {
-    ConfigDefaults::HIDE_TOOL_CALLS
-}
 fn default_no_tool_calls() -> bool {
     ConfigDefaults::NO_TOOL_CALLS
 }
@@ -582,12 +600,6 @@ pub struct Config {
     pub context_window_limit: Option<usize>,
     #[serde(default = "default_warn_threshold_percent")]
     pub warn_threshold_percent: f32,
-    /// Enable verbose output (equivalent to -v flag)
-    #[serde(default = "default_verbose")]
-    pub verbose: bool,
-    /// Hide tool call display by default (verbose overrides)
-    #[serde(default = "default_hide_tool_calls")]
-    pub hide_tool_calls: bool,
     /// Omit tools from API requests entirely (pure text mode)
     #[serde(default = "default_no_tool_calls")]
     pub no_tool_calls: bool,
@@ -600,10 +612,12 @@ pub struct Config {
     /// Maximum characters for reflection tool output
     #[serde(default = "default_reflection_character_limit")]
     pub reflection_character_limit: usize,
-    /// Total fuel budget for the agentic loop (tool rounds, continuations, empty responses)
+    /// Total fuel budget for the agentic loop (tool rounds, continuations, empty responses).
+    /// Set to `0` to disable fuel tracking entirely (unlimited mode).
     #[serde(default = "default_fuel")]
     pub fuel: usize,
-    /// Fuel cost of an empty response (high cost prevents infinite empty loops)
+    /// Fuel cost of an empty response (high cost prevents infinite empty loops).
+    /// Ignored when `fuel = 0` (unlimited mode).
     #[serde(default = "default_fuel_empty_response_cost")]
     pub fuel_empty_response_cost: usize,
     #[serde(default = "default_username")]
@@ -641,6 +655,10 @@ pub struct Config {
     /// Global tool filtering configuration (include/exclude/exclude_categories)
     #[serde(default)]
     pub tools: ToolsConfig,
+    /// Global VFS configuration. Not in ResolvedConfig — the VFS backend is a
+    /// startup-time singleton and not per-context configurable.
+    #[serde(default)]
+    pub vfs: VfsConfig,
     /// URL security policy for sensitive URL handling
     #[serde(default)]
     pub url_policy: Option<UrlPolicy>,
@@ -653,17 +671,13 @@ pub struct LocalConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub username: Option<String>,
-    /// Per-context verbose override
-    pub verbose: Option<bool>,
-    /// Per-context hide tool calls override
-    pub hide_tool_calls: Option<bool>,
     /// Per-context no tool calls override
     pub no_tool_calls: Option<bool>,
     pub auto_compact: Option<bool>,
     pub auto_compact_threshold: Option<f32>,
-    /// Per-context fuel budget override
+    /// Per-context fuel budget override. `0` means unlimited.
     pub fuel: Option<usize>,
-    /// Per-context fuel cost for empty responses
+    /// Per-context fuel cost for empty responses. Ignored when `fuel = 0`.
     pub fuel_empty_response_cost: Option<usize>,
     pub warn_threshold_percent: Option<f32>,
     pub context_window_limit: Option<usize>,
@@ -723,8 +737,6 @@ impl LocalConfig {
             username,
             fallback_tool,
             file_tools_allowed_paths,
-            verbose,
-            hide_tool_calls,
             no_tool_calls,
             auto_compact,
             auto_compact_threshold,
@@ -774,17 +786,13 @@ pub struct ResolvedConfig {
     pub model: String,
     pub context_window_limit: usize,
     pub warn_threshold_percent: f32,
-    /// Verbose output (from config, may be overridden by CLI flag)
-    pub verbose: bool,
-    /// Hide tool call display (from config, may be overridden by CLI flag)
-    pub hide_tool_calls: bool,
     /// Omit tools from API requests (pure text mode, from config/flag)
     pub no_tool_calls: bool,
     pub auto_compact: bool,
     pub auto_compact_threshold: f32,
-    /// Total fuel budget for the agentic loop
+    /// Total fuel budget for the agentic loop. `0` means unlimited (no tracking).
     pub fuel: usize,
-    /// Fuel cost of an empty response
+    /// Fuel cost of an empty response. Ignored when `fuel = 0`.
     pub fuel_empty_response_cost: usize,
     pub username: String,
     pub reflection_enabled: bool,
@@ -825,7 +833,7 @@ impl ResolvedConfig {
     pub fn get_field(&self, path: &str) -> Option<String> {
         // Macro handles standard fields with uniform display logic
         config_get_field!(self, path,
-            display: verbose, hide_tool_calls, no_tool_calls, auto_compact,
+            display: no_tool_calls, auto_compact,
                      reflection_enabled, auto_cleanup_cache,
                      context_window_limit, reflection_character_limit,
                      fuel, fuel_empty_response_cost,
@@ -908,8 +916,6 @@ impl ResolvedConfig {
         &[
             // Top-level fields
             "api_key",
-            "verbose",
-            "hide_tool_calls",
             "no_tool_calls",
             "model",
             "username",
@@ -961,7 +967,7 @@ impl ResolvedConfig {
     pub fn set_field(&mut self, path: &str, value: &str) -> Result<(), String> {
         // Macro handles standard top-level fields
         config_set_field!(self, path, value,
-            bool: verbose, hide_tool_calls, no_tool_calls, auto_compact,
+            bool: no_tool_calls, auto_compact,
                   reflection_enabled, auto_cleanup_cache;
             usize: context_window_limit, reflection_character_limit,
                    fuel, fuel_empty_response_cost,
@@ -1188,8 +1194,6 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,
-            verbose: false,
-            hide_tool_calls: false,
             no_tool_calls: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
@@ -1318,8 +1322,6 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 4096,
             warn_threshold_percent: 80.0,
-            verbose: false,
-            hide_tool_calls: false,
             no_tool_calls: false,
             auto_compact: false,
             auto_compact_threshold: 80.0,
@@ -1435,12 +1437,12 @@ mod tests {
         let pairs = vec![
             ("fuel".to_string(), "50".to_string()),
             ("model".to_string(), "gpt-4".to_string()),
-            ("verbose".to_string(), "true".to_string()),
+            ("no_tool_calls".to_string(), "true".to_string()),
         ];
         config.apply_overrides_from_pairs(&pairs).unwrap();
         assert_eq!(config.fuel, 50);
         assert_eq!(config.model, "gpt-4");
-        assert!(config.verbose);
+        assert!(config.no_tool_calls);
     }
 
     #[test]
@@ -1448,7 +1450,7 @@ mod tests {
         let mut config = test_resolved_config();
         let pairs = vec![
             ("fuel".to_string(), "50".to_string()),
-            ("verbose".to_string(), "notabool".to_string()),
+            ("no_tool_calls".to_string(), "notabool".to_string()),
             ("model".to_string(), "should-not-reach".to_string()),
         ];
         let result = config.apply_overrides_from_pairs(&pairs);
@@ -1456,5 +1458,17 @@ mod tests {
         // first pair applied, second failed, third not reached
         assert_eq!(config.fuel, 50);
         assert_eq!(config.model, "test-model"); // unchanged
+    }
+
+    #[test]
+    fn test_vfs_config_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.vfs.backend, "local");
+    }
+
+    #[test]
+    fn test_vfs_config_custom_backend() {
+        let config: Config = toml::from_str("[vfs]\nbackend = \"fossil\"").unwrap();
+        assert_eq!(config.vfs.backend, "fossil");
     }
 }

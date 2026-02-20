@@ -19,7 +19,7 @@
 //!     let config = chibi.resolve_config("default", None)?;
 //!
 //!     // Create options and a sink to collect the response
-//!     let options = PromptOptions::new(false, false, &[], false);
+//!     let options = PromptOptions::new(false, &[], false);
 //!     let mut sink = CollectingSink::new();
 //!
 //!     // Send a prompt to the default context
@@ -36,6 +36,7 @@ use std::path::Path;
 use crate::api::sink::ResponseSink;
 use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
+use crate::output::{CommandEvent, NoopSink, OutputSink};
 use crate::state::AppState;
 use crate::tools::{self, Tool};
 
@@ -62,21 +63,17 @@ pub type PermissionHandler = Box<dyn Fn(&serde_json::Value) -> io::Result<bool>>
 ///
 /// // Default options use ~/.chibi or CHIBI_HOME
 /// let default_opts = LoadOptions::default();
-/// assert!(!default_opts.verbose);
 /// assert!(default_opts.home.is_none());
 /// assert!(default_opts.project_root.is_none());
 ///
-/// // Custom options with verbose output and custom home
+/// // Custom options with a custom home
 /// let custom_opts = LoadOptions {
-///     verbose: true,
 ///     home: Some(PathBuf::from("/custom/chibi")),
 ///     project_root: Some(PathBuf::from("/my/project")),
 /// };
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
-    /// Print diagnostic info about tool loading to stderr.
-    pub verbose: bool,
     /// Override the chibi home directory.
     /// If `None`, uses `CHIBI_HOME` env var or `~/.chibi`.
     pub home: Option<PathBuf>,
@@ -111,63 +108,73 @@ impl Chibi {
     /// 1. `CHIBI_HOME` environment variable
     /// 2. `~/.chibi` default
     pub fn load() -> io::Result<Self> {
-        Self::load_with_options(LoadOptions::default())
+        Self::load_with_options(LoadOptions::default(), &NoopSink)
     }
 
     /// Load chibi from a specific home directory.
     ///
-    /// Convenience method for `load_with_options(LoadOptions { home: Some(...), ..Default::default() })`.
+    /// Convenience method for `load_with_options(LoadOptions { home: Some(...), ..Default::default() }, sink)`.
     /// Kept as a shortcut for library users who only need to override the home directory.
     ///
     /// This overrides both `CHIBI_HOME` and the default `~/.chibi`.
     pub fn from_home(home: &Path) -> io::Result<Self> {
-        Self::load_with_options(LoadOptions {
-            home: Some(home.to_path_buf()),
-            ..Default::default()
-        })
+        Self::load_with_options(
+            LoadOptions {
+                home: Some(home.to_path_buf()),
+                ..Default::default()
+            },
+            &NoopSink,
+        )
     }
 
     /// Load chibi with custom options.
-    ///
-    /// This is the most flexible way to load chibi, allowing control over
-    /// both the home directory and verbose output.
     ///
     /// Project root resolution order: `options.project_root` > `CHIBI_PROJECT_ROOT` env > cwd.
     ///
     /// Sets `CHIBI_PROJECT_ROOT` and `CHIBI_INDEX_DB` environment variables so
     /// plugins and hooks can discover the project root and index database path.
     ///
+    /// Load-time events (`McpToolsLoaded`, `McpBridgeUnavailable`, `LoadSummary`) are emitted
+    /// to `output` unconditionally; clients filter based on verbose mode.
+    ///
     /// # Example
     ///
     /// ```no_run
     /// // Requires a chibi home directory with config.toml and models.toml.
-    /// use chibi_core::{Chibi, LoadOptions};
+    /// use chibi_core::{Chibi, LoadOptions, OutputSink, CommandEvent};
+    /// use chibi_core::context::TranscriptEntry;
+    /// use std::io;
     ///
-    /// let chibi = Chibi::load_with_options(LoadOptions {
-    ///     verbose: true,
-    ///     home: Some("/custom/path".into()),
-    ///     ..Default::default()
-    /// })?;
+    /// struct NoopSink;
+    /// impl OutputSink for NoopSink {
+    ///     fn emit_result(&self, _: &str) {}
+    ///     fn emit_event(&self, _: CommandEvent) {}
+    ///     fn newline(&self) {}
+    ///     fn emit_entry(&self, _: &TranscriptEntry) -> io::Result<()> { Ok(()) }
+    ///     fn confirm(&self, _: &str) -> bool { false }
+    /// }
+    ///
+    /// let chibi = Chibi::load_with_options(LoadOptions::default(), &NoopSink)?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn load_with_options(options: LoadOptions) -> io::Result<Self> {
+    pub fn load_with_options(options: LoadOptions, output: &dyn OutputSink) -> io::Result<Self> {
         let app = AppState::load(options.home)?;
-        // CLI flag overrides config setting
-        let verbose = options.verbose || app.config.verbose;
-        let mut tools = tools::load_tools(&app.plugins_dir, verbose)?;
+        let mut tools = tools::load_tools(&app.plugins_dir)?;
 
         // Load MCP bridge tools (non-fatal: bridge may not be configured)
         match tools::mcp::load_mcp_tools(&app.chibi_dir) {
             Ok(mcp_tools) => {
-                if verbose && !mcp_tools.is_empty() {
-                    eprintln!("[MCP: {} tools loaded]", mcp_tools.len());
+                if !mcp_tools.is_empty() {
+                    output.emit_event(CommandEvent::McpToolsLoaded {
+                        count: mcp_tools.len(),
+                    });
                 }
                 tools.extend(mcp_tools);
             }
             Err(e) => {
-                if verbose {
-                    eprintln!("[MCP: bridge unavailable: {e}]");
-                }
+                output.emit_event(CommandEvent::McpBridgeUnavailable {
+                    reason: e.to_string(),
+                });
             }
         }
 
@@ -180,6 +187,18 @@ impl Chibi {
             std::env::set_var("CHIBI_PROJECT_ROOT", &project_root);
             std::env::set_var("CHIBI_INDEX_DB", project_index_db_path(&project_root));
         }
+
+        let builtin_names: Vec<String> = tools::builtin_tool_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let plugin_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+        output.emit_event(CommandEvent::LoadSummary {
+            builtin_count: builtin_names.len(),
+            builtin_names,
+            plugin_count: plugin_names.len(),
+            plugin_names,
+        });
 
         Ok(Self {
             app,
@@ -285,7 +304,7 @@ impl Chibi {
     /// # async fn example() -> std::io::Result<()> {
     /// # let chibi = Chibi::load()?;
     /// # let config = chibi.resolve_config("default", None)?;
-    /// # let options = PromptOptions::new(false, false, &[], false);
+    /// # let options = PromptOptions::new(false, &[], false);
     /// let mut sink = CollectingSink::new();
     /// chibi.send_prompt_streaming("default", "Hello", &config, &options, &mut sink).await?;
     /// println!("Got response: {}", sink.text);
@@ -363,8 +382,15 @@ impl Chibi {
             let project_root = std::env::var("CHIBI_PROJECT_ROOT")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-            if let Some(result) =
-                tools::execute_coding_tool(name, &args, &project_root, &self.tools).await
+            if let Some(result) = tools::execute_coding_tool(
+                name,
+                &args,
+                &project_root,
+                &self.tools,
+                &self.app.vfs,
+                context_name,
+            )
+            .await
             {
                 return result;
             }
@@ -382,7 +408,7 @@ impl Chibi {
                 return tools::mcp::execute_mcp_tool(tool, &args, &self.app.chibi_dir);
             }
             // Regular plugin
-            return tools::execute_tool(tool, &args, false);
+            return tools::execute_tool(tool, &args);
         }
 
         Err(io::Error::new(
@@ -434,6 +460,20 @@ impl Chibi {
     pub fn tool_count(&self) -> usize {
         self.tools.len()
     }
+
+    /// Create a minimal `Chibi` instance for testing.
+    ///
+    /// Bypasses file-based loading; the caller supplies a pre-built `AppState`.
+    /// Returns `(Chibi, TempDir)` — the `TempDir` must outlive `Chibi`.
+    #[cfg(test)]
+    pub(crate) fn for_test(app: AppState, root: std::path::PathBuf) -> Self {
+        Self {
+            app,
+            tools: vec![],
+            project_root: root,
+            permission_handler: None,
+        }
+    }
 }
 
 /// Resolve project root: explicit path > `CHIBI_PROJECT_ROOT` env > VCS root > cwd.
@@ -468,54 +508,10 @@ pub fn project_index_db_path(root: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::StatePaths;
-    use crate::config::{ApiParams, ToolsConfig};
-    use crate::partition::StorageConfig;
-    use tempfile::TempDir;
+    use crate::test_support::create_test_chibi;
 
     // Note: Most tests require a real chibi directory structure.
     // These are basic sanity tests.
-
-    /// create a test chibi instance with a temporary directory.
-    /// returns both for lifetime management (tempdir must outlive chibi).
-    fn create_test_chibi() -> (Chibi, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let config = crate::config::Config {
-            api_key: Some("test-key".to_string()),
-            model: Some("test-model".to_string()),
-            context_window_limit: Some(8000),
-            warn_threshold_percent: 75.0,
-            verbose: false,
-            hide_tool_calls: false,
-            no_tool_calls: false,
-            auto_compact: false,
-            auto_compact_threshold: 80.0,
-            reflection_enabled: true,
-            reflection_character_limit: 10000,
-            fuel: 15,
-            fuel_empty_response_cost: 15,
-            username: "testuser".to_string(),
-            lock_heartbeat_seconds: 30,
-            rolling_compact_drop_percentage: 50.0,
-            tool_output_cache_threshold: 4000,
-            tool_cache_max_age_days: 7,
-            auto_cleanup_cache: true,
-            tool_cache_preview_chars: 500,
-            file_tools_allowed_paths: vec![],
-            api: ApiParams::default(),
-            storage: StorageConfig::default(),
-            fallback_tool: "call_user".to_string(),
-            tools: ToolsConfig::default(),
-            url_policy: None,
-        };
-        let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
-        let chibi = Chibi {
-            project_root: temp_dir.path().to_path_buf(),
-            app,
-            tools: vec![],
-            permission_handler: None,
-        };
-        (chibi, temp_dir)
-    }
 
     #[test]
     fn test_chibi_facade_exists() {
@@ -534,18 +530,8 @@ mod tests {
     #[test]
     fn test_load_options_default() {
         let opts = LoadOptions::default();
-        assert!(!opts.verbose);
         assert!(opts.home.is_none());
         assert!(opts.project_root.is_none());
-    }
-
-    #[test]
-    fn test_load_options_with_verbose() {
-        let opts = LoadOptions {
-            verbose: true,
-            ..Default::default()
-        };
-        assert!(opts.verbose);
     }
 
     #[test]
@@ -707,7 +693,7 @@ mod tests {
         assert_eq!(config.username, "testuser");
         assert_eq!(config.fuel, 15);
         assert_eq!(config.context_window_limit, 8000);
-        assert!(!config.verbose);
+        assert!(!config.no_tool_calls);
     }
 
     #[test]

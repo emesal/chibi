@@ -30,11 +30,6 @@ pub trait StatePaths {
         self.context_dir(name).join("context_meta.json")
     }
 
-    /// Path to human-readable transcript (transcript.md)
-    fn transcript_md_file(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("transcript.md")
-    }
-
     /// Path to JSONL transcript (transcript.jsonl) - legacy location
     fn transcript_jsonl_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("transcript.jsonl")
@@ -55,23 +50,6 @@ pub trait StatePaths {
     /// Path to summary file
     fn summary_file(&self, name: &str) -> PathBuf {
         self.context_dir(name).join("summary.md")
-    }
-
-    /// Path to tool cache directory for a context
-    fn tool_cache_dir(&self, name: &str) -> PathBuf {
-        self.context_dir(name).join("tool_cache")
-    }
-
-    /// Path to a cached tool output file
-    fn cache_file(&self, name: &str, cache_id: &str) -> PathBuf {
-        self.tool_cache_dir(name)
-            .join(format!("{}.cache", cache_id))
-    }
-
-    /// Path to cache metadata file
-    fn cache_meta_file(&self, name: &str, cache_id: &str) -> PathBuf {
-        self.tool_cache_dir(name)
-            .join(format!("{}.meta.json", cache_id))
     }
 
     /// Get the path to a context's system prompt file

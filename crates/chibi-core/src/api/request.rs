@@ -10,7 +10,6 @@ use serde_json::json;
 /// Options for controlling prompt execution behavior
 #[derive(Debug, Clone)]
 pub struct PromptOptions<'a> {
-    pub verbose: bool,
     pub use_reflection: bool,
     pub debug: &'a [DebugKey],
     pub force_render: bool,
@@ -19,14 +18,8 @@ pub struct PromptOptions<'a> {
 }
 
 impl<'a> PromptOptions<'a> {
-    pub fn new(
-        verbose: bool,
-        use_reflection: bool,
-        debug: &'a [DebugKey],
-        force_render: bool,
-    ) -> Self {
+    pub fn new(use_reflection: bool, debug: &'a [DebugKey], force_render: bool) -> Self {
         Self {
-            verbose,
             use_reflection,
             debug,
             force_render,

@@ -14,11 +14,10 @@ The LLM always has access to these tools (no setup required):
 | `update_goals` | Set high-level objectives |
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
 | `send_message` | Send messages to other contexts |
-| `file_head` | Read first N lines from a cached output or file |
-| `file_tail` | Read last N lines from a cached output or file |
-| `file_lines` | Read a specific line range from a cached output or file |
-| `file_grep` | Search for a pattern in a cached output or file |
-| `cache_list` | List all cached tool outputs for the current context |
+| `file_head` | Read first N lines from a file or cached output (accepts `vfs:///` URIs) |
+| `file_tail` | Read last N lines from a file or cached output (accepts `vfs:///` URIs) |
+| `file_lines` | Read a specific line range from a file or cached output (accepts `vfs:///` URIs) |
+| `file_grep` | Search for a pattern in a file or cached output (accepts `vfs:///` URIs) |
 | `write_file` | Write content to a file (requires `file_tools_allowed_paths`, gated by `pre_file_write` hook) |
 | `spawn_agent` | Spawn a sub-agent with a custom system prompt to process input |
 | `retrieve_content` | Read a file/URL and process content through a sub-agent |
@@ -308,24 +307,24 @@ LLM: Writes summary report
 
 ## Tool Output Caching
 
-When tool outputs exceed the configured threshold (default: 4000 chars), they're automatically cached to disk and a truncated preview is sent to the LLM.
+When tool outputs exceed the configured threshold (default: 4000 chars), they're automatically cached to VFS and a truncated preview is sent to the LLM.
 
 ### How It Works
 
 1. Tool produces large output (e.g., `fetch_url` returns a large webpage)
-2. Output is cached to `~/.chibi/contexts/<name>/tool_cache/`
+2. Output is written to `vfs:///sys/tool_cache/<context>/<id>` by SYSTEM
 3. LLM receives a truncated message with:
-   - Cache ID for later reference
+   - `vfs:///` URI for later reference
    - Size and line count statistics
    - Preview of first ~500 chars
-   - Instructions to use file tools for examination
+   - Instructions to use file tools with the URI
 
 ### Examining Cached Content
 
-The LLM uses built-in file tools to examine cached content surgically:
+The LLM uses built-in file tools with the `vfs:///` URI:
 
 ```
-[Output cached: fetch_url_abc123_def456]
+[Output cached: vfs:///sys/tool_cache/default/fetch_url_abc123_def456]
 Tool: fetch_url | Size: 50000 chars, ~12500 tokens | Lines: 1200
 Preview:
 ---
@@ -335,13 +334,13 @@ Preview:
   <title>Example Page</title>
 ...
 ---
-Use file_head, file_tail, file_lines, file_grep with cache_id to examine.
+Use file_head, file_tail, file_lines, file_grep with path="vfs:///sys/tool_cache/..." to examine.
 ```
 
 The LLM can then:
-- `file_head(cache_id="fetch_url_abc123_def456", lines=100)` - See first 100 lines
-- `file_grep(cache_id="...", pattern="class.*Button")` - Search for patterns
-- `file_lines(cache_id="...", start=500, end=550)` - Read specific section
+- `file_head(path="vfs:///sys/tool_cache/default/fetch_url_abc123_def456", lines=100)` - See first 100 lines
+- `file_grep(path="vfs:///sys/tool_cache/default/fetch_url_abc123_def456", pattern="class.*Button")` - Search for patterns
+- `file_lines(path="vfs:///sys/tool_cache/default/fetch_url_abc123_def456", start=500, end=550)` - Read specific section
 
 ### Configuration
 

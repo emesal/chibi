@@ -84,8 +84,6 @@ impl AppState {
                 .context_window_limit
                 .unwrap_or(ConfigDefaults::CONTEXT_WINDOW_LIMIT),
             warn_threshold_percent: self.config.warn_threshold_percent,
-            verbose: self.config.verbose,
-            hide_tool_calls: self.config.hide_tool_calls,
             no_tool_calls: self.config.no_tool_calls,
             auto_compact: self.config.auto_compact,
             auto_compact_threshold: self.config.auto_compact_threshold,

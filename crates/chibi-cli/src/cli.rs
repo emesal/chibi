@@ -663,17 +663,13 @@ impl Cli {
         };
 
         let flags = ExecutionFlags {
-            verbose: self.verbose,
-            hide_tool_calls: self.hide_tool_calls,
-            show_thinking: self.show_thinking,
-            no_tool_calls: self.no_tool_calls,
             force_call_user,
             force_call_agent: self.force_call_agent,
             debug: debug_keys,
         };
 
         // Parse -s/--set KEY=VALUE pairs
-        let config_overrides: Vec<(String, String)> = self
+        let mut config_overrides: Vec<(String, String)> = self
             .set
             .iter()
             .map(|s| {
@@ -687,6 +683,11 @@ impl Cli {
             })
             .collect::<io::Result<_>>()?;
 
+        // Boolean CLI flags → config overrides (only when true)
+        if self.no_tool_calls {
+            config_overrides.push(("no_tool_calls".to_string(), "true".to_string()));
+        }
+
         Ok(ChibiInput {
             command,
             flags,
@@ -696,6 +697,9 @@ impl Cli {
             md_file,
             force_markdown,
             config_overrides,
+            verbose_flag: self.verbose,
+            hide_tool_calls_flag: self.hide_tool_calls,
+            show_thinking_flag: self.show_thinking,
         })
     }
 
@@ -1283,7 +1287,7 @@ mod tests {
     #[test]
     fn test_verbose_short() {
         let input = parse_input("-v").unwrap();
-        assert!(input.flags.verbose);
+        assert!(input.verbose_flag);
     }
 
     #[test]
@@ -1406,7 +1410,7 @@ mod tests {
     fn test_plugin_no_longer_captures_trailing_flags() {
         // With the new 2-arg format, flags after -p are parsed normally
         let input = parse_input("-p myplugin '-l --verbose' -v").unwrap();
-        assert!(input.flags.verbose); // -v is now parsed as verbose flag
+        assert!(input.verbose_flag); // -v is now parsed as verbose flag
         assert!(
             matches!(input.command, Command::RunPlugin { ref name, ref args }
             if name == "myplugin" && args == &["-l", "--verbose"])
@@ -1416,7 +1420,7 @@ mod tests {
     #[test]
     fn test_plugin_verbose_before() {
         let input = parse_input("-v -p myplugin \"arg1\"").unwrap();
-        assert!(input.flags.verbose);
+        assert!(input.verbose_flag);
         assert!(
             matches!(input.command, Command::RunPlugin { ref name, ref args }
             if name == "myplugin" && args == &["arg1"])
@@ -1437,7 +1441,7 @@ mod tests {
     fn test_plugin_verbose_after() {
         // Flags can now come after -p since it only takes 2 args
         let input = parse_input("-p myplugin \"arg1\" -v").unwrap();
-        assert!(input.flags.verbose);
+        assert!(input.verbose_flag);
         assert!(
             matches!(input.command, Command::RunPlugin { ref name, ref args }
             if name == "myplugin" && args == &["arg1"])
@@ -1457,7 +1461,7 @@ mod tests {
     fn test_call_tool_with_flags_after() {
         // Flags can now come after -P since it only takes 2 args
         let input = parse_input("-P mytool '{}' -v -C ephemeral").unwrap();
-        assert!(input.flags.verbose);
+        assert!(input.verbose_flag);
         assert!(
             matches!(input.context, ContextSelection::Ephemeral { ref name } if name == "ephemeral")
         );

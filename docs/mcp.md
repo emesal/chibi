@@ -117,6 +117,10 @@ The bridge speaks JSON-over-TCP (one JSON object per connection, newline-delimit
 {"op": "get_schema", "server": "serena", "tool": "find_symbol"}
 ```
 
+## Examples
+
+- [Using the MCP bridge with Serena](mcp-bridge-serena.md) — complete walkthrough using a semantic code intelligence server
+
 ## Troubleshooting
 
 **"MCP: bridge unavailable"** — the bridge binary isn't in PATH or next to the chibi binary. Run `cargo install --path crates/chibi-mcp-bridge`.

@@ -133,25 +133,13 @@ impl DebugKey {
     }
 }
 
-/// Execution flags — what core needs to run any command.
+/// Execution flags — ephemeral command modifiers.
 ///
-/// Excludes presentation concerns (JSON mode, markdown rendering) which
-/// belong to the binary layer. Both chibi-cli and chibi-json map their
-/// own input types to this.
+/// These are per-invocation imperative commands, not behavioural config.
+/// Behavioural settings (verbose, hide_tool_calls, no_tool_calls, show_thinking)
+/// live in `ResolvedConfig` and are set via `set_field` / `-s` / config files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ExecutionFlags {
-    /// Show verbose output
-    #[serde(default)]
-    pub verbose: bool,
-    /// Omit tools from API requests entirely
-    #[serde(default)]
-    pub no_tool_calls: bool,
-    /// Show thinking/reasoning content
-    #[serde(default)]
-    pub show_thinking: bool,
-    /// Hide tool call display (verbose overrides)
-    #[serde(default)]
-    pub hide_tool_calls: bool,
     /// Force handoff to agent
     #[serde(default)]
     pub force_call_agent: bool,
@@ -176,33 +164,28 @@ mod tests {
     #[test]
     fn test_flags_default() {
         let flags = ExecutionFlags::default();
-        assert!(!flags.verbose);
-        assert!(!flags.force_call_user);
         assert!(!flags.force_call_agent);
+        assert!(!flags.force_call_user);
         assert!(flags.debug.is_empty());
     }
 
     #[test]
     fn test_flags_serialization() {
         let flags = ExecutionFlags {
-            verbose: true,
-            hide_tool_calls: false,
-            show_thinking: false,
-            no_tool_calls: false,
             force_call_user: false,
-            force_call_agent: false,
+            force_call_agent: true,
             debug: vec![DebugKey::RequestLog],
         };
         let json = serde_json::to_string(&flags).unwrap();
-        assert!(json.contains("verbose"));
+        assert!(json.contains("force_call_agent"));
         assert!(json.contains("request_log"));
     }
 
     #[test]
     fn test_flags_deserialization() {
-        let json = r#"{"verbose":true,"force_call_user":true}"#;
+        let json = r#"{"force_call_agent":true,"force_call_user":true}"#;
         let flags: ExecutionFlags = serde_json::from_str(json).unwrap();
-        assert!(flags.verbose);
+        assert!(flags.force_call_agent);
         assert!(flags.force_call_user);
     }
 
@@ -483,10 +466,6 @@ mod tests {
     #[test]
     fn test_execution_flags_default() {
         let flags = ExecutionFlags::default();
-        assert!(!flags.verbose);
-        assert!(!flags.no_tool_calls);
-        assert!(!flags.show_thinking);
-        assert!(!flags.hide_tool_calls);
         assert!(!flags.force_call_agent);
         assert!(!flags.force_call_user);
         assert!(flags.debug.is_empty());
@@ -495,18 +474,14 @@ mod tests {
     #[test]
     fn test_execution_flags_serialization() {
         let flags = ExecutionFlags {
-            verbose: true,
-            no_tool_calls: true,
-            show_thinking: false,
-            hide_tool_calls: false,
             force_call_agent: true,
             force_call_user: false,
             debug: vec![DebugKey::RequestLog],
         };
         let json = serde_json::to_string(&flags).unwrap();
         let deser: ExecutionFlags = serde_json::from_str(&json).unwrap();
-        assert_eq!(deser.verbose, flags.verbose);
         assert_eq!(deser.force_call_agent, flags.force_call_agent);
+        assert_eq!(deser.force_call_user, flags.force_call_user);
         assert_eq!(deser.debug.len(), 1);
     }
 }

@@ -99,12 +99,6 @@ All fields are optional. chibi works with no config file at all (free-tier OpenR
 # Default username shown to the LLM (default: "user")
 username = "user"
 
-# Enable verbose output by default, equivalent to -v (default: false)
-verbose = false
-
-# Hide tool call display by default (default: false, verbose overrides)
-hide_tool_calls = false
-
 # Omit tools from API requests entirely for pure text mode (default: false)
 no_tool_calls = false
 
@@ -141,11 +135,14 @@ reflection_character_limit = 10000
 
 # Total fuel budget for autonomous tool loops (default: 30)
 # Each tool-call round and agent continuation costs 1 fuel. First turn is free.
+# Set to 0 to disable fuel tracking entirely (unlimited mode — no budget enforced,
+# no fuel info injected into prompts or hook payloads).
 fuel = 30
 
 # Fuel cost of an empty LLM response (default: 15)
 # When the LLM returns an empty response (no text, no tool calls), this much
 # fuel is consumed. High cost prevents infinite empty-response loops.
+# Ignored when fuel = 0 (unlimited mode).
 fuel_empty_response_cost = 15
 
 # Context lock heartbeat interval in seconds (default: 30)
@@ -176,8 +173,8 @@ tool_cache_preview_chars = 500
 # Built-in file operations
 # =============================================================================
 
-# Paths allowed for read-only file tools (default: empty = cache only)
-# When empty, file tools only work with cache_id. Add paths to allow file access.
+# Paths allowed for read-only file tools (default: empty = VFS only)
+# When empty, file tools only work with vfs:/// URIs. Add paths to allow OS file access.
 # file_tools_allowed_paths = ["~", "/tmp"]
 
 # =============================================================================
@@ -297,9 +294,7 @@ context_window_limit = 128000
 # Override warning threshold
 warn_threshold_percent = 90.0
 
-# Override verbose, tool call display, or tool omission
-verbose = true
-hide_tool_calls = false
+# Override tool omission
 no_tool_calls = false
 
 # Override auto-compact behavior
@@ -363,6 +358,22 @@ CLI-specific presentation settings live in `~/.chibi/cli.toml`. These control ho
 render_markdown = true
 
 # =============================================================================
+# Diagnostics and Display
+# =============================================================================
+
+# Show extra diagnostic info: tools loaded, warnings, fuel, etc. (default: false)
+# Equivalent to the -v / --verbose flag
+verbose = false
+
+# Hide tool call display (default: false — tool calls shown by default)
+# Equivalent to the --hide-tool-calls flag
+hide_tool_calls = false
+
+# Show thinking/reasoning content from models that support extended thinking (default: false)
+# Equivalent to the --show-thinking flag
+show_thinking = false
+
+# =============================================================================
 # Image Configuration
 # =============================================================================
 
@@ -423,6 +434,12 @@ Create `~/.chibi/contexts/<name>/cli.toml` to override CLI settings for specific
 ```toml
 # Disable markdown rendering for this context
 render_markdown = false
+
+# Always show verbose output in this context
+verbose = true
+
+# Always show thinking in this context
+show_thinking = true
 
 [image]
 # Taller images in this context
@@ -522,7 +539,7 @@ Chibi includes built-in coding tools that work out of the box — no plugins nee
 
 The interactive prompt defaults to **allow** (`[Y/n]`) — press Enter to approve, or type `n` to deny. This makes sense because if you gave the LLM tools, you probably want it to use them.
 
-**Read-only tools** execute without prompting: `dir_list`, `glob_files`, `grep_files`, `file_head`, `file_tail`, `file_lines`, `file_grep`, `cache_list`, `index_query`, `index_status`, `index_update`.
+**Read-only tools** execute without prompting: `dir_list`, `glob_files`, `grep_files`, `file_head`, `file_tail`, `file_lines`, `file_grep`, `index_query`, `index_status`, `index_update`.
 
 ### Headless / Automation Mode
 
@@ -593,7 +610,7 @@ include = ["update_todos", "update_goals", "update_reflection"]
 | Category | Tools |
 |----------|-------|
 | `builtin` | update_todos, update_goals, update_reflection, send_message |
-| `file` | file_head, file_tail, file_lines, file_grep, cache_list |
+| `file` | file_head, file_tail, file_lines, file_grep, write_file |
 | `agent` | spawn_agent, retrieve_content |
 | `coding` | shell_exec, dir_list, glob_files, grep_files, file_edit, index_update, index_query, index_status |
 | `plugin` | Tools loaded from the plugins directory |

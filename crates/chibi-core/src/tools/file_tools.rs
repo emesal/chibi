@@ -1,15 +1,26 @@
-//! File access tools for examining cached tool outputs and files.
+//! File access tools for reading files and cached tool outputs via VFS.
 //!
-//! These tools provide surgical access to cached tool outputs, allowing the LLM
-//! to examine large outputs without overwhelming the context window.
+//! Large tool outputs are cached automatically by the system under
+//! `vfs:///sys/tool_cache/<context>/<id>`. Use these tools with
+//! `path="vfs:///sys/tool_cache/..."` to examine cached content.
 
-use super::builtin::{BuiltinToolDef, ToolPropertyDef};
-use crate::cache;
+use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;
-use crate::state::{AppState, StatePaths};
-use std::io::{self, ErrorKind};
+use crate::state::AppState;
+use crate::vfs::VfsPath;
+use std::io::{self, BufRead, ErrorKind};
 use std::path::{Path, PathBuf};
+
+/// A resolved tool path — either an OS path or a VFS path.
+///
+/// Returned by `resolve_file_path` so callers can branch on OS vs VFS
+/// without re-parsing the URI.
+#[derive(Debug)]
+pub(crate) enum ResolvedPath {
+    Os(PathBuf),
+    Vfs(VfsPath),
+}
 
 // === Tool Name Constants ===
 
@@ -17,7 +28,6 @@ pub const FILE_HEAD_TOOL_NAME: &str = "file_head";
 pub const FILE_TAIL_TOOL_NAME: &str = "file_tail";
 pub const FILE_LINES_TOOL_NAME: &str = "file_lines";
 pub const FILE_GREP_TOOL_NAME: &str = "file_grep";
-pub const CACHE_LIST_TOOL_NAME: &str = "cache_list";
 pub const WRITE_FILE_TOOL_NAME: &str = "write_file";
 
 // === Tool Definition Registry ===
@@ -26,18 +36,12 @@ pub const WRITE_FILE_TOOL_NAME: &str = "write_file";
 pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
     BuiltinToolDef {
         name: FILE_HEAD_TOOL_NAME,
-        description: "Read the first N lines from a cached tool output or file. Use this to examine the beginning of large outputs.",
+        description: "Read the first N lines from a file or cached tool output. Use this to examine the beginning of large outputs.",
         properties: &[
-            ToolPropertyDef {
-                name: "cache_id",
-                prop_type: "string",
-                description: "ID of a cached tool output (from [Output cached: ID] messages)",
-                default: None,
-            },
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file (if not using cache_id)",
+                description: "Absolute or relative path to a file, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -47,23 +51,17 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
                 default: Some(50),
             },
         ],
-        required: &[],
+        required: &["path"],
         summary_params: &["path"],
     },
     BuiltinToolDef {
         name: FILE_TAIL_TOOL_NAME,
-        description: "Read the last N lines from a cached tool output or file. Use this to examine the end of large outputs.",
+        description: "Read the last N lines from a file or cached tool output. Use this to examine the end of large outputs.",
         properties: &[
-            ToolPropertyDef {
-                name: "cache_id",
-                prop_type: "string",
-                description: "ID of a cached tool output (from [Output cached: ID] messages)",
-                default: None,
-            },
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file (if not using cache_id)",
+                description: "Absolute or relative path to a file, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -73,23 +71,17 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
                 default: Some(50),
             },
         ],
-        required: &[],
+        required: &["path"],
         summary_params: &["path"],
     },
     BuiltinToolDef {
         name: FILE_LINES_TOOL_NAME,
-        description: "Read a specific range of lines from a cached tool output or file. Lines are 1-indexed.",
+        description: "Read a specific range of lines from a file or cached tool output. Lines are 1-indexed.",
         properties: &[
-            ToolPropertyDef {
-                name: "cache_id",
-                prop_type: "string",
-                description: "ID of a cached tool output (from [Output cached: ID] messages)",
-                default: None,
-            },
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file (if not using cache_id)",
+                description: "Absolute or relative path to a file, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -105,23 +97,17 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
                 default: None,
             },
         ],
-        required: &["start", "end"],
+        required: &["path", "start", "end"],
         summary_params: &["path"],
     },
     BuiltinToolDef {
         name: FILE_GREP_TOOL_NAME,
-        description: "Search for a pattern in a cached tool output or file. Returns matching lines with optional context.",
+        description: "Search for a pattern in a file or cached tool output. Returns matching lines with optional context.",
         properties: &[
-            ToolPropertyDef {
-                name: "cache_id",
-                prop_type: "string",
-                description: "ID of a cached tool output (from [Output cached: ID] messages)",
-                default: None,
-            },
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Path to a file (if not using cache_id)",
+                description: "Absolute or relative path to a file, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -143,15 +129,8 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
                 default: Some(2),
             },
         ],
-        required: &["pattern"],
+        required: &["path", "pattern"],
         summary_params: &["pattern", "path"],
-    },
-    BuiltinToolDef {
-        name: CACHE_LIST_TOOL_NAME,
-        description: "List all cached tool outputs for this context. Shows cache IDs, tool names, sizes, and timestamps.",
-        properties: &[],
-        required: &[],
-        summary_params: &[],
     },
     BuiltinToolDef {
         name: WRITE_FILE_TOOL_NAME,
@@ -160,7 +139,7 @@ pub static FILE_TOOL_DEFS: &[BuiltinToolDef] = &[
             ToolPropertyDef {
                 name: "path",
                 prop_type: "string",
-                description: "Absolute or relative path to write to",
+                description: "Absolute or relative path to write to, or a vfs:/// URI for VFS storage",
                 default: None,
             },
             ToolPropertyDef {
@@ -191,62 +170,42 @@ pub fn get_file_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
 
 // === Path Resolution ===
 
-/// Resolve a file path from either cache_id or path argument.
+/// Resolve a file path from the `path` argument.
 ///
 /// When a relative `path` is provided, it is resolved against `project_root`
 /// before validation so that tools work correctly even when the process CWD
 /// differs from the project root.
+///
+/// Paths starting with `vfs:///` are resolved as VFS paths and bypass OS
+/// path validation entirely.
 fn resolve_file_path(
-    app: &AppState,
-    context_name: &str,
+    _app: &AppState,
+    _context_name: &str,
     args: &serde_json::Value,
     config: &ResolvedConfig,
     project_root: &Path,
-) -> io::Result<PathBuf> {
-    let cache_id = args.get_str("cache_id");
-    let path = args.get_str("path");
+) -> io::Result<ResolvedPath> {
+    let path = args
+        .get_str("path")
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Must provide path"))?;
 
-    match (cache_id, path) {
-        (Some(id), None) => {
-            // Resolve from cache
-            let cache_dir = app.tool_cache_dir(context_name);
-            cache::resolve_cache_path(&cache_dir, id)
-        }
-        (None, Some(p)) => {
-            // Resolve relative paths against project_root before validation
-            let resolved_path = if Path::new(p).is_relative() {
-                project_root.join(p).to_string_lossy().to_string()
-            } else {
-                p.to_string()
-            };
-            let resolved = super::security::validate_file_path(&resolved_path, config)?;
-            Ok(resolved)
-        }
-        (Some(_), Some(_)) => Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "Provide either cache_id or path, not both",
-        )),
-        (None, None) => Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "Must provide either cache_id or path",
-        )),
+    if VfsPath::is_vfs_uri(path) {
+        let vfs_path = VfsPath::from_uri(path)?;
+        return Ok(ResolvedPath::Vfs(vfs_path));
     }
+
+    let resolved_path = if Path::new(path).is_relative() {
+        project_root.join(path).to_string_lossy().to_string()
+    } else {
+        path.to_string()
+    };
+    let resolved = super::security::validate_file_path(&resolved_path, config)?;
+    Ok(ResolvedPath::Os(resolved))
 }
 
 // === Tool Execution ===
 
 // --- Helpers for parameter extraction ---
-
-/// Extract a required string parameter, returning a helpful error if missing.
-/// Use this pattern for required params in future file tools.
-fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String> {
-    args.get_str(name).map(String::from).ok_or_else(|| {
-        io::Error::new(
-            ErrorKind::InvalidInput,
-            format!("Missing '{}' parameter", name),
-        )
-    })
-}
 
 /// Extract a required u64 parameter, returning a helpful error if missing.
 /// Use this pattern for required numeric params in future file tools.
@@ -278,11 +237,36 @@ fn execute_file_head_or_tail(
     project_root: &Path,
 ) -> io::Result<String> {
     let path = resolve_file_path(app, context_name, args, config, project_root)?;
-    let lines = args.get_u64_or("lines", 50) as usize;
+    let n = args.get_u64_or("lines", 50) as usize;
 
-    match direction {
-        ReadDirection::Head => cache::read_cache_head(&path, lines),
-        ReadDirection::Tail => cache::read_cache_tail(&path, lines),
+    match path {
+        ResolvedPath::Os(p) => match direction {
+            ReadDirection::Head => {
+                let file = std::fs::File::open(&p)?;
+                let reader = std::io::BufReader::new(file);
+                let lines: Vec<String> = reader.lines().take(n).collect::<Result<_, _>>()?;
+                Ok(lines.join("\n"))
+            }
+            ReadDirection::Tail => {
+                let content = std::fs::read_to_string(&p)?;
+                let lines: Vec<&str> = content.lines().collect();
+                let start = lines.len().saturating_sub(n);
+                Ok(lines[start..].join("\n"))
+            }
+        },
+        ResolvedPath::Vfs(vfs_path) => {
+            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let content = String::from_utf8_lossy(&data);
+            let all_lines: Vec<&str> = content.lines().collect();
+            let selected = match direction {
+                ReadDirection::Head => &all_lines[..all_lines.len().min(n)],
+                ReadDirection::Tail => {
+                    let start = all_lines.len().saturating_sub(n);
+                    &all_lines[start..]
+                }
+            };
+            Ok(selected.join("\n"))
+        }
     }
 }
 
@@ -348,7 +332,31 @@ pub fn execute_file_lines(
         ));
     }
 
-    cache::read_cache_lines(&path, start, end)
+    match path {
+        ResolvedPath::Os(p) => {
+            let file = std::fs::File::open(&p)?;
+            let reader = std::io::BufReader::new(file);
+            let lines: Vec<String> = reader
+                .lines()
+                .enumerate()
+                .filter(|(i, _)| *i >= start.saturating_sub(1) && *i < end)
+                .map(|(_, line)| line)
+                .collect::<Result<_, _>>()?;
+            Ok(lines.join("\n"))
+        }
+        ResolvedPath::Vfs(vfs_path) => {
+            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let content = String::from_utf8_lossy(&data);
+            // 1-indexed inclusive range
+            let lines: Vec<&str> = content
+                .lines()
+                .enumerate()
+                .filter(|(i, _)| *i >= start.saturating_sub(1) && *i < end)
+                .map(|(_, line)| line)
+                .collect();
+            Ok(lines.join("\n"))
+        }
+    }
 }
 
 /// Execute file_grep tool
@@ -364,7 +372,17 @@ pub fn execute_file_grep(
     let context_before = args.get_u64_or("context_before", 2) as usize;
     let context_after = args.get_u64_or("context_after", 2) as usize;
 
-    let result = cache::read_cache_grep(&path, &pattern, context_before, context_after)?;
+    let result = match path {
+        ResolvedPath::Os(p) => {
+            let content = std::fs::read_to_string(&p)?;
+            grep_in_memory(&content, &pattern, context_before, context_after)?
+        }
+        ResolvedPath::Vfs(vfs_path) => {
+            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let content = String::from_utf8_lossy(&data).into_owned();
+            grep_in_memory(&content, &pattern, context_before, context_after)?
+        }
+    };
 
     if result.is_empty() {
         Ok(format!("No matches found for pattern: {}", pattern))
@@ -373,41 +391,65 @@ pub fn execute_file_grep(
     }
 }
 
-/// Execute cache_list tool
-pub fn execute_cache_list(app: &AppState, context_name: &str) -> io::Result<String> {
-    let cache_dir = app.tool_cache_dir(context_name);
-    let entries = cache::list_cache_entries(&cache_dir)?;
+/// In-memory grep with context lines.
+fn grep_in_memory(
+    content: &str,
+    pattern: &str,
+    context_before: usize,
+    context_after: usize,
+) -> io::Result<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    let regex = regex::Regex::new(pattern)
+        .map_err(|e| io::Error::new(ErrorKind::InvalidInput, format!("Invalid regex: {}", e)))?;
 
-    if entries.is_empty() {
-        return Ok("No cached outputs found.".to_string());
+    let mut result = Vec::new();
+    let mut last_end = 0;
+
+    for (i, line) in lines.iter().enumerate() {
+        if regex.is_match(line) {
+            let start = i.saturating_sub(context_before);
+            let end = (i + context_after + 1).min(lines.len());
+
+            if start > last_end && !result.is_empty() {
+                result.push("--".to_string());
+            }
+
+            let range_start = start.max(last_end);
+            for (j, line) in lines.iter().enumerate().take(end).skip(range_start) {
+                let prefix = if j == i { ">" } else { " " };
+                result.push(format!("{}{}:{}", prefix, j + 1, line));
+            }
+
+            last_end = end;
+        }
     }
 
-    let mut output = String::from("Cached tool outputs:\n");
-    for entry in entries {
-        // Format timestamp
-        let timestamp = chrono::DateTime::from_timestamp(entry.timestamp as i64, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        output.push_str(&format!(
-            "\n  {} ({}):\n    Tool: {}\n    Size: {} chars (~{} tokens), {} lines\n    Cached: {}\n",
-            entry.id,
-            entry.tool_name,
-            entry.tool_name,
-            entry.char_count,
-            entry.token_estimate,
-            entry.line_count,
-            timestamp
-        ));
-    }
-
-    Ok(output)
+    Ok(result.join("\n"))
 }
 
 /// Execute write_file tool
 ///
 /// Note: Permission check via pre_file_write hook happens in send.rs before this is called.
-pub fn execute_write_file(path: &str, content: &str) -> io::Result<String> {
+///
+/// When `path` starts with `vfs:///`, the write is routed through the VFS.
+/// The `vfs` parameter must be `Some((vfs, caller))` for VFS writes.
+pub fn execute_write_file(
+    path: &str,
+    content: &str,
+    vfs: Option<(&crate::vfs::Vfs, &str)>,
+) -> io::Result<String> {
+    if VfsPath::is_vfs_uri(path) {
+        let vfs_path = VfsPath::from_uri(path)?;
+        let (vfs, caller) =
+            vfs.ok_or_else(|| io::Error::other("VFS not available for vfs:// path"))?;
+        vfs_block_on(vfs.write(caller, &vfs_path, content.as_bytes()))?;
+        return Ok(format!(
+            "File written successfully: {} ({} bytes)",
+            vfs_path,
+            content.len()
+        ));
+    }
+
     let path = PathBuf::from(path);
 
     // Create parent directories if needed
@@ -426,6 +468,21 @@ pub fn execute_write_file(path: &str, content: &str) -> io::Result<String> {
     ))
 }
 
+/// Bridge an async VFS future into synchronous tool dispatch.
+///
+/// Uses `block_in_place` + `block_on` so that it works both from pure sync
+/// callers (where the current thread is free) and from sync code inside a
+/// tokio runtime (e.g. tool dispatch in `execute_tool_pure`). The
+/// `block_in_place` call tells the runtime scheduler to move other tasks off
+/// this thread while we block.
+///
+/// **Runtime requirement:** `block_in_place` panics on `current_thread`
+/// runtimes. Any test that calls VFS tools must use:
+/// `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`
+pub(crate) fn vfs_block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
+}
+
 /// Check if a tool name is a file tool
 pub fn is_file_tool(name: &str) -> bool {
     matches!(
@@ -434,7 +491,6 @@ pub fn is_file_tool(name: &str) -> bool {
             | FILE_TAIL_TOOL_NAME
             | FILE_LINES_TOOL_NAME
             | FILE_GREP_TOOL_NAME
-            | CACHE_LIST_TOOL_NAME
             | WRITE_FILE_TOOL_NAME
     )
 }
@@ -442,7 +498,7 @@ pub fn is_file_tool(name: &str) -> bool {
 /// Execute a file tool by name.
 ///
 /// `project_root` is used to resolve relative paths in file read tools.
-/// `CACHE_LIST_TOOL_NAME` and `WRITE_FILE_TOOL_NAME` do not use it.
+/// `WRITE_FILE_TOOL_NAME` does not use it.
 pub fn execute_file_tool(
     app: &AppState,
     context_name: &str,
@@ -480,12 +536,11 @@ pub fn execute_file_tool(
             config,
             project_root,
         )),
-        CACHE_LIST_TOOL_NAME => Some(execute_cache_list(app, context_name)),
         WRITE_FILE_TOOL_NAME => {
             let path = require_str_param(args, "path");
             let content = require_str_param(args, "content");
             match (path, content) {
-                (Ok(p), Ok(c)) => Some(execute_write_file(&p, &c)),
+                (Ok(p), Ok(c)) => Some(execute_write_file(&p, &c, Some((&app.vfs, context_name)))),
                 (Err(e), _) | (_, Err(e)) => Some(Err(e)),
             }
         }
@@ -541,19 +596,13 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_list_tool_api_format() {
-        let tool = get_tool_api(CACHE_LIST_TOOL_NAME);
-        assert_eq!(tool["function"]["name"], CACHE_LIST_TOOL_NAME);
-    }
-
-    #[test]
     fn test_is_file_tool() {
         assert!(is_file_tool(FILE_HEAD_TOOL_NAME));
         assert!(is_file_tool(FILE_TAIL_TOOL_NAME));
         assert!(is_file_tool(FILE_LINES_TOOL_NAME));
         assert!(is_file_tool(FILE_GREP_TOOL_NAME));
-        assert!(is_file_tool(CACHE_LIST_TOOL_NAME));
         assert!(is_file_tool(WRITE_FILE_TOOL_NAME));
+        assert!(!is_file_tool("cache_list"));
         assert!(!is_file_tool("other_tool"));
     }
 
@@ -563,7 +612,6 @@ mod tests {
         assert_eq!(FILE_TAIL_TOOL_NAME, "file_tail");
         assert_eq!(FILE_LINES_TOOL_NAME, "file_lines");
         assert_eq!(FILE_GREP_TOOL_NAME, "file_grep");
-        assert_eq!(CACHE_LIST_TOOL_NAME, "cache_list");
         assert_eq!(WRITE_FILE_TOOL_NAME, "write_file");
     }
 
@@ -571,13 +619,12 @@ mod tests {
 
     #[test]
     fn test_file_tool_registry_contains_all_tools() {
-        assert_eq!(FILE_TOOL_DEFS.len(), 6);
+        assert_eq!(FILE_TOOL_DEFS.len(), 5);
         let names: Vec<_> = FILE_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&FILE_HEAD_TOOL_NAME));
         assert!(names.contains(&FILE_TAIL_TOOL_NAME));
         assert!(names.contains(&FILE_LINES_TOOL_NAME));
         assert!(names.contains(&FILE_GREP_TOOL_NAME));
-        assert!(names.contains(&CACHE_LIST_TOOL_NAME));
         assert!(names.contains(&WRITE_FILE_TOOL_NAME));
     }
 
@@ -590,7 +637,7 @@ mod tests {
     #[test]
     fn test_all_file_tools_to_api_format() {
         let tools = all_file_tools_to_api_format();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 5);
         for tool in &tools {
             assert_eq!(tool["type"], "function");
             assert!(tool["function"]["name"].is_string());
@@ -637,29 +684,24 @@ mod tests {
 
     #[test]
     fn test_file_tool_required_fields() {
-        // file_lines requires start and end
+        // file_lines requires path, start, end
         let lines = get_tool_api(FILE_LINES_TOOL_NAME);
         let required = lines["function"]["parameters"]["required"]
             .as_array()
             .unwrap();
-        assert_eq!(required.len(), 2);
+        assert_eq!(required.len(), 3);
+        assert!(required.contains(&serde_json::json!("path")));
         assert!(required.contains(&serde_json::json!("start")));
         assert!(required.contains(&serde_json::json!("end")));
 
-        // file_grep requires pattern
+        // file_grep requires path, pattern
         let grep = get_tool_api(FILE_GREP_TOOL_NAME);
         let required = grep["function"]["parameters"]["required"]
             .as_array()
             .unwrap();
-        assert_eq!(required.len(), 1);
+        assert_eq!(required.len(), 2);
+        assert!(required.contains(&serde_json::json!("path")));
         assert!(required.contains(&serde_json::json!("pattern")));
-
-        // cache_list has no required
-        let cache = get_tool_api(CACHE_LIST_TOOL_NAME);
-        let required = cache["function"]["parameters"]["required"]
-            .as_array()
-            .unwrap();
-        assert!(required.is_empty());
     }
 
     #[test]
@@ -667,7 +709,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("test.txt");
 
-        let result = super::execute_write_file(path.to_str().unwrap(), "hello world");
+        let result = super::execute_write_file(path.to_str().unwrap(), "hello world", None);
         assert!(result.is_ok());
         assert!(result.unwrap().contains("written successfully"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world");
@@ -678,7 +720,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("nested/dir/test.txt");
 
-        let result = super::execute_write_file(path.to_str().unwrap(), "content");
+        let result = super::execute_write_file(path.to_str().unwrap(), "content", None);
         assert!(result.is_ok());
         assert!(path.exists());
     }
@@ -689,7 +731,7 @@ mod tests {
         let path = temp_dir.path().join("test.txt");
         std::fs::write(&path, "old content").unwrap();
 
-        let result = super::execute_write_file(path.to_str().unwrap(), "new content");
+        let result = super::execute_write_file(path.to_str().unwrap(), "new content", None);
         assert!(result.is_ok());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
     }
@@ -706,8 +748,6 @@ mod tests {
             model: "test-model".to_string(),
             context_window_limit: 128000,
             warn_threshold_percent: 0.8,
-            verbose: false,
-            hide_tool_calls: false,
             no_tool_calls: false,
             auto_compact: false,
             auto_compact_threshold: 0.9,
@@ -768,7 +808,10 @@ mod tests {
             "absolute path should resolve without project_root: {:?}",
             result.err()
         );
-        assert_eq!(result.unwrap(), file.canonicalize().unwrap());
+        match result.unwrap() {
+            ResolvedPath::Os(p) => assert_eq!(p, file.canonicalize().unwrap()),
+            ResolvedPath::Vfs(_) => panic!("expected Os path"),
+        }
     }
 
     #[test]
@@ -821,5 +864,161 @@ mod tests {
         let result = execute_file_grep(&app, "test", &args, &config, project_dir.path());
         assert!(result.is_ok());
         assert!(result.unwrap().contains("println"));
+    }
+
+    // === VFS integration tests ===
+
+    use crate::vfs::{LocalBackend, Vfs};
+
+    /// Create an AppState with a VFS backed by the given temp directory.
+    fn make_vfs_app(home: &tempfile::TempDir, vfs_dir: &tempfile::TempDir) -> AppState {
+        let mut app = AppState::load(Some(home.path().to_path_buf())).unwrap();
+        let backend = LocalBackend::new(vfs_dir.path().to_path_buf());
+        app.vfs = Vfs::new(Box::new(backend));
+        app
+    }
+
+    #[test]
+    fn test_resolve_file_path_vfs_uri() {
+        let home = tempfile::tempdir().unwrap();
+        let vfs_dir = tempfile::tempdir().unwrap();
+        let app = make_vfs_app(&home, &vfs_dir);
+        let config = make_test_config(vec![]);
+
+        let args = serde_json::json!({"path": "vfs:///shared/notes.txt"});
+        let result = resolve_file_path(&app, "ctx", &args, &config, Path::new("/unused"));
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ResolvedPath::Vfs(p) => assert_eq!(p.as_str(), "/shared/notes.txt"),
+            ResolvedPath::Os(_) => panic!("expected VFS path"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_write_file_vfs() {
+        let home = tempfile::tempdir().unwrap();
+        let vfs_dir = tempfile::tempdir().unwrap();
+        let app = make_vfs_app(&home, &vfs_dir);
+
+        let result = execute_write_file(
+            "vfs:///shared/doc.txt",
+            "hello vfs",
+            Some((&app.vfs, "ctx")),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("written successfully"));
+
+        // Verify content via VFS read
+        let vfs_path = VfsPath::new("/shared/doc.txt").unwrap();
+        let data = app.vfs.read("ctx", &vfs_path).await.unwrap();
+        assert_eq!(data, b"hello vfs");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_file_head_vfs() {
+        let home = tempfile::tempdir().unwrap();
+        let vfs_dir = tempfile::tempdir().unwrap();
+        let app = make_vfs_app(&home, &vfs_dir);
+        let config = make_test_config(vec![]);
+
+        // Write content to VFS
+        let vfs_path = VfsPath::new("/shared/data.txt").unwrap();
+        app.vfs
+            .write("ctx", &vfs_path, b"line1\nline2\nline3\nline4\nline5")
+            .await
+            .unwrap();
+
+        let args = serde_json::json!({"path": "vfs:///shared/data.txt", "lines": 2});
+        let result = execute_file_head(&app, "ctx", &args, &config, Path::new("/unused"));
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("line1"));
+        assert!(output.contains("line2"));
+        assert!(!output.contains("line3"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_file_tail_vfs() {
+        let home = tempfile::tempdir().unwrap();
+        let vfs_dir = tempfile::tempdir().unwrap();
+        let app = make_vfs_app(&home, &vfs_dir);
+        let config = make_test_config(vec![]);
+
+        let vfs_path = VfsPath::new("/shared/data.txt").unwrap();
+        app.vfs
+            .write("ctx", &vfs_path, b"line1\nline2\nline3\nline4\nline5")
+            .await
+            .unwrap();
+
+        let args = serde_json::json!({"path": "vfs:///shared/data.txt", "lines": 2});
+        let result = execute_file_tail(&app, "ctx", &args, &config, Path::new("/unused"));
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(!output.contains("line3"));
+        assert!(output.contains("line4"));
+        assert!(output.contains("line5"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_file_lines_vfs() {
+        let home = tempfile::tempdir().unwrap();
+        let vfs_dir = tempfile::tempdir().unwrap();
+        let app = make_vfs_app(&home, &vfs_dir);
+        let config = make_test_config(vec![]);
+
+        let vfs_path = VfsPath::new("/shared/data.txt").unwrap();
+        app.vfs
+            .write("ctx", &vfs_path, b"line1\nline2\nline3\nline4\nline5")
+            .await
+            .unwrap();
+
+        let args = serde_json::json!({"path": "vfs:///shared/data.txt", "start": 2, "end": 4});
+        let result = execute_file_lines(&app, "ctx", &args, &config, Path::new("/unused"));
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(!output.contains("line1"));
+        assert!(output.contains("line2"));
+        assert!(output.contains("line3"));
+        assert!(output.contains("line4"));
+        assert!(!output.contains("line5"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_file_grep_vfs() {
+        let home = tempfile::tempdir().unwrap();
+        let vfs_dir = tempfile::tempdir().unwrap();
+        let app = make_vfs_app(&home, &vfs_dir);
+        let config = make_test_config(vec![]);
+
+        let vfs_path = VfsPath::new("/shared/code.rs").unwrap();
+        app.vfs
+            .write(
+                "ctx",
+                &vfs_path,
+                b"fn hello() {\n    println!(\"world\");\n}\n",
+            )
+            .await
+            .unwrap();
+
+        let args = serde_json::json!({"path": "vfs:///shared/code.rs", "pattern": "println"});
+        let result = execute_file_grep(&app, "ctx", &args, &config, Path::new("/unused"));
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("println"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_write_file_vfs_permission_denied() {
+        let home = tempfile::tempdir().unwrap();
+        let vfs_dir = tempfile::tempdir().unwrap();
+        let app = make_vfs_app(&home, &vfs_dir);
+
+        // /sys/ is read-only for non-SYSTEM callers
+        let result = execute_write_file(
+            "vfs:///sys/config.txt",
+            "forbidden",
+            Some((&app.vfs, "ctx")),
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
     }
 }

@@ -83,6 +83,15 @@ pub struct ChibiInput {
     /// Per-invocation config overrides from -s/--set (KEY=VALUE pairs)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_overrides: Vec<(String, String)>,
+    /// CLI flag: enable verbose diagnostics (overrides cli.toml)
+    #[serde(default)]
+    pub verbose_flag: bool,
+    /// CLI flag: hide tool call display (overrides cli.toml)
+    #[serde(default)]
+    pub hide_tool_calls_flag: bool,
+    /// CLI flag: show thinking/reasoning content (overrides cli.toml)
+    #[serde(default)]
+    pub show_thinking_flag: bool,
 }
 
 impl Default for ChibiInput {
@@ -96,6 +105,9 @@ impl Default for ChibiInput {
             md_file: None,
             force_markdown: false,
             config_overrides: vec![],
+            verbose_flag: false,
+            hide_tool_calls_flag: false,
+            show_thinking_flag: false,
         }
     }
 }
@@ -111,7 +123,7 @@ mod tests {
     fn test_default_input() {
         let input = ChibiInput::default();
         assert!(matches!(input.command, Command::NoOp));
-        assert!(!input.flags.verbose);
+        assert!(!input.flags.force_call_agent);
         assert!(!input.raw);
         assert!(matches!(input.context, ContextSelection::Current));
     }
@@ -214,10 +226,6 @@ mod tests {
                 thing: Inspectable::SystemPrompt,
             },
             flags: ExecutionFlags {
-                verbose: true,
-                hide_tool_calls: false,
-                show_thinking: false,
-                no_tool_calls: false,
                 force_call_user: true,
                 force_call_agent: false,
                 debug: vec![DebugKey::All],
@@ -231,6 +239,9 @@ mod tests {
             md_file: None,
             force_markdown: false,
             config_overrides: vec![],
+            verbose_flag: false,
+            hide_tool_calls_flag: false,
+            show_thinking_flag: false,
         };
 
         let json = serde_json::to_string(&input).unwrap();
@@ -239,7 +250,6 @@ mod tests {
         assert!(
             matches!(deserialized.command, Command::Inspect { context: Some(ref c), thing: Inspectable::SystemPrompt } if c == "test")
         );
-        assert!(deserialized.flags.verbose);
         assert!(deserialized.flags.force_call_user);
         assert_eq!(deserialized.flags.debug, vec![DebugKey::All]);
         assert!(deserialized.raw);
@@ -262,6 +272,9 @@ mod tests {
             md_file: None,
             force_markdown: false,
             config_overrides: vec![],
+            verbose_flag: false,
+            hide_tool_calls_flag: false,
+            show_thinking_flag: false,
         };
 
         let json = serde_json::to_string(&input).unwrap();
