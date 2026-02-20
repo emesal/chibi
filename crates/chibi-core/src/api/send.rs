@@ -1835,7 +1835,22 @@ pub async fn send_prompt<S: ResponseSink>(
         let mut all_tools = tools::tools_to_api_format(tools);
         all_tools.extend(tools::builtin_tools_to_api_format(use_reflection));
         all_tools.extend(tools::all_file_tools_to_api_format());
-        all_tools.extend(tools::all_agent_tools_to_api_format());
+
+        // Resolve available preset capability names for the current cost tier so the
+        // LLM sees valid values in the spawn_agent tool description.
+        let preset_capabilities: Vec<String> = {
+            use ratatoskr::ModelGateway;
+            match build_gateway(&resolved_config) {
+                Ok(gw) => gw
+                    .list_presets()
+                    .get(&resolved_config.subagent_cost_tier)
+                    .map(|caps| caps.iter().cloned().collect())
+                    .unwrap_or_default(),
+                Err(_) => vec![],
+            }
+        };
+        let preset_cap_refs: Vec<&str> = preset_capabilities.iter().map(String::as_str).collect();
+        all_tools.extend(tools::all_agent_tools_to_api_format(&preset_cap_refs));
         all_tools.extend(tools::all_coding_tools_to_api_format());
         all_tools.extend(tools::all_vfs_tools_to_api_format());
         annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);

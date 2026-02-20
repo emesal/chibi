@@ -106,6 +106,11 @@ no_tool_calls = false
 # Options: "call_user" (return to user) or "call_agent" (continue loop)
 fallback_tool = "call_user"
 
+# Cost tier for resolving subagent model presets (default: "free")
+# Controls which ratatoskr preset tier is used when spawn_agent is given a
+# preset capability name (e.g. "fast", "reasoning") instead of an explicit model.
+# subagent_cost_tier = "free"
+
 # =============================================================================
 # Auto-Compaction
 # =============================================================================

@@ -377,6 +377,7 @@ mod tests {
             fallback_tool: "call_user".to_string(),
             storage: crate::partition::StorageConfig::default(),
             url_policy: None,
+            subagent_cost_tier: "free".to_string(),
             extra: BTreeMap::new(),
         }
     }

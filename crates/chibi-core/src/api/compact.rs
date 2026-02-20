@@ -657,6 +657,7 @@ mod tests {
             tools: ToolsConfig::default(),
             vfs: VfsConfig::default(),
             url_policy: None,
+            subagent_cost_tier: "free".to_string(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)
@@ -886,6 +887,7 @@ mod tests {
             fallback_tool: "call_user".to_string(),
             storage: StorageConfig::default(),
             url_policy: None,
+            subagent_cost_tier: "free".to_string(),
             extra: std::collections::BTreeMap::new(),
         }
     }
