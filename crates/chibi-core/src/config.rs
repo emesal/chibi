@@ -1483,7 +1483,10 @@ mod tests {
             subagent_cost_tier: "free".to_string(),
             ..test_resolved_config()
         };
-        assert_eq!(config.get_field("subagent_cost_tier"), Some("free".to_string()));
+        assert_eq!(
+            config.get_field("subagent_cost_tier"),
+            Some("free".to_string())
+        );
     }
 
     #[test]

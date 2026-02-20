@@ -145,10 +145,7 @@ impl SpawnOptions {
 
 /// Apply `PresetParameters` as defaults to `ApiParams`.
 /// Fills `None` fields only — never overwrites `Some` values set by the caller.
-fn apply_preset_defaults(
-    params: &ratatoskr::PresetParameters,
-    api: &mut crate::config::ApiParams,
-) {
+fn apply_preset_defaults(params: &ratatoskr::PresetParameters, api: &mut crate::config::ApiParams) {
     macro_rules! fill {
         ($field:ident) => {
             if api.$field.is_none() {
@@ -673,7 +670,10 @@ mod tests {
     fn test_agent_tool_schema_has_preset_param() {
         let spawn = get_tool_api(SPAWN_AGENT_TOOL_NAME);
         let params = &spawn["function"]["parameters"]["properties"];
-        assert!(params.get("preset").is_some(), "spawn_agent should have preset param");
+        assert!(
+            params.get("preset").is_some(),
+            "spawn_agent should have preset param"
+        );
     }
 
     #[test]
@@ -686,7 +686,10 @@ mod tests {
         let preset_desc = spawn["function"]["parameters"]["properties"]["preset"]["description"]
             .as_str()
             .unwrap_or("");
-        assert!(preset_desc.contains("fast"), "description should list 'fast'");
+        assert!(
+            preset_desc.contains("fast"),
+            "description should list 'fast'"
+        );
         assert!(
             preset_desc.contains("reasoning"),
             "description should list 'reasoning'"
@@ -720,21 +723,21 @@ mod tests {
         let gateway = crate::gateway::build_gateway(&config).expect("gateway should build");
         let presets = gateway.list_presets();
         // Only run the assertion if any preset exists
-        if let Some((tier, caps)) = presets.iter().next() {
-            if let Some(capability) = caps.iter().next() {
-                let mut effective_config = make_test_config();
-                effective_config.subagent_cost_tier = tier.clone();
-                let opts = SpawnOptions {
-                    preset: Some(capability.clone()),
-                    ..Default::default()
-                };
-                let result = apply_spawn_options(&effective_config, &opts, Some(&gateway));
-                // model should have changed from the default
-                assert_ne!(
-                    result.model, effective_config.model,
-                    "preset should have changed the model"
-                );
-            }
+        if let Some((tier, caps)) = presets.iter().next()
+            && let Some(capability) = caps.iter().next()
+        {
+            let mut effective_config = make_test_config();
+            effective_config.subagent_cost_tier = tier.clone();
+            let opts = SpawnOptions {
+                preset: Some(capability.clone()),
+                ..Default::default()
+            };
+            let result = apply_spawn_options(&effective_config, &opts, Some(&gateway));
+            // model should have changed from the default
+            assert_ne!(
+                result.model, effective_config.model,
+                "preset should have changed the model"
+            );
         }
     }
 
