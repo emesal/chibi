@@ -202,7 +202,7 @@ mod tests {
 
         assert!(!lock_path.exists());
 
-        let lock = ContextLock::acquire(temp_dir.path(), 30).unwrap();
+        let lock = ContextLock::acquire(temp_dir.path(), 1).unwrap();
 
         assert!(lock_path.exists());
 
@@ -220,7 +220,7 @@ mod tests {
         let lock_path = temp_dir.path().join(".lock");
 
         {
-            let _lock = ContextLock::acquire(temp_dir.path(), 30).unwrap();
+            let _lock = ContextLock::acquire(temp_dir.path(), 1).unwrap();
             assert!(lock_path.exists());
         }
 
@@ -232,10 +232,10 @@ mod tests {
     fn test_cannot_acquire_active_lock() {
         let temp_dir = create_test_dir();
 
-        let _lock1 = ContextLock::acquire(temp_dir.path(), 30).unwrap();
+        let _lock1 = ContextLock::acquire(temp_dir.path(), 1).unwrap();
 
         // Try to acquire another lock - should fail
-        let result = ContextLock::acquire(temp_dir.path(), 30);
+        let result = ContextLock::acquire(temp_dir.path(), 1);
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert_eq!(err.kind(), ErrorKind::AlreadyExists);
@@ -310,7 +310,7 @@ mod tests {
         fs::write(&lock_path, old.to_string()).unwrap();
 
         // Should be able to acquire lock (stale lock cleaned up)
-        let lock = ContextLock::acquire(temp_dir.path(), 30).unwrap();
+        let lock = ContextLock::acquire(temp_dir.path(), 1).unwrap();
 
         // New timestamp should be fresh
         let content = fs::read_to_string(&lock_path).unwrap();
@@ -415,7 +415,7 @@ mod tests {
         fs::write(&lock_path, old.to_string()).unwrap();
 
         // acquire() should clean up stale lock and succeed
-        let lock = ContextLock::acquire(temp_dir.path(), 30).unwrap();
+        let lock = ContextLock::acquire(temp_dir.path(), 1).unwrap();
 
         // Verify the lock file has a fresh timestamp
         let content = fs::read_to_string(&lock_path).unwrap();
