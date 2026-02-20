@@ -530,6 +530,8 @@ impl ConfigDefaults {
     pub const FALLBACK_TOOL: &'static str = "call_user";
     /// Default model: ratatoskr free-tier agentic preset
     pub const MODEL: &'static str = "ratatoskr:free/agentic";
+    /// Default cost tier for resolving subagent presets
+    pub const SUBAGENT_COST_TIER: &'static str = "free";
 }
 
 // Thin wrappers for serde's #[serde(default = "...")] requirement
@@ -580,6 +582,9 @@ fn default_fallback_tool() -> String {
 }
 fn default_warn_threshold_percent() -> f32 {
     ConfigDefaults::WARN_THRESHOLD_PERCENT
+}
+fn default_subagent_cost_tier() -> String {
+    ConfigDefaults::SUBAGENT_COST_TIER.to_string()
 }
 
 // ============================================================================
@@ -662,6 +667,10 @@ pub struct Config {
     /// URL security policy for sensitive URL handling
     #[serde(default)]
     pub url_policy: Option<UrlPolicy>,
+    /// Cost tier used when resolving subagent presets (e.g. "free", "standard", "premium").
+    /// Controls which tier of ratatoskr presets `spawn_agent` resolves against.
+    #[serde(default = "default_subagent_cost_tier")]
+    pub subagent_cost_tier: String,
 }
 
 /// Per-context config from `~/.chibi/contexts/<name>/local.toml`
@@ -707,6 +716,8 @@ pub struct LocalConfig {
     pub fallback_tool: Option<String>,
     /// URL security policy override
     pub url_policy: Option<UrlPolicy>,
+    /// Subagent preset cost tier override
+    pub subagent_cost_tier: Option<String>,
 }
 
 impl LocalConfig {
@@ -751,6 +762,7 @@ impl LocalConfig {
             tool_cache_max_age_days,
             auto_cleanup_cache,
             tool_cache_preview_chars,
+            subagent_cost_tier,
         );
         // url_policy: whole-object override (not merge)
         if self.url_policy.is_some() {
@@ -821,6 +833,8 @@ pub struct ResolvedConfig {
     pub storage: StorageConfig,
     /// URL security policy (None = use permission handler fallback)
     pub url_policy: Option<UrlPolicy>,
+    /// Cost tier for resolving subagent presets. Default: "free".
+    pub subagent_cost_tier: String,
     /// Arbitrary per-invocation key-value overrides (freeform escape hatch).
     /// Unknown field paths in `set_field` land here; `get_field` falls through to here.
     pub extra: BTreeMap<String, String>,
@@ -839,7 +853,7 @@ impl ResolvedConfig {
                      fuel, fuel_empty_response_cost,
                      tool_output_cache_threshold, tool_cache_preview_chars,
                      tool_cache_max_age_days;
-            clone: model, username, fallback_tool;
+            clone: model, username, fallback_tool, subagent_cost_tier;
             int: warn_threshold_percent, auto_compact_threshold;
             fmt: rolling_compact_drop_percentage;
         );
@@ -935,6 +949,7 @@ impl ResolvedConfig {
             "tool_cache_preview_chars",
             "file_tools_allowed_paths",
             "url_policy",
+            "subagent_cost_tier",
             // API params
             "api.temperature",
             "api.max_tokens",
@@ -1217,6 +1232,7 @@ mod tests {
                 ..Default::default()
             },
             url_policy: None,
+            subagent_cost_tier: "free".to_string(),
             extra: BTreeMap::new(),
         };
 
@@ -1341,6 +1357,7 @@ mod tests {
             fallback_tool: "call_user".to_string(),
             storage: StorageConfig::default(),
             url_policy: None,
+            subagent_cost_tier: "free".to_string(),
             extra: BTreeMap::new(),
         }
     }
@@ -1458,6 +1475,27 @@ mod tests {
         // first pair applied, second failed, third not reached
         assert_eq!(config.fuel, 50);
         assert_eq!(config.model, "test-model"); // unchanged
+    }
+
+    #[test]
+    fn test_subagent_cost_tier_default() {
+        let config = ResolvedConfig {
+            subagent_cost_tier: "free".to_string(),
+            ..test_resolved_config()
+        };
+        assert_eq!(config.get_field("subagent_cost_tier"), Some("free".to_string()));
+    }
+
+    #[test]
+    fn test_subagent_cost_tier_override() {
+        let base = test_resolved_config();
+        let local = LocalConfig {
+            subagent_cost_tier: Some("standard".to_string()),
+            ..Default::default()
+        };
+        let mut resolved = base.clone();
+        local.apply_overrides(&mut resolved);
+        assert_eq!(resolved.subagent_cost_tier, "standard");
     }
 
     #[test]

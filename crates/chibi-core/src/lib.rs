@@ -112,6 +112,7 @@ pub(crate) mod test_support {
             tools: ToolsConfig::default(),
             vfs: VfsConfig::default(),
             url_policy: None,
+            subagent_cost_tier: "free".to_string(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         let root = temp_dir.path().to_path_buf();

@@ -103,6 +103,7 @@ impl AppState {
             fallback_tool: self.config.fallback_tool.clone(),
             storage: self.config.storage.clone(),
             url_policy: self.config.url_policy.clone(),
+            subagent_cost_tier: self.config.subagent_cost_tier.clone(),
             extra: BTreeMap::new(),
         };
 

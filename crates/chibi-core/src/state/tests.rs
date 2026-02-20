@@ -36,6 +36,7 @@ fn create_test_app() -> (AppState, TempDir) {
         tools: ToolsConfig::default(),
         vfs: VfsConfig::default(),
         url_policy: None,
+        subagent_cost_tier: "free".to_string(),
     };
     let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
     (app, temp_dir)
@@ -561,6 +562,7 @@ fn test_resolve_config_model_level_api_params() {
         tools: ToolsConfig::default(),
         vfs: VfsConfig::default(),
         url_policy: None,
+        subagent_cost_tier: "free".to_string(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -621,6 +623,7 @@ fn test_resolve_config_hierarchy_context_over_model() {
         tools: ToolsConfig::default(),
         vfs: VfsConfig::default(),
         url_policy: None,
+        subagent_cost_tier: "free".to_string(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -690,6 +693,7 @@ fn test_resolve_config_all_local_overrides() {
         storage: StorageConfig::default(),
         fallback_tool: None,
         url_policy: None,
+        subagent_cost_tier: None,
     };
     app.save_local_config("default", &local).unwrap();
 
