@@ -1767,24 +1767,6 @@ mod tests {
     // === Model metadata tests ===
 
     #[test]
-    fn test_model_metadata_short() {
-        let input = parse_input("-m anthropic/claude-sonnet-4").unwrap();
-        assert!(
-            matches!(input.command, Command::ModelMetadata { ref model, full: false } if model == "anthropic/claude-sonnet-4")
-        );
-        assert!(input.flags.force_call_user);
-    }
-
-    #[test]
-    fn test_model_metadata_full_short() {
-        let input = parse_input("-M anthropic/claude-sonnet-4").unwrap();
-        assert!(
-            matches!(input.command, Command::ModelMetadata { ref model, full: true } if model == "anthropic/claude-sonnet-4")
-        );
-        assert!(input.flags.force_call_user);
-    }
-
-    #[test]
     fn test_model_metadata_long() {
         let input = parse_input("--model-metadata anthropic/claude-sonnet-4").unwrap();
         assert!(
@@ -1800,20 +1782,68 @@ mod tests {
         );
     }
 
+    // Verify old -m/-M no longer accepted for model-metadata
     #[test]
-    fn test_model_metadata_attached() {
-        let input = parse_input("-manthropic/claude-sonnet-4").unwrap();
+    fn test_model_metadata_long_only() {
+        let input = parse_input("--model-metadata anthropic/claude-sonnet-4").unwrap();
         assert!(
             matches!(input.command, Command::ModelMetadata { ref model, full: false } if model == "anthropic/claude-sonnet-4")
         );
     }
 
     #[test]
-    fn test_model_metadata_full_attached() {
-        let input = parse_input("-Manthropic/claude-sonnet-4").unwrap();
+    fn test_model_metadata_full_long_only() {
+        let input = parse_input("--model-metadata-full anthropic/claude-sonnet-4").unwrap();
         assert!(
             matches!(input.command, Command::ModelMetadata { ref model, full: true } if model == "anthropic/claude-sonnet-4")
         );
+    }
+
+    // === Set model tests ===
+
+    #[test]
+    fn test_set_model_short() {
+        let input = parse_input("-m anthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { context: None, ref model } if model == "anthropic/claude-sonnet-4")
+        );
+        assert!(!input.flags.force_call_user); // combinable
+    }
+
+    #[test]
+    fn test_set_model_long() {
+        let input = parse_input("--set-model anthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { context: None, ref model } if model == "anthropic/claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn test_set_model_attached() {
+        let input = parse_input("-manthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { context: None, ref model } if model == "anthropic/claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn test_set_model_for_context_short() {
+        let input = parse_input("-M myctx openai/gpt-4o").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { ref context, ref model }
+                if *context == Some("myctx".to_string()) && model == "openai/gpt-4o")
+        );
+        assert!(input.flags.force_call_user); // implies --no-chibi
+    }
+
+    #[test]
+    fn test_set_model_for_context_long() {
+        let input = parse_input("--set-model-for-context myctx openai/gpt-4o").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { ref context, ref model }
+                if *context == Some("myctx".to_string()) && model == "openai/gpt-4o")
+        );
+        assert!(input.flags.force_call_user);
     }
 
     #[test]
