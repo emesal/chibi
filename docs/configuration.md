@@ -344,6 +344,13 @@ chibi -u alice "Hello"  # Persists to local.toml
 chibi -U bob "Hello"    # Ephemeral, doesn't persist
 ```
 
+Model can be set similarly:
+
+```bash
+chibi -m anthropic/claude-sonnet-4   # Persists to local.toml (validated live)
+chibi -s model=anthropic/claude-sonnet-4 "Hello"  # Ephemeral, doesn't persist
+```
+
 ## CLI Configuration (cli.toml)
 
 CLI-specific presentation settings live in `~/.chibi/cli.toml`. These control how output is rendered in the terminal and are separate from core configuration to support future frontends.
