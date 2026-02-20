@@ -71,3 +71,51 @@ pub use tools::{HookPoint, SpawnOptions, Tool, spawn_agent};
 pub fn ratatoskr_version() -> &'static str {
     ratatoskr::PKG_VERSION
 }
+
+/// Shared test helpers for integration-style tests across chibi-core modules.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use crate::Chibi;
+    use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
+    use crate::partition::StorageConfig;
+    use crate::state::AppState;
+    use tempfile::TempDir;
+
+    /// Build a minimal `Chibi` instance backed by a temporary directory.
+    ///
+    /// Returns `(Chibi, TempDir)` — the `TempDir` must outlive `Chibi`.
+    pub(crate) fn create_test_chibi() -> (Chibi, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config {
+            api_key: Some("test-key".to_string()),
+            model: Some("test-model".to_string()),
+            context_window_limit: Some(8000),
+            warn_threshold_percent: 75.0,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            reflection_enabled: true,
+            reflection_character_limit: 10000,
+            fuel: 15,
+            fuel_empty_response_cost: 15,
+            username: "testuser".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: false,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api: ApiParams::default(),
+            storage: StorageConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            tools: ToolsConfig::default(),
+            vfs: VfsConfig::default(),
+            url_policy: None,
+        };
+        let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+        let root = temp_dir.path().to_path_buf();
+        let chibi = Chibi::for_test(app, root);
+        (chibi, temp_dir)
+    }
+}

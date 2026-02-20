@@ -1652,8 +1652,7 @@ async fn test_clear_tool_cache_removes_all_entries() {
     let ctx = "clear-ctx";
 
     for name in ["e1", "e2", "e3"] {
-        let path =
-            crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
+        let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
         app.vfs
             .write(crate::vfs::SYSTEM_CALLER, &path, b"data")
             .await
@@ -1663,8 +1662,7 @@ async fn test_clear_tool_cache_removes_all_entries() {
     app.clear_tool_cache(ctx).await.unwrap();
 
     for name in ["e1", "e2", "e3"] {
-        let path =
-            crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
+        let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
         let exists = app
             .vfs
             .exists(crate::vfs::SYSTEM_CALLER, &path)
@@ -1701,8 +1699,7 @@ async fn test_cleanup_all_tool_caches_fresh_entries_survive() {
     let (app, _temp) = create_test_app();
 
     for ctx in ["ctx-x", "ctx-y"] {
-        let path =
-            crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
+        let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
         app.vfs
             .write(crate::vfs::SYSTEM_CALLER, &path, b"fresh")
             .await

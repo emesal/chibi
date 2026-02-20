@@ -112,6 +112,50 @@ impl OutputSink for NoopSink {
     }
 }
 
+/// A capturing output sink for tests — collects results and events for assertions.
+#[cfg(test)]
+pub(crate) struct CaptureSink {
+    pub results: std::cell::RefCell<Vec<String>>,
+    pub events: std::cell::RefCell<Vec<CommandEvent>>,
+    /// Return value for `confirm()`. Defaults to false.
+    pub confirm_response: bool,
+}
+
+#[cfg(test)]
+impl CaptureSink {
+    pub fn new() -> Self {
+        Self {
+            results: std::cell::RefCell::new(vec![]),
+            events: std::cell::RefCell::new(vec![]),
+            confirm_response: false,
+        }
+    }
+
+    pub fn confirming() -> Self {
+        Self {
+            confirm_response: true,
+            ..Self::new()
+        }
+    }
+}
+
+#[cfg(test)]
+impl OutputSink for CaptureSink {
+    fn emit_result(&self, content: &str) {
+        self.results.borrow_mut().push(content.to_string());
+    }
+    fn emit_event(&self, event: CommandEvent) {
+        self.events.borrow_mut().push(event);
+    }
+    fn newline(&self) {}
+    fn emit_entry(&self, _: &TranscriptEntry) -> io::Result<()> {
+        Ok(())
+    }
+    fn confirm(&self, _: &str) -> bool {
+        self.confirm_response
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

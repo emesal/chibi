@@ -460,6 +460,20 @@ impl Chibi {
     pub fn tool_count(&self) -> usize {
         self.tools.len()
     }
+
+    /// Create a minimal `Chibi` instance for testing.
+    ///
+    /// Bypasses file-based loading; the caller supplies a pre-built `AppState`.
+    /// Returns `(Chibi, TempDir)` — the `TempDir` must outlive `Chibi`.
+    #[cfg(test)]
+    pub(crate) fn for_test(app: AppState, root: std::path::PathBuf) -> Self {
+        Self {
+            app,
+            tools: vec![],
+            project_root: root,
+            permission_handler: None,
+        }
+    }
 }
 
 /// Resolve project root: explicit path > `CHIBI_PROJECT_ROOT` env > VCS root > cwd.
@@ -494,53 +508,10 @@ pub fn project_index_db_path(root: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::StatePaths;
-    use crate::config::{ApiParams, ToolsConfig, VfsConfig};
-    use crate::partition::StorageConfig;
-    use tempfile::TempDir;
+    use crate::test_support::create_test_chibi;
 
     // Note: Most tests require a real chibi directory structure.
     // These are basic sanity tests.
-
-    /// create a test chibi instance with a temporary directory.
-    /// returns both for lifetime management (tempdir must outlive chibi).
-    fn create_test_chibi() -> (Chibi, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let config = crate::config::Config {
-            api_key: Some("test-key".to_string()),
-            model: Some("test-model".to_string()),
-            context_window_limit: Some(8000),
-            warn_threshold_percent: 75.0,
-            no_tool_calls: false,
-            auto_compact: false,
-            auto_compact_threshold: 80.0,
-            reflection_enabled: true,
-            reflection_character_limit: 10000,
-            fuel: 15,
-            fuel_empty_response_cost: 15,
-            username: "testuser".to_string(),
-            lock_heartbeat_seconds: 30,
-            rolling_compact_drop_percentage: 50.0,
-            tool_output_cache_threshold: 4000,
-            tool_cache_max_age_days: 7,
-            auto_cleanup_cache: true,
-            tool_cache_preview_chars: 500,
-            file_tools_allowed_paths: vec![],
-            api: ApiParams::default(),
-            storage: StorageConfig::default(),
-            fallback_tool: "call_user".to_string(),
-            tools: ToolsConfig::default(),
-            vfs: VfsConfig::default(),
-            url_policy: None,
-        };
-        let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
-        let chibi = Chibi {
-            project_root: temp_dir.path().to_path_buf(),
-            app,
-            tools: vec![],
-            permission_handler: None,
-        };
-        (chibi, temp_dir)
-    }
 
     #[test]
     fn test_chibi_facade_exists() {
