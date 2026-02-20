@@ -235,7 +235,9 @@ pub async fn spawn_agent(
     options: &SpawnOptions,
     tools: &[Tool],
 ) -> io::Result<String> {
-    let effective_config = apply_spawn_options(config, options, None);
+    // Build gateway once for preset resolution; gateway::chat builds its own internally.
+    let gateway = gateway::build_gateway(config).ok();
+    let effective_config = apply_spawn_options(config, options, gateway.as_ref());
 
     // Fire pre_spawn_agent hook
     let hook_data = json!({
@@ -633,6 +635,35 @@ mod tests {
         api.temperature = Some(0.9); // caller already set this
         apply_preset_defaults(&params, &mut api);
         assert_eq!(api.temperature, Some(0.9)); // caller wins
+    }
+
+    // === Gateway preset wiring ===
+
+    #[test]
+    fn test_apply_spawn_options_preset_sets_model() {
+        // Tests the plumbing: if we pass a real EmbeddedGateway and a preset
+        // that exists, the model in the returned config should change.
+        use ratatoskr::ModelGateway;
+        let config = make_test_config();
+        let gateway = crate::gateway::build_gateway(&config).expect("gateway should build");
+        let presets = gateway.list_presets();
+        // Only run the assertion if any preset exists
+        if let Some((tier, caps)) = presets.iter().next() {
+            if let Some(capability) = caps.iter().next() {
+                let mut effective_config = make_test_config();
+                effective_config.subagent_cost_tier = tier.clone();
+                let opts = SpawnOptions {
+                    preset: Some(capability.clone()),
+                    ..Default::default()
+                };
+                let result = apply_spawn_options(&effective_config, &opts, Some(&gateway));
+                // model should have changed from the default
+                assert_ne!(
+                    result.model, effective_config.model,
+                    "preset should have changed the model"
+                );
+            }
+        }
     }
 
     // === Source classification ===
