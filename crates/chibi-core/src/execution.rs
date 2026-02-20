@@ -43,15 +43,12 @@ pub enum CommandEffect {
 /// # Arguments
 /// - `context` — already resolved by binary (CLI via session, JSON from input)
 /// - `config` — core config, resolved by binary before calling
-/// - `username` — ephemeral username override for this invocation
-#[allow(clippy::too_many_arguments)]
 pub async fn execute_command<S: ResponseSink>(
     chibi: &mut Chibi,
     context: &str,
     command: &Command,
     flags: &ExecutionFlags,
     config: &ResolvedConfig,
-    username: Option<&str>,
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
@@ -100,10 +97,7 @@ pub async fn execute_command<S: ResponseSink>(
     }
 
     // --- command dispatch ---
-    let effect = dispatch_command(
-        chibi, context, command, flags, config, username, output, sink,
-    )
-    .await?;
+    let effect = dispatch_command(chibi, context, command, flags, config, output, sink).await?;
 
     // --- post-command lifecycle ---
 
@@ -132,14 +126,12 @@ pub async fn execute_command<S: ResponseSink>(
 ///
 /// Send-path commands (SendPrompt, CallTool, CheckInbox, CheckAllInboxes)
 /// use the provided `ResponseSink`. Non-send commands use `OutputSink` only.
-#[allow(clippy::too_many_arguments)]
 async fn dispatch_command<S: ResponseSink>(
     chibi: &mut Chibi,
     context: &str,
     command: &Command,
     flags: &ExecutionFlags,
     config: &ResolvedConfig,
-    _username: Option<&str>,
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
@@ -581,7 +573,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -621,7 +612,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -657,7 +647,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -695,7 +684,6 @@ mod tests {
             &Command::ListContexts,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -740,7 +728,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -780,7 +767,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -817,7 +803,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -851,7 +836,6 @@ mod tests {
             &Command::ArchiveHistory { name: None },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -883,7 +867,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -917,7 +900,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -948,7 +930,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -991,7 +972,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -1032,7 +1012,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -1067,7 +1046,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -1111,7 +1089,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )

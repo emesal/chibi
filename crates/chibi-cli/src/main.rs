@@ -368,7 +368,6 @@ async fn execute_from_input(
         &command,
         &input.flags,
         &cli_config.core,
-        ephemeral_username,
         output,
         &mut sink,
     )

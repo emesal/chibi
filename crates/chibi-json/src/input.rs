@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use chibi_core::config::LocalConfig;
 use chibi_core::input::{Command, ExecutionFlags};
-use chibi_core::tools::UrlPolicy;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -23,21 +22,14 @@ pub struct JsonInput {
     /// Execution flags
     #[serde(default)]
     pub flags: ExecutionFlags,
-    /// Runtime username override
-    #[serde(default)]
-    pub username: Option<String>,
     /// Chibi home directory override
     #[serde(default)]
     pub home: Option<PathBuf>,
     /// Project root override
     #[serde(default)]
     pub project_root: Option<PathBuf>,
-    /// URL security policy override (replaces config-level policy).
-    /// Prefer using `config.url_policy` instead — this field is kept for
-    /// backwards compatibility.
-    #[serde(default)]
-    pub url_policy: Option<UrlPolicy>,
-    /// Typed config overrides (same semantics as local.toml, schema-documented)
+    /// Typed config overrides (same semantics as local.toml, schema-documented).
+    /// Use `config.username` and `config.url_policy` for per-invocation overrides.
     #[serde(default)]
     pub config: Option<LocalConfig>,
     /// String-keyed overrides (highest priority, freeform escape hatch)
