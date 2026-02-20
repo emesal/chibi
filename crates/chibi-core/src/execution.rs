@@ -770,7 +770,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(effect, CommandEffect::ContextDestroyed("doomed".to_string()));
+        assert_eq!(
+            effect,
+            CommandEffect::ContextDestroyed("doomed".to_string())
+        );
     }
 
     #[tokio::test]
