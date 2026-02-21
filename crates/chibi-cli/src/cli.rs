@@ -1799,7 +1799,9 @@ mod tests {
     fn test_destroy_at_combinable_with_context_switch() {
         let input = parse_input("--destroy-after-inactive 1 -c test-ctx -l").unwrap();
         assert_eq!(input.flags.destroy_after_seconds_inactive, Some(1));
-        assert!(matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "test-ctx"));
+        assert!(
+            matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "test-ctx")
+        );
     }
 
     // === Model metadata tests ===

@@ -490,13 +490,7 @@ fn integration_switch_to_previous_context() {
 
     // Switch to context "prev_test_1"
     let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "prev_test_1",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "prev_test_1", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
@@ -504,13 +498,7 @@ fn integration_switch_to_previous_context() {
 
     // Switch to context "prev_test_2"
     let output2 = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "prev_test_2",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "prev_test_2", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
@@ -553,13 +541,7 @@ fn integration_context_name_dash_is_invalid() {
 
     // Create a temporary context first
     let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "temp_ctx",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "temp_ctx", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
@@ -584,25 +566,13 @@ fn integration_ephemeral_switch_to_previous() {
 
     // Create and switch to contexts
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "eph_1",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "eph_1", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
 
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "eph_2",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "eph_2", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
@@ -625,25 +595,13 @@ fn integration_delete_previous_context() {
 
     // Create contexts
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "del_test_1",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "del_test_1", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
 
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "del_test_2",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "del_test_2", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
@@ -664,25 +622,13 @@ fn integration_archive_previous_context() {
 
     // Create contexts
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "arch_test_1",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "arch_test_1", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
 
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "arch_test_2",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "arch_test_2", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
@@ -709,26 +655,14 @@ fn integration_previous_context_with_new() {
 
     // Switch to a context
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "first_ctx",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "first_ctx", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
 
     // Create a new context
     let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "new",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "new", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
@@ -755,26 +689,14 @@ fn integration_previous_context_swaps_like_cd() {
 
     // Switch to context "swap_a"
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "swap_a",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "swap_a", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
 
     // Switch to context "swap_b"
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
-        .args([
-            "--destroy-after-inactive",
-            "1",
-            "-c",
-            "swap_b",
-            "-l",
-        ])
+        .args(["--destroy-after-inactive", "1", "-c", "swap_b", "-l"])
         .env("CHIBI_HOME", temp_home.path())
         .output()
         .expect("failed to run chibi");
