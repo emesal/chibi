@@ -1,0 +1,35 @@
+# =============================================================================
+# Chibi MCP Bridge Configuration
+# =============================================================================
+# Copy this file to ~/.chibi/mcp-bridge.toml and customize as needed.
+# See docs/mcp.md for full reference.
+
+# How long the bridge stays alive without requests (default: 5)
+idle_timeout_minutes = 5
+
+# LLM-powered tool summary generation (optional)
+[summary]
+enabled = true
+model = "ratatoskr:free/text-generation"
+
+# =============================================================================
+# MCP Servers
+# =============================================================================
+# Local servers are spawned as child processes (requires `command`).
+# Remote servers connect via streamable HTTP (requires `url`).
+
+# Serena — semantic code intelligence (local, stdio transport)
+# https://github.com/oraios/serena
+[servers.serena]
+command = "uvx"
+args = ["serena"]
+
+# GitHub MCP Server — GitHub API tools (remote, streamable HTTP transport)
+# https://github.com/github/github-mcp-server
+# Requires a GitHub Personal Access Token:
+#   https://github.com/settings/tokens (needs repo, issues, pull_requests scopes)
+[servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+
+[servers.github.headers]
+Authorization = "Bearer YOUR_GITHUB_PAT"
