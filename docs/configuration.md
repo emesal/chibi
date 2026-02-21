@@ -106,6 +106,11 @@ no_tool_calls = false
 # Options: "call_user" (return to user) or "call_agent" (continue loop)
 fallback_tool = "call_user"
 
+# Cost tier for resolving subagent model presets (default: "free")
+# Controls which ratatoskr preset tier is used when spawn_agent is given a
+# preset capability name (e.g. "fast", "reasoning") instead of an explicit model.
+# subagent_cost_tier = "free"
+
 # =============================================================================
 # Auto-Compaction
 # =============================================================================
@@ -342,6 +347,13 @@ Set username via CLI (automatically saves to local.toml):
 ```bash
 chibi -u alice "Hello"  # Persists to local.toml
 chibi -U bob "Hello"    # Ephemeral, doesn't persist
+```
+
+Model can be set similarly:
+
+```bash
+chibi -m anthropic/claude-sonnet-4   # Persists to local.toml (validated live)
+chibi -s model=anthropic/claude-sonnet-4 "Hello"  # Ephemeral, doesn't persist
 ```
 
 ## CLI Configuration (cli.toml)

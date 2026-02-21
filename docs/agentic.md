@@ -211,6 +211,26 @@ Chibi provides two built-in tools for spawning sub-agents — separate LLM calls
 
 Both tools accept optional `model`, `temperature`, and `max_tokens` overrides. Without overrides, the parent's model and settings are used.
 
+### Model Presets
+
+Instead of specifying a model directly, `spawn_agent` accepts a `preset` parameter — a capability name like `"fast"` or `"reasoning"`. The actual model and default parameters are resolved from your ratatoskr preset configuration using the `subagent_cost_tier` set in `config.toml` (default: `"free"`).
+
+Available capability names are listed in the `preset` parameter description when the tool is active — the LLM sees the valid options at runtime. Explicit `model`, `temperature`, and `max_tokens` arguments always override preset defaults.
+
+```json
+{
+  "system_prompt": "You are a fast summariser.",
+  "input": "Summarise the following document...",
+  "preset": "fast"
+}
+```
+
+To change the cost tier for sub-agents, set `subagent_cost_tier` in `config.toml` or `local.toml`:
+
+```toml
+subagent_cost_tier = "standard"
+```
+
 Sub-agent calls are non-streaming (results returned as tool output). Plugins can intercept or replace sub-agent calls via `pre_spawn_agent` / `post_spawn_agent` hooks — see [hooks.md](hooks.md#pre_spawn_agent).
 
 ### Ephemeral Context Flag

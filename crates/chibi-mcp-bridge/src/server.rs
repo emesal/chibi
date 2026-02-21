@@ -4,6 +4,9 @@ use crate::protocol::ToolInfo;
 use rmcp::model::{CallToolRequestParams, ListToolsResult};
 use rmcp::service::RunningService;
 use rmcp::transport::TokioChildProcess;
+use rmcp::transport::streamable_http_client::{
+    StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+};
 use rmcp::{RoleClient, ServiceExt};
 
 use std::collections::HashMap;
@@ -26,17 +29,49 @@ impl ServerManager {
         }
     }
 
-    /// Spawn an MCP server process, connect via stdio, and discover its tools.
+    /// Spawn or connect to an MCP server and discover its tools.
     pub async fn start_server(
         &mut self,
         name: &str,
         config: &ServerConfig,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut cmd = tokio::process::Command::new(&config.command);
-        cmd.args(&config.args);
-
-        let transport = TokioChildProcess::new(cmd)?;
-        let service = ().serve(transport).await?;
+        let service = match config {
+            ServerConfig::Stdio { command, args } => {
+                let mut cmd = tokio::process::Command::new(command);
+                cmd.args(args);
+                let transport = TokioChildProcess::new(cmd)?;
+                ().serve(transport).await?
+            }
+            ServerConfig::StreamableHttp { url, headers } => {
+                let transport = if headers.is_empty() {
+                    StreamableHttpClientTransport::from_uri(url.as_str())
+                } else {
+                    let mut header_map = reqwest::header::HeaderMap::new();
+                    for (key, value) in headers {
+                        let header_name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                            .map_err(|e| {
+                            format!("server '{name}': invalid header name '{key}': {e}")
+                        })?;
+                        let header_value =
+                            reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+                                format!("server '{name}': invalid header value for '{key}': {e}")
+                            })?;
+                        header_map.insert(header_name, header_value);
+                    }
+                    let client = reqwest::Client::builder()
+                        .default_headers(header_map)
+                        .build()
+                        .map_err(|e| {
+                            format!("server '{name}': failed to build HTTP client: {e}")
+                        })?;
+                    StreamableHttpClientTransport::with_client(
+                        client,
+                        StreamableHttpClientTransportConfig::with_uri(url.as_str()),
+                    )
+                };
+                ().serve(transport).await?
+            }
+        };
 
         let ListToolsResult { tools, .. } = service.list_tools(Default::default()).await?;
 

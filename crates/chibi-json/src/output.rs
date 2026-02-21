@@ -44,6 +44,9 @@ impl OutputSink for JsonOutputSink {
                 serde_json::json!({"type": "username_saved", "username": username,
                                    "context": context})
             }
+            CommandEvent::ModelSet { model, context } => {
+                serde_json::json!({"type": "model_set", "model": model, "context": context})
+            }
             CommandEvent::InboxEmpty { context } => {
                 serde_json::json!({"type": "inbox_empty", "context": context})
             }

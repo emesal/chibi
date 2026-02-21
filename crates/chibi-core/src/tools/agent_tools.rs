@@ -58,6 +58,12 @@ pub static AGENT_TOOL_DEFS: &[BuiltinToolDef] = &[
                 description: "Max tokens override for the sub-agent",
                 default: None,
             },
+            ToolPropertyDef {
+                name: "preset",
+                prop_type: "string",
+                description: "PRESET_DESCRIPTION_PLACEHOLDER",
+                default: None,
+            },
         ],
         required: &["system_prompt", "input"],
         summary_params: &[],
@@ -114,6 +120,9 @@ pub struct SpawnOptions {
     pub temperature: Option<f32>,
     /// Max tokens override
     pub max_tokens: Option<usize>,
+    /// Preset capability name (e.g. "fast", "reasoning").
+    /// Resolved against `config.subagent_cost_tier`. Explicit model/temperature/max_tokens win over preset defaults.
+    pub preset: Option<String>,
 }
 
 impl SpawnOptions {
@@ -129,13 +138,62 @@ impl SpawnOptions {
                 .get("max_tokens")
                 .and_then(|v| v.as_u64())
                 .map(|n| n as usize),
+            preset: args.get_str("preset").map(String::from),
         }
     }
 }
 
+/// Apply `PresetParameters` as defaults to `ApiParams`.
+/// Fills `None` fields only — never overwrites `Some` values set by the caller.
+fn apply_preset_defaults(params: &ratatoskr::PresetParameters, api: &mut crate::config::ApiParams) {
+    macro_rules! fill {
+        ($field:ident) => {
+            if api.$field.is_none() {
+                api.$field = params.$field.clone();
+            }
+        };
+    }
+    fill!(temperature);
+    fill!(top_p);
+    fill!(max_tokens);
+    fill!(frequency_penalty);
+    fill!(presence_penalty);
+    fill!(seed);
+    fill!(stop);
+    fill!(parallel_tool_calls);
+    // Note: top_k, reasoning, tool_choice, response_format, cache_prompt,
+    // raw_provider_options are in PresetParameters but not in ApiParams — skip.
+}
+
 /// Apply spawn options to a cloned config, returning the effective config.
-fn apply_spawn_options(config: &ResolvedConfig, opts: &SpawnOptions) -> ResolvedConfig {
+/// `gateway` is used for preset resolution when `opts.preset` is set.
+fn apply_spawn_options(
+    config: &ResolvedConfig,
+    opts: &SpawnOptions,
+    gateway: Option<&ratatoskr::EmbeddedGateway>,
+) -> ResolvedConfig {
     let mut c = config.clone();
+
+    // Resolve preset first (explicit opts override preset defaults)
+    if let (Some(capability), Some(gw)) = (opts.preset.as_deref(), gateway) {
+        use ratatoskr::ModelGateway;
+        match gw.resolve_preset(&config.subagent_cost_tier, capability) {
+            Some(resolution) => {
+                c.model = resolution.model;
+                if let Some(params) = resolution.parameters {
+                    apply_preset_defaults(&params, &mut c.api);
+                }
+            }
+            None => {
+                eprintln!(
+                    "[WARN] spawn_agent: no preset for tier '{}' / capability '{}' — using parent model",
+                    config.subagent_cost_tier, capability
+                );
+            }
+        }
+    }
+
+    // Explicit overrides win over preset defaults
     if let Some(ref model) = opts.model {
         c.model = model.clone();
     }
@@ -180,7 +238,9 @@ pub async fn spawn_agent(
     options: &SpawnOptions,
     tools: &[Tool],
 ) -> io::Result<String> {
-    let effective_config = apply_spawn_options(config, options);
+    // Build gateway once for preset resolution; gateway::chat builds its own internally.
+    let gateway = gateway::build_gateway(config).ok();
+    let effective_config = apply_spawn_options(config, options, gateway.as_ref());
 
     // Fire pre_spawn_agent hook
     let hook_data = json!({
@@ -298,10 +358,34 @@ pub async fn execute_agent_tool(
 }
 
 /// Convert all agent tools to API format.
-pub fn all_agent_tools_to_api_format() -> Vec<serde_json::Value> {
+///
+/// `preset_capabilities`: capability names available via the configured cost tier.
+/// If empty, the `preset` param description notes no presets are configured.
+/// Explicit capability names are injected into the `spawn_agent` tool description
+/// at runtime so the LLM knows which values are valid.
+pub fn all_agent_tools_to_api_format(preset_capabilities: &[&str]) -> Vec<serde_json::Value> {
+    let preset_desc = if preset_capabilities.is_empty() {
+        "Preset capability name (no presets configured for this tier)".to_string()
+    } else {
+        format!(
+            "Preset capability name — one of: {} (cost tier set by config). \
+             Sets the model and default parameters for the sub-agent. \
+             Explicit model/temperature/max_tokens override preset defaults.",
+            preset_capabilities.join(", ")
+        )
+    };
+
     AGENT_TOOL_DEFS
         .iter()
-        .map(|def| def.to_api_format())
+        .map(|def| {
+            let mut json = def.to_api_format();
+            // Inject dynamic preset description into spawn_agent only
+            if def.name == SPAWN_AGENT_TOOL_NAME {
+                json["function"]["parameters"]["properties"]["preset"]["description"] =
+                    serde_json::Value::String(preset_desc.clone());
+            }
+            json
+        })
         .collect()
 }
 
@@ -354,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_all_agent_tools_to_api_format() {
-        let tools = all_agent_tools_to_api_format();
+        let tools = all_agent_tools_to_api_format(&[]);
         assert_eq!(tools.len(), 2);
         for tool in &tools {
             assert_eq!(tool["type"], "function");
@@ -434,7 +518,7 @@ mod tests {
             model: Some("new-model".to_string()),
             ..Default::default()
         };
-        let result = apply_spawn_options(&config, &opts);
+        let result = apply_spawn_options(&config, &opts, None);
         assert_eq!(result.model, "new-model");
         // Other fields unchanged
         assert_eq!(result.api.temperature, config.api.temperature);
@@ -447,7 +531,7 @@ mod tests {
             temperature: Some(0.9),
             ..Default::default()
         };
-        let result = apply_spawn_options(&config, &opts);
+        let result = apply_spawn_options(&config, &opts, None);
         assert_eq!(result.api.temperature, Some(0.9));
         assert_eq!(result.model, config.model);
     }
@@ -456,7 +540,7 @@ mod tests {
     fn test_apply_spawn_options_no_overrides() {
         let config = make_test_config();
         let opts = SpawnOptions::default();
-        let result = apply_spawn_options(&config, &opts);
+        let result = apply_spawn_options(&config, &opts, None);
         assert_eq!(result.model, config.model);
         assert_eq!(result.api.temperature, config.api.temperature);
         assert_eq!(result.api.max_tokens, config.api.max_tokens);
@@ -535,6 +619,128 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // === preset / apply_preset_defaults ===
+
+    #[test]
+    fn test_spawn_options_preset_from_args() {
+        let args = json!({ "preset": "fast" });
+        let opts = SpawnOptions::from_args(&args);
+        assert_eq!(opts.preset, Some("fast".to_string()));
+    }
+
+    #[test]
+    fn test_spawn_options_no_preset() {
+        let args = json!({ "model": "some/model" });
+        let opts = SpawnOptions::from_args(&args);
+        assert!(opts.preset.is_none());
+        assert_eq!(opts.model, Some("some/model".to_string()));
+    }
+
+    #[test]
+    fn test_apply_preset_defaults_fills_none() {
+        use ratatoskr::PresetParameters;
+        let params = PresetParameters {
+            temperature: Some(0.3),
+            max_tokens: Some(2048),
+            ..Default::default()
+        };
+        let mut api = crate::config::ApiParams::defaults();
+        assert!(api.temperature.is_none());
+        apply_preset_defaults(&params, &mut api);
+        assert_eq!(api.temperature, Some(0.3));
+        assert_eq!(api.max_tokens, Some(2048));
+    }
+
+    #[test]
+    fn test_apply_preset_defaults_preserves_existing() {
+        use ratatoskr::PresetParameters;
+        let params = PresetParameters {
+            temperature: Some(0.3),
+            ..Default::default()
+        };
+        let mut api = crate::config::ApiParams::defaults();
+        api.temperature = Some(0.9); // caller already set this
+        apply_preset_defaults(&params, &mut api);
+        assert_eq!(api.temperature, Some(0.9)); // caller wins
+    }
+
+    // === Dynamic tool description ===
+
+    #[test]
+    fn test_agent_tool_schema_has_preset_param() {
+        let spawn = get_tool_api(SPAWN_AGENT_TOOL_NAME);
+        let params = &spawn["function"]["parameters"]["properties"];
+        assert!(
+            params.get("preset").is_some(),
+            "spawn_agent should have preset param"
+        );
+    }
+
+    #[test]
+    fn test_agent_tools_description_lists_capabilities() {
+        let tools = all_agent_tools_to_api_format(&["fast", "reasoning"]);
+        let spawn = tools
+            .iter()
+            .find(|t| t["function"]["name"].as_str() == Some(SPAWN_AGENT_TOOL_NAME))
+            .expect("spawn_agent in list");
+        let preset_desc = spawn["function"]["parameters"]["properties"]["preset"]["description"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            preset_desc.contains("fast"),
+            "description should list 'fast'"
+        );
+        assert!(
+            preset_desc.contains("reasoning"),
+            "description should list 'reasoning'"
+        );
+    }
+
+    #[test]
+    fn test_agent_tools_description_no_capabilities() {
+        let tools = all_agent_tools_to_api_format(&[]);
+        let spawn = tools
+            .iter()
+            .find(|t| t["function"]["name"].as_str() == Some(SPAWN_AGENT_TOOL_NAME))
+            .expect("spawn_agent in list");
+        let preset_desc = spawn["function"]["parameters"]["properties"]["preset"]["description"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            preset_desc.contains("no presets"),
+            "should mention no presets configured"
+        );
+    }
+
+    // === Gateway preset wiring ===
+
+    #[test]
+    fn test_apply_spawn_options_preset_sets_model() {
+        // Tests the plumbing: if we pass a real EmbeddedGateway and a preset
+        // that exists, the model in the returned config should change.
+        use ratatoskr::ModelGateway;
+        let config = make_test_config();
+        let gateway = crate::gateway::build_gateway(&config).expect("gateway should build");
+        let presets = gateway.list_presets();
+        // Only run the assertion if any preset exists
+        if let Some((tier, caps)) = presets.iter().next()
+            && let Some(capability) = caps.iter().next()
+        {
+            let mut effective_config = make_test_config();
+            effective_config.subagent_cost_tier = tier.clone();
+            let opts = SpawnOptions {
+                preset: Some(capability.clone()),
+                ..Default::default()
+            };
+            let result = apply_spawn_options(&effective_config, &opts, Some(&gateway));
+            // model should have changed from the default
+            assert_ne!(
+                result.model, effective_config.model,
+                "preset should have changed the model"
+            );
+        }
+    }
+
     // === Source classification ===
 
     #[test]
@@ -579,6 +785,7 @@ mod tests {
             fallback_tool: "call_agent".to_string(),
             storage: crate::partition::StorageConfig::default(),
             url_policy: None,
+            subagent_cost_tier: "free".to_string(),
             extra: BTreeMap::new(),
         }
     }

@@ -43,15 +43,12 @@ pub enum CommandEffect {
 /// # Arguments
 /// - `context` — already resolved by binary (CLI via session, JSON from input)
 /// - `config` — core config, resolved by binary before calling
-/// - `username` — ephemeral username override for this invocation
-#[allow(clippy::too_many_arguments)]
 pub async fn execute_command<S: ResponseSink>(
     chibi: &mut Chibi,
     context: &str,
     command: &Command,
     flags: &ExecutionFlags,
     config: &ResolvedConfig,
-    username: Option<&str>,
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
@@ -100,10 +97,7 @@ pub async fn execute_command<S: ResponseSink>(
     }
 
     // --- command dispatch ---
-    let effect = dispatch_command(
-        chibi, context, command, flags, config, username, output, sink,
-    )
-    .await?;
+    let effect = dispatch_command(chibi, context, command, flags, config, output, sink).await?;
 
     // --- post-command lifecycle ---
 
@@ -132,14 +126,12 @@ pub async fn execute_command<S: ResponseSink>(
 ///
 /// Send-path commands (SendPrompt, CallTool, CheckInbox, CheckAllInboxes)
 /// use the provided `ResponseSink`. Non-send commands use `OutputSink` only.
-#[allow(clippy::too_many_arguments)]
 async fn dispatch_command<S: ResponseSink>(
     chibi: &mut Chibi,
     context: &str,
     command: &Command,
     flags: &ExecutionFlags,
     config: &ResolvedConfig,
-    _username: Option<&str>,
     output: &dyn OutputSink,
     sink: &mut S,
 ) -> io::Result<CommandEffect> {
@@ -256,6 +248,23 @@ async fn dispatch_command<S: ResponseSink>(
             };
             chibi.app.set_system_prompt_for(ctx_name, &content)?;
             output.emit_event(CommandEvent::SystemPromptSet {
+                context: ctx_name.to_string(),
+            });
+            Ok(CommandEffect::None)
+        }
+        Command::SetModel {
+            context: ctx,
+            model,
+        } => {
+            let ctx_name = ctx.as_deref().unwrap_or(context);
+            let gateway = crate::gateway::build_gateway(config)?;
+            // Live validation: registry → cache → network. Unknown model → error, no write.
+            crate::model_info::fetch_metadata(&gateway, model).await?;
+            let mut local = chibi.app.load_local_config(ctx_name)?;
+            local.model = Some(model.clone());
+            chibi.app.save_local_config(ctx_name, &local)?;
+            output.emit_event(CommandEvent::ModelSet {
+                model: model.clone(),
                 context: ctx_name.to_string(),
             });
             Ok(CommandEffect::None)
@@ -564,7 +573,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -604,7 +612,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -640,7 +647,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -678,7 +684,6 @@ mod tests {
             &Command::ListContexts,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -723,7 +728,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -763,7 +767,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -800,7 +803,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -834,7 +836,6 @@ mod tests {
             &Command::ArchiveHistory { name: None },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -866,7 +867,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -900,7 +900,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -931,7 +930,6 @@ mod tests {
             },
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -974,7 +972,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -1015,7 +1012,6 @@ mod tests {
             &Command::NoOp,
             &flags,
             &config,
-            None,
             &sink,
             &mut response,
         )
@@ -1028,6 +1024,82 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CommandEvent::CacheCleanup { .. })),
             "CacheCleanup should not fire when auto_cleanup_cache is disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_set_model_saves_to_local_config() {
+        let (mut chibi, _dir) = create_test_chibi();
+        chibi.app.ensure_context_dir("ctx").unwrap();
+
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::SetModel {
+                context: None,
+                model: "anthropic/claude-sonnet-4".to_string(),
+            },
+            &flags,
+            &config,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        // Model should be persisted in local.toml
+        let local = chibi.app.load_local_config("ctx").unwrap();
+        assert_eq!(
+            local.model.as_deref(),
+            Some("anthropic/claude-sonnet-4"),
+            "model should be saved to local config"
+        );
+
+        // ModelSet event should be emitted
+        let events = sink.events.borrow();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, CommandEvent::ModelSet { .. })),
+            "ModelSet event should be emitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_set_model_named_context() {
+        let (mut chibi, _dir) = create_test_chibi();
+        chibi.app.ensure_context_dir("other").unwrap();
+
+        let config = chibi.resolve_config("ctx", None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            "ctx",
+            &Command::SetModel {
+                context: Some("other".to_string()),
+                model: "anthropic/claude-sonnet-4".to_string(),
+            },
+            &flags,
+            &config,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        let local = chibi.app.load_local_config("other").unwrap();
+        assert_eq!(
+            local.model.as_deref(),
+            Some("anthropic/claude-sonnet-4"),
+            "model should be saved to named context's local config"
         );
     }
 }

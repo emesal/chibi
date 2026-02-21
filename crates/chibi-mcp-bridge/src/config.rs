@@ -2,12 +2,22 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// MCP server definition
+/// MCP server definition — either a local stdio process or a remote HTTP endpoint.
 #[derive(Debug, Clone, Deserialize)]
-pub struct ServerConfig {
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
+#[serde(untagged)]
+pub enum ServerConfig {
+    /// Local server spawned as a child process (stdio transport).
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    /// Remote server accessed via streamable HTTP transport.
+    StreamableHttp {
+        url: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
 }
 
 /// Summary generation config.
@@ -20,7 +30,7 @@ pub struct SummaryConfig {
 }
 
 fn default_summary_model() -> String {
-    "ratatoskr:free/text-generation".to_string()
+    "ratatoskr:free/summariser".to_string()
 }
 
 fn default_summary_enabled() -> bool {
@@ -88,9 +98,13 @@ args = ["--stdio"]
 "#;
         let cfg: BridgeConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.servers.len(), 1);
-        let s = &cfg.servers["serena"];
-        assert_eq!(s.command, "serena");
-        assert_eq!(s.args, vec!["--stdio"]);
+        match &cfg.servers["serena"] {
+            ServerConfig::Stdio { command, args } => {
+                assert_eq!(command, "serena");
+                assert_eq!(args, &["--stdio"]);
+            }
+            other => panic!("expected Stdio, got {other:?}"),
+        }
         assert_eq!(cfg.idle_timeout_minutes, 5);
     }
 
@@ -141,7 +155,7 @@ args = ["-b", "--verbose"]
         let cfg = BridgeConfig::load(Path::new("/nonexistent/path"));
         assert_eq!(cfg.idle_timeout_minutes, 5);
         assert!(cfg.servers.is_empty());
-        assert_eq!(cfg.summary.model, "ratatoskr:free/text-generation");
+        assert_eq!(cfg.summary.model, "ratatoskr:free/summariser");
     }
 
     #[test]
@@ -151,6 +165,96 @@ args = ["-b", "--verbose"]
 command = "my-server"
 "#;
         let cfg: BridgeConfig = toml::from_str(toml).unwrap();
-        assert!(cfg.servers["minimal"].args.is_empty());
+        match &cfg.servers["minimal"] {
+            ServerConfig::Stdio { args, .. } => assert!(args.is_empty()),
+            other => panic!("expected Stdio, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_streamable_http_server() {
+        let toml = r#"
+[servers.remote]
+url = "https://my-server.com/mcp"
+"#;
+        let cfg: BridgeConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.servers.len(), 1);
+        match &cfg.servers["remote"] {
+            ServerConfig::StreamableHttp { url, headers } => {
+                assert_eq!(url, "https://my-server.com/mcp");
+                assert!(headers.is_empty());
+            }
+            other => panic!("expected StreamableHttp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_streamable_http_with_headers() {
+        let toml = r#"
+[servers.remote]
+url = "https://my-server.com/mcp"
+
+[servers.remote.headers]
+Authorization = "Bearer sk-test"
+X-Custom = "value"
+"#;
+        let cfg: BridgeConfig = toml::from_str(toml).unwrap();
+        match &cfg.servers["remote"] {
+            ServerConfig::StreamableHttp { url, headers } => {
+                assert_eq!(url, "https://my-server.com/mcp");
+                assert_eq!(headers["Authorization"], "Bearer sk-test");
+                assert_eq!(headers["X-Custom"], "value");
+            }
+            other => panic!("expected StreamableHttp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_mixed_servers() {
+        let toml = r#"
+[servers.local]
+command = "serena"
+args = ["--stdio"]
+
+[servers.remote]
+url = "https://my-server.com/mcp"
+"#;
+        let cfg: BridgeConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.servers.len(), 2);
+        assert!(matches!(cfg.servers["local"], ServerConfig::Stdio { .. }));
+        assert!(matches!(
+            cfg.servers["remote"],
+            ServerConfig::StreamableHttp { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_empty_server() {
+        let toml = r#"
+[servers.bad]
+args = ["--flag"]
+"#;
+        let result: Result<BridgeConfig, _> = toml::from_str(toml);
+        assert!(
+            result.is_err(),
+            "server with neither command nor url should fail to parse"
+        );
+    }
+
+    #[test]
+    fn stdio_config_preserves_existing_behaviour() {
+        let toml = r#"
+[servers.serena]
+command = "serena"
+args = ["--stdio"]
+"#;
+        let cfg: BridgeConfig = toml::from_str(toml).unwrap();
+        match &cfg.servers["serena"] {
+            ServerConfig::Stdio { command, args } => {
+                assert_eq!(command, "serena");
+                assert_eq!(args, &["--stdio"]);
+            }
+            other => panic!("expected Stdio, got {other:?}"),
+        }
     }
 }

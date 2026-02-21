@@ -52,6 +52,9 @@ impl OutputSink for OutputHandler {
             CommandEvent::UsernameSaved { username, context } => {
                 format!("[Username '{}' saved to context '{}']", username, context)
             }
+            CommandEvent::ModelSet { model, context } => {
+                format!("[Model '{}' saved to context '{}']", model, context)
+            }
             CommandEvent::InboxEmpty { context } => {
                 format!("[No messages in inbox for '{}']", context)
             }

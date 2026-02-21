@@ -248,7 +248,6 @@ pub struct Cli {
     // === Model metadata ===
     /// Show model metadata in TOML format (settable fields only)
     #[arg(
-        short = 'm',
         long = "model-metadata",
         value_name = "MODEL",
         allow_hyphen_values = true
@@ -257,12 +256,31 @@ pub struct Cli {
 
     /// Show full model metadata in TOML format (with pricing, capabilities, parameter ranges)
     #[arg(
-        short = 'M',
         long = "model-metadata-full",
         value_name = "MODEL",
         allow_hyphen_values = true
     )]
     pub model_metadata_full: Option<String>,
+
+    // === Model setting ===
+    /// Set model for current context (persists to local.toml)
+    #[arg(
+        short = 'm',
+        long = "set-model",
+        value_name = "MODEL",
+        allow_hyphen_values = true
+    )]
+    pub set_model: Option<String>,
+
+    /// Set model for specified context (requires CTX and MODEL)
+    #[arg(
+        short = 'M',
+        long = "set-model-for-context",
+        value_names = ["CTX", "MODEL"],
+        num_args = 2,
+        allow_hyphen_values = true
+    )]
+    pub set_model_for_context: Option<Vec<String>>,
 
     // === Control flags ===
     /// Show extra info (tools loaded, etc.)
@@ -353,8 +371,8 @@ FLAG BEHAVIOR:
   Some flags imply --no-chibi (operations that produce output or
   operate on other contexts). Use -X to override and invoke LLM after.
 
-  Implied --no-chibi: -l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -p, -P, -m, -M
-  Combinable with prompt: -c, -C, -a, -z, -r, -y, -u, -U, -v
+  Implied --no-chibi: -l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -M, -p, -P, --model-metadata, --model-metadata-full
+  Combinable with prompt: -c, -C, -a, -z, -r, -m, -y, -u, -U, -v
 
 PROMPT INPUT:
   Arguments after options are joined as the prompt.
@@ -527,7 +545,8 @@ impl Cli {
             || call_tool.is_some()
             || debug_implies_force_call_user
             || self.model_metadata.is_some()
-            || self.model_metadata_full.is_some();
+            || self.model_metadata_full.is_some()
+            || self.set_model_for_context.is_some();
 
         let mut force_call_user = self.force_call_user || implies_force_call_user;
         if self.force_call_agent {
@@ -651,6 +670,20 @@ impl Cli {
             Command::ModelMetadata {
                 model: model.clone(),
                 full: true,
+            }
+        } else if let Some(ref model) = self.set_model {
+            Command::SetModel {
+                context: None,
+                model: model.clone(),
+            }
+        } else if let Some(ref v) = self.set_model_for_context {
+            if v.len() >= 2 {
+                Command::SetModel {
+                    context: Some(v[0].clone()),
+                    model: v[1].clone(),
+                }
+            } else {
+                Command::NoOp
             }
         } else if self.check_all_inboxes {
             Command::CheckAllInboxes
@@ -1734,24 +1767,6 @@ mod tests {
     // === Model metadata tests ===
 
     #[test]
-    fn test_model_metadata_short() {
-        let input = parse_input("-m anthropic/claude-sonnet-4").unwrap();
-        assert!(
-            matches!(input.command, Command::ModelMetadata { ref model, full: false } if model == "anthropic/claude-sonnet-4")
-        );
-        assert!(input.flags.force_call_user);
-    }
-
-    #[test]
-    fn test_model_metadata_full_short() {
-        let input = parse_input("-M anthropic/claude-sonnet-4").unwrap();
-        assert!(
-            matches!(input.command, Command::ModelMetadata { ref model, full: true } if model == "anthropic/claude-sonnet-4")
-        );
-        assert!(input.flags.force_call_user);
-    }
-
-    #[test]
     fn test_model_metadata_long() {
         let input = parse_input("--model-metadata anthropic/claude-sonnet-4").unwrap();
         assert!(
@@ -1767,20 +1782,68 @@ mod tests {
         );
     }
 
+    // Verify old -m/-M no longer accepted for model-metadata
     #[test]
-    fn test_model_metadata_attached() {
-        let input = parse_input("-manthropic/claude-sonnet-4").unwrap();
+    fn test_model_metadata_long_only() {
+        let input = parse_input("--model-metadata anthropic/claude-sonnet-4").unwrap();
         assert!(
             matches!(input.command, Command::ModelMetadata { ref model, full: false } if model == "anthropic/claude-sonnet-4")
         );
     }
 
     #[test]
-    fn test_model_metadata_full_attached() {
-        let input = parse_input("-Manthropic/claude-sonnet-4").unwrap();
+    fn test_model_metadata_full_long_only() {
+        let input = parse_input("--model-metadata-full anthropic/claude-sonnet-4").unwrap();
         assert!(
             matches!(input.command, Command::ModelMetadata { ref model, full: true } if model == "anthropic/claude-sonnet-4")
         );
+    }
+
+    // === Set model tests ===
+
+    #[test]
+    fn test_set_model_short() {
+        let input = parse_input("-m anthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { context: None, ref model } if model == "anthropic/claude-sonnet-4")
+        );
+        assert!(!input.flags.force_call_user); // combinable
+    }
+
+    #[test]
+    fn test_set_model_long() {
+        let input = parse_input("--set-model anthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { context: None, ref model } if model == "anthropic/claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn test_set_model_attached() {
+        let input = parse_input("-manthropic/claude-sonnet-4").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { context: None, ref model } if model == "anthropic/claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn test_set_model_for_context_short() {
+        let input = parse_input("-M myctx openai/gpt-4o").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { ref context, ref model }
+                if *context == Some("myctx".to_string()) && model == "openai/gpt-4o")
+        );
+        assert!(input.flags.force_call_user); // implies --no-chibi
+    }
+
+    #[test]
+    fn test_set_model_for_context_long() {
+        let input = parse_input("--set-model-for-context myctx openai/gpt-4o").unwrap();
+        assert!(
+            matches!(input.command, Command::SetModel { ref context, ref model }
+                if *context == Some("myctx".to_string()) && model == "openai/gpt-4o")
+        );
+        assert!(input.flags.force_call_user);
     }
 
     #[test]

@@ -59,6 +59,11 @@ pub enum Command {
         context: Option<String>,
         prompt: String,
     },
+    /// Set model for a context (-m/--set-model, -M/--set-model-for-context)
+    SetModel {
+        context: Option<String>,
+        model: String,
+    },
     /// Run a plugin directly (-p)
     RunPlugin { name: String, args: Vec<String> },
     /// Call a tool directly (-P)

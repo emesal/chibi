@@ -16,6 +16,8 @@ pub enum CommandEvent {
     SystemPromptSet { context: String },
     /// Username saved for a context (verbose-tier).
     UsernameSaved { username: String, context: String },
+    /// Model saved to local.toml for a context (verbose-tier).
+    ModelSet { model: String, context: String },
     /// No inbox messages for context (verbose-tier).
     InboxEmpty { context: String },
     /// Inbox messages being processed (verbose-tier).

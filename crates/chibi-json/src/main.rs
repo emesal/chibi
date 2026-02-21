@@ -73,11 +73,7 @@ async fn run() -> io::Result<()> {
     }
 
     // Resolve core config and build response sink
-    let mut resolved = chibi.resolve_config(context, json_input.username.as_deref())?;
-    // Legacy per-invocation URL policy override (prefer config.url_policy instead)
-    if json_input.url_policy.is_some() {
-        resolved.url_policy = json_input.url_policy.clone();
-    }
+    let mut resolved = chibi.resolve_config(context, None)?;
     // Typed config overrides (same semantics as local.toml but per-invocation)
     if let Some(ref config_override) = json_input.config {
         config_override.apply_overrides(&mut resolved);
@@ -101,7 +97,6 @@ async fn run() -> io::Result<()> {
         &json_input.command,
         &json_input.flags,
         &resolved,
-        json_input.username.as_deref(),
         &output,
         &mut response_sink,
     )
