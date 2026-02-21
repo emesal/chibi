@@ -10,7 +10,7 @@
 //!
 //! ## Context Cleanup
 //!
-//! Tests that create contexts use `--debug destroy_after_seconds_inactive=1`
+//! Tests that create contexts use `--destroy-after-inactive 1`
 //! to mark them for automatic cleanup. This ensures test contexts don't
 //! accumulate in the user's ~/.chibi directory. The auto-destroy feature
 //! runs at every chibi invocation, so subsequent normal usage cleans up
@@ -491,8 +491,8 @@ fn integration_switch_to_previous_context() {
     // Switch to context "prev_test_1"
     let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "prev_test_1",
             "-l",
@@ -505,8 +505,8 @@ fn integration_switch_to_previous_context() {
     // Switch to context "prev_test_2"
     let output2 = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "prev_test_2",
             "-l",
@@ -554,8 +554,8 @@ fn integration_context_name_dash_is_invalid() {
     // Create a temporary context first
     let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "temp_ctx",
             "-l",
@@ -585,8 +585,8 @@ fn integration_ephemeral_switch_to_previous() {
     // Create and switch to contexts
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "eph_1",
             "-l",
@@ -597,8 +597,8 @@ fn integration_ephemeral_switch_to_previous() {
 
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "eph_2",
             "-l",
@@ -626,8 +626,8 @@ fn integration_delete_previous_context() {
     // Create contexts
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "del_test_1",
             "-l",
@@ -638,8 +638,8 @@ fn integration_delete_previous_context() {
 
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "del_test_2",
             "-l",
@@ -665,8 +665,8 @@ fn integration_archive_previous_context() {
     // Create contexts
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "arch_test_1",
             "-l",
@@ -677,8 +677,8 @@ fn integration_archive_previous_context() {
 
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "arch_test_2",
             "-l",
@@ -710,8 +710,8 @@ fn integration_previous_context_with_new() {
     // Switch to a context
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "first_ctx",
             "-l",
@@ -723,8 +723,8 @@ fn integration_previous_context_with_new() {
     // Create a new context
     let output1 = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "new",
             "-l",
@@ -756,8 +756,8 @@ fn integration_previous_context_swaps_like_cd() {
     // Switch to context "swap_a"
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "swap_a",
             "-l",
@@ -769,8 +769,8 @@ fn integration_previous_context_swaps_like_cd() {
     // Switch to context "swap_b"
     let _ = Command::new(env!("CARGO_BIN_EXE_chibi"))
         .args([
-            "--debug",
-            "destroy_after_seconds_inactive=1",
+            "--destroy-after-inactive",
+            "1",
             "-c",
             "swap_b",
             "-l",
