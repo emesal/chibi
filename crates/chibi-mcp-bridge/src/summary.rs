@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use ratatoskr::{ChatOptions, Message, ModelGateway, Ratatoskr, RatatoskrError};
 
+const MCP_TOOL_SUMMARY_TEMPLATE: &str = include_str!("../prompts/mcp-tool-summary.md");
+
 /// Maximum number of attempts per tool summary before giving up.
 const MAX_ATTEMPTS: u32 = 3;
 
@@ -38,13 +40,10 @@ pub async fn generate_summary(
         .map_err(|e| RatatoskrError::Configuration(e.to_string()))?;
 
     let schema_str = serde_json::to_string_pretty(schema).unwrap_or_default();
-    let prompt = format!(
-        "Compress this MCP tool description into a single concise sentence \
-         suitable for an LLM tool listing. Include key parameters.\n\n\
-         Tool: {tool_name}\n\
-         Description: {description}\n\
-         Schema: {schema_str}"
-    );
+    let prompt = MCP_TOOL_SUMMARY_TEMPLATE
+        .replace("{TOOL_NAME}", tool_name)
+        .replace("{DESCRIPTION}", description)
+        .replace("{SCHEMA}", &schema_str);
 
     let messages = vec![Message::user(prompt)];
     // Reasoning models (e.g. R1) use part of the budget for <think> chains,

@@ -14,6 +14,11 @@ use crate::tools;
 use serde_json::json;
 use std::io;
 
+const ROLLING_COMPACT_DECISION_TEMPLATE: &str =
+    include_str!("../../prompts/rolling-compact-decision.md");
+const ROLLING_COMPACT_UPDATE_TEMPLATE: &str =
+    include_str!("../../prompts/rolling-compact-update.md");
+
 /// Calculate how many messages to drop during rolling compaction.
 ///
 /// Formula: `(count * percentage / 100).round().max(1)`
@@ -143,45 +148,39 @@ pub async fn rolling_compact(
     let drop_percentage = resolved_config.rolling_compact_drop_percentage;
     let target_drop_count = drop_count(non_system_messages.len(), drop_percentage);
 
-    // Ask LLM which messages to drop
-    let decision_prompt = format!(
-        r#"You are deciding which conversation messages to archive during context compaction.
-
-CURRENT MESSAGES (oldest first):
-{}
-
-{}{}
-EXISTING SUMMARY:
-{}
-
-Your task: Select approximately {} messages to archive (move to summary).
-Consider:
-1. Keep messages directly relevant to current goals and todos
-2. Keep recent messages (they provide immediate context)
-3. Archive older messages that have been superseded or are less relevant
-4. Preserve messages containing important decisions or key information
-5. Tool call messages and their results should be archived together
-
-Return ONLY a JSON array of message IDs to archive, e.g.: ["id1", "id2", "id3"]
-No explanation, just the JSON array."#,
-        serde_json::to_string_pretty(&messages_for_llm).unwrap_or_default(),
-        if goals.is_empty() {
-            String::new()
-        } else {
-            format!("CURRENT GOALS:\n{}\n\n", goals)
-        },
-        if todos.is_empty() {
-            String::new()
-        } else {
-            format!("CURRENT TODOS:\n{}\n\n", todos)
-        },
-        if context.summary.is_empty() {
-            "(No existing summary)"
-        } else {
-            &context.summary
-        },
-        target_drop_count,
-    );
+    // Ask LLM which messages to drop.
+    // {GOALS} and {TODOS} expand to a labelled section or empty string — the
+    // adjacent placeholders in the template collapse cleanly when both are absent.
+    let decision_prompt = ROLLING_COMPACT_DECISION_TEMPLATE
+        .replace(
+            "{MESSAGES}",
+            &serde_json::to_string_pretty(&messages_for_llm).unwrap_or_default(),
+        )
+        .replace(
+            "{GOALS}",
+            &if goals.is_empty() {
+                String::new()
+            } else {
+                format!("CURRENT GOALS:\n{}\n\n", goals)
+            },
+        )
+        .replace(
+            "{TODOS}",
+            &if todos.is_empty() {
+                String::new()
+            } else {
+                format!("CURRENT TODOS:\n{}\n\n", todos)
+            },
+        )
+        .replace(
+            "{SUMMARY}",
+            if context.summary.is_empty() {
+                "(No existing summary)"
+            } else {
+                &context.summary
+            },
+        )
+        .replace("{TARGET_COUNT}", &target_drop_count.to_string());
 
     // First LLM call: decide what to drop
     let decision_messages = vec![json!({
@@ -270,42 +269,35 @@ No explanation, just the JSON array."#,
         messages_to_drop.iter().map(|m| (*m).clone()).collect();
     let drop_tool_call_ids = collect_tool_call_ids(&dropped_msgs);
 
-    // Second LLM call: update summary with dropped content
-    let update_prompt = format!(
-        r#"You are updating a conversation summary. Your task is to integrate archived content into the existing summary.
-
-EXISTING SUMMARY:
-{}
-
-CONTENT BEING ARCHIVED:
-{}
-
-{}{}
-Create an updated summary that:
-1. Preserves important information from the existing summary
-2. Integrates key points from the archived content
-3. Keeps information relevant to the goals and todos
-4. Is concise but comprehensive
-5. Maintains chronological awareness (what happened earlier vs later)
-
-Output ONLY the updated summary, no preamble."#,
-        if context.summary.is_empty() {
-            "(No existing summary)"
-        } else {
-            &context.summary
-        },
-        stripped_text,
-        if goals.is_empty() {
-            String::new()
-        } else {
-            format!("\nCURRENT GOALS:\n{}\n", goals)
-        },
-        if todos.is_empty() {
-            String::new()
-        } else {
-            format!("\nCURRENT TODOS:\n{}\n", todos)
-        },
-    );
+    // Second LLM call: update summary with dropped content.
+    // {GOALS} and {TODOS} expand to a labelled section or empty string — the
+    // adjacent placeholders in the template collapse cleanly when both are absent.
+    let update_prompt = ROLLING_COMPACT_UPDATE_TEMPLATE
+        .replace(
+            "{SUMMARY}",
+            if context.summary.is_empty() {
+                "(No existing summary)"
+            } else {
+                &context.summary
+            },
+        )
+        .replace("{ARCHIVED}", &stripped_text)
+        .replace(
+            "{GOALS}",
+            &if goals.is_empty() {
+                String::new()
+            } else {
+                format!("\nCURRENT GOALS:\n{}\n", goals)
+            },
+        )
+        .replace(
+            "{TODOS}",
+            &if todos.is_empty() {
+                String::new()
+            } else {
+                format!("\nCURRENT TODOS:\n{}\n", todos)
+            },
+        );
 
     let summary_messages = vec![json!({
         "role": "user",
