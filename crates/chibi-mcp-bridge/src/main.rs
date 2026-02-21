@@ -111,7 +111,8 @@ fn write_lockfile(home: &Path, addr: &SocketAddr) -> std::io::Result<PathBuf> {
     }
 }
 
-/// Check if the lockfile is stale (heartbeat timestamp older than 1.5x interval).
+/// Check if the lockfile is stale (heartbeat timestamp older than 1.5x interval,
+/// or PID no longer running).
 fn is_lockfile_stale(lock_path: &Path) -> bool {
     let content = match fs::read_to_string(lock_path) {
         Ok(c) => c,
@@ -121,6 +122,18 @@ fn is_lockfile_stale(lock_path: &Path) -> bool {
         Ok(v) => v,
         Err(_) => return true,
     };
+
+    // PID liveness: instant detection of a crashed bridge without waiting for
+    // the heartbeat to expire.
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(pid) = lock.get("pid").and_then(|v| v.as_u64())
+            && !Path::new(&format!("/proc/{pid}")).exists()
+        {
+            return true;
+        }
+    }
+
     let heartbeat_secs = lock
         .get("heartbeat_secs")
         .and_then(|v| v.as_u64())
