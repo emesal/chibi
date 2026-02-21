@@ -30,7 +30,7 @@ pub struct SummaryConfig {
 }
 
 fn default_summary_model() -> String {
-    "ratatoskr:free/text-generation".to_string()
+    "ratatoskr:free/summariser".to_string()
 }
 
 fn default_summary_enabled() -> bool {
@@ -155,7 +155,7 @@ args = ["-b", "--verbose"]
         let cfg = BridgeConfig::load(Path::new("/nonexistent/path"));
         assert_eq!(cfg.idle_timeout_minutes, 5);
         assert!(cfg.servers.is_empty());
-        assert_eq!(cfg.summary.model, "ratatoskr:free/text-generation");
+        assert_eq!(cfg.summary.model, "ratatoskr:free/summariser");
     }
 
     #[test]

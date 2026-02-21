@@ -117,7 +117,7 @@ idle_timeout_minutes = 5
 # LLM-powered tool summary generation (optional)
 [summary]
 enabled = true                             # set to false to disable
-model = "ratatoskr:free/text-generation"   # default
+model = "ratatoskr:free/summariser"   # default
 
 # Local MCP server (stdio transport)
 [servers.local-name]

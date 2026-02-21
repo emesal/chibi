@@ -10,7 +10,7 @@ idle_timeout_minutes = 5
 # LLM-powered tool summary generation (optional)
 [summary]
 enabled = true
-model = "ratatoskr:free/text-generation"
+model = "ratatoskr:free/summariser"
 
 # =============================================================================
 # MCP Servers
