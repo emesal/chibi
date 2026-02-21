@@ -1383,6 +1383,96 @@ fn test_entries_to_messages_groups_tool_batch() {
 }
 
 #[test]
+fn test_entries_to_messages_sequential_tool_calls_are_separate_turns() {
+    let (app, _temp) = create_test_app();
+
+    // Simulate the real-world scenario: model called 3 tools sequentially (one per API
+    // response), then a final text response. On disk this is stored as tc/tr tc/tr tc/tr.
+    // Each tc/tr pair must reconstruct as its own assistant turn, not one big batch.
+    let entries = vec![
+        create_user_message_entry("ctx", "search something", "user"),
+        create_tool_call_entry("ctx", "tool_a", r#"{"a":1}"#, "tc_a"),
+        create_tool_result_entry("ctx", "tool_a", "result_a", "tc_a"),
+        create_tool_call_entry("ctx", "tool_b", r#"{"b":2}"#, "tc_b"),
+        create_tool_result_entry("ctx", "tool_b", "result_b", "tc_b"),
+        create_tool_call_entry("ctx", "tool_c", r#"{"c":3}"#, "tc_c"),
+        create_tool_result_entry("ctx", "tool_c", "result_c", "tc_c"),
+        create_assistant_message_entry("ctx", "all done"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+
+    // Expected: user, [asst+tc_a, tool_a], [asst+tc_b, tool_b], [asst+tc_c, tool_c], asst
+    assert_eq!(messages.len(), 8);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+
+    // First tool turn
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+    let tc1 = messages[1]["tool_calls"].as_array().unwrap();
+    assert_eq!(tc1.len(), 1);
+    assert_eq!(tc1[0]["function"]["name"].as_str().unwrap(), "tool_a");
+    assert_eq!(messages[2]["role"].as_str().unwrap(), "tool");
+    assert_eq!(messages[2]["tool_call_id"].as_str().unwrap(), "tc_a");
+
+    // Second tool turn
+    assert_eq!(messages[3]["role"].as_str().unwrap(), "assistant");
+    let tc2 = messages[3]["tool_calls"].as_array().unwrap();
+    assert_eq!(tc2.len(), 1);
+    assert_eq!(tc2[0]["function"]["name"].as_str().unwrap(), "tool_b");
+    assert_eq!(messages[4]["role"].as_str().unwrap(), "tool");
+    assert_eq!(messages[4]["tool_call_id"].as_str().unwrap(), "tc_b");
+
+    // Third tool turn
+    assert_eq!(messages[5]["role"].as_str().unwrap(), "assistant");
+    let tc3 = messages[5]["tool_calls"].as_array().unwrap();
+    assert_eq!(tc3.len(), 1);
+    assert_eq!(tc3[0]["function"]["name"].as_str().unwrap(), "tool_c");
+    assert_eq!(messages[6]["role"].as_str().unwrap(), "tool");
+    assert_eq!(messages[6]["tool_call_id"].as_str().unwrap(), "tc_c");
+
+    // Final text response
+    assert_eq!(messages[7]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(messages[7]["content"].as_str().unwrap(), "all done");
+}
+
+#[test]
+fn test_entries_to_messages_mixed_parallel_then_sequential() {
+    let (app, _temp) = create_test_app();
+
+    // First API response: parallel batch of 2. Second API response: single tool.
+    // Storage: tc tc tr tr tc tr
+    let entries = vec![
+        create_tool_call_entry("ctx", "tool_a", r#"{}"#, "tc_a"),
+        create_tool_call_entry("ctx", "tool_b", r#"{}"#, "tc_b"),
+        create_tool_result_entry("ctx", "tool_a", "result_a", "tc_a"),
+        create_tool_result_entry("ctx", "tool_b", "result_b", "tc_b"),
+        create_tool_call_entry("ctx", "tool_c", r#"{}"#, "tc_c"),
+        create_tool_result_entry("ctx", "tool_c", "result_c", "tc_c"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+
+    // Expected: [asst+tc_a+tc_b, tool_a, tool_b], [asst+tc_c, tool_c]
+    assert_eq!(messages.len(), 5);
+
+    // First turn: parallel batch
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "assistant");
+    let tc1 = messages[0]["tool_calls"].as_array().unwrap();
+    assert_eq!(tc1.len(), 2);
+    assert_eq!(tc1[0]["function"]["name"].as_str().unwrap(), "tool_a");
+    assert_eq!(tc1[1]["function"]["name"].as_str().unwrap(), "tool_b");
+    assert_eq!(messages[1]["tool_call_id"].as_str().unwrap(), "tc_a");
+    assert_eq!(messages[2]["tool_call_id"].as_str().unwrap(), "tc_b");
+
+    // Second turn: single tool
+    assert_eq!(messages[3]["role"].as_str().unwrap(), "assistant");
+    let tc2 = messages[3]["tool_calls"].as_array().unwrap();
+    assert_eq!(tc2.len(), 1);
+    assert_eq!(tc2[0]["function"]["name"].as_str().unwrap(), "tool_c");
+    assert_eq!(messages[4]["tool_call_id"].as_str().unwrap(), "tc_c");
+}
+
+#[test]
 fn test_entries_to_messages_backward_compat_no_tool_call_id() {
     let (app, _temp) = create_test_app();
 
