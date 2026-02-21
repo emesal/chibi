@@ -196,6 +196,8 @@ Use `-n home` to inspect the resolved path.
 | Flag | Description |
 |------|-------------|
 | `--debug <KEY[,KEY,...]>` | Enable debug features (comma-separated, see below) |
+| `--destroy-at <TIMESTAMP>` | Auto-destroy this context at a Unix timestamp |
+| `--destroy-after-inactive <SECS>` | Auto-destroy this context after N seconds of inactivity |
 
 ### Debug Keys
 
@@ -206,8 +208,6 @@ Use `-n home` to inspect the resolved path.
 | `all` | Enable all logging features above |
 | `md=<FILENAME>` | Render a markdown file and quit (implies `-x`, forces rendering even without TTY) |
 | `force-markdown` | Force markdown rendering even when stdout is not a TTY |
-| `destroy_at=<TIMESTAMP>` | Set auto-destroy timestamp on current context |
-| `destroy_after_seconds_inactive=<SECS>` | Set inactivity timeout on current context |
 
 ### Debug Logging
 
@@ -262,19 +262,19 @@ chibi --debug request-log,force-markdown "Tell me about Rust"
 chibi --debug request-log,response-meta "Hello"
 ```
 
-### Auto-Destroy (Test Cleanup)
+### Auto-Destroy
 
-Contexts can be marked for automatic destruction, primarily for test cleanup:
+Mark a context for automatic destruction using lifecycle flags:
 
 ```bash
 # Destroy context after 60 seconds of inactivity
-chibi --debug destroy_after_seconds_inactive=60 -c test-ctx
+chibi --destroy-after-inactive 60 -c test-ctx
 
-# Destroy context at a specific timestamp
-chibi --debug destroy_at=1234567890 -c test-ctx
+# Destroy context at a specific Unix timestamp
+chibi --destroy-at 1234567890 -c test-ctx
 ```
 
-Auto-destroy runs automatically at every chibi invocation. It checks all non-current contexts and destroys those that meet the criteria. This prevents test contexts from accumulating.
+Auto-destroy runs at the start of every chibi invocation and destroys all contexts that meet their configured criteria.
 
 ## Flag Behavior
 
