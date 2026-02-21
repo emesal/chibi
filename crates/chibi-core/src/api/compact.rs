@@ -443,15 +443,8 @@ async fn compact_context_with_llm_internal(
         message_count: context.messages.len(),
     });
 
-    // Load compaction prompt
+    // Load compaction prompt (falls back to compiled-in default)
     let compaction_prompt = app.load_prompt("compaction")?;
-    let default_compaction_prompt = "Please summarize the following conversation into a concise summary. Capture the key points, decisions, and context.";
-    let compaction_prompt = if compaction_prompt.is_empty() {
-        sink.emit_event(CommandEvent::CompactionNoPrompt);
-        default_compaction_prompt
-    } else {
-        &compaction_prompt
-    };
 
     // Build conversation text for summarization, including tool interactions
     let mut conversation_text = String::new();
@@ -503,13 +496,8 @@ async fn compact_context_with_llm_internal(
         ));
     }
 
-    // Prepare continuation prompt
+    // Prepare continuation prompt (falls back to compiled-in default)
     let continuation_prompt = app.load_prompt("continuation")?;
-    let continuation_prompt = if continuation_prompt.is_empty() {
-        "Here is a summary of the previous conversation. Continue from this point."
-    } else {
-        &continuation_prompt
-    };
 
     // Load system prompt
     let system_prompt = app.load_system_prompt_for(context_name)?;

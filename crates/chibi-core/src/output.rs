@@ -54,8 +54,6 @@ pub enum CommandEvent {
     RollingCompactionFallback { drop_percentage: f64 },
     /// Rolling compaction completed (verbose-tier).
     RollingCompactionComplete { archived: usize, remaining: usize },
-    /// No compaction prompt found — using default (verbose-tier).
-    CompactionNoPrompt,
 }
 
 /// Abstraction over how command results and diagnostics are presented.
