@@ -1803,3 +1803,114 @@ async fn test_cleanup_all_tool_caches_fresh_entries_survive() {
     let removed = app.cleanup_all_tool_caches(0).await.unwrap();
     assert_eq!(removed, 0, "no fresh entries should be removed");
 }
+
+// === Flow-control entry tests ===
+
+#[test]
+fn test_create_flow_control_call_entry() {
+    let entry =
+        create_flow_control_call_entry("default", "call_user", r#"{"message": "hi"}"#, "fc_1");
+
+    assert_eq!(entry.from, "default");
+    assert_eq!(entry.to, "call_user");
+    assert_eq!(entry.content, r#"{"message": "hi"}"#);
+    assert_eq!(
+        entry.entry_type,
+        crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL
+    );
+    assert_eq!(entry.tool_call_id, Some("fc_1".to_string()));
+}
+
+#[test]
+fn test_create_flow_control_result_entry() {
+    let entry =
+        create_flow_control_result_entry("default", "call_user", "Returning to user", "fc_1");
+
+    assert_eq!(entry.from, "call_user");
+    assert_eq!(entry.to, "default");
+    assert_eq!(entry.content, "Returning to user");
+    assert_eq!(
+        entry.entry_type,
+        crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT
+    );
+    assert_eq!(entry.tool_call_id, Some("fc_1".to_string()));
+}
+
+#[test]
+fn test_is_context_entry_filters_flow_control() {
+    let fc_call = create_flow_control_call_entry("ctx", "call_user", "{}", "id1");
+    let fc_result = create_flow_control_result_entry("ctx", "call_user", "ack", "id1");
+    let normal_call = create_tool_call_entry("ctx", "web_search", "{}", "id2");
+    let normal_result = create_tool_result_entry("ctx", "web_search", "results", "id2");
+
+    assert!(
+        !is_context_entry(&fc_call),
+        "flow_control_call must not be a context entry"
+    );
+    assert!(
+        !is_context_entry(&fc_result),
+        "flow_control_result must not be a context entry"
+    );
+    assert!(
+        is_context_entry(&normal_call),
+        "tool_call must be a context entry"
+    );
+    assert!(
+        is_context_entry(&normal_result),
+        "tool_result must be a context entry"
+    );
+}
+
+#[test]
+fn test_is_context_entry_filters_system_prompt_changed() {
+    use crate::context::{ENTRY_TYPE_SYSTEM_PROMPT_CHANGED, TranscriptEntry};
+    let entry = TranscriptEntry {
+        id: "x".to_string(),
+        timestamp: 0,
+        from: "system".to_string(),
+        to: "ctx".to_string(),
+        content: "changed".to_string(),
+        entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
+        metadata: None,
+        tool_call_id: None,
+    };
+    assert!(!is_context_entry(&entry));
+}
+
+#[test]
+fn test_rebuild_context_filters_flow_control_entries() {
+    let (app, _temp) = create_test_app();
+    let ctx = "test-rebuild-fc";
+    app.ensure_context_dir(ctx).unwrap();
+
+    // Build a transcript with: user msg, call_user exchange, assistant msg
+    let anchor = create_context_created_anchor(ctx);
+    let user_msg = create_user_message_entry(ctx, "hello", "testuser");
+    let fc_call =
+        create_flow_control_call_entry(ctx, "call_user", r#"{"message": "done"}"#, "fc_1");
+    let fc_result = create_flow_control_result_entry(ctx, "call_user", "Returning to user", "fc_1");
+    let assistant_msg = create_assistant_message_entry(ctx, "done");
+
+    for entry in &[&anchor, &user_msg, &fc_call, &fc_result, &assistant_msg] {
+        app.append_to_transcript(ctx, entry).unwrap();
+    }
+
+    app.rebuild_context_from_transcript(ctx).unwrap();
+
+    let context_entries = app.read_context_entries(ctx).unwrap();
+
+    // context.jsonl should have: anchor + user_msg + assistant_msg (no fc_call/fc_result)
+    assert_eq!(
+        context_entries.len(),
+        3,
+        "expected anchor + 2 messages, got {}",
+        context_entries.len()
+    );
+    assert!(
+        context_entries.iter().all(|e| {
+            e.entry_type != crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL
+                && e.entry_type != crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT
+        }),
+        "flow-control entries must not appear in context.jsonl"
+    );
+}

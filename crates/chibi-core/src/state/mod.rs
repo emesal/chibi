@@ -13,7 +13,8 @@ mod prompts;
 
 pub use entries::{
     create_archival_anchor, create_assistant_message_entry, create_compaction_anchor,
-    create_context_created_anchor, create_tool_call_entry, create_tool_result_entry,
+    create_context_created_anchor, create_flow_control_call_entry,
+    create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
 };
 pub use paths::StatePaths;
@@ -530,10 +531,7 @@ impl AppState {
                 let anchor = transcript_entries[idx].clone();
                 let entries: Vec<_> = transcript_entries[idx + 1..]
                     .iter()
-                    .filter(|e| {
-                        // Exclude system_prompt_changed events from context
-                        e.entry_type != crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED
-                    })
+                    .filter(|e| is_context_entry(e))
                     .cloned()
                     .collect();
                 (anchor, entries)
@@ -552,10 +550,10 @@ impl AppState {
                     metadata: None,
                     tool_call_id: None,
                 };
-                // Include all transcript entries (excluding system_prompt_changed)
+                // Include all transcript entries that belong in context
                 let entries: Vec<_> = transcript_entries
                     .iter()
-                    .filter(|e| e.entry_type != crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED)
+                    .filter(|e| is_context_entry(e))
                     .cloned()
                     .collect();
                 (anchor, entries)
@@ -1098,6 +1096,21 @@ impl AppState {
 
         Ok(())
     }
+}
+
+/// Returns true if a transcript entry should be included in context.jsonl.
+///
+/// Transcript-only entries (never written to context):
+/// - `system_prompt_changed` — prompt change events, stored in context_meta.json
+/// - `flow_control_call` / `flow_control_result` — chibi plumbing (call_user/call_agent);
+///   must not appear in LLM message history
+fn is_context_entry(entry: &TranscriptEntry) -> bool {
+    !matches!(
+        entry.entry_type.as_str(),
+        crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED
+            | crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL
+            | crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT
+    )
 }
 
 /// Check whether a cache entry's creation timestamp is older than `max_age_days`.

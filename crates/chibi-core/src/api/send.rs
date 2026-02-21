@@ -17,7 +17,8 @@ use crate::gateway::{
 use crate::json_ext::JsonExt;
 use crate::output::NoopSink;
 use crate::state::{
-    AppState, create_assistant_message_entry, create_tool_call_entry, create_tool_result_entry,
+    AppState, create_assistant_message_entry, create_flow_control_call_entry,
+    create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
 };
 use crate::tools::{self, Tool};
@@ -1491,8 +1492,18 @@ async fn process_tool_calls<S: ResponseSink>(
     // Write all tool_call entries to transcript first (matches API message order:
     // one assistant message with tool_calls[], then individual tool result messages)
     for (i, tc) in tool_calls.iter().enumerate() {
-        let tool_call_entry = create_tool_call_entry(context_name, &tc.name, &tc.arguments, &tc.id);
-        app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
+        let metadata = tools::get_tool_metadata(tools, &tc.name);
+        let tool_call_entry = if metadata.flow_control {
+            // Flow-control tools are chibi plumbing; transcript-only, never context
+            create_flow_control_call_entry(context_name, &tc.name, &tc.arguments, &tc.id)
+        } else {
+            create_tool_call_entry(context_name, &tc.name, &tc.arguments, &tc.id)
+        };
+        if metadata.flow_control {
+            app.append_to_transcript(context_name, &tool_call_entry)?;
+        } else {
+            app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
+        }
         sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
         // Pre-log diagnostics for parallel-executed tools only.
@@ -1526,15 +1537,23 @@ async fn process_tool_calls<S: ResponseSink>(
             summary,
         })?;
 
-        // Log tool result to transcript
+        // Log tool result to transcript (flow-control tools: transcript-only, never context)
+        let metadata = tools::get_tool_metadata(tools, &tc.name);
         let logged_result = if result.was_cached {
             &result.final_result
         } else {
             &result.original_result
         };
-        let tool_result_entry =
-            create_tool_result_entry(context_name, &tc.name, logged_result, &tc.id);
-        app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
+        let tool_result_entry = if metadata.flow_control {
+            create_flow_control_result_entry(context_name, &tc.name, logged_result, &tc.id)
+        } else {
+            create_tool_result_entry(context_name, &tc.name, logged_result, &tc.id)
+        };
+        if metadata.flow_control {
+            app.append_to_transcript(context_name, &tool_result_entry)?;
+        } else {
+            app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
+        }
         sink.handle(ResponseEvent::TranscriptEntry(tool_result_entry))?;
 
         sink.handle(ResponseEvent::ToolResult {
@@ -1567,7 +1586,6 @@ async fn process_tool_calls<S: ResponseSink>(
 
         // Apply handoff for parallel-executed flow control tools
         // (sequential ones already applied via execute_single_tool)
-        let metadata = tools::get_tool_metadata(tools, &tc.name);
         if metadata.flow_control && metadata.parallel {
             // This shouldn't happen (flow_control tools are always sequential),
             // but handle it defensively
