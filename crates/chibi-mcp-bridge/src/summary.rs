@@ -132,9 +132,7 @@ pub async fn fill_cache_gaps(
                 }
                 Err(e) => {
                     // Permanent error: no point continuing with other tools.
-                    eprintln!(
-                        "[mcp-bridge] summary generation aborted: {e}"
-                    );
+                    eprintln!("[mcp-bridge] summary generation aborted: {e}");
                     break 'tools;
                 }
             }
