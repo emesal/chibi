@@ -89,9 +89,6 @@ impl OutputSink for JsonOutputSink {
                 serde_json::json!({"type": "rolling_compaction_complete",
                                    "archived": archived, "remaining": remaining})
             }
-            CommandEvent::CompactionNoPrompt => {
-                serde_json::json!({"type": "compaction_no_prompt"})
-            }
             CommandEvent::LoadSummary {
                 builtin_count,
                 builtin_names,

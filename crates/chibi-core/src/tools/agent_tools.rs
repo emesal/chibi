@@ -20,6 +20,8 @@ use std::io::{self, ErrorKind};
 pub const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 pub const SUMMARIZE_CONTENT_TOOL_NAME: &str = "summarize_content";
 
+const SUMMARIZE_CONTENT_SYSTEM_PROMPT: &str = include_str!("../../prompts/summarize-content.md");
+
 // === Tool Definition Registry ===
 
 /// All agent tool definitions
@@ -306,7 +308,7 @@ pub async fn summarize_content(
     }
 
     // Build system prompt and input for the sub-agent
-    let system_prompt = "You are a content processing assistant. Follow the user's instructions to process the provided content. Be concise and focused.";
+    let system_prompt = SUMMARIZE_CONTENT_SYSTEM_PROMPT.trim();
     let input = format!(
         "## Instructions\n{}\n\n## Content from: {}\n{}",
         instructions, source, content

@@ -2,8 +2,25 @@
 //!
 //! Generates concise one-sentence summaries of MCP tool descriptions,
 //! suitable for inclusion in an LLM's tool listing.
+//!
+//! Transient failures (rate limits, network errors) are retried with
+//! exponential backoff, honouring `Retry-After` hints when available.
+//! Permanent failures (auth, model not found) abort the batch immediately.
 
-use ratatoskr::{ChatOptions, Message, ModelGateway, Ratatoskr};
+use std::time::Duration;
+
+use ratatoskr::{ChatOptions, Message, ModelGateway, Ratatoskr, RatatoskrError};
+
+const MCP_TOOL_SUMMARY_TEMPLATE: &str = include_str!("../prompts/mcp-tool-summary.md");
+
+/// Maximum number of attempts per tool summary before giving up.
+const MAX_ATTEMPTS: u32 = 3;
+
+/// Initial backoff delay for transient errors (doubled each attempt).
+const BACKOFF_BASE: Duration = Duration::from_secs(5);
+
+/// Upper bound on backoff delay regardless of doubling or `Retry-After`.
+const BACKOFF_MAX: Duration = Duration::from_secs(60);
 
 /// Generate a concise summary of an MCP tool using an LLM.
 ///
@@ -16,17 +33,17 @@ pub async fn generate_summary(
     description: &str,
     schema: &serde_json::Value,
     api_key: Option<&str>,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let gateway = Ratatoskr::builder().openrouter(api_key).build()?;
+) -> Result<String, RatatoskrError> {
+    let gateway = Ratatoskr::builder()
+        .openrouter(api_key)
+        .build()
+        .map_err(|e| RatatoskrError::Configuration(e.to_string()))?;
 
     let schema_str = serde_json::to_string_pretty(schema).unwrap_or_default();
-    let prompt = format!(
-        "Compress this MCP tool description into a single concise sentence \
-         suitable for an LLM tool listing. Include key parameters.\n\n\
-         Tool: {tool_name}\n\
-         Description: {description}\n\
-         Schema: {schema_str}"
-    );
+    let prompt = MCP_TOOL_SUMMARY_TEMPLATE
+        .replace("{TOOL_NAME}", tool_name)
+        .replace("{DESCRIPTION}", description)
+        .replace("{SCHEMA}", &schema_str);
 
     let messages = vec![Message::user(prompt)];
     // Reasoning models (e.g. R1) use part of the budget for <think> chains,
@@ -39,7 +56,11 @@ pub async fn generate_summary(
 
 /// Fill cache gaps by generating summaries for tools that aren't cached yet.
 ///
-/// Aborts on first failure (e.g. missing API key) to avoid spamming errors.
+/// Transient errors (rate limiting, network) are retried with exponential
+/// backoff up to [`MAX_ATTEMPTS`] times, honouring `Retry-After` hints.
+/// Permanent errors (auth failure, model not found) abort the batch — no
+/// point attempting further tools if the API key or model is wrong.
+///
 /// Returns the number of newly generated summaries.
 pub async fn fill_cache_gaps(
     cache: &std::sync::Arc<tokio::sync::Mutex<crate::cache::SummaryCache>>,
@@ -49,7 +70,7 @@ pub async fn fill_cache_gaps(
 ) -> usize {
     let mut generated = 0;
 
-    for tool in tools {
+    'tools: for tool in tools {
         // Lock briefly to check cache
         {
             let cache = cache.lock().await;
@@ -61,34 +82,58 @@ pub async fn fill_cache_gaps(
             }
         }
 
-        // LLM call runs without holding the lock
-        let result = generate_summary(
-            model,
-            &tool.name,
-            &tool.description,
-            &tool.parameters,
-            api_key,
-        )
-        .await;
-        match result {
-            Ok(summary) if !summary.is_empty() => {
-                eprintln!(
-                    "[mcp-bridge] generated summary for {}:{}: {}",
-                    tool.server, tool.name, summary
-                );
-                let mut cache = cache.lock().await;
-                cache.set(&tool.server, &tool.name, &tool.parameters, summary);
-                generated += 1;
-            }
-            Ok(_) => {
-                eprintln!(
-                    "[mcp-bridge] empty summary for {}:{}, skipping",
-                    tool.server, tool.name
-                );
-            }
-            Err(e) => {
-                eprintln!("[mcp-bridge] summary generation failed, aborting: {e}",);
-                break;
+        // Retry loop for transient failures
+        let mut backoff = BACKOFF_BASE;
+        for attempt in 1..=MAX_ATTEMPTS {
+            let result = generate_summary(
+                model,
+                &tool.name,
+                &tool.description,
+                &tool.parameters,
+                api_key,
+            )
+            .await;
+
+            match result {
+                Ok(summary) if !summary.is_empty() => {
+                    eprintln!(
+                        "[mcp-bridge] generated summary for {}:{}: {}",
+                        tool.server, tool.name, summary
+                    );
+                    let mut cache = cache.lock().await;
+                    cache.set(&tool.server, &tool.name, &tool.parameters, summary);
+                    generated += 1;
+                    continue 'tools;
+                }
+                Ok(_) => {
+                    eprintln!(
+                        "[mcp-bridge] empty summary for {}:{}, skipping",
+                        tool.server, tool.name
+                    );
+                    continue 'tools;
+                }
+                Err(ref e) if e.is_transient() => {
+                    if attempt == MAX_ATTEMPTS {
+                        eprintln!(
+                            "[mcp-bridge] summary failed for {}:{} after {MAX_ATTEMPTS} attempts ({e}), skipping",
+                            tool.server, tool.name
+                        );
+                        continue 'tools;
+                    }
+                    // Honour Retry-After if provided, otherwise use backoff.
+                    let wait = e.retry_after().unwrap_or(backoff).min(BACKOFF_MAX);
+                    eprintln!(
+                        "[mcp-bridge] transient error for {}:{} (attempt {attempt}/{MAX_ATTEMPTS}): {e} — retrying in {wait:?}",
+                        tool.server, tool.name
+                    );
+                    tokio::time::sleep(wait).await;
+                    backoff = (backoff * 2).min(BACKOFF_MAX);
+                }
+                Err(e) => {
+                    // Permanent error: no point continuing with other tools.
+                    eprintln!("[mcp-bridge] summary generation aborted: {e}");
+                    break 'tools;
+                }
             }
         }
     }

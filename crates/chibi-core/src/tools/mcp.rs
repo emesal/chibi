@@ -58,8 +58,21 @@ fn default_heartbeat_secs() -> u64 {
     30
 }
 
-/// Check if a bridge lockfile is stale (timestamp older than 1.5x heartbeat).
+/// Check if a bridge lockfile is stale.
+///
+/// Returns true if the PID in the lockfile is no longer running, or if the
+/// heartbeat timestamp is older than 1.5x the heartbeat interval.
 fn is_lockfile_stale(lock: &LockContent) -> bool {
+    // PID liveness: instant detection of a crashed bridge without waiting for
+    // the heartbeat to expire. On Linux we probe /proc/<pid>; on other unix
+    // variants we fall back to timestamp-only staleness.
+    #[cfg(target_os = "linux")]
+    {
+        if !std::path::Path::new(&format!("/proc/{}", lock.pid)).exists() {
+            return true;
+        }
+    }
+
     if lock.timestamp == 0 {
         return false; // Legacy lockfile without timestamp — assume alive
     }
@@ -98,31 +111,58 @@ pub fn read_bridge_address(home: &Path) -> io::Result<SocketAddr> {
 
 /// Ensure the bridge daemon is running, spawning it if necessary.
 ///
-/// Tries to read the lockfile first. If stale or missing, spawns
-/// `chibi-mcp-bridge` as a detached child and polls for the lockfile
-/// to appear (up to 10 seconds).
+/// Uses a spawn-mutex file (`mcp-bridge-spawning.lock`) to prevent concurrent
+/// callers from each spawning their own bridge instance. The mutex is held only
+/// during the spawn+poll window and removed once the bridge lockfile appears.
+///
+/// Flow:
+/// 1. Fast path: bridge lockfile exists and is fresh — return its address.
+/// 2. Acquire spawn-mutex (O_CREAT | O_EXCL). If another process holds it,
+///    skip spawning and just poll for the bridge lockfile.
+/// 3. Spawn bridge, poll for lockfile (up to 10s), release spawn-mutex.
 pub fn ensure_bridge_running(home: &Path) -> io::Result<SocketAddr> {
-    // Try existing lockfile first
+    // Fast path: bridge is already running.
     if let Ok(addr) = read_bridge_address(home) {
         return Ok(addr);
     }
 
-    // Spawn the bridge daemon
+    let spawn_mutex = home.join("mcp-bridge-spawning.lock");
+
+    // Try to acquire the spawn-mutex exclusively.
+    let we_spawn = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&spawn_mutex)
+        .is_ok();
+
+    if we_spawn {
+        // We won the race — spawn the bridge.
+        let result = spawn_bridge(home);
+        // Release mutex before polling so other waiters can proceed.
+        let _ = std::fs::remove_file(&spawn_mutex);
+        result?;
+    }
+    // Whether we spawned or another process did, poll until the bridge is up.
+    poll_for_bridge(home)
+}
+
+/// Spawn `chibi-mcp-bridge` as a detached background process.
+fn spawn_bridge(home: &Path) -> io::Result<()> {
     let bridge_bin = which_bridge()?;
     let mut cmd = std::process::Command::new(&bridge_bin);
     if let Some(home_str) = home.to_str() {
         cmd.env("CHIBI_HOME", home_str);
     }
-
-    // Detach: redirect stdio to null
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-
     cmd.spawn()
         .map_err(|e| io::Error::other(format!("failed to spawn chibi-mcp-bridge: {e}")))?;
+    Ok(())
+}
 
-    // Poll for lockfile (up to 10s)
+/// Poll for the bridge lockfile to appear (up to 10s).
+fn poll_for_bridge(home: &Path) -> io::Result<SocketAddr> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         std::thread::sleep(std::time::Duration::from_millis(100));

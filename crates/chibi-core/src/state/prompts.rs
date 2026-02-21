@@ -9,15 +9,31 @@ use uuid::Uuid;
 
 use super::{AppState, StatePaths};
 
+/// Compiled-in default prompts, embedded from crates/chibi-core/prompts/.
+/// Users override these by placing a file at ~/.chibi/prompts/<name>.md.
+const DEFAULT_PROMPT_CHIBI: &str = include_str!("../../prompts/chibi.md");
+const DEFAULT_PROMPT_COMPACTION: &str = include_str!("../../prompts/compaction.md");
+const DEFAULT_PROMPT_CONTINUATION: &str = include_str!("../../prompts/continuation.md");
+
+/// Return the compiled-in default for a named prompt, or empty string if none exists.
+fn default_prompt(name: &str) -> &'static str {
+    match name {
+        "chibi" => DEFAULT_PROMPT_CHIBI,
+        "compaction" => DEFAULT_PROMPT_COMPACTION,
+        "continuation" => DEFAULT_PROMPT_CONTINUATION,
+        _ => "",
+    }
+}
+
 impl AppState {
-    /// Load a named prompt from ~/.chibi/prompts/<name>.md
+    /// Load a named prompt from ~/.chibi/prompts/<name>.md, falling back to the
+    /// compiled-in default if no override is installed.
     pub fn load_prompt(&self, name: &str) -> io::Result<String> {
         let prompt_path = self.prompts_dir.join(format!("{}.md", name));
         if prompt_path.exists() {
-            fs::read_to_string(&prompt_path)
-        } else {
-            Ok(String::new())
+            return fs::read_to_string(&prompt_path);
         }
+        Ok(default_prompt(name).to_string())
     }
 
     // NOTE: load_system_prompt() (no args) was removed in stateless-core refactor.

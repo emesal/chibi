@@ -263,7 +263,8 @@ impl AppState {
     }
 
     /// Update the last_activity_at timestamp for a context and optionally set destroy settings.
-    /// The destroy settings are only set via --debug flags for testing purposes.
+    /// The destroy settings come from `ExecutionFlags.destroy_at` and
+    /// `ExecutionFlags.destroy_after_seconds_inactive`.
     pub fn touch_context_with_destroy_settings(
         &mut self,
         name: &str,

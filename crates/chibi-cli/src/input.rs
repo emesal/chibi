@@ -229,6 +229,7 @@ mod tests {
                 force_call_user: true,
                 force_call_agent: false,
                 debug: vec![DebugKey::All],
+                ..Default::default()
             },
             context: ContextSelection::Switch {
                 name: "coding".to_string(),

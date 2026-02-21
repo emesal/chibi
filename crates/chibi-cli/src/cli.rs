@@ -324,6 +324,14 @@ pub struct Cli {
     #[arg(long = "debug", value_name = "KEY")]
     pub debug: Option<String>,
 
+    /// Auto-destroy this context at a Unix timestamp
+    #[arg(long = "destroy-at", value_name = "TIMESTAMP")]
+    pub destroy_at: Option<u64>,
+
+    /// Auto-destroy this context after N seconds of inactivity
+    #[arg(long = "destroy-after-inactive", value_name = "SECS")]
+    pub destroy_after_inactive: Option<u64>,
+
     // === Directory override ===
     /// Override chibi home directory (default: ~/.chibi, or CHIBI_HOME env var)
     #[arg(long = "home", value_name = "PATH")]
@@ -699,6 +707,8 @@ impl Cli {
             force_call_user,
             force_call_agent: self.force_call_agent,
             debug: debug_keys,
+            destroy_at: self.destroy_at,
+            destroy_after_seconds_inactive: self.destroy_after_inactive,
         };
 
         // Parse -s/--set KEY=VALUE pairs
@@ -1761,6 +1771,36 @@ mod tests {
                 .debug
                 .iter()
                 .any(|k| matches!(k, DebugKey::RequestLog))
+        );
+    }
+
+    #[test]
+    fn test_destroy_at_flag() {
+        let input = parse_input("--destroy-at 1234567890").unwrap();
+        assert_eq!(input.flags.destroy_at, Some(1234567890));
+        assert_eq!(input.flags.destroy_after_seconds_inactive, None);
+    }
+
+    #[test]
+    fn test_destroy_after_inactive_flag() {
+        let input = parse_input("--destroy-after-inactive 60").unwrap();
+        assert_eq!(input.flags.destroy_after_seconds_inactive, Some(60));
+        assert_eq!(input.flags.destroy_at, None);
+    }
+
+    #[test]
+    fn test_destroy_flags_absent_by_default() {
+        let input = parse_input("-l").unwrap();
+        assert_eq!(input.flags.destroy_at, None);
+        assert_eq!(input.flags.destroy_after_seconds_inactive, None);
+    }
+
+    #[test]
+    fn test_destroy_at_combinable_with_context_switch() {
+        let input = parse_input("--destroy-after-inactive 1 -c test-ctx -l").unwrap();
+        assert_eq!(input.flags.destroy_after_seconds_inactive, Some(1));
+        assert!(
+            matches!(input.context, ContextSelection::Switch { ref name, .. } if name == "test-ctx")
         );
     }
 

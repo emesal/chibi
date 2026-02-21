@@ -99,9 +99,6 @@ impl OutputSink for OutputHandler {
                 "[Rolling compaction complete: {} archived, {} remaining]",
                 archived, remaining
             ),
-            CommandEvent::CompactionNoPrompt => {
-                "[No compaction prompt found — using default]".to_string()
-            }
             CommandEvent::LoadSummary {
                 builtin_count,
                 builtin_names,
@@ -375,6 +372,5 @@ mod tests {
             archived: 8,
             remaining: 12,
         });
-        handler.emit_event(CommandEvent::CompactionNoPrompt);
     }
 }
