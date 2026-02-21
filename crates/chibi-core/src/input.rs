@@ -94,33 +94,12 @@ pub enum DebugKey {
     RequestLog,
     /// Log response metadata (usage stats, model info) to response_meta.jsonl
     ResponseMeta,
-    /// Set destroy_at timestamp on the current context (e.g., "destroy_at=1234567890")
-    DestroyAt(u64),
-    /// Set destroy_after_seconds_inactive on the current context (e.g., "destroy_after_seconds_inactive=60")
-    DestroyAfterSecondsInactive(u64),
     /// Enable all debug features (request_log, response_meta)
     All,
 }
 
 impl DebugKey {
     pub fn parse(s: &str) -> Option<Self> {
-        // Check for parameterized debug keys first
-        if let Some(value) = s
-            .strip_prefix("destroy_at=")
-            .or_else(|| s.strip_prefix("destroy-at="))
-        {
-            return value.parse::<u64>().ok().map(DebugKey::DestroyAt);
-        }
-        if let Some(value) = s
-            .strip_prefix("destroy_after_seconds_inactive=")
-            .or_else(|| s.strip_prefix("destroy-after-seconds-inactive="))
-        {
-            return value
-                .parse::<u64>()
-                .ok()
-                .map(DebugKey::DestroyAfterSecondsInactive);
-        }
-
         match s {
             "request-log" | "request_log" => Some(DebugKey::RequestLog),
             "response-meta" | "response_meta" => Some(DebugKey::ResponseMeta),
@@ -154,6 +133,12 @@ pub struct ExecutionFlags {
     /// Debug features to enable
     #[serde(default)]
     pub debug: Vec<DebugKey>,
+    /// Auto-destroy this context at the given Unix timestamp (0/None = disabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destroy_at: Option<u64>,
+    /// Auto-destroy this context after N seconds of inactivity (0/None = disabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destroy_after_seconds_inactive: Option<u64>,
 }
 
 // CLI-specific types (ContextSelection, UsernameOverride, ChibiInput) have been
@@ -180,6 +165,7 @@ mod tests {
             force_call_user: false,
             force_call_agent: true,
             debug: vec![DebugKey::RequestLog],
+            ..Default::default()
         };
         let json = serde_json::to_string(&flags).unwrap();
         assert!(json.contains("force_call_agent"));
@@ -220,37 +206,6 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_key_from_str_destroy_at() {
-        assert_eq!(
-            DebugKey::parse("destroy_at=1234567890"),
-            Some(DebugKey::DestroyAt(1234567890))
-        );
-        assert_eq!(
-            DebugKey::parse("destroy-at=1234567890"),
-            Some(DebugKey::DestroyAt(1234567890))
-        );
-        // Invalid value
-        assert_eq!(DebugKey::parse("destroy_at=invalid"), None);
-    }
-
-    #[test]
-    fn test_debug_key_from_str_destroy_after_seconds_inactive() {
-        assert_eq!(
-            DebugKey::parse("destroy_after_seconds_inactive=60"),
-            Some(DebugKey::DestroyAfterSecondsInactive(60))
-        );
-        assert_eq!(
-            DebugKey::parse("destroy-after-seconds-inactive=3600"),
-            Some(DebugKey::DestroyAfterSecondsInactive(3600))
-        );
-        // Invalid value
-        assert_eq!(
-            DebugKey::parse("destroy_after_seconds_inactive=invalid"),
-            None
-        );
-    }
-
-    #[test]
     fn test_debug_key_cli_only_keys_not_parsed_by_core() {
         // md= and force-markdown are CLI-only keys, not recognized by core
         assert_eq!(DebugKey::parse("md=README.md"), None);
@@ -282,14 +237,6 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_key_parse_list_with_parameterized() {
-        assert_eq!(
-            DebugKey::parse_list("request-log,destroy_at=1234567890"),
-            vec![DebugKey::RequestLog, DebugKey::DestroyAt(1234567890)]
-        );
-    }
-
-    #[test]
     fn test_debug_key_parse_list_ignores_invalid() {
         assert_eq!(
             DebugKey::parse_list("request-log,invalid,response-meta"),
@@ -315,15 +262,6 @@ mod tests {
         let key = DebugKey::All;
         let json = serde_json::to_string(&key).unwrap();
         assert_eq!(json, r#""all""#);
-
-        // Parameterized variants serialize with their values
-        let key = DebugKey::DestroyAt(1234567890);
-        let json = serde_json::to_string(&key).unwrap();
-        assert!(json.contains("destroy_at"));
-
-        let key = DebugKey::DestroyAfterSecondsInactive(60);
-        let json = serde_json::to_string(&key).unwrap();
-        assert!(json.contains("destroy_after_seconds_inactive"));
     }
 
     #[test]
@@ -482,11 +420,33 @@ mod tests {
             force_call_agent: true,
             force_call_user: false,
             debug: vec![DebugKey::RequestLog],
+            ..Default::default()
         };
         let json = serde_json::to_string(&flags).unwrap();
         let deser: ExecutionFlags = serde_json::from_str(&json).unwrap();
         assert_eq!(deser.force_call_agent, flags.force_call_agent);
         assert_eq!(deser.force_call_user, flags.force_call_user);
         assert_eq!(deser.debug.len(), 1);
+    }
+
+    #[test]
+    fn test_execution_flags_destroy_fields_round_trip() {
+        let flags = ExecutionFlags {
+            destroy_at: Some(1234567890),
+            destroy_after_seconds_inactive: Some(60),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&flags).unwrap();
+        let deser: ExecutionFlags = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.destroy_at, Some(1234567890));
+        assert_eq!(deser.destroy_after_seconds_inactive, Some(60));
+    }
+
+    #[test]
+    fn test_execution_flags_destroy_fields_absent_when_none() {
+        let flags = ExecutionFlags::default();
+        let json = serde_json::to_string(&flags).unwrap();
+        assert!(!json.contains("destroy_at"));
+        assert!(!json.contains("destroy_after_seconds_inactive"));
     }
 }

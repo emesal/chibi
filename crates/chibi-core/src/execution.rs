@@ -12,7 +12,7 @@ use crate::api::PromptOptions;
 use crate::api::sink::ResponseSink;
 use crate::config::ResolvedConfig;
 use crate::context;
-use crate::input::{Command, DebugKey, ExecutionFlags, Inspectable};
+use crate::input::{Command, ExecutionFlags, Inspectable};
 use crate::output::{CommandEvent, OutputSink};
 use crate::state::StatePaths;
 
@@ -79,19 +79,11 @@ pub async fn execute_command<S: ResponseSink>(
             ));
     }
 
-    // Touch context with debug destroy settings
-    let debug_destroy_at = flags.debug.iter().find_map(|k| match k {
-        DebugKey::DestroyAt(ts) => Some(*ts),
-        _ => None,
-    });
-    let debug_destroy_after = flags.debug.iter().find_map(|k| match k {
-        DebugKey::DestroyAfterSecondsInactive(secs) => Some(*secs),
-        _ => None,
-    });
+    // Touch context with destroy settings from ExecutionFlags
     if chibi.app.touch_context_with_destroy_settings(
         context,
-        debug_destroy_at,
-        debug_destroy_after,
+        flags.destroy_at,
+        flags.destroy_after_seconds_inactive,
     )? {
         chibi.save()?;
     }
