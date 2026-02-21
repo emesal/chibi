@@ -7,11 +7,13 @@ Chibi can use tools from any [MCP](https://modelcontextprotocol.io/)-compatible 
 A standalone daemon (`chibi-mcp-bridge`) manages MCP server lifecycles and proxies tool calls over TCP. Chibi starts the daemon automatically when MCP servers are configured.
 
 ```
-chibi-core ──TCP──▶ chibi-mcp-bridge ──stdio──▶ MCP server(s)
+chibi-core ──TCP──▶ chibi-mcp-bridge ──stdio──▶ local MCP server(s)
+                                     ──HTTP──▶  remote MCP server(s)
 ```
 
 The bridge:
-- spawns MCP servers as child processes
+- spawns local MCP servers as child processes (stdio transport)
+- connects to remote MCP servers over HTTP (streamable HTTP transport)
 - discovers their tools via the MCP protocol
 - proxies tool calls from chibi to the correct server
 - shuts down automatically after 5 minutes of inactivity
@@ -42,12 +44,56 @@ command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
 ```
 
-Each server entry needs:
+Each server entry is either a **local** stdio server or a **remote** HTTP server — determined by which field is present.
+
+**Local server** (spawns a child process):
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `command` | string | Executable to run |
 | `args` | string[] | Command-line arguments (optional) |
+
+**Remote server** (connects via HTTP):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | string | Full URL of the MCP endpoint |
+| `headers` | table | HTTP headers to send with every request (optional) |
+
+`command` and `url` are mutually exclusive — a server entry must have one or the other.
+
+### Remote servers
+
+To connect to a remote MCP server, specify a `url` instead of a `command`:
+
+```toml
+[servers.remote-tools]
+url = "https://mcp.example.com/mcp"
+```
+
+For servers that require authentication, add a `[servers.<name>.headers]` table:
+
+```toml
+[servers.remote-tools]
+url = "https://mcp.example.com/mcp"
+
+[servers.remote-tools.headers]
+Authorization = "Bearer sk-..."
+```
+
+You can mix local and remote servers freely:
+
+```toml
+[servers.serena]
+command = "uvx"
+args = ["serena"]
+
+[servers.remote-tools]
+url = "https://mcp.example.com/mcp"
+
+[servers.remote-tools.headers]
+Authorization = "Bearer sk-..."
+```
 
 ### 3. Use it
 
@@ -73,10 +119,17 @@ idle_timeout_minutes = 5
 enabled = true                             # set to false to disable
 model = "ratatoskr:free/text-generation"   # default
 
-# MCP servers
-[servers.name]
+# Local MCP server (stdio transport)
+[servers.local-name]
 command = "path/to/server"
 args = ["--flag", "value"]
+
+# Remote MCP server (streamable HTTP transport)
+[servers.remote-name]
+url = "https://mcp.example.com/mcp"
+
+[servers.remote-name.headers]
+Authorization = "Bearer sk-..."
 ```
 
 ### Tool summaries

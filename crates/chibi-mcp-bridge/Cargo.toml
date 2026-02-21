@@ -6,7 +6,8 @@ rust-version.workspace = true
 
 [dependencies]
 dirs = "6.0"
-rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rmcp = { version = "0.15", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 ratatoskr.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
