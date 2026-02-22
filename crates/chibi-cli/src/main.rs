@@ -19,9 +19,7 @@ use crate::markdown::{MarkdownConfig, MarkdownStream};
 use crate::output::OutputHandler;
 use crate::session::Session;
 use crate::sink::CliResponseSink;
-use chibi_core::{
-    Chibi, CommandEffect, CommandEvent, LoadOptions, OutputSink, PermissionHandler, StatePaths,
-};
+use chibi_core::{Chibi, CommandEffect, LoadOptions, OutputSink, PermissionHandler, StatePaths};
 use std::io::{self, ErrorKind, Write};
 use std::path::PathBuf;
 
@@ -245,7 +243,6 @@ async fn execute_from_input(
     input: ChibiInput,
     chibi: &mut Chibi,
     session: &mut Session,
-    output: &dyn OutputSink,
     force_markdown: bool,
 ) -> io::Result<()> {
     let mut did_action = false;
@@ -295,10 +292,12 @@ async fn execute_from_input(
             chibi
                 .app
                 .save_local_config(&working_context, &local_config)?;
-            output.emit_event(CommandEvent::UsernameSaved {
-                username: username.clone(),
-                context: working_context.clone(),
-            });
+            if early_verbose {
+                eprintln!(
+                    "[Username '{}' saved to context '{}']",
+                    username, working_context
+                );
+            }
             did_action = true;
             None // persistent was saved, no runtime override needed
         }
@@ -313,7 +312,7 @@ async fn execute_from_input(
             return Ok(());
         }
         Command::ShowVersion => {
-            output.emit_result(&format!("chibi {}", env!("CARGO_PKG_VERSION")));
+            println!("chibi {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         _ => {}
@@ -322,7 +321,7 @@ async fn execute_from_input(
     // --- resolve CLI-specific context names in command fields ---
     let command = resolve_command_names(&input.command, chibi, session)?;
 
-    // --- resolve config and build CLI response sink ---
+    // --- resolve config ---
     let mut cli_config = resolve_cli_config(chibi, &working_context, ephemeral_username)?;
 
     // Apply per-invocation config overrides (-s/--set)
@@ -359,7 +358,16 @@ async fn execute_from_input(
         None
     };
 
-    let mut sink = CliResponseSink::new(output, md_config, verbose, show_tool_calls, show_thinking);
+    // Build output handler now that markdown config is resolved.
+    // OutputHandler::emit_markdown renders via MarkdownStream when md_config is present,
+    // enabling markdown display in ShowLog (emit_entry calls emit_markdown for messages).
+    let handler = match md_config.clone() {
+        Some(cfg) => OutputHandler::with_markdown(verbose, cfg),
+        None => OutputHandler::new(verbose),
+    };
+
+    let mut sink =
+        CliResponseSink::new(&handler, md_config, verbose, show_tool_calls, show_thinking);
 
     // --- delegate to core ---
     let effect = chibi_core::execute_command(
@@ -368,7 +376,7 @@ async fn execute_from_input(
         &command,
         &input.flags,
         &cli_config.core,
-        output,
+        &handler,
         &mut sink,
     )
     .await?;
@@ -408,17 +416,17 @@ async fn execute_from_input(
                     .map_err(|e| io::Error::new(ErrorKind::InvalidInput, e))?;
             }
             match cfg.get_field(field) {
-                Some(value) => output.emit_result(&value),
-                None => output.emit_result("(not set)"),
+                Some(value) => handler.emit_result(&value),
+                None => handler.emit_result("(not set)"),
             }
         }
         CommandEffect::InspectConfigList { context: _ } => {
-            output.emit_result("Inspectable items:");
+            handler.emit_result("Inspectable items:");
             for name in ["system_prompt", "reflection", "todos", "goals", "home"] {
-                output.emit_result(&format!("  {}", name));
+                handler.emit_result(&format!("  {}", name));
             }
             for field in ResolvedConfig::list_fields() {
-                output.emit_result(&format!("  {}", field));
+                handler.emit_result(&format!("  {}", field));
             }
         }
         CommandEffect::None => {}
@@ -521,17 +529,19 @@ async fn main() -> io::Result<()> {
     // Handle --debug force-markdown
     let force_markdown = input.force_markdown;
 
-    let output = OutputHandler::new(input.verbose_flag);
+    // Plain handler for load-time events (auto-destroy, cache cleanup, MCP).
+    // A markdown-aware handler is built inside execute_from_input once config is resolved.
+    let load_output = OutputHandler::new(input.verbose_flag);
 
     let mut chibi = Chibi::load_with_options(
         LoadOptions {
             home: home_override,
             project_root: project_root_override,
         },
-        &output,
+        &load_output,
     )?;
     chibi.set_permission_handler(select_permission_handler(trust_mode));
     let mut session = Session::load(chibi.home_dir())?;
 
-    execute_from_input(input, &mut chibi, &mut session, &output, force_markdown).await
+    execute_from_input(input, &mut chibi, &mut session, force_markdown).await
 }

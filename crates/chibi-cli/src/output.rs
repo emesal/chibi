@@ -9,19 +9,35 @@ use chibi_core::context::TranscriptEntry;
 use chibi_core::output::CommandEvent;
 use std::io::{self, IsTerminal, Write};
 
+use crate::markdown::{MarkdownConfig, MarkdownStream};
+
 /// CLI output handler — text to stdout, diagnostics to stderr.
 ///
 /// Implements `OutputSink` directly; all output goes through trait methods.
 /// Always operates in text mode — JSON output belongs to chibi-json.
-#[derive(Default)]
+///
+/// When `md_config` is `Some`, `emit_markdown` renders content through
+/// `MarkdownStream` (used by `emit_entry` for message content in ShowLog).
 pub struct OutputHandler {
     verbose: bool,
+    md_config: Option<MarkdownConfig>,
 }
 
 impl OutputHandler {
-    /// Create a new output handler.
+    /// Create a new output handler without markdown rendering.
     pub fn new(verbose: bool) -> Self {
-        Self { verbose }
+        Self {
+            verbose,
+            md_config: None,
+        }
+    }
+
+    /// Create a new output handler with markdown rendering enabled.
+    pub fn with_markdown(verbose: bool, md_config: MarkdownConfig) -> Self {
+        Self {
+            verbose,
+            md_config: Some(md_config),
+        }
     }
 }
 
@@ -202,7 +218,13 @@ impl OutputSink for OutputHandler {
     }
 
     fn emit_markdown(&self, content: &str) -> io::Result<()> {
-        self.emit_result(content);
+        if let Some(cfg) = &self.md_config {
+            let mut md = MarkdownStream::new(cfg.clone());
+            md.write_chunk(content)?;
+            md.finish()?;
+        } else {
+            self.emit_result(content);
+        }
         Ok(())
     }
 }
