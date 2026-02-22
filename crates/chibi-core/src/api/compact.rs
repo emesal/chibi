@@ -457,7 +457,8 @@ async fn compact_context_with_llm_internal(
         } else if role == "tool" {
             let content = m["content"].as_str().unwrap_or("");
             let preview = if content.len() > 200 {
-                format!("{}... [truncated]", &content[..200])
+                let end = content.char_indices().nth(200).map(|(i, _)| i).unwrap_or(content.len());
+                format!("{}... [truncated]", &content[..end])
             } else {
                 content.to_string()
             };
