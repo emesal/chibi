@@ -24,6 +24,7 @@ default:
   @echo "🚀 Release cycle:"
   @echo "  just freeze <reason>      → Lock tree for release (bugfixes only)"
   @echo "  just thaw                 → Unlock tree for features again"
+  @echo "  just changelog            → Regenerate CHANGELOG.md (requires git-cliff)"
   @echo "  just release 0.x.y        → Squash dev→main, run tests, tag release"
   @echo "  just push-release 0.x.y   → Push release to github"
   @echo "  just update-deps          → Update dependencies post-release"
@@ -286,6 +287,10 @@ rustdoc-all:
   echo "{{version}}" | sed 's/^v//' | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+' \
     || (echo "❌ Invalid version '{{version}}'. Expected semver, e.g. 0.7.1 or v0.7.1" && exit 1)
 
+# Regenerate CHANGELOG.md from git history (requires git-cliff)
+changelog:
+  git-cliff --output CHANGELOG.md
+
 # Lock the tree for release (squash-merge dev to main, tag release)
 release version: (_parse-version version)
   #!/usr/bin/env bash
@@ -304,14 +309,22 @@ release version: (_parse-version version)
   cargo clippy --all-targets --locked -- -D warnings || (echo "❌ Clippy errors found." && exit 1)
   cargo nextest run --all-targets --locked || (echo "❌ Tests failed." && exit 1)
 
+  # Tag dev HEAD so git-cliff can generate the changelog correctly
+  git tag "${TAG}" HEAD
+
+  # Generate changelog with the new version tag
+  git-cliff --output CHANGELOG.md
+  git add CHANGELOG.md
+  git commit -m "docs: update CHANGELOG for ${TAG}"
+
   # Create release commit on main with dev's tree (no merge conflicts, no history leak)
   git checkout main
   git pull
   RELEASE_COMMIT=$(git commit-tree dev^{tree} -p HEAD -m "Release ${TAG}")
   git reset --hard "$RELEASE_COMMIT"
 
-  # Tag the release
-  git tag -a "${TAG}" -m "Release ${TAG}"
+  # Tag main too (annotated, for GitHub releases)
+  git tag -a "${TAG}" -m "Release ${TAG}" -f
 
   echo "✓ Release ${TAG} prepared on main"
   echo "  Review with: git show HEAD"
