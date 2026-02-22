@@ -15,6 +15,12 @@ cd chibi && just install
 
 Requires [just](https://github.com/casey/just) and a Rust toolchain. Cargo fetches all dependencies automatically.
 
+Get a free API key at [openrouter.ai](https://openrouter.ai/settings/keys) (no credit card needed), then:
+
+```bash
+CHIBI_API_KEY=your-key chibi "nyaaa~"
+```
+
 ## Use
 
 ```bash
@@ -30,14 +36,11 @@ Contexts persist across invocations. Switch with `-c <name>`, list with `-L`.
 
 ## Configure
 
-For better models or your own API key, create `~/.chibi/config.toml`:
+Persist your key and pick a model in `~/.chibi/config.toml`:
 
 ```toml
-# API key for OpenRouter (https://openrouter.ai/settings/keys)
-api_key = "your-api-key-here"
-
-# Model to use (default: ratatoskr:free/agentic)
-model = "anthropic/claude-sonnet-4"
+api_key = "your-key-here"
+model = "anthropic/claude-sonnet-4"   # default: free-tier agentic preset
 ```
 
 All fields are optional. See [Configuration](docs/configuration.md) for the full reference.

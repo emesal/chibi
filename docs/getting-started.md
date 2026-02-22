@@ -17,21 +17,19 @@ cargo build --release
 
 ## Quick Start
 
-chibi works out of the box with no configuration — it uses free-tier OpenRouter by default:
+Chibi uses [OpenRouter](https://openrouter.ai) as its API backend. Get a free key at
+[openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) (no credit card needed), then:
 
 ```bash
-chibi "hello, what can you do?"
+CHIBI_API_KEY=your-key chibi "hello, what can you do?"
 ```
-
-That's it.
 
 ## Customisation
 
-For better models or your own API key, create `~/.chibi/config.toml`:
+Persist your key and any other settings in `~/.chibi/config.toml`:
 
 ```toml
 # API key for OpenRouter (https://openrouter.ai/settings/keys)
-# Omit for free-tier access (no key needed)
 api_key = "your-api-key-here"
 
 # Model to use (default: ratatoskr:free/agentic)
