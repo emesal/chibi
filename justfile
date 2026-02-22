@@ -388,11 +388,6 @@ list-features:
 clean:
   cargo clean
 
-# Update git submodules
-update-submodules:
-  git submodule update --init --recursive
-
 # Full clean rebuild
 rebuild: clean
-  git submodule update --init --recursive
   cargo build --release

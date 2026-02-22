@@ -1,36 +1,23 @@
 ![chibi~](docs/images/socials-wide-trans.png)
 
-A minimal, composable building block for LLM interactions. Chibi provides persistent context, a plugin/hook system, and communication primitives — everything else lives in plugins.
+Chibi is a composable building block for LLM interactions — not an agent framework. It provides persistent context storage, a plugin and hook system that exposes the full request lifecycle, communication primitives for multi-agent coordination, and a programmable agentic loop.
 
-Think of it as a Lego brick: tiny, light, but infinitely combinable. Multiple chibis with different models, temperatures, and plugins can work together. The plugin system is deliberately permissive, exposing the full lifecycle via hooks to enable experimentation with coordination patterns, workflows, and agentic behaviors.
+Plugins have full access to chibi's lifecycle hooks — they can modify or replace core behaviours (like context assembly, prompt construction, tool filtering, permissions), spawn sub-agents with custom home directories, orchestrate fleets of chibis across different models and system prompts, and implement entirely new coordination patterns. The plugin layer has no ceiling.
 
 **Early development — not yet stable.**
 
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/emesal/chibi.git
-cd chibi && cargo install --path .
+export CHIBI_API_KEY=your-openrouter-key
+git clone https://github.com/emesal/chibi.git
+cd chibi && just install
+chibi nyaaa~
 ```
 
-## Configure
+Requires [just](https://github.com/casey/just) and a Rust toolchain. Cargo fetches all dependencies automatically.
 
-Create `~/.chibi/config.toml`:
-
-```toml
-api_key = "your-openrouter-api-key"
-model = "anthropic/claude-sonnet-4"
-context_window_limit = 200000
-warn_threshold_percent = 80.0
-```
-
-(This step will be automated in a future release.)
-
-Copy the example prompts:
-
-```bash
-mkdir -p ~/.chibi/prompts && cp examples/prompts/*.md ~/.chibi/prompts/
-```
+Get a free API key at [openrouter.ai](https://openrouter.ai/settings/keys) (no credit card needed), then:
 
 ## Use
 
@@ -45,6 +32,17 @@ Contexts persist across invocations. Switch with `-c <name>`, list with `-L`.
 
 ![chibi explain this girl](docs/images/explain_this.png)
 
+## Configure
+
+Persist your key and pick a model in `~/.chibi/config.toml`:
+
+```toml
+api_key = "your-key-here"
+model = "anthropic/claude-sonnet-4"   # default: free-tier agentic preset
+```
+
+All fields are optional. See [Configuration](docs/configuration.md) for the full reference.
+
 ## Documentation
 
 - [Getting Started](docs/getting-started.md) — Installation and first steps
@@ -53,10 +51,13 @@ Contexts persist across invocations. Switch with `-c <name>`, list with `-L`.
 - [Plugins](docs/plugins.md) — Creating tools for the LLM
 - [Hooks](docs/hooks.md) — Lifecycle event system
 - [MCP Servers](docs/mcp.md) — Using MCP-compatible tool providers
+- [Virtual File System](docs/vfs.md) — Sandboxed shared file space for contexts
 - [Agentic Workflows](docs/agentic.md) — Autonomous processing
 - [CLI Reference](docs/cli-reference.md) — All flags and commands
 - [Images](docs/images.md) — Terminal image rendering
+- [Markdown Themes](docs/markdown-themes.md) — Customising colour schemes
 - [Transcript Format](docs/transcript-format.md) — JSONL format spec
+- [Upgrade Notes](docs/upgrade-notes.md) — Breaking changes requiring user action
 
 Example plugins: [chibi-plugins](https://github.com/emesal/chibi-plugins)
 
