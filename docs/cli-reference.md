@@ -109,7 +109,7 @@ chibi -m anthropic/claude-sonnet-4 "Hello"  # Set model, then chat
 | `--model-metadata <MODEL>` | Show model metadata in TOML format (settable fields only) |
 | `--model-metadata-full <MODEL>` | Show full model metadata (with pricing, capabilities, parameter ranges) |
 
-Model metadata is fetched via ratatoskr's gateway (embedded registry → cache → OpenRouter API on miss). `--model-metadata` shows only fields you can set in `models.toml`, while `--model-metadata-full` includes everything (pricing, capabilities, parameter ranges).
+Model metadata is fetched via ratatoskr's gateway (embedded registry → cache → OpenRouter API on miss). `--model-metadata` shows only fields you can set under `[models]` in `config.toml`, while `--model-metadata-full` includes everything (pricing, capabilities, parameter ranges).
 
 ```bash
 chibi --model-metadata anthropic/claude-sonnet-4       # Settable fields only

@@ -623,6 +623,7 @@ mod tests {
             vfs: VfsConfig::default(),
             url_policy: None,
             subagent_cost_tier: "free".to_string(),
+            models: Default::default(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)

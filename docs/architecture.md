@@ -82,7 +82,7 @@ MCP tools use virtual `mcp://server/tool` paths and appear as regular `Tool` str
 
 ```
 ~/.chibi/
-├── config.toml, models.toml
+├── config.toml
 ├── state.json               # Context metadata (core)
 ├── session.json             # Navigation state (CLI)
 ├── prompts/{chibi,reflection,compaction,continuation}.md

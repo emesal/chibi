@@ -7,7 +7,7 @@
 //! For most embedding use cases, use the [`Chibi`] facade:
 //!
 //! ```no_run
-//! // Requires ~/.chibi directory with config.toml and models.toml.
+//! // Requires ~/.chibi directory with config.toml.
 //! // See chibi documentation for setup instructions.
 //! use chibi_core::{Chibi, CollectingSink};
 //! use chibi_core::api::PromptOptions;
@@ -58,7 +58,7 @@ pub use chibi::{Chibi, LoadOptions, PermissionHandler, project_chibi_dir, projec
 
 // Re-export commonly used types
 pub use api::{CollectingSink, PromptOptions, ResponseEvent, ResponseSink};
-pub use config::{ApiParams, Config, LocalConfig, ModelsConfig, ResolvedConfig, ToolsConfig};
+pub use config::{ApiParams, Config, LocalConfig, ResolvedConfig, ToolsConfig};
 pub use context::{Context, ContextEntry, TranscriptEntry};
 pub use execution::{CommandEffect, execute_command};
 pub use input::{Command, ExecutionFlags, Inspectable};
@@ -113,6 +113,7 @@ pub(crate) mod test_support {
             vfs: VfsConfig::default(),
             url_policy: None,
             subagent_cost_tier: "free".to_string(),
+            models: Default::default(),
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         let root = temp_dir.path().to_path_buf();

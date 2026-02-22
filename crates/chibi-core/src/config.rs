@@ -671,6 +671,9 @@ pub struct Config {
     /// Controls which tier of ratatoskr presets `spawn_agent` resolves against.
     #[serde(default = "default_subagent_cost_tier")]
     pub subagent_cost_tier: String,
+    /// Per-model API parameter overrides. Keyed by model ID.
+    #[serde(default)]
+    pub models: HashMap<String, ModelMetadata>,
 }
 
 /// Per-context config from `~/.chibi/contexts/<name>/local.toml`
@@ -718,6 +721,10 @@ pub struct LocalConfig {
     pub url_policy: Option<UrlPolicy>,
     /// Subagent preset cost tier override
     pub subagent_cost_tier: Option<String>,
+    /// Per-model API parameter overrides for this context. Keyed by model ID.
+    /// These take precedence over global `config.toml` model overrides.
+    #[serde(default)]
+    pub models: HashMap<String, ModelMetadata>,
 }
 
 impl LocalConfig {
@@ -771,22 +778,16 @@ impl LocalConfig {
     }
 }
 
-/// Model metadata from ~/.chibi/models.toml.
+/// Per-model API parameter overrides.
 ///
-/// Contains only per-model API parameter overrides. Model capabilities
-/// (context window, tool call support) come from ratatoskr's registry.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Configured under `[models."<model-id>"]` in `config.toml` (global) or
+/// `local.toml` (per-context). Contains only API parameter overrides; model
+/// capabilities come from ratatoskr's registry.
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
 pub struct ModelMetadata {
     /// API parameters for this specific model
     #[serde(default)]
     pub api: ApiParams,
-}
-
-/// Models config containing model aliases/metadata
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ModelsConfig {
-    #[serde(default)]
-    pub models: HashMap<String, ModelMetadata>,
 }
 
 /// Fully resolved configuration with all overrides applied.

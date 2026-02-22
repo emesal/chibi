@@ -25,7 +25,6 @@ model = "arcee-ai/trinity-large-preview:free"
 
 # Context window limit (tokens)
 # Used for calculating when to warn about approaching limits
-# If using models.toml, the context_window from there takes precedence
 context_window_limit = 200000
 
 # Warning threshold percentage (0.0-100.0)
@@ -177,3 +176,27 @@ effort = "medium"
 
 # Explicitly enable/disable reasoning
 # enabled = true
+
+# =============================================================================
+# Per-Model API Parameter Overrides
+# =============================================================================
+# Override API parameters for specific models. Keys match the model IDs used
+# in `model` or local.toml. These are applied after global [api] settings but
+# before per-context local.toml settings.
+#
+# Use `chibi -M <model>` to see what parameters a model supports.
+
+# Claude with extended thinking
+# [models."anthropic/claude-sonnet-4".api.reasoning]
+# max_tokens = 32000
+
+# OpenAI reasoning models
+# [models."openai/o3".api]
+# max_tokens = 100000
+#
+# [models."openai/o3".api.reasoning]
+# effort = "high"
+
+# xAI Grok reasoning
+# [models."x-ai/grok-3-beta".api.reasoning]
+# effort = "high"

@@ -9,8 +9,9 @@ Settings are resolved in this order (later overrides earlier):
 1. **Defaults** - Built-in default values
 2. **Global config** (`~/.chibi/config.toml`) - User's base configuration
 3. **Environment variables** - `CHIBI_API_KEY`, `CHIBI_MODEL` (see [below](#environment-variables))
-4. **Model metadata** (`~/.chibi/models.toml`) - Per-model settings
+4. **Global model overrides** (`config.toml` `[models]`) - Per-model API params
 5. **Context config** (`~/.chibi/contexts/<name>/local.toml`) - Per-context overrides
+6. **Context model overrides** (`local.toml` `[models]`) - Per-context per-model API params
 6. **CLI flags** - Command-line arguments (highest priority)
 
 ## CLI Presentation Configuration
@@ -251,14 +252,19 @@ effort = "medium"
 # enabled = true
 ```
 
-## Model Metadata (models.toml)
+## Per-Model API Parameters
 
-Per-model API parameter overrides in `~/.chibi/models.toml`. Model capabilities (context window, tool call support) come from ratatoskr's registry automatically — no need to configure them here.
+Per-model API parameter overrides under `[models."<model-id>"]` in `config.toml` (global)
+or `local.toml` (per-context). Local overrides take precedence over global.
+
+Model capabilities (context window, tool call support) come from ratatoskr's registry automatically — no need to configure them here.
 
 Use `chibi -M` to see what parameters a model supports.
 
+In `config.toml` (global) or `local.toml` (per-context):
+
 ```toml
-# Each key should match the model name used in config.toml or local.toml
+# Each key should match the model name used in `model` or local.toml
 
 # Claude with extended thinking (token-based reasoning)
 [models."anthropic/claude-sonnet-4".api.reasoning]
@@ -510,8 +516,9 @@ When resolving API parameters, chibi merges in this order:
 
 1. **Defaults** (`prompt_caching=true`, `reasoning.effort="medium"`, `parallel_tool_calls=true`)
 2. **Global config** (`config.toml` `[api]` section)
-3. **Model metadata** (`models.toml` `[models."name".api]` section)
+3. **Global model overrides** (`config.toml` `[models."name".api]` section)
 4. **Context config** (`local.toml` `[api]` section)
+5. **Context model overrides** (`local.toml` `[models."name".api]` section)
 
 Each layer can override specific values while inheriting others.
 

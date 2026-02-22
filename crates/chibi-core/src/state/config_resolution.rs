@@ -40,23 +40,10 @@ impl AppState {
         crate::safe_io::atomic_write_text(&path, &content)
     }
 
-    /// Resolve model name using models.toml aliases
-    /// If the model is an alias defined in models.toml, return the full model name
-    /// Otherwise return the original model name
-    pub fn resolve_model_name(&self, model: &str) -> String {
-        if self.models_config.models.contains_key(model) {
-            // The model name itself is a key in models.toml, use it as-is
-            // (models.toml maps alias -> metadata, not alias -> full name)
-            model.to_string()
-        } else {
-            model.to_string()
-        }
-    }
-
     /// Resolve the full configuration, applying overrides in order:
     /// 1. Runtime override (passed as parameter, highest priority)
     /// 2. Context-local config (local.toml)
-    /// 3. Models.toml (per-model API params)
+    /// 3. `config.models` / `local.models` (per-model API params)
     /// 4. Environment variables (`CHIBI_API_KEY`, `CHIBI_MODEL`)
     /// 5. Global config (config.toml)
     /// 6. Defaults
@@ -139,15 +126,18 @@ impl AppState {
             resolved.file_tools_allowed_paths = vec![cwd.to_string_lossy().to_string()];
         }
 
-        // Resolve model name and potentially override context window + API params
-        resolved.model = self.resolve_model_name(&resolved.model);
-        if let Some(model_meta) = self.models_config.models.get(&resolved.model) {
-            // Apply model-level API params (Layer 2 - after global, before context)
-            // Note: We merge model params before context params because context should override model
-            // But we do this after context-level override for the rest of config, so we need to
-            // re-merge context params on top
+        // Apply per-model API param overrides (global config.models, then local.models on top)
+        // Both layers are overridden by explicit local.api (context-level params always win).
+        if let Some(model_meta) = self.config.models.get(&resolved.model) {
             let model_api = resolved.api.merge_with(&model_meta.api);
-            // Re-apply context-level API params on top of model params
+            resolved.api = if let Some(ref local_api) = local.api {
+                model_api.merge_with(local_api)
+            } else {
+                model_api
+            };
+        }
+        if let Some(model_meta) = local.models.get(&resolved.model) {
+            let model_api = resolved.api.merge_with(&model_meta.api);
             resolved.api = if let Some(ref local_api) = local.api {
                 model_api.merge_with(local_api)
             } else {
