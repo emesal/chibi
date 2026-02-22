@@ -1499,16 +1499,11 @@ async fn process_tool_calls<S: ResponseSink>(
     for (i, tc) in tool_calls.iter().enumerate() {
         let metadata = tools::get_tool_metadata(tools, &tc.name);
         let tool_call_entry = if metadata.flow_control {
-            // Flow-control tools are chibi plumbing; transcript-only, never context
             create_flow_control_call_entry(context_name, &tc.name, &tc.arguments, &tc.id)
         } else {
             create_tool_call_entry(context_name, &tc.name, &tc.arguments, &tc.id)
         };
-        if metadata.flow_control {
-            app.append_to_transcript(context_name, &tool_call_entry)?;
-        } else {
-            app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
-        }
+        app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
         // Pre-log diagnostics for parallel-executed tools only.
@@ -1554,11 +1549,7 @@ async fn process_tool_calls<S: ResponseSink>(
         } else {
             create_tool_result_entry(context_name, &tc.name, logged_result, &tc.id)
         };
-        if metadata.flow_control {
-            app.append_to_transcript(context_name, &tool_result_entry)?;
-        } else {
-            app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
-        }
+        app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(tool_result_entry))?;
 
         sink.handle(ResponseEvent::ToolResult {

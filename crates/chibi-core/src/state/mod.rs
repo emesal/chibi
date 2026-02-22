@@ -1102,14 +1102,10 @@ impl AppState {
 ///
 /// Transcript-only entries (never written to context):
 /// - `system_prompt_changed` — prompt change events, stored in context_meta.json
-/// - `flow_control_call` / `flow_control_result` — chibi plumbing (call_user/call_agent);
-///   must not appear in LLM message history
 fn is_context_entry(entry: &TranscriptEntry) -> bool {
     !matches!(
         entry.entry_type.as_str(),
         crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED
-            | crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL
-            | crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT
     )
 }
 

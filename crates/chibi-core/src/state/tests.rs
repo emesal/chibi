@@ -1837,19 +1837,19 @@ fn test_create_flow_control_result_entry() {
 }
 
 #[test]
-fn test_is_context_entry_filters_flow_control() {
+fn test_is_context_entry_includes_flow_control() {
     let fc_call = create_flow_control_call_entry("ctx", "call_user", "{}", "id1");
     let fc_result = create_flow_control_result_entry("ctx", "call_user", "ack", "id1");
     let normal_call = create_tool_call_entry("ctx", "web_search", "{}", "id2");
     let normal_result = create_tool_result_entry("ctx", "web_search", "results", "id2");
 
     assert!(
-        !is_context_entry(&fc_call),
-        "flow_control_call must not be a context entry"
+        is_context_entry(&fc_call),
+        "flow_control_call must be a context entry"
     );
     assert!(
-        !is_context_entry(&fc_result),
-        "flow_control_result must not be a context entry"
+        is_context_entry(&fc_result),
+        "flow_control_result must be a context entry"
     );
     assert!(
         is_context_entry(&normal_call),
@@ -1878,7 +1878,7 @@ fn test_is_context_entry_filters_system_prompt_changed() {
 }
 
 #[test]
-fn test_rebuild_context_filters_flow_control_entries() {
+fn test_rebuild_context_includes_flow_control_entries() {
     let (app, _temp) = create_test_app();
     let ctx = "test-rebuild-fc";
     app.ensure_context_dir(ctx).unwrap();
@@ -1899,18 +1899,19 @@ fn test_rebuild_context_filters_flow_control_entries() {
 
     let context_entries = app.read_context_entries(ctx).unwrap();
 
-    // context.jsonl should have: anchor + user_msg + assistant_msg (no fc_call/fc_result)
+    // context.jsonl should have: anchor + user_msg + fc_call + fc_result + assistant_msg
     assert_eq!(
         context_entries.len(),
-        3,
-        "expected anchor + 2 messages, got {}",
+        5,
+        "expected anchor + user_msg + fc_call + fc_result + assistant_msg, got {}",
         context_entries.len()
     );
     assert!(
-        context_entries.iter().all(|e| {
-            e.entry_type != crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL
-                && e.entry_type != crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT
-        }),
-        "flow-control entries must not appear in context.jsonl"
+        context_entries.iter().any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL),
+        "flow_control_call must appear in context.jsonl"
+    );
+    assert!(
+        context_entries.iter().any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT),
+        "flow_control_result must appear in context.jsonl"
     );
 }
