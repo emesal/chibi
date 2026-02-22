@@ -1982,6 +1982,29 @@ pub async fn send_prompt<S: ResponseSink>(
                 // Keep request_body in sync for logging
                 request_body["messages"] = serde_json::json!(messages);
 
+                // If call_user was invoked, end the turn immediately — no follow-up API call.
+                // The message from call_user (if any) is delivered via handle_final_response.
+                if handoff.ends_turn_requested() {
+                    let final_text = response.full_response.clone();
+                    match handle_final_response(
+                        app,
+                        context_name,
+                        &final_text,
+                        &final_prompt,
+                        handoff,
+                        tools,
+                        &resolved_config,
+                        sink,
+                    )? {
+                        FinalResponseAction::ReturnToUser => return Ok(()),
+                        FinalResponseAction::ContinueWithPrompt(_) => {
+                            // call_user was set; handle_final_response sees User handoff,
+                            // so ContinueWithPrompt should never occur. Defensive: return.
+                            return Ok(());
+                        }
+                    }
+                }
+
                 // Tool call round costs 1 fuel
                 if !fuel_unlimited {
                     fuel_remaining = fuel_remaining.saturating_sub(1);
@@ -2590,6 +2613,44 @@ mod tests {
         assert!(
             prompt.contains("fuel: 7/10"),
             "fuel info must appear in limited mode"
+        );
+    }
+
+    // ========================================================================
+    // call_user early-exit tests
+    // ========================================================================
+
+    #[test]
+    fn test_continuation_prompt_call_user_ends_turn() {
+        use crate::tools::{Handoff, HandoffTarget};
+
+        // A fresh handoff (no explicit target) does not request an end-turn.
+        let handoff = Handoff::new(HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        assert!(
+            !handoff.ends_turn_requested(),
+            "fresh handoff must not trigger early exit"
+        );
+
+        // After call_agent, continuation is expected — no early exit.
+        let mut handoff = Handoff::new(HandoffTarget::User {
+            message: String::new(),
+        });
+        handoff.set_agent("next step".to_string());
+        assert!(
+            !handoff.ends_turn_requested(),
+            "call_agent must not trigger early exit"
+        );
+
+        // After call_user, the turn must end — early exit must be taken.
+        let mut handoff = Handoff::new(HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        handoff.set_user("done".to_string());
+        assert!(
+            handoff.ends_turn_requested(),
+            "call_user must trigger early exit, skipping follow-up API call"
         );
     }
 
