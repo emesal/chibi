@@ -60,6 +60,12 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 |------|------|------------|
 | `pre_file_write` | Before `write_file`/`file_edit` execution | Yes (approve/deny, fail-safe deny if no hook registered) |
 
+### URL Security
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_fetch_url` | Before fetching a sensitive URL (loopback, private network, cloud metadata) | Yes (approve/deny, fail-safe deny if no handler) |
+
 ### Sub-Agent Lifecycle
 
 | Hook | When | Can Modify |
@@ -80,6 +86,12 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 |------|------|------------|
 | `pre_send_message` | Before delivering inter-context message | Yes (can claim delivery) |
 | `post_send_message` | After message delivery | No |
+
+### Index Lifecycle
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `post_index_file` | After a file is indexed by the code indexer | No |
 
 ### Context Lifecycle
 
@@ -527,6 +539,34 @@ Called before `shell_exec` execution. Uses the same **deny-only** permission pro
 {}
 ```
 
+### pre_fetch_url
+
+Called before fetching a URL classified as sensitive (loopback, private network, cloud metadata endpoint, or unparseable). Uses the same **deny-only** permission protocol as `pre_file_read` and `pre_file_write`. Only fires when no `url_policy` is configured — if a policy is set, it is authoritative and this hook is not called.
+
+```json
+{
+  "tool_name": "fetch_url",
+  "url": "http://localhost:8080/api",
+  "safety": "sensitive",
+  "reason": "loopback address"
+}
+```
+
+Possible `reason` values: `"loopback address"`, `"private network address"`, `"link-local address"`, `"cloud metadata endpoint"`, `"could not parse URL"`.
+
+**To deny:**
+```json
+{
+  "denied": true,
+  "reason": "Local URLs not permitted"
+}
+```
+
+**No opinion (falls through to frontend handler):**
+```json
+{}
+```
+
 ### pre_spawn_agent
 
 Called before a sub-agent LLM call (from `spawn_agent` or `retrieve_content` tools). Can intercept and replace the call entirely, or block it.
@@ -605,6 +645,19 @@ For `post_rolling_compact`:
   "message_count": 25,
   "messages_archived": 25,
   "summary": "updated summary..."
+}
+```
+
+### post_index_file
+
+Fired after a file is successfully indexed by the code indexer. Observe only.
+
+```json
+{
+  "path": "src/main.rs",
+  "lang": "rust",
+  "symbol_count": 42,
+  "ref_count": 17
 }
 ```
 

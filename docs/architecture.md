@@ -17,11 +17,12 @@ chibi-mcp-bridge (binary, async daemon)
 
 - `chibi.rs` — Main `Chibi` struct, tool execution
 - `context.rs`, `state/` — Context management, file I/O, config resolution
-- `api/` — Request building, streaming, agentic loop (`send.rs`), compaction
+- `api/` — Request building, streaming, agentic loop (`send.rs`), compaction, `ResponseSink` trait (`sink.rs`), request/response logging (`logging.rs`)
 - `gateway.rs` — Type conversions between chibi and ratatoskr; context window auto-resolution
 - `model_info.rs` — Model metadata retrieval and formatting
-- `tools/` — Plugins, hooks, built-in tools (builtin, coding, file, agent, vfs categories), URL security policy, MCP bridge client (`mcp.rs`)
-- `vfs/` — Virtual file system: path validation, backend trait, permission model, local backend, router
+- `tools/` — Plugins (`plugins.rs`), hooks (`hooks.rs`), built-in tools (`builtin.rs`, `coding_tools.rs`, `file_tools.rs`, `agent_tools.rs`, `vfs_tools.rs`), URL and file path security policy (`security.rs`), MCP bridge client (`mcp.rs`)
+- `vfs/` — Virtual file system: path validation (`path.rs`), backend trait (`backend.rs`), permission model (`permissions.rs`), local backend (`local.rs`), types (`types.rs`), `Vfs` orchestrator (`vfs.rs`)
+- `vfs_cache.rs` — Tool output caching helpers (cache ID generation, VFS path mapping, cache eligibility)
 - `partition.rs` — Partitioned transcript storage with bloom filters
 - `config.rs` — Core configuration types (`Config`, `LocalConfig`, `ResolvedConfig`)
 - `agents_md.rs` — AGENTS.md discovery and loading (VCS-aware hierarchy)
@@ -30,6 +31,10 @@ chibi-mcp-bridge (binary, async daemon)
 - `execution.rs` — Shared command execution (`execute_command`, `CommandEffect`)
 - `input.rs` — Core input types (`Command`, `ExecutionFlags`, `Inspectable`)
 - `output.rs` — `OutputSink` trait (abstraction over CLI text / JSON output)
+- `safe_io.rs` — Atomic file writes (`atomic_write_*`) and `FileLock` (race-condition-safe I/O)
+- `lock.rs` — `ContextLock` (per-context RAII locking)
+- `inbox.rs` — Inbox management (`AppState`)
+- `jsonl.rs`, `json_ext.rs` — JSONL reading, `JsonExt` serde_json helpers
 
 ### chibi-cli — Binary crate (CLI-specific)
 

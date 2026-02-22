@@ -40,18 +40,18 @@ All fields are optional — only set what you want to change. See [configuration
 
 ## System Prompts
 
-Copy the example prompts to set up the default personality:
+Chibi ships with built-in default prompts compiled into the binary. To customise them, place override files in `~/.chibi/prompts/`:
 
 ```bash
 mkdir -p ~/.chibi/prompts
-cp examples/prompts/*.md ~/.chibi/prompts/
+# Create any of the following to override the defaults:
+# ~/.chibi/prompts/chibi.md         — personality / system prompt
+# ~/.chibi/prompts/compaction.md    — instructions for summarising during compaction
+# ~/.chibi/prompts/continuation.md  — instructions after compaction to guide continuation
+# ~/.chibi/prompts/reflection.md    — reflection content injected into every prompt
 ```
 
-**Available prompts:**
-
-- `chibi.md` - Default system/personality prompt
-- `compaction.md` - Instructions for summarizing conversations during compaction
-- `continuation.md` - Instructions after compaction to guide continuation
+If a file exists it takes precedence over the built-in; if absent, the compiled-in default is used (or nothing, for `reflection.md` which has no built-in).
 
 ## First Conversation
 
@@ -59,7 +59,7 @@ cp examples/prompts/*.md ~/.chibi/prompts/
 # Simple prompt
 chibi What are the benefits of using Rust?
 
-# Multi-line prompt (end with . on empty line)
+# Multi-line prompt (end with . on empty line, or Ctrl+D)
 chibi
 Explain the following concepts:
 - Ownership
@@ -94,7 +94,7 @@ Plugins provide tools that the LLM can call. With verbose mode you can see tool 
 
 ```bash
 chibi -v "Read my package.json and list the dependencies"
-# stderr: [Tool: file_head(path: package.json)]
+# stderr: [Tool: file_head] package.json
 # stdout: <LLM response about the file>
 ```
 

@@ -41,11 +41,22 @@ The `.github/workflows/auto-tag-features.yml` workflow automatically creates tag
 
 This preserves the branch for archaeology (`just show-feature auth-system` will work).
 
+## Tree Freeze
+
+During release preparation, the tree can be locked to bugfixes, docs, and hotfixes only:
+
+```bash
+just freeze "preparing 0.x.y"  # Lock tree
+just thaw                       # Unlock tree
+```
+
+While frozen, only `bugfix/*`, `docs/*`, and `hotfix/*` branches can be merged.
+
 ## Release Cycle
 
 ```bash
-just release v0.x       # Squash dev→main, run tests, tag release
-just push-release v0.x  # Push to GitHub
+just release 0.x.y      # Squash dev→main, run tests, tag release
+just push-release 0.x.y # Push to GitHub
 just update-deps        # Update dependencies post-release
 ```
 
@@ -57,7 +68,7 @@ Use `just` commands on the `dev` branch for detailed history:
 just blame <file>         # Per-commit attribution
 just show-feature <name>  # What did this feature change?
 just history <file>       # Full change history
-just list-features        # Show all feature tags
+just list-features        # Show all feature and bugfix tags
 ```
 
 ## GitHub Pages

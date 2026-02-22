@@ -251,6 +251,7 @@ chibi -n system_prompt   # View system prompt
 chibi -n reflection      # View reflection (global)
 chibi -n todos           # View todos
 chibi -n goals           # View goals
+chibi -n home            # View chibi home directory
 chibi -n list            # List what can be inspected
 
 # Inspect a specific context
@@ -274,22 +275,26 @@ chibi -g -5  # First 5 entries
 ## Storage Structure
 
 ```
-~/.chibi/contexts/<name>/
-├── transcript/          # Authoritative conversation log (partitioned)
-│   ├── manifest.json    # Partition metadata
-│   ├── active.jsonl     # Current write partition
-│   └── partitions/      # Archived read-only partitions
-├── context.jsonl        # LLM context window (derived from transcript)
-├── context_meta.json    # Metadata (created_at timestamp)
-├── local.toml           # Per-context config overrides (optional)
-├── summary.md           # Conversation summary (from compaction)
-├── todos.md             # Current todos
-├── goals.md             # Current goals
-├── inbox.jsonl          # Messages from other contexts
-├── system_prompt.md     # Custom system prompt (optional)
-├── tool_cache/          # Cached large tool outputs
-├── .lock                # Lock file (when active)
-└── .dirty               # Marker for context rebuild (temporary)
+~/.chibi/
+├── state.json                   # Context registry (names, created_at, auto-destroy settings)
+├── session.json                 # CLI session state (implied_context, previous_context)
+└── contexts/<name>/
+    ├── transcript/              # Authoritative conversation log (partitioned)
+    │   ├── manifest.json        # Partition metadata
+    │   ├── active.jsonl         # Current write partition
+    │   └── partitions/          # Archived read-only partitions
+    ├── context.jsonl            # LLM context window (derived from transcript)
+    ├── context_meta.json        # Internal cache metadata (system prompt mtime, last combined prompt)
+    ├── local.toml               # Per-context config overrides (optional)
+    ├── summary.md               # Conversation summary (from compaction)
+    ├── todos.md                 # Current todos
+    ├── goals.md                 # Current goals
+    ├── inbox.jsonl              # Messages from other contexts
+    ├── system_prompt.md         # Custom system prompt (optional)
+    ├── .lock                    # Lock file (when active)
+    └── .dirty                   # Marker for context rebuild (temporary)
 ```
+
+Tool cache is stored in the VFS at `/sys/tool_cache/<context>/` (not in the context directory on disk).
 
 See [transcript-format.md](transcript-format.md) for details on the JSONL file formats.

@@ -548,6 +548,8 @@ Chibi includes built-in coding tools that work out of the box — no plugins nee
 | `shell_exec` | `PreShellExec` | Execute shell commands |
 | `file_edit` | `PreFileWrite` | Patch files (search/replace) |
 | `write_file` | `PreFileWrite` | Create or overwrite files |
+| `fetch_url` | `PreFetchUrl` | Fetch a URL (gated for sensitive addresses) |
+| `summarize_content` | `PreFetchUrl` | Read and summarize a URL source (gated when source is a URL) |
 
 The interactive prompt defaults to **allow** (`[Y/n]`) — press Enter to approve, or type `n` to deny. This makes sense because if you gave the LLM tools, you probably want it to use them.
 
@@ -572,7 +574,7 @@ Plugins can implement custom permission logic via the `pre_file_write` and `pre_
 
 ### URL Security Policy
 
-By default, `retrieve_content` prompts for permission when fetching sensitive URLs (loopback, private network, link-local, cloud metadata). A URL policy replaces this interactive check with declarative rules — useful for automation and chibi-json.
+By default, `fetch_url` and `summarize_content` (when given a URL source) prompt for permission when fetching sensitive URLs (loopback, private network, link-local, cloud metadata). A URL policy replaces this interactive check with declarative rules — useful for automation and chibi-json.
 
 ```toml
 [url_policy]
@@ -621,10 +623,12 @@ include = ["update_todos", "update_goals", "update_reflection"]
 
 | Category | Tools |
 |----------|-------|
-| `builtin` | update_todos, update_goals, update_reflection, send_message |
+| `builtin` | update_todos, update_goals, update_reflection, send_message, call_agent, call_user, model_info, read_context |
 | `file` | file_head, file_tail, file_lines, file_grep, write_file |
-| `agent` | spawn_agent, retrieve_content |
-| `coding` | shell_exec, dir_list, glob_files, grep_files, file_edit, index_update, index_query, index_status |
+| `agent` | spawn_agent, summarize_content |
+| `coding` | shell_exec, dir_list, glob_files, grep_files, file_edit, fetch_url, index_update, index_query, index_status |
+| `vfs` | vfs_list, vfs_info, vfs_copy, vfs_move, vfs_mkdir, vfs_delete |
+| `mcp` | MCP tools loaded from the bridge (named `<server>_<tool>`) |
 | `plugin` | Tools loaded from the plugins directory |
 
 **Global vs. per-context:**

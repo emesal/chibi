@@ -62,8 +62,8 @@ Use `-v` to see which tools the LLM is calling in a normal conversation:
 
 ```bash
 chibi -v "Where is the Config struct defined and what are its fields?"
-# stderr: [Tool: serena_find_symbol(...)]
-# stderr: [Tool: serena_get_symbols_overview(...)]
+# stderr: [Tool: serena_find_symbol] find symbol by name
+# stderr: [Tool: serena_get_symbols_overview] get symbols overview
 ```
 
 ---

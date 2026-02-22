@@ -81,19 +81,26 @@ url = "https://mcp.example.com/mcp"
 Authorization = "Bearer sk-..."
 ```
 
-You can mix local and remote servers freely:
+You can mix local and remote servers freely. A working example config covering
+both transports is at [`examples/mcp-bridge.example.toml`](../examples/mcp-bridge.example.toml)
+— copy it to `~/.chibi/mcp-bridge.toml` and fill in your tokens.
+
+#### GitHub MCP server
+
+[GitHub's official MCP server](https://github.com/github/github-mcp-server) uses
+the remote HTTP transport and gives the LLM access to GitHub issues, pull
+requests, code search, and more:
 
 ```toml
-[servers.serena]
-command = "uvx"
-args = ["serena"]
+[servers.github]
+url = "https://api.githubcopilot.com/mcp/"
 
-[servers.remote-tools]
-url = "https://mcp.example.com/mcp"
-
-[servers.remote-tools.headers]
-Authorization = "Bearer sk-..."
+[servers.github.headers]
+Authorization = "Bearer YOUR_GITHUB_PAT"
 ```
+
+Generate a PAT at <https://github.com/settings/tokens> with `repo`, `issues`,
+and `pull_requests` scopes.
 
 ### 3. Use it
 

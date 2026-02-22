@@ -15,9 +15,11 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 | `-a, --archive-current-history` | Archive current context history (saves to transcript) |
 | `-A, --archive-history <CTX>` | Archive specified context's history |
 | `-z, --compact-current-context` | Compact current context (LLM summarizes) |
-| `-Z, --compact-context <CTX>` | Compact specified context (simple archive) |
+| `-Z, --compact-context <CTX>` | Compact specified context (LLM summarizes) |
 | `-r, --rename-current-context <NEW>` | Rename current context |
 | `-R, --rename-context <OLD> <NEW>` | Rename specified context |
+| `-b, --check-all-inboxes` | Check all context inboxes and process any messages |
+| `-B, --check-inbox-for <CTX>` | Check inbox for specified context and process any messages |
 
 ### Previous Context Reference
 
@@ -126,12 +128,13 @@ chibi --model-metadata-full openai/gpt-4o              # Full metadata including
 | `-x, --force-call-user` | Force return to user after operations (skip LLM) |
 | `-X, --force-call-agent` | Force agent continuation (overrides implied -x) |
 | `--raw` | Disable markdown rendering (plain text output) |
+| `-s, --set <KEY=VALUE>` | Override a config value for this invocation (repeatable) |
 | `-h, --help` | Show help message |
 | `--version` | Show version |
 
 ## Programmatic / JSON Mode
 
-JSON mode has moved to the separate `chibi-json` binary (see [upgrade notes](upgrade-notes.md) for migration). The CLI is now text-only.
+JSON mode has moved to the separate `chibi-json` binary. The CLI is now text-only.
 
 ```bash
 # programmatic usage (v0.8.0+)
@@ -183,6 +186,7 @@ chibi-json --version
 | Flag | Description |
 |------|-------------|
 | `--home <PATH>` | Override chibi home directory (default: `~/.chibi`) |
+| `--project-root <PATH>` | Override project root directory (default: cwd, or `CHIBI_PROJECT_ROOT` env) |
 
 The home directory is resolved in this order:
 1. `--home` CLI flag (highest priority)
@@ -282,7 +286,7 @@ Auto-destroy runs at the start of every chibi invocation and destroys all contex
 
 These flags produce output or operate on other contexts, so they imply `-x`:
 
-`-l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -M, -p, -P, --model-metadata, --model-metadata-full`
+`-l, -L, -d, -D, -A, -Z, -R, -g, -G, -n, -N, -Y, -M, -p, -P, --model-metadata, --model-metadata-full, --debug md=<file>`
 
 ### Combinable with Prompt
 
