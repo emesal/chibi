@@ -448,8 +448,11 @@ fn build_full_system_prompt<S: ResponseSink>(
     let pre_sys_hook_results =
         tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data)?;
 
-    // Build full system prompt with all components
-    let mut full_system_prompt = system_prompt;
+    // Build full system prompt with all components, anchoring identity first
+    let mut full_system_prompt = format!(
+        "You are \"{}\", a chibi agent.\n\n{}",
+        context_name, system_prompt
+    );
 
     // Prepend any content from pre_system_prompt hooks
     for (hook_tool_name, result) in &pre_sys_hook_results {
@@ -487,9 +490,6 @@ fn build_full_system_prompt<S: ResponseSink>(
         ));
     }
 
-    // Add context name
-    full_system_prompt.push_str(&format!("\n\nCurrent context: {}", context_name));
-
     // Add summary if present
     if !summary.is_empty() {
         full_system_prompt.push_str("\n\n--- CONVERSATION SUMMARY ---\n");
@@ -506,6 +506,11 @@ fn build_full_system_prompt<S: ResponseSink>(
     if !todos.is_empty() {
         full_system_prompt.push_str("\n\n--- CURRENT TODOS ---\n");
         full_system_prompt.push_str(&todos);
+    }
+
+    // Add fuel notice when operating under a fuel budget
+    if resolved_config.fuel > 0 {
+        full_system_prompt.push_str("\n\nUse call_user to return control to the user. You operate within a fuel budget. When fuel runs out control is returned automatically. Fuel refills with each prompt.");
     }
 
     // Add reflection prompt last (personality layer)
@@ -2372,11 +2377,10 @@ mod tests {
 
     #[test]
     fn test_context_name_injected_in_system_prompt() {
-        // This is a unit test concept - the actual integration happens in build_full_system_prompt
-        // We verify the format string is correct
+        // Verify the identity anchor format used in build_full_system_prompt
         let context_name = "my-context";
-        let expected = format!("\n\nCurrent context: {}", context_name);
-        assert!(expected.contains("Current context: my-context"));
+        let expected = format!("You are \"{}\", a chibi agent.", context_name);
+        assert!(expected.contains("You are \"my-context\", a chibi agent."));
     }
 
     #[test]
