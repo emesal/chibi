@@ -3,7 +3,12 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.0] - 2026-02-22
+
+### Chores
+
+- Add git-cliff changelog generation, bump to v0.9.0 ([`3335a74`](https://github.com/emesal/chibi/commit/3335a7446765a00cd68f7e98756e0549f4ef5367))
+
 
 ### Documentation
 
