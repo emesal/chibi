@@ -21,7 +21,7 @@ pub use paths::StatePaths;
 
 use crate::jsonl::read_jsonl_file;
 
-use crate::config::{Config, ConfigDefaults, ModelsConfig, ResolvedConfig};
+use crate::config::{Config, ConfigDefaults, ResolvedConfig};
 // Note: ImageConfig, MarkdownStyle removed - these are CLI presentation concerns
 use crate::context::{
     Context, ContextEntry, ContextMeta, ContextState, TranscriptEntry, is_valid_context_name,
@@ -38,7 +38,6 @@ use uuid::Uuid;
 
 pub struct AppState {
     pub config: Config,
-    pub models_config: ModelsConfig,
     pub state: ContextState,
     pub chibi_dir: PathBuf,
     pub state_path: PathBuf,
@@ -93,7 +92,7 @@ impl AppState {
 
         Ok(AppState {
             config,
-            models_config: ModelsConfig::default(),
+
             state,
             chibi_dir,
             state_path,
@@ -149,18 +148,12 @@ impl AppState {
             })?
         };
 
-        // Load models.toml (optional)
-        let models_config: ModelsConfig = if models_path.exists() {
-            let content = fs::read_to_string(&models_path)?;
-            toml::from_str(&content).map_err(|e| {
-                io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!("Failed to parse models.toml: {}", e),
-                )
-            })?
-        } else {
-            ModelsConfig::default()
-        };
+        if models_path.exists() {
+            eprintln!(
+                "[WARN] ~/.chibi/models.toml is deprecated. \
+                 Move your [models] sections into config.toml and delete models.toml."
+            );
+        }
 
         let state = if state_path.exists() {
             let file = File::open(&state_path)?;
@@ -192,7 +185,6 @@ impl AppState {
 
         let mut app = AppState {
             config,
-            models_config,
             state,
             chibi_dir,
             state_path,

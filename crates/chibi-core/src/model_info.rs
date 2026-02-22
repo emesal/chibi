@@ -1,7 +1,7 @@
 //! Model metadata retrieval and formatting.
 //!
 //! Two output formats:
-//! - **TOML** ([`format_model_toml`]): For `models.toml` copy-paste (CLI `-m`/`-M`).
+//! - **TOML** ([`format_model_toml`]): For copy-pasting into `config.toml` (CLI `-m`/`-M`).
 //! - **JSON** ([`format_model_json`]): Structured output for the `model_info` tool.
 //!
 //! Metadata is fetched via [`fetch_metadata`], which delegates to ratatoskr's
@@ -29,7 +29,7 @@ pub fn format_model_json(metadata: &ModelMetadata) -> serde_json::Value {
     serde_json::to_value(metadata).expect("ModelMetadata serialisation should not fail")
 }
 
-/// Format model metadata as TOML for `models.toml`.
+/// Format model metadata as TOML for copy-pasting into `config.toml`.
 ///
 /// When `full` is false, emits only the settable fields.
 /// When `full` is true, includes informational comments.

@@ -37,6 +37,7 @@ fn create_test_app() -> (AppState, TempDir) {
         vfs: VfsConfig::default(),
         url_policy: None,
         subagent_cost_tier: "free".to_string(),
+        models: Default::default(),
     };
     let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
     (app, temp_dir)
@@ -563,12 +564,13 @@ fn test_resolve_config_model_level_api_params() {
         vfs: VfsConfig::default(),
         url_policy: None,
         subagent_cost_tier: "free".to_string(),
+        models: Default::default(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
 
     // Add model config
-    app.models_config.models.insert(
+    app.config.models.insert(
         "test-model".to_string(),
         crate::config::ModelMetadata {
             api: ApiParams {
@@ -624,12 +626,13 @@ fn test_resolve_config_hierarchy_context_over_model() {
         vfs: VfsConfig::default(),
         url_policy: None,
         subagent_cost_tier: "free".to_string(),
+        models: Default::default(),
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
 
     // Add model config with temperature
-    app.models_config.models.insert(
+    app.config.models.insert(
         "test-model".to_string(),
         crate::config::ModelMetadata {
             api: ApiParams {
@@ -656,6 +659,47 @@ fn test_resolve_config_hierarchy_context_over_model() {
     assert_eq!(resolved.api.temperature, Some(0.9));
     // Model value should be preserved when context doesn't override
     assert_eq!(resolved.api.max_tokens, Some(1000));
+}
+
+#[test]
+#[serial_test::serial]
+fn test_resolve_config_local_models_override_global_models() {
+    // local.models should override config.models for the same model key
+    let temp_dir = TempDir::new().unwrap();
+    let mut config = Config {
+        model: Some("test-model".to_string()),
+        ..Config::default()
+    };
+    config.models.insert(
+        "test-model".to_string(),
+        crate::config::ModelMetadata {
+            api: ApiParams {
+                temperature: Some(0.3),
+                max_tokens: Some(500),
+                ..Default::default()
+            },
+        },
+    );
+
+    let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
+
+    // local.models overrides temperature but not max_tokens
+    let mut local = LocalConfig::default();
+    local.models.insert(
+        "test-model".to_string(),
+        crate::config::ModelMetadata {
+            api: ApiParams {
+                temperature: Some(0.9),
+                ..Default::default()
+            },
+        },
+    );
+    app.save_local_config("default", &local).unwrap();
+
+    let resolved = app.resolve_config("default", None).unwrap();
+
+    assert_eq!(resolved.api.temperature, Some(0.9)); // local.models wins
+    assert_eq!(resolved.api.max_tokens, Some(500)); // config.models preserved
 }
 
 // NOTE: test_resolve_config_cli_persistent_username and
@@ -694,6 +738,7 @@ fn test_resolve_config_all_local_overrides() {
         fallback_tool: None,
         url_policy: None,
         subagent_cost_tier: None,
+        models: Default::default(),
     };
     app.save_local_config("default", &local).unwrap();
 

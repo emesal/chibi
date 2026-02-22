@@ -25,12 +25,13 @@ Partitions rotate when any threshold is reached:
 
 ### context.jsonl (Derived)
 
-The active LLM context window. Derived from transcript.jsonl starting at the last anchor entry. Rebuilt automatically when the context is marked as dirty (via `.dirty` marker file).
+The active LLM context window. Derived from transcript starting at the last anchor entry. Rebuilt automatically when stale.
 
 Structure:
 1. **Entry 0**: Anchor entry (`context_created`, `compaction`, or `archival`)
-2. **Entry 1**: System prompt entry (`system_prompt`)
-3. **Remaining**: Conversation entries (messages, tool calls, tool results)
+2. **Remaining**: Conversation entries (messages, tool calls, tool results, flow control)
+
+> **Note:** The system prompt is **not** stored in `context.jsonl`. It lives in `system_prompt.md` (source of truth) and is tracked via `context_meta.json`.
 
 ## Entry Format
 
@@ -43,8 +44,7 @@ All JSONL entries share this structure:
   "from": "alice",
   "to": "default",
   "content": "What is Rust?",
-  "entry_type": "message",
-  "metadata": {}
+  "entry_type": "message"
 }
 ```
 
@@ -58,7 +58,8 @@ All JSONL entries share this structure:
 | `to` | Destination: context name, "user", or tool name |
 | `content` | Message content, tool arguments, or tool results |
 | `entry_type` | Type of entry (see below) |
-| `metadata` | Optional object with additional data (summary, hash, etc.) |
+| `metadata` | Optional object with additional data (summary, etc.) |
+| `tool_call_id` | Optional; present on `tool_call`, `tool_result`, `flow_control_call`, and `flow_control_result` entries to correlate pairs |
 
 ### Entry Types
 
@@ -70,6 +71,15 @@ All JSONL entries share this structure:
 | `tool_call` | LLM calling a tool | context | tool name |
 | `tool_result` | Tool returning a result | tool name | context |
 
+#### Flow Control Types
+
+Flow control entries are written for special tools (e.g. `call_user`) that manage turn boundaries. They appear in both transcript and context.jsonl.
+
+| Type | Description | `from` | `to` |
+|------|-------------|--------|------|
+| `flow_control_call` | LLM invoking a flow-control tool | context | tool name |
+| `flow_control_result` | Flow-control tool returning | tool name | context |
+
 #### Anchor Types (context.jsonl[0])
 
 | Type | Description | When Created |
@@ -78,12 +88,11 @@ All JSONL entries share this structure:
 | `compaction` | Context was compacted | After LLM-based or rolling compaction |
 | `archival` | Context was archived/cleared | After clear operation |
 
-#### System Types
+#### System Types (transcript only)
 
-| Type | Description | Location |
-|------|-------------|----------|
-| `system_prompt` | Current system prompt | context.jsonl[1] |
-| `system_prompt_changed` | System prompt was updated | transcript.jsonl only |
+| Type | Description |
+|------|-------------|
+| `system_prompt_changed` | System prompt was updated; stored in transcript only, never written to context.jsonl |
 
 ## Examples
 
@@ -122,7 +131,8 @@ All JSONL entries share this structure:
   "from": "default",
   "to": "file_head",
   "content": "{\"path\":\"Cargo.toml\"}",
-  "entry_type": "tool_call"
+  "entry_type": "tool_call",
+  "tool_call_id": "tc_abc123"
 }
 ```
 
@@ -135,7 +145,36 @@ All JSONL entries share this structure:
   "from": "file_head",
   "to": "default",
   "content": "[package]\nname = \"chibi\"...",
-  "entry_type": "tool_result"
+  "entry_type": "tool_result",
+  "tool_call_id": "tc_abc123"
+}
+```
+
+### Flow Control Call
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440008",
+  "timestamp": 1705123470,
+  "from": "default",
+  "to": "call_user",
+  "content": "{\"message\": \"Task complete.\"}",
+  "entry_type": "flow_control_call",
+  "tool_call_id": "fc_def456"
+}
+```
+
+### Flow Control Result
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440009",
+  "timestamp": 1705123471,
+  "from": "call_user",
+  "to": "default",
+  "content": "Returning to user",
+  "entry_type": "flow_control_result",
+  "tool_call_id": "fc_def456"
 }
 ```
 
@@ -181,22 +220,6 @@ All JSONL entries share this structure:
 }
 ```
 
-### System Prompt Entry
-
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440007",
-  "timestamp": 1705123401,
-  "from": "system",
-  "to": "default",
-  "content": "You are a helpful assistant...",
-  "entry_type": "system_prompt",
-  "metadata": {
-    "hash": "a1b2c3d4e5f6..."
-  }
-}
-```
-
 ## Metadata Structure
 
 The optional `metadata` field can contain:
@@ -204,19 +227,17 @@ The optional `metadata` field can contain:
 | Field | Used In | Description |
 |-------|---------|-------------|
 | `summary` | `compaction` | Summary of compacted conversation |
-| `hash` | `system_prompt` | SHA256 hash of the prompt content |
-| `transcript_anchor_id` | context.jsonl anchors | Reference to corresponding transcript.jsonl entry |
+| `transcript_anchor_id` | context.jsonl anchors | Reference to corresponding transcript entry ID |
 
 ## Context Rebuilding
 
-When the context is marked dirty (`.dirty` file exists), `context.jsonl` is rebuilt from the transcript:
+When `context.jsonl` is stale, it is rebuilt from the transcript:
 
 1. Find the last anchor entry across all transcript partitions
-2. Copy entries from that anchor to end
-3. Inject current system prompt as entry[1]
-4. Remove `.dirty` marker
+2. Copy entries from that anchor to end, filtering out `system_prompt_changed` events
+3. Write as `context.jsonl`: anchor at entry[0], conversation entries following
 
-This ensures context.jsonl stays synchronized with the authoritative transcript while allowing front-matter (system prompt) to change without rewriting transcript history.
+The system prompt is injected at API call time from `system_prompt.md` (via `context_meta.json`), not stored as an entry in `context.jsonl`.
 
 ## Inbox Format (inbox.jsonl)
 

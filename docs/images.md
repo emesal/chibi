@@ -13,7 +13,7 @@ escape codes, which work in most modern terminals.
 - **Data URIs**: `data:image/png;base64,...`
 - **HTTPS URLs**: `https://example.com/photo.png`
 - **HTTP URLs** (disabled by default): `http://example.com/photo.png`
-  — requires `image_allow_http = true`
+  — requires `allow_http = true` in the `[image]` config section
 
 ## Remote image fetching
 
@@ -87,7 +87,7 @@ cache_max_bytes = 104857600
 cache_max_age_days = 30
 ```
 
-Eviction runs automatically at exit:
+Eviction runs automatically after each command:
 1. Entries older than `cache_max_age_days` are removed first.
 2. If total size still exceeds `cache_max_bytes`, the
    least-recently-accessed entries are removed until under the limit.

@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```no_run
-//! // Requires ~/.chibi directory with config.toml and models.toml.
+//! // Requires ~/.chibi directory with config.toml.
 //! use chibi_core::{Chibi, CollectingSink, ResolvedConfig};
 //! use chibi_core::api::PromptOptions;
 //!
@@ -140,7 +140,7 @@ impl Chibi {
     /// # Example
     ///
     /// ```no_run
-    /// // Requires a chibi home directory with config.toml and models.toml.
+    /// // Requires a chibi home directory with config.toml.
     /// use chibi_core::{Chibi, LoadOptions, OutputSink, CommandEvent};
     /// use chibi_core::context::TranscriptEntry;
     /// use std::io;

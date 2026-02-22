@@ -57,7 +57,6 @@ All fields are optional. See [Configuration](docs/configuration.md) for the full
 - [Images](docs/images.md) — Terminal image rendering
 - [Markdown Themes](docs/markdown-themes.md) — Customising colour schemes
 - [Transcript Format](docs/transcript-format.md) — JSONL format spec
-- [Upgrade Notes](docs/upgrade-notes.md) — Breaking changes requiring user action
 
 Example plugins: [chibi-plugins](https://github.com/emesal/chibi-plugins)
 

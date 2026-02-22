@@ -77,7 +77,6 @@ When your plugin runs, chibi sets:
 |----------|------|----------|
 | `CHIBI_TOOL_NAME` | Tool call | Tool name (for multi-tool plugins) |
 | `CHIBI_HOOK` | Hook execution | Hook name (e.g., `on_start`) |
-| `CHIBI_VERBOSE` | Always (if `-v`) | Set to `1` when verbose mode is on |
 
 ## Hooks
 
@@ -92,33 +91,11 @@ Plugins can register for lifecycle hooks by including a `hooks` array in the sch
 }
 ```
 
-### Available Hooks
-
-| Hook | When | Hook Data |
-|------|------|-----------|
-| `on_start` | Chibi starts | `{implied_context, working_context, verbose}` |
-| `on_end` | Chibi exits | `{implied_context, working_context}` |
-| `pre_message` | Before sending user message to LLM | `{prompt, context_name, summary}` |
-| `post_message` | After receiving LLM response | `{prompt, response, context_name}` |
-| `pre_tool` | Before executing a tool | `{tool_name, arguments}` |
-| `post_tool` | After tool execution | `{tool_name, arguments, result}` |
-| `on_context_switch` | Context changes | `{from_context, to_context, is_ephemeral}` |
-| `pre_clear` | Before clearing context | `{context_name, message_count, summary}` |
-| `post_clear` | After clearing context | `{context_name}` |
-| `pre_compact` | Before manual compaction | `{context_name, message_count, summary}` |
-| `post_compact` | After manual compaction | `{context_name, message_count, summary}` |
-| `pre_rolling_compact` | Before auto-compaction | `{context_name, message_count, non_system_count, summary}` |
-| `post_rolling_compact` | After auto-compaction | `{context_name, message_count, messages_archived, summary}` |
-| `pre_system_prompt` | Building system prompt | `{context_name, summary, todos, goals}` |
-| `post_system_prompt` | After system prompt built | `{context_name, summary, todos, goals}` |
-| `pre_send_message` | Before inter-context message | `{from, to, content, context_name}` |
-| `post_send_message` | After inter-context message | `{from, to, content, context_name, delivery_result}` |
-| `pre_spawn_agent` | Before sub-agent LLM call | `{system_prompt, input, model, temperature, max_tokens}` |
-| `post_spawn_agent` | After sub-agent LLM call | `{system_prompt, input, model, response}` |
+See [hooks.md](hooks.md) for the full hook reference — payloads, return values, and all 31 hook points.
 
 ### Hook Output
 
-Hooks can return JSON to stdout. For most hooks, this is informational. Some hooks have special behavior:
+Hooks can return JSON to stdout. For most hooks, this is informational. Some hooks have special behaviour:
 
 - `pre_message`: Return `{"prompt": "text"}` to modify the user's prompt before sending to LLM
 - `pre_tool`: Return `{"block": true, "message": "reason"}` to prevent tool execution
@@ -126,6 +103,9 @@ Hooks can return JSON to stdout. For most hooks, this is informational. Some hoo
 - `pre_system_prompt` / `post_system_prompt`: Return `{"inject": "text"}` to add content to the system prompt
 - `pre_send_message`: Return `{"delivered": true, "via": "..."}` to intercept message delivery
 - `pre_spawn_agent`: Return `{"response": "..."}` to replace the LLM call, or `{"block": true, "message": "..."}` to block it
+- `pre_cache_output`: Return `{"summary": "..."}` to provide a custom summary instead of caching
+- `pre_api_tools`: Return `{"remove": ["tool_name"]}` to filter tools from the API request
+- `pre_agentic_loop` / `post_tool_batch`: Return `{"handoff": "user"|"agent"|"none"}` to override the fallback
 
 Return empty output or `{}` if you have nothing to contribute.
 
@@ -137,18 +117,18 @@ import json, os, sys
 
 if len(sys.argv) > 1 and sys.argv[1] == "--schema":
     print(json.dumps({
-        "name": "context_logger",
-        "description": "Logs context switches",
+        "name": "startup_logger",
+        "description": "Logs chibi startup info",
         "parameters": {"type": "object", "properties": {}},
-        "hooks": ["on_context_switch"]
+        "hooks": ["on_start"]
     }))
     sys.exit(0)
 
 hook = os.environ.get("CHIBI_HOOK", "")
-if hook == "on_context_switch":
+if hook == "on_start":
     data = json.load(sys.stdin)
-    with open("/tmp/context_log.txt", "a") as f:
-        f.write(f"{data['from_context']} -> {data['to_context']}\n")
+    with open("/tmp/chibi_starts.log", "a") as f:
+        f.write(f"started: project_root={data['project_root']}\n")
     print("{}")
     sys.exit(0)
 
@@ -265,26 +245,36 @@ echo '{}' | CHIBI_HOOK="on_start" ./my_plugin
 
 ## Built-in Tools
 
-Chibi provides several built-in tools that don't require plugins:
+Chibi provides built-in tools that don't require plugins:
 
 **Agentic tools:**
 - `update_todos` - Manage per-context todo list
 - `update_goals` - Manage per-context goals
 - `update_reflection` - Update LLM's persistent memory
 - `send_message` - Send messages between contexts
+- `spawn_agent` - Spawn a sub-agent with a custom system prompt
 
-**File tools** (for examining cached tool outputs and allowed paths):
+**File tools** (for reading and writing files and cached tool outputs):
 - `file_head` - Read first N lines (accepts `vfs:///` URIs for cached outputs)
 - `file_tail` - Read last N lines (accepts `vfs:///` URIs)
 - `file_lines` - Read specific line range (accepts `vfs:///` URIs)
 - `file_grep` - Search for patterns (accepts `vfs:///` URIs)
 - `write_file` - Write content to a file or VFS path
 
-**Agent tools** (for spawning sub-agents):
-- `spawn_agent` - Spawn a sub-agent with a custom system prompt
-- `retrieve_content` - Read a file/URL and process it through a sub-agent
+**Coding tools** (project-aware, path-relative to project root):
+- `shell_exec` - Execute a shell command
+- `dir_list` - List a directory tree
+- `glob_files` - Find files matching a glob pattern
+- `grep_files` - Regex-search files with context lines
+- `file_edit` - Structured file edits (replace_lines, insert_before, insert_after, delete_lines, replace_string)
+- `fetch_url` - Fetch content from a URL
 
-These are always available to the LLM. See [agentic.md](agentic.md) for details on sub-agents and tool output caching.
+**Index tools:**
+- `index_update` - Walk and index the project for symbol search
+- `index_query` - Search the codebase index for symbols or references
+- `index_status` - Show index summary (file counts, symbol totals)
+
+See [agentic.md](agentic.md) for details on sub-agents and tool output caching.
 
 ## Language Plugins
 
