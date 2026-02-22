@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["fetch_metadata","format_capability","format_cost","format_model_json","format_model_toml","format_num","has_parameter_comments","write_header_comments","write_parameter_comments"]};

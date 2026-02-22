@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["atomic_write","atomic_write_json","atomic_write_text"],"struct":["FileLock"]};

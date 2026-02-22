@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ServerConfig"],"fn":["default_idle_timeout","default_summary_enabled","default_summary_model"],"struct":["BridgeConfig","SummaryConfig"]};

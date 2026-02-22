@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["backend","local","path","permissions","types","vfs"],"struct":["Vfs"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["default_heartbeat_secs","ensure_bridge_running","execute_mcp_tool","is_lockfile_stale","is_mcp_tool","load_mcp_tools","mcp_tool_from_info","parse_mcp_path","poll_for_bridge","read_bridge_address","send_request","spawn_bridge","which_bridge"],"struct":["BridgeToolInfo","CallToolResponse","ListToolsResponse","LockContent"]};

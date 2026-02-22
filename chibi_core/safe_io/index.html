@@ -1,0 +1,39 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Safe file I/O utilities: atomic writes and file locking."><title>chibi_core::safe_io - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="chibi_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.1 (01f6ddf75 2026-02-11)" data-channel="1.93.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-a3946164.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-a410ff4d.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module safe_io</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../chibi_core/index.html">chibi_<wbr>core</a><span class="version">0.8.10</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module safe_io</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#design-rationale" title="Design Rationale">Design Rationale</a></li><li><a href="#example" title="Example">Example</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate chibi_<wbr>core</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">chibi_core</a></div><h1>Module <span>safe_io</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/chibi_core/safe_io.rs.html#1-547">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Safe file I/O utilities: atomic writes and file locking.</p>
+<p>This module provides building blocks for safe concurrent file access:</p>
+<ul>
+<li><a href="fn.atomic_write_json.html" title="fn chibi_core::safe_io::atomic_write_json"><code>atomic_write_json()</code></a> - Write JSON atomically (temp file + rename)</li>
+<li><a href="fn.atomic_write.html" title="fn chibi_core::safe_io::atomic_write"><code>atomic_write()</code></a> - Write bytes atomically</li>
+<li><a href="struct.FileLock.html" title="struct chibi_core::safe_io::FileLock"><code>FileLock</code></a> - RAII file locking wrapper using fs2</li>
+</ul>
+<h2 id="design-rationale"><a class="doc-anchor" href="#design-rationale">§</a>Design Rationale</h2>
+<p>These utilities address common file I/O hazards:</p>
+<p><strong>Atomic Writes</strong>: Prevent data corruption from crashes during write operations.
+By writing to a temporary file and renaming, the target file is either fully
+updated or unchanged - never partially written.</p>
+<p><strong>File Locking</strong>: Prevent race conditions when multiple processes access the
+same files. Uses fs2’s advisory locking which works across platforms.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>chibi_core::safe_io::{atomic_write_json, atomic_write_text, FileLock};
+<span class="kw">use </span>std::path::Path;
+
+<span class="kw">let </span>temp_dir = std::env::temp_dir().join(<span class="string">"chibi_doctest"</span>);
+std::fs::create_dir_all(<span class="kw-2">&amp;</span>temp_dir)<span class="question-mark">?</span>;
+
+<span class="comment">// Atomic JSON write
+</span><span class="kw">let </span>path = temp_dir.join(<span class="string">"data.json"</span>);
+<span class="kw">let </span>data = <span class="macro">serde_json::json!</span>({<span class="string">"key"</span>: <span class="string">"value"</span>});
+atomic_write_json(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>data)<span class="question-mark">?</span>;
+
+<span class="comment">// Atomic text write
+</span><span class="kw">let </span>text_path = temp_dir.join(<span class="string">"text.txt"</span>);
+atomic_write_text(<span class="kw-2">&amp;</span>text_path, <span class="string">"hello world"</span>)<span class="question-mark">?</span>;
+
+<span class="comment">// File locking with RAII
+</span><span class="kw">let </span>lock_path = temp_dir.join(<span class="string">"test.lock"</span>);
+{
+    <span class="kw">let </span>_lock = FileLock::acquire(<span class="kw-2">&amp;</span>lock_path)<span class="question-mark">?</span>;
+    <span class="comment">// ... operations protected by lock ...
+</span>} <span class="comment">// lock released automatically
+
+// Cleanup
+</span>std::fs::remove_dir_all(<span class="kw-2">&amp;</span>temp_dir)<span class="question-mark">?</span>;</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.FileLock.html" title="struct chibi_core::safe_io::FileLock">File<wbr>Lock</a></dt><dd>RAII file lock using fs2 exclusive locking.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.atomic_write.html" title="fn chibi_core::safe_io::atomic_write">atomic_<wbr>write</a></dt><dd>Atomically write bytes to a file.</dd><dt><a class="fn" href="fn.atomic_write_json.html" title="fn chibi_core::safe_io::atomic_write_json">atomic_<wbr>write_<wbr>json</a></dt><dd>Atomically write JSON to a file.</dd><dt><a class="fn" href="fn.atomic_write_text.html" title="fn chibi_core::safe_io::atomic_write_text">atomic_<wbr>write_<wbr>text</a></dt><dd>Atomically write a string to a file.</dd></dl></section></div></main></body></html>

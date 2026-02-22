@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["index_status","query_refs","query_symbols"],"struct":["RefRow","SymbolQuery","SymbolRow"]};

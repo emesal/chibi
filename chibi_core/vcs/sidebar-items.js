@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["VCS_MARKERS"],"fn":["detect_cvs_root","detect_project_root","detect_vcs_root"]};

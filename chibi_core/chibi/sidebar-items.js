@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["project_chibi_dir","project_index_db_path","resolve_project_root"],"struct":["Chibi","LoadOptions"],"type":["PermissionHandler"]};
