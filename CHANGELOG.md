@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.9.0] - 2026-02-22
+## [Unreleased]
 
 ### Chores
 
@@ -13,6 +13,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ### Documentation
 
 - Sync all docs/ with reality ([`035fdd8`](https://github.com/emesal/chibi/commit/035fdd821705eeee53717a0fcd1be7aabf047046))
+
+- Update CHANGELOG for v0.9.0 ([`a491623`](https://github.com/emesal/chibi/commit/a491623aa2d7227680e4b9b201a1c97739972e88))
 
 
 ### Refactoring
