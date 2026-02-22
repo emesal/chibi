@@ -13,7 +13,8 @@ mod prompts;
 
 pub use entries::{
     create_archival_anchor, create_assistant_message_entry, create_compaction_anchor,
-    create_context_created_anchor, create_tool_call_entry, create_tool_result_entry,
+    create_context_created_anchor, create_flow_control_call_entry,
+    create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
 };
 pub use paths::StatePaths;
@@ -530,10 +531,7 @@ impl AppState {
                 let anchor = transcript_entries[idx].clone();
                 let entries: Vec<_> = transcript_entries[idx + 1..]
                     .iter()
-                    .filter(|e| {
-                        // Exclude system_prompt_changed events from context
-                        e.entry_type != crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED
-                    })
+                    .filter(|e| is_context_entry(e))
                     .cloned()
                     .collect();
                 (anchor, entries)
@@ -552,10 +550,10 @@ impl AppState {
                     metadata: None,
                     tool_call_id: None,
                 };
-                // Include all transcript entries (excluding system_prompt_changed)
+                // Include all transcript entries that belong in context
                 let entries: Vec<_> = transcript_entries
                     .iter()
-                    .filter(|e| e.entry_type != crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED)
+                    .filter(|e| is_context_entry(e))
                     .cloned()
                     .collect();
                 (anchor, entries)
@@ -720,10 +718,17 @@ impl AppState {
     ///
     /// Walks entries sequentially:
     /// - "message" entries → `{"_id", "role", "content"}`
-    /// - "tool_call" entries → collected into a batch, emitted as assistant message
-    ///   with `tool_calls[]` followed by individual tool result messages
+    /// - "tool_call" entries → grouped into API-turn batches, each emitted as an
+    ///   assistant message with `tool_calls[]` followed by individual tool result messages
     /// - Other entry types (compaction, archival, context_created, system_prompt_changed)
     ///   are skipped.
+    ///
+    /// **Batch grouping:** A batch boundary is determined structurally — a leading run of
+    /// consecutive `tool_call` entries (no interleaved results) forms one API-turn batch,
+    /// followed by exactly that many `tool_result` entries. This correctly handles:
+    /// - `tc tc tr tr` → one batch (parallel tool calls in a single API response)
+    /// - `tc tr tc tr` → two batches (sequential single-tool API responses)
+    /// - `tc tc tr tr tc tr` → two batches (parallel then sequential)
     ///
     /// Backward compat: old interleaved entries without tool_call_id are paired by
     /// position with synthetic IDs derived from the tool_call entry's own ID.
@@ -749,34 +754,37 @@ impl AppState {
                     i += 1;
                 }
                 crate::context::ENTRY_TYPE_TOOL_CALL => {
-                    // Collect consecutive tool_call and tool_result entries into a batch
-                    let mut tool_calls = Vec::new();
-                    let mut tool_results = Vec::new();
-                    while i < entries.len() {
-                        match entries[i].entry_type.as_str() {
-                            crate::context::ENTRY_TYPE_TOOL_CALL => {
-                                tool_calls.push(&entries[i]);
-                                i += 1;
-                            }
-                            crate::context::ENTRY_TYPE_TOOL_RESULT => {
-                                tool_results.push(&entries[i]);
-                                i += 1;
-                            }
-                            _ => break,
-                        }
+                    // Collect the leading run of tool_call entries — these were all
+                    // returned in a single API response (parallel tool calls).
+                    // Stop at the first non-tool_call entry.
+                    let mut tool_calls: Vec<&TranscriptEntry> = Vec::new();
+                    while i < entries.len()
+                        && entries[i].entry_type == crate::context::ENTRY_TYPE_TOOL_CALL
+                    {
+                        tool_calls.push(&entries[i]);
+                        i += 1;
+                    }
+
+                    // Collect exactly tool_calls.len() tool_result entries that follow.
+                    // Stop early at the first non-tool_result, preserving any remaining
+                    // tool_call entries for the next iteration (next API turn).
+                    let mut tool_results: Vec<&TranscriptEntry> = Vec::new();
+                    while tool_results.len() < tool_calls.len()
+                        && i < entries.len()
+                        && entries[i].entry_type == crate::context::ENTRY_TYPE_TOOL_RESULT
+                    {
+                        tool_results.push(&entries[i]);
+                        i += 1;
                     }
 
                     // Build assistant message with tool_calls array
                     let tool_calls_json: Vec<serde_json::Value> = tool_calls
                         .iter()
-                        .enumerate()
-                        .map(|(idx, tc)| {
-                            // Use stored tool_call_id, or synthesize from the entry's own ID
+                        .map(|tc| {
                             let tc_id = tc
                                 .tool_call_id
                                 .clone()
                                 .unwrap_or_else(|| format!("synth_{}", tc.id));
-                            let _ = idx; // idx used for position-based pairing below
                             serde_json::json!({
                                 "id": tc_id,
                                 "type": "function",
@@ -1088,6 +1096,21 @@ impl AppState {
 
         Ok(())
     }
+}
+
+/// Returns true if a transcript entry should be included in context.jsonl.
+///
+/// Transcript-only entries (never written to context):
+/// - `system_prompt_changed` — prompt change events, stored in context_meta.json
+/// - `flow_control_call` / `flow_control_result` — chibi plumbing (call_user/call_agent);
+///   must not appear in LLM message history
+fn is_context_entry(entry: &TranscriptEntry) -> bool {
+    !matches!(
+        entry.entry_type.as_str(),
+        crate::context::ENTRY_TYPE_SYSTEM_PROMPT_CHANGED
+            | crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL
+            | crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT
+    )
 }
 
 /// Check whether a cache entry's creation timestamp is older than `max_age_days`.

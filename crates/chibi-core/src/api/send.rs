@@ -17,7 +17,8 @@ use crate::gateway::{
 use crate::json_ext::JsonExt;
 use crate::output::NoopSink;
 use crate::state::{
-    AppState, create_assistant_message_entry, create_tool_call_entry, create_tool_result_entry,
+    AppState, create_assistant_message_entry, create_flow_control_call_entry,
+    create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
 };
 use crate::tools::{self, Tool};
@@ -447,8 +448,11 @@ fn build_full_system_prompt<S: ResponseSink>(
     let pre_sys_hook_results =
         tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data)?;
 
-    // Build full system prompt with all components
-    let mut full_system_prompt = system_prompt;
+    // Build full system prompt with all components, anchoring identity first
+    let mut full_system_prompt = format!(
+        "You are \"{}\", a chibi agent.\n\n{}",
+        context_name, system_prompt
+    );
 
     // Prepend any content from pre_system_prompt hooks
     for (hook_tool_name, result) in &pre_sys_hook_results {
@@ -486,9 +490,6 @@ fn build_full_system_prompt<S: ResponseSink>(
         ));
     }
 
-    // Add context name
-    full_system_prompt.push_str(&format!("\n\nCurrent context: {}", context_name));
-
     // Add summary if present
     if !summary.is_empty() {
         full_system_prompt.push_str("\n\n--- CONVERSATION SUMMARY ---\n");
@@ -505,6 +506,11 @@ fn build_full_system_prompt<S: ResponseSink>(
     if !todos.is_empty() {
         full_system_prompt.push_str("\n\n--- CURRENT TODOS ---\n");
         full_system_prompt.push_str(&todos);
+    }
+
+    // Add fuel notice when operating under a fuel budget
+    if resolved_config.fuel > 0 {
+        full_system_prompt.push_str("\n\nUse call_user to return control to the user. You operate within a fuel budget. When fuel runs out control is returned automatically. Fuel refills with each prompt.");
     }
 
     // Add reflection prompt last (personality layer)
@@ -1491,8 +1497,18 @@ async fn process_tool_calls<S: ResponseSink>(
     // Write all tool_call entries to transcript first (matches API message order:
     // one assistant message with tool_calls[], then individual tool result messages)
     for (i, tc) in tool_calls.iter().enumerate() {
-        let tool_call_entry = create_tool_call_entry(context_name, &tc.name, &tc.arguments, &tc.id);
-        app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
+        let metadata = tools::get_tool_metadata(tools, &tc.name);
+        let tool_call_entry = if metadata.flow_control {
+            // Flow-control tools are chibi plumbing; transcript-only, never context
+            create_flow_control_call_entry(context_name, &tc.name, &tc.arguments, &tc.id)
+        } else {
+            create_tool_call_entry(context_name, &tc.name, &tc.arguments, &tc.id)
+        };
+        if metadata.flow_control {
+            app.append_to_transcript(context_name, &tool_call_entry)?;
+        } else {
+            app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
+        }
         sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
 
         // Pre-log diagnostics for parallel-executed tools only.
@@ -1526,15 +1542,23 @@ async fn process_tool_calls<S: ResponseSink>(
             summary,
         })?;
 
-        // Log tool result to transcript
+        // Log tool result to transcript (flow-control tools: transcript-only, never context)
+        let metadata = tools::get_tool_metadata(tools, &tc.name);
         let logged_result = if result.was_cached {
             &result.final_result
         } else {
             &result.original_result
         };
-        let tool_result_entry =
-            create_tool_result_entry(context_name, &tc.name, logged_result, &tc.id);
-        app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
+        let tool_result_entry = if metadata.flow_control {
+            create_flow_control_result_entry(context_name, &tc.name, logged_result, &tc.id)
+        } else {
+            create_tool_result_entry(context_name, &tc.name, logged_result, &tc.id)
+        };
+        if metadata.flow_control {
+            app.append_to_transcript(context_name, &tool_result_entry)?;
+        } else {
+            app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
+        }
         sink.handle(ResponseEvent::TranscriptEntry(tool_result_entry))?;
 
         sink.handle(ResponseEvent::ToolResult {
@@ -1567,7 +1591,6 @@ async fn process_tool_calls<S: ResponseSink>(
 
         // Apply handoff for parallel-executed flow control tools
         // (sequential ones already applied via execute_single_tool)
-        let metadata = tools::get_tool_metadata(tools, &tc.name);
         if metadata.flow_control && metadata.parallel {
             // This shouldn't happen (flow_control tools are always sequential),
             // but handle it defensively
@@ -1964,6 +1987,29 @@ pub async fn send_prompt<S: ResponseSink>(
                 // Keep request_body in sync for logging
                 request_body["messages"] = serde_json::json!(messages);
 
+                // If call_user was invoked, end the turn immediately — no follow-up API call.
+                // The message from call_user (if any) is delivered via handle_final_response.
+                if handoff.ends_turn_requested() {
+                    let final_text = response.full_response.clone();
+                    match handle_final_response(
+                        app,
+                        context_name,
+                        &final_text,
+                        &final_prompt,
+                        handoff,
+                        tools,
+                        &resolved_config,
+                        sink,
+                    )? {
+                        FinalResponseAction::ReturnToUser => return Ok(()),
+                        FinalResponseAction::ContinueWithPrompt(_) => {
+                            // call_user was set; handle_final_response sees User handoff,
+                            // so ContinueWithPrompt should never occur. Defensive: return.
+                            return Ok(());
+                        }
+                    }
+                }
+
                 // Tool call round costs 1 fuel
                 if !fuel_unlimited {
                     fuel_remaining = fuel_remaining.saturating_sub(1);
@@ -2331,11 +2377,10 @@ mod tests {
 
     #[test]
     fn test_context_name_injected_in_system_prompt() {
-        // This is a unit test concept - the actual integration happens in build_full_system_prompt
-        // We verify the format string is correct
+        // Verify the identity anchor format used in build_full_system_prompt
         let context_name = "my-context";
-        let expected = format!("\n\nCurrent context: {}", context_name);
-        assert!(expected.contains("Current context: my-context"));
+        let expected = format!("You are \"{}\", a chibi agent.", context_name);
+        assert!(expected.contains("You are \"my-context\", a chibi agent."));
     }
 
     #[test]
@@ -2572,6 +2617,44 @@ mod tests {
         assert!(
             prompt.contains("fuel: 7/10"),
             "fuel info must appear in limited mode"
+        );
+    }
+
+    // ========================================================================
+    // call_user early-exit tests
+    // ========================================================================
+
+    #[test]
+    fn test_continuation_prompt_call_user_ends_turn() {
+        use crate::tools::{Handoff, HandoffTarget};
+
+        // A fresh handoff (no explicit target) does not request an end-turn.
+        let handoff = Handoff::new(HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        assert!(
+            !handoff.ends_turn_requested(),
+            "fresh handoff must not trigger early exit"
+        );
+
+        // After call_agent, continuation is expected — no early exit.
+        let mut handoff = Handoff::new(HandoffTarget::User {
+            message: String::new(),
+        });
+        handoff.set_agent("next step".to_string());
+        assert!(
+            !handoff.ends_turn_requested(),
+            "call_agent must not trigger early exit"
+        );
+
+        // After call_user, the turn must end — early exit must be taken.
+        let mut handoff = Handoff::new(HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        handoff.set_user("done".to_string());
+        assert!(
+            handoff.ends_turn_requested(),
+            "call_user must trigger early exit, skipping follow-up API call"
         );
     }
 

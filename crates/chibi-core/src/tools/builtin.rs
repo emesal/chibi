@@ -169,7 +169,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
     },
     BuiltinToolDef {
         name: CALL_AGENT_TOOL_NAME,
-        description: "recurse to do more work before handing control back to the user. Use this to continue processing when you have more steps to complete.",
+        description: "Continue in a new turn before returning to the user. Use when you have more steps to complete.",
         properties: &[ToolPropertyDef {
             name: "prompt",
             prop_type: "string",
@@ -181,11 +181,11 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
     },
     BuiltinToolDef {
         name: CALL_USER_TOOL_NAME,
-        description: "Return control to user.",
+        description: "End your turn immediately and return control to the user.",
         properties: &[ToolPropertyDef {
             name: "message",
             prop_type: "string",
-            description: "Optional message to display",
+            description: "Final message to show the user.",
             default: None,
         }],
         required: &[],
@@ -349,6 +349,11 @@ impl Handoff {
     /// Override the fallback target (used by hooks)
     pub fn set_fallback(&mut self, target: HandoffTarget) {
         self.fallback = target;
+    }
+
+    /// Check if an explicit end-turn (call_user) has been requested
+    pub fn ends_turn_requested(&self) -> bool {
+        matches!(self.next, Some(HandoffTarget::User { .. }))
     }
 }
 
@@ -648,7 +653,7 @@ mod tests {
             tool["function"]["description"]
                 .as_str()
                 .unwrap()
-                .contains("recurse")
+                .contains("Continue")
         );
         assert!(
             tool["function"]["parameters"]["required"]
@@ -810,6 +815,34 @@ mod tests {
             HandoffTarget::User { message } => assert_eq!(message, "fallback"),
             _ => panic!("Expected User variant"),
         }
+    }
+
+    // === ends_turn_requested Tests ===
+
+    #[test]
+    fn test_handoff_ends_turn_requested_none() {
+        let handoff = Handoff::new(HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        assert!(!handoff.ends_turn_requested());
+    }
+
+    #[test]
+    fn test_handoff_ends_turn_requested_user() {
+        let mut handoff = Handoff::new(HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        handoff.set_user("bye".to_string());
+        assert!(handoff.ends_turn_requested());
+    }
+
+    #[test]
+    fn test_handoff_ends_turn_requested_agent() {
+        let mut handoff = Handoff::new(HandoffTarget::User {
+            message: String::new(),
+        });
+        handoff.set_agent("continue".to_string());
+        assert!(!handoff.ends_turn_requested());
     }
 
     // === Registry Tests ===

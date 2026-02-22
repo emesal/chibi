@@ -173,6 +173,12 @@ pub const ENTRY_TYPE_ARCHIVAL: &str = "archival";
 // Change event (transcript only) - logs full raw prompt content
 pub const ENTRY_TYPE_SYSTEM_PROMPT_CHANGED: &str = "system_prompt_changed";
 
+// Flow-control tool events (transcript only) - suppressed from context.jsonl
+// These record call_user/call_agent exchanges, which are chibi plumbing and
+// must not appear in the LLM message history.
+pub const ENTRY_TYPE_FLOW_CONTROL_CALL: &str = "flow_control_call";
+pub const ENTRY_TYPE_FLOW_CONTROL_RESULT: &str = "flow_control_result";
+
 /// Entry for JSONL transcript file (now also context.jsonl)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptEntry {

@@ -457,7 +457,12 @@ async fn compact_context_with_llm_internal(
         } else if role == "tool" {
             let content = m["content"].as_str().unwrap_or("");
             let preview = if content.len() > 200 {
-                format!("{}... [truncated]", &content[..200])
+                let end = content
+                    .char_indices()
+                    .nth(200)
+                    .map(|(i, _)| i)
+                    .unwrap_or(content.len());
+                format!("{}... [truncated]", &content[..end])
             } else {
                 content.to_string()
             };
@@ -517,26 +522,6 @@ async fn compact_context_with_llm_internal(
         "_id": uuid::Uuid::new_v4().to_string(),
         "role": "user",
         "content": format!("{}\n\n--- SUMMARY ---\n{}", continuation_prompt, summary),
-    }));
-
-    // Add assistant acknowledgment
-    let ack_messages = vec![
-        json!({
-            "role": "system",
-            "content": system_prompt,
-        }),
-        json!({
-            "role": "user",
-            "content": format!("{}\n\n--- SUMMARY ---\n{}", continuation_prompt, summary),
-        }),
-    ];
-
-    let acknowledgment = gateway::chat(resolved_config, &ack_messages).await?;
-
-    new_context.messages.push(json!({
-        "_id": uuid::Uuid::new_v4().to_string(),
-        "role": "assistant",
-        "content": acknowledgment,
     }));
 
     // Finalize compaction: write anchor to transcript and mark dirty
