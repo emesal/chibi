@@ -1,8 +1,8 @@
 ![chibi~](docs/images/socials-wide-trans.png)
 
-A minimal, composable building block for LLM interactions. Chibi provides persistent context, a plugin/hook system, and communication primitives — everything else lives in plugins.
+Chibi is a composable building block for LLM interactions — not an agent framework. It provides persistent context storage, a plugin and hook system that exposes the full request lifecycle, communication primitives for multi-agent coordination, and a programmable agentic loop.
 
-Think of it as a Lego brick: tiny, light, but infinitely combinable. Multiple chibis with different models, temperatures, and plugins can work together. The plugin system is deliberately permissive, exposing the full lifecycle via hooks to enable experimentation with coordination patterns, workflows, and agentic behaviors.
+Plugins have full access to chibi's lifecycle hooks — they can modify or replace core behaviours (like context assembly, prompt construction, tool filtering, permissions), spawn sub-agents with custom home directories, orchestrate fleets of chibis across different models and system prompts, and implement entirely new coordination patterns. The plugin layer has no ceiling.
 
 **Early development — not yet stable.**
 
