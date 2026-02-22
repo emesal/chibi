@@ -53,7 +53,7 @@ jobs:
         run: |
           sudo dpkg --add-architecture arm64
           # pin existing sources to amd64, add ports.ubuntu.com for arm64
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          sudo sed -i 's/^deb \([^\[]\)/deb [arch=amd64] \1/' /etc/apt/sources.list.d/*.list 2>/dev/null || true
           sudo sed -i 's/^Types: deb$/Types: deb\nArchitectures: amd64/' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           echo "deb [arch=arm64] http://ports.ubuntu.com/ noble main restricted universe" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ noble-updates main restricted universe" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
