@@ -9,17 +9,15 @@ Plugins have full access to chibi's lifecycle hooks — they can modify or repla
 ## Install
 
 ```bash
+export CHIBI_API_KEY=your-openrouter-key
 git clone https://github.com/emesal/chibi.git
 cd chibi && just install
+chibi nyaaa~
 ```
 
 Requires [just](https://github.com/casey/just) and a Rust toolchain. Cargo fetches all dependencies automatically.
 
 Get a free API key at [openrouter.ai](https://openrouter.ai/settings/keys) (no credit card needed), then:
-
-```bash
-CHIBI_API_KEY=your-key chibi "nyaaa~"
-```
 
 ## Use
 
