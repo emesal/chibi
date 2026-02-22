@@ -9,28 +9,11 @@ Think of it as a Lego brick: tiny, light, but infinitely combinable. Multiple ch
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/emesal/chibi.git
-cd chibi && cargo install --path .
+git clone https://github.com/emesal/chibi.git
+cd chibi && just install
 ```
 
-## Configure
-
-Create `~/.chibi/config.toml`:
-
-```toml
-api_key = "your-openrouter-api-key"
-model = "anthropic/claude-sonnet-4"
-context_window_limit = 200000
-warn_threshold_percent = 80.0
-```
-
-(This step will be automated in a future release.)
-
-Copy the example prompts:
-
-```bash
-mkdir -p ~/.chibi/prompts && cp examples/prompts/*.md ~/.chibi/prompts/
-```
+Requires [just](https://github.com/casey/just) and a Rust toolchain. Cargo fetches all dependencies automatically.
 
 ## Use
 
@@ -45,6 +28,20 @@ Contexts persist across invocations. Switch with `-c <name>`, list with `-L`.
 
 ![chibi explain this girl](docs/images/explain_this.png)
 
+## Configure
+
+For better models or your own API key, create `~/.chibi/config.toml`:
+
+```toml
+# API key for OpenRouter (https://openrouter.ai/settings/keys)
+api_key = "your-api-key-here"
+
+# Model to use (default: ratatoskr:free/agentic)
+model = "anthropic/claude-sonnet-4"
+```
+
+All fields are optional. See [Configuration](docs/configuration.md) for the full reference.
+
 ## Documentation
 
 - [Getting Started](docs/getting-started.md) — Installation and first steps
@@ -53,10 +50,13 @@ Contexts persist across invocations. Switch with `-c <name>`, list with `-L`.
 - [Plugins](docs/plugins.md) — Creating tools for the LLM
 - [Hooks](docs/hooks.md) — Lifecycle event system
 - [MCP Servers](docs/mcp.md) — Using MCP-compatible tool providers
+- [Virtual File System](docs/vfs.md) — Sandboxed shared file space for contexts
 - [Agentic Workflows](docs/agentic.md) — Autonomous processing
 - [CLI Reference](docs/cli-reference.md) — All flags and commands
 - [Images](docs/images.md) — Terminal image rendering
+- [Markdown Themes](docs/markdown-themes.md) — Customising colour schemes
 - [Transcript Format](docs/transcript-format.md) — JSONL format spec
+- [Upgrade Notes](docs/upgrade-notes.md) — Breaking changes requiring user action
 
 Example plugins: [chibi-plugins](https://github.com/emesal/chibi-plugins)
 
