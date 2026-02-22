@@ -6,31 +6,105 @@ Chibi includes built-in tools and features that enable autonomous, multi-step wo
 
 The LLM always has access to these tools (no setup required):
 
+### Core
+
 | Tool | Description |
 |------|-------------|
-| `call_user` | Hand control back to the user (ends the agentic loop) |
+| `call_user` | End the turn and return control to the user |
 | `call_agent` | Continue the agentic loop with a new prompt |
 | `update_todos` | Track tasks for the current conversation |
 | `update_goals` | Set high-level objectives |
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
 | `send_message` | Send messages to other contexts |
+| `read_context` | Read another context's state (summary, todos, goals, messages) |
+| `model_info` | Look up model metadata (context window, pricing, capabilities, parameters) |
+
+### File
+
+| Tool | Description |
+|------|-------------|
 | `file_head` | Read first N lines from a file or cached output (accepts `vfs:///` URIs) |
 | `file_tail` | Read last N lines from a file or cached output (accepts `vfs:///` URIs) |
 | `file_lines` | Read a specific line range from a file or cached output (accepts `vfs:///` URIs) |
 | `file_grep` | Search for a pattern in a file or cached output (accepts `vfs:///` URIs) |
 | `write_file` | Write content to a file (requires `file_tools_allowed_paths`, gated by `pre_file_write` hook) |
+
+### Coding
+
+| Tool | Description |
+|------|-------------|
+| `shell_exec` | Execute a shell command; returns stdout, stderr, exit code, and timeout status |
+| `dir_list` | List a directory tree with file sizes; respects depth limit |
+| `glob_files` | Find files matching a glob pattern, honouring `.gitignore` |
+| `grep_files` | Search files for a regex pattern, honouring `.gitignore` |
+| `file_edit` | Structured file editing (insert, replace, delete ranges) |
+| `fetch_url` | HTTP GET request returning the response body |
+| `index_update` | Index the codebase for symbol search |
+| `index_query` | Search the index by symbol name or pattern |
+| `index_status` | Show index metadata (file count, last updated) |
+
+### Agent
+
+| Tool | Description |
+|------|-------------|
 | `spawn_agent` | Spawn a sub-agent with a custom system prompt to process input |
-| `retrieve_content` | Read a file/URL and process content through a sub-agent |
-| `model_info` | Look up model metadata (context window, pricing, capabilities, parameters) |
+| `summarize_content` | Read a file or URL and process its content through a sub-agent |
+
+### VFS
+
+| Tool | Description |
+|------|-------------|
+| `vfs_list` | List a VFS directory |
+| `vfs_info` | Get VFS entry metadata |
+| `vfs_copy` | Copy a file within VFS |
+| `vfs_move` | Move or rename a VFS entry |
+| `vfs_mkdir` | Create a VFS directory |
+| `vfs_delete` | Delete a VFS entry |
+
+### Tool Filtering
+
+All tool categories are included by default. Use the `[tools]` config section to restrict them:
+
+```toml
+[tools]
+# Allowlist (only these tools are sent to the LLM)
+include = ["call_agent", "shell_exec", "file_head"]
+
+# Blocklist (remove specific tools)
+exclude = ["shell_exec"]
+
+# Remove entire categories: "builtin", "file", "coding", "agent", "vfs", "mcp", "plugin"
+exclude_categories = ["vfs", "coding"]
+```
+
+Plugins can also filter tools dynamically via the `pre_api_tools` hook — see [hooks.md](hooks.md#pre_api_tools).
 
 ## External Plugins
 
-These plugins are available in [chibi-plugins](https://github.com/emesal/chibi-plugins) and must be installed separately:
+The [chibi-plugins](https://github.com/emesal/chibi-plugins) repository provides ready-to-install plugins:
 
 | Plugin | Description |
 |--------|-------------|
-| `read_context` | Read another context's state (read-only) |
-| `sub-agent` | Spawn sub-agents in another context |
+| `agent-skills` | Agent Skills marketplace — install and invoke skills from `SKILL.md` |
+| `bofh_in_the_shell` | No comment |
+| `coffee-table` | Shared inter-context communication space |
+| `file-permission` | Prompts for user confirmation on file writes (hook) |
+| `hello_chibi` | XMPP bridge via mcabber — send/receive XMPP messages |
+| `hook-inspector` | Debug hook — logs all hook events to file |
+| `web_search` | Web search via DuckDuckGo |
+
+See [plugins.md](plugins.md) for installation and authoring details.
+
+## MCP Tools
+
+Chibi integrates with any [MCP](https://modelcontextprotocol.io/)-compatible server. MCP tools are
+discovered automatically and presented to the LLM alongside built-in tools and plugins — the LLM
+uses them the same way as any other tool, with no special handling required.
+
+A standalone daemon (`chibi-mcp-bridge`) manages MCP server lifecycles and proxies tool calls over
+TCP. Chibi starts it automatically when MCP servers are configured.
+
+See [mcp.md](mcp.md) for setup and configuration.
 
 ## Todos and Goals
 
@@ -55,7 +129,7 @@ The LLM can call `update_todos` or `update_goals` with new markdown content. The
 Example LLM behavior:
 ```
 LLM: "Let me update my task list."
-     [calls update_todos with content: "- [x] Read the config file\n- [ ] Analyze the structure\n- [ ] Write report"]
+     [calls update_todos with content: "- [x] Read the config file\n- [ ] Analyse the structure\n- [ ] Write report"]
 ```
 
 ## Reflection (Persistent Memory)
@@ -101,9 +175,11 @@ The built-in `send_message` tool lets contexts communicate:
 {
   "to": "research",
   "content": "Please look up quantum computing basics",
-  "from": "main"  // optional, defaults to current context
+  "from": "main"
 }
 ```
+
+The `from` field defaults to the current context name if not specified.
 
 Messages are delivered to the recipient's inbox and injected into their next prompt.
 
@@ -159,8 +235,6 @@ This also works with `chibi-json` for programmatic use:
 echo '{"command": {"call_tool": {"name": "send_message", "args": ["{\"to\": \"work-assistant\", \"content\": \"Hello!\"}"]}}}' | chibi-json
 ```
 
-The `from` field defaults to the current context name if not specified.
-
 **Example: CI/CD integration**
 
 ```bash
@@ -201,11 +275,11 @@ Chibi provides two built-in tools for spawning sub-agents — separate LLM calls
 }
 ```
 
-**`retrieve_content`** — Read a file or fetch a URL, then process through a sub-agent:
+**`summarize_content`** — Read a file or fetch a URL, then process through a sub-agent:
 ```json
 {
   "source": "https://example.com/api-docs",
-  "instructions": "Summarize the authentication section"
+  "instructions": "Summarise the authentication section"
 }
 ```
 
@@ -245,25 +319,15 @@ chibi -C research "Find information about quantum computing"
 chibi -C coding -y "You are a code reviewer" "Review this function"
 ```
 
-### sub-agent Plugin
-
-The `sub-agent` plugin (from chibi-plugins) provides a convenient wrapper for the LLM:
-
-```
-Main: [calls sub-agent with context: "research", task: "Find info about X"]
-      ... sub-agent runs in "research" context ...
-Main: [calls read_context with context_name: "research"]
-Main: "The sub-agent found: ..."
-```
-
-### read_context Plugin
+### read_context Tool
 
 Allows reading another context's state without switching:
 
 ```json
 {
   "context_name": "research",
-  "include": ["todos", "goals", "summary", "messages"]
+  "include_messages": "true",
+  "num_messages": 5
 }
 ```
 
@@ -273,12 +337,12 @@ When auto-compaction is enabled and context size exceeds the threshold, rolling 
 
 ### Process
 
-1. LLM analyzes all messages
+1. LLM analyses all messages
 2. Decides which to archive based on:
    - Current goals and todos (keeps relevant messages)
    - Message recency (prefers keeping recent context)
    - Content importance (preserves key decisions)
-3. Selected messages are archived and summarized
+3. Selected messages are archived and summarised
 4. Summary is integrated with existing conversation summary
 
 ### Fallback
@@ -310,17 +374,17 @@ User: "Research quantum computing and write a summary report"
 Round 1:
 LLM: Sets goals: "Research quantum computing, write summary report"
      Sets todos: "- [ ] Search for introductory materials"
-     [calls sub-agent: context="research", task="Find quantum computing basics"]
+     [calls spawn_agent: system_prompt="You are a researcher", input="Find quantum computing basics"]
      [calls call_agent: "Check research results and continue"]
 
 Round 2:
 LLM: [calls read_context: "research"]
-     Updates todos: "- [x] Search for materials\n- [ ] Synthesize findings"
+     Updates todos: "- [x] Search for materials\n- [ ] Synthesise findings"
      [calls call_agent: "Write the summary"]
 
 Round 3:
 LLM: Writes summary report
-     Updates todos: "- [x] Search\n- [x] Synthesize\n- [x] Write report"
+     Updates todos: "- [x] Search\n- [x] Synthesise\n- [x] Write report"
      Clears goals
      Returns final response to user
 ```
