@@ -1907,11 +1907,15 @@ fn test_rebuild_context_includes_flow_control_entries() {
         context_entries.len()
     );
     assert!(
-        context_entries.iter().any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL),
+        context_entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL),
         "flow_control_call must appear in context.jsonl"
     );
     assert!(
-        context_entries.iter().any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT),
+        context_entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT),
         "flow_control_result must appear in context.jsonl"
     );
 }

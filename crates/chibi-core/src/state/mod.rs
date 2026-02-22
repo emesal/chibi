@@ -135,16 +135,18 @@ impl AppState {
         let models_path = chibi_dir.join("models.toml");
         let state_path = chibi_dir.join("state.json");
 
-        let config: Config = if config_path.exists() {
-            let content = fs::read_to_string(&config_path)?;
+        let config: Config = {
+            let content = if config_path.exists() {
+                fs::read_to_string(&config_path)?
+            } else {
+                String::new()
+            };
             toml::from_str(&content).map_err(|e| {
                 io::Error::new(
                     ErrorKind::InvalidData,
                     format!("Failed to parse config: {}", e),
                 )
             })?
-        } else {
-            Config::default()
         };
 
         // Load models.toml (optional)
