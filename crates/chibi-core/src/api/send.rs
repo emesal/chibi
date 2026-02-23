@@ -818,7 +818,7 @@ async fn execute_tool_pure(
     let pre_hook_results = tools::execute_hook(tools, tools::HookPoint::PreTool, &pre_hook_data)?;
 
     let pre_tool = apply_pre_tool_results(pre_hook_results, &tool_call.name, args);
-    let mut blocked = pre_tool.blocked;
+    let blocked = pre_tool.blocked;
     let block_message = pre_tool.block_message;
     args = pre_tool.args;
     diagnostics.extend(pre_tool.diagnostics);
@@ -2741,7 +2741,10 @@ mod tests {
 
     #[test]
     fn test_pre_tool_block_signal() {
-        let results = vec![("gate".to_string(), serde_json::json!({"block": true, "message": "nope"}))];
+        let results = vec![(
+            "gate".to_string(),
+            serde_json::json!({"block": true, "message": "nope"}),
+        )];
         let pre = apply_pre_tool_results(results, "my_tool", serde_json::json!({"key": "val"}));
         assert!(pre.blocked);
         assert_eq!(pre.block_message, "nope");
@@ -2762,7 +2765,11 @@ mod tests {
             "modifier".to_string(),
             serde_json::json!({"arguments": {"new_key": "new_val"}}),
         )];
-        let pre = apply_pre_tool_results(results, "my_tool", serde_json::json!({"old_key": "old_val"}));
+        let pre = apply_pre_tool_results(
+            results,
+            "my_tool",
+            serde_json::json!({"old_key": "old_val"}),
+        );
         assert!(!pre.blocked);
         assert_eq!(pre.args, serde_json::json!({"new_key": "new_val"}));
         assert!(pre.diagnostics[0].contains("modified arguments"));
@@ -2780,8 +2787,14 @@ mod tests {
     #[test]
     fn test_pre_tool_block_short_circuits() {
         let results = vec![
-            ("blocker".to_string(), serde_json::json!({"block": true, "message": "stop"})),
-            ("modifier".to_string(), serde_json::json!({"arguments": {"x": 1}})),
+            (
+                "blocker".to_string(),
+                serde_json::json!({"block": true, "message": "stop"}),
+            ),
+            (
+                "modifier".to_string(),
+                serde_json::json!({"arguments": {"x": 1}}),
+            ),
         ];
         let pre = apply_pre_tool_results(results, "my_tool", serde_json::json!({"original": true}));
         assert!(pre.blocked);
@@ -2793,8 +2806,14 @@ mod tests {
     #[test]
     fn test_pre_tool_multiple_modifications_last_wins() {
         let results = vec![
-            ("first".to_string(), serde_json::json!({"arguments": {"step": 1}})),
-            ("second".to_string(), serde_json::json!({"arguments": {"step": 2}})),
+            (
+                "first".to_string(),
+                serde_json::json!({"arguments": {"step": 1}}),
+            ),
+            (
+                "second".to_string(),
+                serde_json::json!({"arguments": {"step": 2}}),
+            ),
         ];
         let pre = apply_pre_tool_results(results, "my_tool", serde_json::json!({}));
         assert!(!pre.blocked);
@@ -2808,7 +2827,10 @@ mod tests {
 
     #[test]
     fn test_pre_tool_output_block_replaces() {
-        let results = vec![("filter".to_string(), serde_json::json!({"block": true, "message": "redacted"}))];
+        let results = vec![(
+            "filter".to_string(),
+            serde_json::json!({"block": true, "message": "redacted"}),
+        )];
         let (output, diag) =
             apply_pre_tool_output_results(results, "my_tool", "original output".to_string());
         assert_eq!(output, "redacted");
@@ -2818,14 +2840,16 @@ mod tests {
     #[test]
     fn test_pre_tool_output_block_default_message() {
         let results = vec![("filter".to_string(), serde_json::json!({"block": true}))];
-        let (output, _) =
-            apply_pre_tool_output_results(results, "my_tool", "original".to_string());
+        let (output, _) = apply_pre_tool_output_results(results, "my_tool", "original".to_string());
         assert_eq!(output, "Output blocked by hook");
     }
 
     #[test]
     fn test_pre_tool_output_modify() {
-        let results = vec![("enricher".to_string(), serde_json::json!({"output": "enriched data"}))];
+        let results = vec![(
+            "enricher".to_string(),
+            serde_json::json!({"output": "enriched data"}),
+        )];
         let (output, diag) =
             apply_pre_tool_output_results(results, "my_tool", "raw data".to_string());
         assert_eq!(output, "enriched data");
@@ -2847,8 +2871,7 @@ mod tests {
             "combo".to_string(),
             serde_json::json!({"block": true, "message": "blocked", "output": "modified"}),
         )];
-        let (output, _) =
-            apply_pre_tool_output_results(results, "my_tool", "original".to_string());
+        let (output, _) = apply_pre_tool_output_results(results, "my_tool", "original".to_string());
         assert_eq!(output, "blocked");
     }
 
@@ -2866,7 +2889,10 @@ mod tests {
     #[test]
     fn test_filter_tools_include() {
         let tools = make_api_tools(&["read_file", "write_file", "shell_exec"]);
-        let results = vec![("policy".to_string(), serde_json::json!({"include": ["read_file", "write_file"]}))];
+        let results = vec![(
+            "policy".to_string(),
+            serde_json::json!({"include": ["read_file", "write_file"]}),
+        )];
         let mut sink = CollectingSink::default();
         let filtered = filter_tools_from_hook_results(tools, &results, &mut sink).unwrap();
         let names: Vec<&str> = filtered
@@ -2879,7 +2905,10 @@ mod tests {
     #[test]
     fn test_filter_tools_exclude() {
         let tools = make_api_tools(&["read_file", "write_file", "shell_exec"]);
-        let results = vec![("policy".to_string(), serde_json::json!({"exclude": ["shell_exec"]}))];
+        let results = vec![(
+            "policy".to_string(),
+            serde_json::json!({"exclude": ["shell_exec"]}),
+        )];
         let mut sink = CollectingSink::default();
         let filtered = filter_tools_from_hook_results(tools, &results, &mut sink).unwrap();
         let names: Vec<&str> = filtered
@@ -2901,8 +2930,14 @@ mod tests {
     fn test_filter_tools_multiple_includes_intersect() {
         let tools = make_api_tools(&["a", "b", "c", "d"]);
         let results = vec![
-            ("hook1".to_string(), serde_json::json!({"include": ["a", "b", "c"]})),
-            ("hook2".to_string(), serde_json::json!({"include": ["b", "c", "d"]})),
+            (
+                "hook1".to_string(),
+                serde_json::json!({"include": ["a", "b", "c"]}),
+            ),
+            (
+                "hook2".to_string(),
+                serde_json::json!({"include": ["b", "c", "d"]}),
+            ),
         ];
         let mut sink = CollectingSink::default();
         let filtered = filter_tools_from_hook_results(tools, &results, &mut sink).unwrap();
@@ -2968,8 +3003,14 @@ mod tests {
     fn test_request_mod_multiple_hooks_sequential() {
         let body = serde_json::json!({"model": "gpt-4", "temperature": 1.0});
         let results = vec![
-            ("hook1".to_string(), serde_json::json!({"request_body": {"temperature": 0.7}})),
-            ("hook2".to_string(), serde_json::json!({"request_body": {"temperature": 0.3, "max_tokens": 100}})),
+            (
+                "hook1".to_string(),
+                serde_json::json!({"request_body": {"temperature": 0.7}}),
+            ),
+            (
+                "hook2".to_string(),
+                serde_json::json!({"request_body": {"temperature": 0.3, "max_tokens": 100}}),
+            ),
         ];
         let mut sink = CollectingSink::default();
         let modified = apply_request_modifications(body, &results, &mut sink).unwrap();
@@ -2989,7 +3030,10 @@ mod tests {
             prompt: String::new(),
         });
         let mut fuel = 10usize;
-        let results = vec![("orchestrator".to_string(), serde_json::json!({"fallback": "call_user"}))];
+        let results = vec![(
+            "orchestrator".to_string(),
+            serde_json::json!({"fallback": "call_user"}),
+        )];
         let mut sink = CollectingSink::default();
         apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
         let target = handoff.take();
@@ -3002,7 +3046,10 @@ mod tests {
             message: String::new(),
         });
         let mut fuel = 10usize;
-        let results = vec![("orchestrator".to_string(), serde_json::json!({"fallback": "call_agent"}))];
+        let results = vec![(
+            "orchestrator".to_string(),
+            serde_json::json!({"fallback": "call_agent"}),
+        )];
         let mut sink = CollectingSink::default();
         apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
         let target = handoff.take();
@@ -3051,7 +3098,10 @@ mod tests {
             prompt: String::new(),
         });
         let mut fuel = 0usize;
-        let results = vec![("limiter".to_string(), serde_json::json!({"fuel": 5, "fuel_delta": 10}))];
+        let results = vec![(
+            "limiter".to_string(),
+            serde_json::json!({"fuel": 5, "fuel_delta": 10}),
+        )];
         let mut sink = CollectingSink::default();
         apply_hook_overrides(&mut handoff, &mut fuel, true, &results, &mut sink).unwrap();
         assert_eq!(fuel, 0, "fuel must not change when unlimited");

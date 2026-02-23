@@ -416,21 +416,9 @@ echo 'OK'
         // Middle hook fails (exit 1) — first and third should still produce results
         let dir = tempfile::tempdir().unwrap();
 
-        let ok1 = create_test_script(
-            dir.path(),
-            "ok1.sh",
-            b"#!/bin/bash\necho '{\"order\": 1}'",
-        );
-        let fail = create_test_script(
-            dir.path(),
-            "fail.sh",
-            b"#!/bin/bash\nexit 1",
-        );
-        let ok2 = create_test_script(
-            dir.path(),
-            "ok2.sh",
-            b"#!/bin/bash\necho '{\"order\": 3}'",
-        );
+        let ok1 = create_test_script(dir.path(), "ok1.sh", b"#!/bin/bash\necho '{\"order\": 1}'");
+        let fail = create_test_script(dir.path(), "fail.sh", b"#!/bin/bash\nexit 1");
+        let ok2 = create_test_script(dir.path(), "ok2.sh", b"#!/bin/bash\necho '{\"order\": 3}'");
 
         let tools = vec![
             Tool {
@@ -463,8 +451,7 @@ echo 'OK'
         ];
 
         let results =
-            execute_hook_with_retry(&tools, HookPoint::PreMessage, &serde_json::json!({}))
-                .unwrap();
+            execute_hook_with_retry(&tools, HookPoint::PreMessage, &serde_json::json!({})).unwrap();
 
         assert_eq!(results.len(), 2, "failed hook should be skipped silently");
         assert_eq!(results[0].0, "ok1");
@@ -504,8 +491,7 @@ echo 'OK'
             .collect();
 
         let results =
-            execute_hook_with_retry(&tools, HookPoint::PreMessage, &serde_json::json!({}))
-                .unwrap();
+            execute_hook_with_retry(&tools, HookPoint::PreMessage, &serde_json::json!({})).unwrap();
 
         assert_eq!(results.len(), 3);
         for (i, (name, value)) in results.iter().enumerate() {
