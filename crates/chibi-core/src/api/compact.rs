@@ -892,10 +892,8 @@ mod tests {
     /// ResolvedConfig that routes LLM calls to the given stub base URL.
     fn stub_resolved_config(stub_base_url: &str) -> ResolvedConfig {
         let mut cfg = dummy_resolved_config();
-        cfg.extra.insert(
-            "stub_base_url".to_string(),
-            stub_base_url.to_string(),
-        );
+        cfg.extra
+            .insert("stub_base_url".to_string(), stub_base_url.to_string());
         cfg
     }
 
@@ -939,7 +937,10 @@ mod tests {
             "expected messages to be reduced, got {} (unchanged)",
             non_system_count
         );
-        assert_eq!(after.summary, "updated summary", "summary should be updated");
+        assert_eq!(
+            after.summary, "updated summary",
+            "summary should be updated"
+        );
     }
 
     #[tokio::test]
