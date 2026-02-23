@@ -2133,6 +2133,7 @@ pub async fn send_prompt<S: ResponseSink>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CollectingSink;
 
     /// Helper: create a minimal plugin Tool for classification tests.
     fn fake_plugin_tool(name: &str) -> Tool {
@@ -2732,5 +2733,208 @@ mod tests {
             .await
             .unwrap();
         assert!(!exists, "cache entry should be gone after clear");
+    }
+
+    // ========================================================================
+    // apply_pre_tool_results tests (PreTool hook consumption)
+    // ========================================================================
+
+    #[test]
+    fn test_pre_tool_block_signal() {
+        let results = vec![("gate".to_string(), serde_json::json!({"block": true, "message": "nope"}))];
+        let pre = apply_pre_tool_results(results, "my_tool", serde_json::json!({"key": "val"}));
+        assert!(pre.blocked);
+        assert_eq!(pre.block_message, "nope");
+        assert!(pre.diagnostics[0].contains("blocked"));
+    }
+
+    #[test]
+    fn test_pre_tool_block_default_message() {
+        let results = vec![("gate".to_string(), serde_json::json!({"block": true}))];
+        let pre = apply_pre_tool_results(results, "my_tool", serde_json::json!({}));
+        assert!(pre.blocked);
+        assert_eq!(pre.block_message, "Tool call blocked by hook");
+    }
+
+    #[test]
+    fn test_pre_tool_argument_modification() {
+        let results = vec![(
+            "modifier".to_string(),
+            serde_json::json!({"arguments": {"new_key": "new_val"}}),
+        )];
+        let pre = apply_pre_tool_results(results, "my_tool", serde_json::json!({"old_key": "old_val"}));
+        assert!(!pre.blocked);
+        assert_eq!(pre.args, serde_json::json!({"new_key": "new_val"}));
+        assert!(pre.diagnostics[0].contains("modified arguments"));
+    }
+
+    #[test]
+    fn test_pre_tool_empty_results_passthrough() {
+        let original = serde_json::json!({"key": "val"});
+        let pre = apply_pre_tool_results(vec![], "my_tool", original.clone());
+        assert!(!pre.blocked);
+        assert_eq!(pre.args, original);
+        assert!(pre.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn test_pre_tool_block_short_circuits() {
+        let results = vec![
+            ("blocker".to_string(), serde_json::json!({"block": true, "message": "stop"})),
+            ("modifier".to_string(), serde_json::json!({"arguments": {"x": 1}})),
+        ];
+        let pre = apply_pre_tool_results(results, "my_tool", serde_json::json!({"original": true}));
+        assert!(pre.blocked);
+        // args should NOT have been modified by second hook
+        assert_eq!(pre.args, serde_json::json!({"original": true}));
+        assert_eq!(pre.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn test_pre_tool_multiple_modifications_last_wins() {
+        let results = vec![
+            ("first".to_string(), serde_json::json!({"arguments": {"step": 1}})),
+            ("second".to_string(), serde_json::json!({"arguments": {"step": 2}})),
+        ];
+        let pre = apply_pre_tool_results(results, "my_tool", serde_json::json!({}));
+        assert!(!pre.blocked);
+        assert_eq!(pre.args, serde_json::json!({"step": 2}));
+        assert_eq!(pre.diagnostics.len(), 2);
+    }
+
+    // ========================================================================
+    // apply_pre_tool_output_results tests (PreToolOutput hook consumption)
+    // ========================================================================
+
+    #[test]
+    fn test_pre_tool_output_block_replaces() {
+        let results = vec![("filter".to_string(), serde_json::json!({"block": true, "message": "redacted"}))];
+        let (output, diag) =
+            apply_pre_tool_output_results(results, "my_tool", "original output".to_string());
+        assert_eq!(output, "redacted");
+        assert!(diag[0].contains("blocked output"));
+    }
+
+    #[test]
+    fn test_pre_tool_output_block_default_message() {
+        let results = vec![("filter".to_string(), serde_json::json!({"block": true}))];
+        let (output, _) =
+            apply_pre_tool_output_results(results, "my_tool", "original".to_string());
+        assert_eq!(output, "Output blocked by hook");
+    }
+
+    #[test]
+    fn test_pre_tool_output_modify() {
+        let results = vec![("enricher".to_string(), serde_json::json!({"output": "enriched data"}))];
+        let (output, diag) =
+            apply_pre_tool_output_results(results, "my_tool", "raw data".to_string());
+        assert_eq!(output, "enriched data");
+        assert!(diag[0].contains("modified output"));
+    }
+
+    #[test]
+    fn test_pre_tool_output_empty_passthrough() {
+        let (output, diag) =
+            apply_pre_tool_output_results(vec![], "my_tool", "original".to_string());
+        assert_eq!(output, "original");
+        assert!(diag.is_empty());
+    }
+
+    #[test]
+    fn test_pre_tool_output_block_beats_modify() {
+        // A single hook that has BOTH block and output — block wins (break before output check)
+        let results = vec![(
+            "combo".to_string(),
+            serde_json::json!({"block": true, "message": "blocked", "output": "modified"}),
+        )];
+        let (output, _) =
+            apply_pre_tool_output_results(results, "my_tool", "original".to_string());
+        assert_eq!(output, "blocked");
+    }
+
+    // ========================================================================
+    // filter_tools_from_hook_results tests (PreApiTools hook consumption)
+    // ========================================================================
+
+    fn make_api_tools(names: &[&str]) -> Vec<serde_json::Value> {
+        names
+            .iter()
+            .map(|n| serde_json::json!({"function": {"name": *n}}))
+            .collect()
+    }
+
+    #[test]
+    fn test_filter_tools_include() {
+        let tools = make_api_tools(&["read_file", "write_file", "shell_exec"]);
+        let results = vec![("policy".to_string(), serde_json::json!({"include": ["read_file", "write_file"]}))];
+        let mut sink = CollectingSink::default();
+        let filtered = filter_tools_from_hook_results(tools, &results, &mut sink).unwrap();
+        let names: Vec<&str> = filtered
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["read_file", "write_file"]);
+    }
+
+    #[test]
+    fn test_filter_tools_exclude() {
+        let tools = make_api_tools(&["read_file", "write_file", "shell_exec"]);
+        let results = vec![("policy".to_string(), serde_json::json!({"exclude": ["shell_exec"]}))];
+        let mut sink = CollectingSink::default();
+        let filtered = filter_tools_from_hook_results(tools, &results, &mut sink).unwrap();
+        let names: Vec<&str> = filtered
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["read_file", "write_file"]);
+    }
+
+    #[test]
+    fn test_filter_tools_empty_results_passthrough() {
+        let tools = make_api_tools(&["a", "b", "c"]);
+        let mut sink = CollectingSink::default();
+        let filtered = filter_tools_from_hook_results(tools.clone(), &[], &mut sink).unwrap();
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn test_filter_tools_multiple_includes_intersect() {
+        let tools = make_api_tools(&["a", "b", "c", "d"]);
+        let results = vec![
+            ("hook1".to_string(), serde_json::json!({"include": ["a", "b", "c"]})),
+            ("hook2".to_string(), serde_json::json!({"include": ["b", "c", "d"]})),
+        ];
+        let mut sink = CollectingSink::default();
+        let filtered = filter_tools_from_hook_results(tools, &results, &mut sink).unwrap();
+        let names: Vec<&str> = filtered
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn test_filter_tools_multiple_excludes_union() {
+        let tools = make_api_tools(&["a", "b", "c", "d"]);
+        let results = vec![
+            ("hook1".to_string(), serde_json::json!({"exclude": ["a"]})),
+            ("hook2".to_string(), serde_json::json!({"exclude": ["d"]})),
+        ];
+        let mut sink = CollectingSink::default();
+        let filtered = filter_tools_from_hook_results(tools, &results, &mut sink).unwrap();
+        let names: Vec<&str> = filtered
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn test_filter_tools_empty_include_removes_all() {
+        let tools = make_api_tools(&["a", "b"]);
+        let results = vec![("strict".to_string(), serde_json::json!({"include": []}))];
+        let mut sink = CollectingSink::default();
+        let filtered = filter_tools_from_hook_results(tools, &results, &mut sink).unwrap();
+        assert!(filtered.is_empty());
     }
 }
