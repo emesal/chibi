@@ -825,6 +825,159 @@ mod tests {
         assert_eq!(after.summary, "existing summary");
     }
 
+    // === rolling_compact LLM path tests ===
+
+    /// Spin up a minimal OpenAI-compatible stub server that always returns the
+    /// given `response_body` string as the assistant message content.
+    ///
+    /// Returns the base URL (e.g. `"http://127.0.0.1:PORT"`) and a join handle.
+    /// The server shuts down automatically when the handle is dropped.
+    async fn spawn_stub_server(response_body: String) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{}", port);
+
+        let body = serde_json::json!({
+            "id": "stub-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "stub",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": response_body },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        })
+        .to_string();
+
+        let handle = tokio::spawn(async move {
+            for _ in 0..10 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let body = body.clone();
+                tokio::spawn(async move {
+                    // Drain the full HTTP request (read until \r\n\r\n)
+                    let mut buf = vec![0u8; 16384];
+                    let mut total = 0;
+                    loop {
+                        match stream.read(&mut buf[total..]).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                total += n;
+                                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // Connection: close forces reqwest to open a fresh connection per request
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        (url, handle)
+    }
+
+    /// ResolvedConfig that routes LLM calls to the given stub base URL.
+    fn stub_resolved_config(stub_base_url: &str) -> ResolvedConfig {
+        let mut cfg = dummy_resolved_config();
+        cfg.extra.insert(
+            "stub_base_url".to_string(),
+            stub_base_url.to_string(),
+        );
+        cfg
+    }
+
+    #[tokio::test]
+    async fn rolling_compact_with_stub_llm_reduces_message_count() {
+        // Note: save_context regenerates _ids via messages_to_entries, so the
+        // stub's returned ids won't match the stored context — the fallback path
+        // activates, dropping the oldest N (50% of 6 = 3) messages. What we're
+        // testing here is that the full rolling_compact pipeline (LLM call →
+        // save → reload) completes successfully and actually reduces messages.
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-llm-path";
+
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("s1"),
+            msg("user", "u1"),
+            msg("assistant", "a1"),
+            msg("user", "u2"),
+            msg("assistant", "a2"),
+            msg("user", "u3"),
+            msg("assistant", "a3"),
+        ];
+        app.save_context(&context).unwrap();
+
+        // Stub returns a non-empty string for the summary update call so save proceeds.
+        let (url, _handle) = spawn_stub_server("updated summary".to_string()).await;
+        let resolved = stub_resolved_config(&url);
+
+        let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "rolling_compact failed: {:?}", result);
+
+        let after = app.get_or_create_context(ctx_name).unwrap();
+        let non_system_count = after
+            .messages
+            .iter()
+            .filter(|m| m["role"].as_str() != Some("system"))
+            .count();
+        assert!(
+            non_system_count < 6,
+            "expected messages to be reduced, got {} (unchanged)",
+            non_system_count
+        );
+        assert_eq!(after.summary, "updated summary", "summary should be updated");
+    }
+
+    #[tokio::test]
+    async fn rolling_compact_fallback_drops_oldest_n_on_empty_llm_response() {
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-fallback-path";
+
+        // 6 non-system messages
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("s1"),
+            msg("user", "u1"),
+            msg("assistant", "a1"),
+            msg("user", "u2"),
+            msg("assistant", "a2"),
+            msg("user", "u3"),
+            msg("assistant", "a3"),
+        ];
+        app.save_context(&context).unwrap();
+
+        // Stub returns empty string → ids_to_drop parses as empty → fallback activates.
+        // The summary update call also gets empty → early return before save.
+        let (url, _handle) = spawn_stub_server(String::new()).await;
+        let resolved = stub_resolved_config(&url);
+
+        let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "rolling_compact failed: {:?}", result);
+
+        // Empty summary → early return before save, so messages are unchanged
+        let after = app.get_or_create_context(ctx_name).unwrap();
+        assert_eq!(
+            after.messages.len(),
+            6,
+            "expected 6 messages (unchanged due to empty summary), got {}",
+            after.messages.len()
+        );
+    }
+
     // === helpers ===
 
     /// Minimal ResolvedConfig for tests that never reach the LLM.

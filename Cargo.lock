@@ -3695,8 +3695,8 @@ dependencies = [
 
 [[package]]
 name = "ratatoskr"
-version = "0.3.4"
-source = "git+https://github.com/emesal/ratatoskr.git?branch=main#353df018051ed6cde2409f5c4c21b31008ec42c0"
+version = "0.3.6"
+source = "git+https://github.com/emesal/ratatoskr.git?branch=main#e017d5cc573be004b449372fbeea1f204d24d9ae"
 dependencies = [
  "async-trait",
  "dirs 5.0.1",
