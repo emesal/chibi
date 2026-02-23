@@ -2937,4 +2937,150 @@ mod tests {
         let filtered = filter_tools_from_hook_results(tools, &results, &mut sink).unwrap();
         assert!(filtered.is_empty());
     }
+
+    // ========================================================================
+    // apply_request_modifications tests (PreApiRequest hook consumption)
+    // ========================================================================
+
+    #[test]
+    fn test_request_mod_merges_keys() {
+        let body = serde_json::json!({"model": "gpt-4", "temperature": 1.0});
+        let results = vec![(
+            "tuner".to_string(),
+            serde_json::json!({"request_body": {"temperature": 0.5, "top_p": 0.9}}),
+        )];
+        let mut sink = CollectingSink::default();
+        let modified = apply_request_modifications(body, &results, &mut sink).unwrap();
+        assert_eq!(modified["model"], "gpt-4");
+        assert_eq!(modified["temperature"], 0.5);
+        assert_eq!(modified["top_p"], 0.9);
+    }
+
+    #[test]
+    fn test_request_mod_empty_results_unchanged() {
+        let body = serde_json::json!({"model": "gpt-4"});
+        let mut sink = CollectingSink::default();
+        let modified = apply_request_modifications(body.clone(), &[], &mut sink).unwrap();
+        assert_eq!(modified, body);
+    }
+
+    #[test]
+    fn test_request_mod_multiple_hooks_sequential() {
+        let body = serde_json::json!({"model": "gpt-4", "temperature": 1.0});
+        let results = vec![
+            ("hook1".to_string(), serde_json::json!({"request_body": {"temperature": 0.7}})),
+            ("hook2".to_string(), serde_json::json!({"request_body": {"temperature": 0.3, "max_tokens": 100}})),
+        ];
+        let mut sink = CollectingSink::default();
+        let modified = apply_request_modifications(body, &results, &mut sink).unwrap();
+        // hook2 overwrites hook1's temperature
+        assert_eq!(modified["temperature"], 0.3);
+        assert_eq!(modified["max_tokens"], 100);
+        assert_eq!(modified["model"], "gpt-4");
+    }
+
+    // ========================================================================
+    // apply_hook_overrides tests (PreAgenticLoop / PostToolBatch hook consumption)
+    // ========================================================================
+
+    #[test]
+    fn test_hook_override_fallback_to_user() {
+        let mut handoff = tools::Handoff::new(tools::HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        let mut fuel = 10usize;
+        let results = vec![("orchestrator".to_string(), serde_json::json!({"fallback": "call_user"}))];
+        let mut sink = CollectingSink::default();
+        apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
+        let target = handoff.take();
+        assert!(matches!(target, tools::HandoffTarget::User { .. }));
+    }
+
+    #[test]
+    fn test_hook_override_fallback_to_agent() {
+        let mut handoff = tools::Handoff::new(tools::HandoffTarget::User {
+            message: String::new(),
+        });
+        let mut fuel = 10usize;
+        let results = vec![("orchestrator".to_string(), serde_json::json!({"fallback": "call_agent"}))];
+        let mut sink = CollectingSink::default();
+        apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
+        let target = handoff.take();
+        assert!(matches!(target, tools::HandoffTarget::Agent { .. }));
+    }
+
+    #[test]
+    fn test_hook_override_fuel_absolute() {
+        let mut handoff = tools::Handoff::new(tools::HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        let mut fuel = 10usize;
+        let results = vec![("limiter".to_string(), serde_json::json!({"fuel": 5}))];
+        let mut sink = CollectingSink::default();
+        apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
+        assert_eq!(fuel, 5);
+    }
+
+    #[test]
+    fn test_hook_override_fuel_delta_negative() {
+        let mut handoff = tools::Handoff::new(tools::HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        let mut fuel = 10usize;
+        let results = vec![("limiter".to_string(), serde_json::json!({"fuel_delta": -3}))];
+        let mut sink = CollectingSink::default();
+        apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
+        assert_eq!(fuel, 7);
+    }
+
+    #[test]
+    fn test_hook_override_fuel_delta_positive() {
+        let mut handoff = tools::Handoff::new(tools::HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        let mut fuel = 10usize;
+        let results = vec![("booster".to_string(), serde_json::json!({"fuel_delta": 5}))];
+        let mut sink = CollectingSink::default();
+        apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
+        assert_eq!(fuel, 15);
+    }
+
+    #[test]
+    fn test_hook_override_fuel_ignored_when_unlimited() {
+        let mut handoff = tools::Handoff::new(tools::HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        let mut fuel = 0usize;
+        let results = vec![("limiter".to_string(), serde_json::json!({"fuel": 5, "fuel_delta": 10}))];
+        let mut sink = CollectingSink::default();
+        apply_hook_overrides(&mut handoff, &mut fuel, true, &results, &mut sink).unwrap();
+        assert_eq!(fuel, 0, "fuel must not change when unlimited");
+    }
+
+    #[test]
+    fn test_hook_override_fuel_zero_means_exhaust() {
+        let mut handoff = tools::Handoff::new(tools::HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        let mut fuel = 10usize;
+        let results = vec![("stopper".to_string(), serde_json::json!({"fuel": 0}))];
+        let mut sink = CollectingSink::default();
+        apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
+        assert_eq!(fuel, 0, "fuel: 0 from hook means exhaust immediately");
+    }
+
+    #[test]
+    fn test_hook_override_multiple_hooks_applied_in_order() {
+        let mut handoff = tools::Handoff::new(tools::HandoffTarget::Agent {
+            prompt: String::new(),
+        });
+        let mut fuel = 10usize;
+        let results = vec![
+            ("first".to_string(), serde_json::json!({"fuel": 20})),
+            ("second".to_string(), serde_json::json!({"fuel_delta": -5})),
+        ];
+        let mut sink = CollectingSink::default();
+        apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
+        assert_eq!(fuel, 15, "first sets to 20, second subtracts 5");
+    }
 }
