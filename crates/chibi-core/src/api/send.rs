@@ -702,6 +702,87 @@ struct ToolExecutionResult {
     diagnostics: Vec<String>,
 }
 
+/// Result of processing PreTool hook results.
+struct PreToolResult {
+    blocked: bool,
+    block_message: String,
+    args: serde_json::Value,
+    diagnostics: Vec<String>,
+}
+
+/// Process PreTool hook results: check for block signals and argument modifications.
+fn apply_pre_tool_results(
+    hook_results: Vec<(String, serde_json::Value)>,
+    tool_name: &str,
+    args: serde_json::Value,
+) -> PreToolResult {
+    let mut result = PreToolResult {
+        blocked: false,
+        block_message: String::new(),
+        args,
+        diagnostics: Vec::new(),
+    };
+
+    for (hook_tool_name, hook_value) in hook_results {
+        if hook_value.get_bool_or("block", false) {
+            result.blocked = true;
+            result.block_message = hook_value
+                .get_str_or("message", "Tool call blocked by hook")
+                .to_string();
+            result.diagnostics.push(format!(
+                "[Hook pre_tool: {} blocked {} - {}]",
+                hook_tool_name, tool_name, result.block_message
+            ));
+            break;
+        }
+
+        if let Some(modified_args) = hook_value.get("arguments") {
+            result.diagnostics.push(format!(
+                "[Hook pre_tool: {} modified arguments for {}]",
+                hook_tool_name, tool_name
+            ));
+            result.args = modified_args.clone();
+        }
+    }
+
+    result
+}
+
+/// Process PreToolOutput hook results: check for block/replace signals and output modifications.
+/// Returns the (possibly modified) tool output and any diagnostics.
+fn apply_pre_tool_output_results(
+    hook_results: Vec<(String, serde_json::Value)>,
+    tool_name: &str,
+    tool_result: String,
+) -> (String, Vec<String>) {
+    let mut output = tool_result;
+    let mut diagnostics = Vec::new();
+
+    for (hook_tool_name, result) in hook_results {
+        if result.get_bool_or("block", false) {
+            let replacement = result
+                .get_str_or("message", "Output blocked by hook")
+                .to_string();
+            diagnostics.push(format!(
+                "[Hook pre_tool_output: {} blocked output from {}]",
+                hook_tool_name, tool_name
+            ));
+            output = replacement;
+            break;
+        }
+
+        if let Some(modified_output) = result.get_str("output") {
+            diagnostics.push(format!(
+                "[Hook pre_tool_output: {} modified output from {}]",
+                hook_tool_name, tool_name
+            ));
+            output = modified_output.to_string();
+        }
+    }
+
+    (output, diagnostics)
+}
+
 /// Sink-free execution core for a single tool call.
 ///
 /// Performs all tool execution logic (hooks, dispatch, caching, output hooks)
@@ -736,32 +817,11 @@ async fn execute_tool_pure(
     });
     let pre_hook_results = tools::execute_hook(tools, tools::HookPoint::PreTool, &pre_hook_data)?;
 
-    let mut blocked = false;
-    let mut block_message = String::new();
-
-    for (hook_tool_name, result) in pre_hook_results {
-        // Check for block signal first
-        if result.get_bool_or("block", false) {
-            blocked = true;
-            block_message = result
-                .get_str_or("message", "Tool call blocked by hook")
-                .to_string();
-            diagnostics.push(format!(
-                "[Hook pre_tool: {} blocked {} - {}]",
-                hook_tool_name, tool_call.name, block_message
-            ));
-            break;
-        }
-
-        // Check for argument modification
-        if let Some(modified_args) = result.get("arguments") {
-            diagnostics.push(format!(
-                "[Hook pre_tool: {} modified arguments for {}]",
-                hook_tool_name, tool_call.name
-            ));
-            args = modified_args.clone();
-        }
-    }
+    let pre_tool = apply_pre_tool_results(pre_hook_results, &tool_call.name, args);
+    let mut blocked = pre_tool.blocked;
+    let block_message = pre_tool.block_message;
+    args = pre_tool.args;
+    diagnostics.extend(pre_tool.diagnostics);
 
     // If blocked, skip execution and use block message as result
     let tool_result = if blocked {
@@ -1129,7 +1189,6 @@ async fn execute_tool_pure(
     };
 
     // Execute pre_tool_output hooks (can modify or replace output)
-    let mut tool_result = tool_result;
     let pre_output_hook_data = serde_json::json!({
         "tool_name": tool_call.name,
         "arguments": args,
@@ -1141,27 +1200,9 @@ async fn execute_tool_pure(
         &pre_output_hook_data,
     )?;
 
-    for (hook_tool_name, result) in pre_output_hook_results {
-        if result.get_bool_or("block", false) {
-            let replacement = result
-                .get_str_or("message", "Output blocked by hook")
-                .to_string();
-            diagnostics.push(format!(
-                "[Hook pre_tool_output: {} blocked output from {}]",
-                hook_tool_name, tool_call.name
-            ));
-            tool_result = replacement;
-            break;
-        }
-
-        if let Some(modified_output) = result.get_str("output") {
-            diagnostics.push(format!(
-                "[Hook pre_tool_output: {} modified output from {}]",
-                hook_tool_name, tool_call.name
-            ));
-            tool_result = modified_output.to_string();
-        }
-    }
+    let (tool_result, output_diagnostics) =
+        apply_pre_tool_output_results(pre_output_hook_results, &tool_call.name, tool_result);
+    diagnostics.extend(output_diagnostics);
 
     // Check if output should be cached
     let (final_result, was_cached) = if !tool_result.starts_with("Error:")
