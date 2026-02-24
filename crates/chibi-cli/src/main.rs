@@ -106,7 +106,7 @@ fn md_config_defaults(render: bool) -> MarkdownConfig {
 }
 
 /// Generate a unique context name for `-c new` or `-c new:prefix`
-/// Format: [prefix_]YYYYMMDD_HHMMSS[_N]
+/// Format: \[prefix_\]YYYYMMDD_HHMMSS\[_N\]
 fn generate_new_context_name(chibi: &Chibi, prefix: Option<&str>) -> String {
     use chrono::Local;
 

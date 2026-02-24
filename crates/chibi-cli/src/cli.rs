@@ -399,7 +399,7 @@ fn check_context_pair(current: bool, specific: &Option<String>) -> Option<Option
     }
 }
 
-/// Extract a string pair from an Option<Vec<String>>.
+/// Extract a string pair from an `Option<Vec<String>>`.
 /// Returns Some((first, second)) if vec has at least 2 elements.
 fn extract_string_pair(v: &Option<Vec<String>>) -> Option<(String, String)> {
     v.as_ref()

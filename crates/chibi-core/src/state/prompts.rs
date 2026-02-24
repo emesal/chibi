@@ -26,7 +26,7 @@ fn default_prompt(name: &str) -> &'static str {
 }
 
 impl AppState {
-    /// Load a named prompt from ~/.chibi/prompts/<name>.md, falling back to the
+    /// Load a named prompt from `~/.chibi/prompts/<name>.md`, falling back to the
     /// compiled-in default if no override is installed.
     pub fn load_prompt(&self, name: &str) -> io::Result<String> {
         let prompt_path = self.prompts_dir.join(format!("{}.md", name));

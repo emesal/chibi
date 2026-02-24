@@ -427,7 +427,7 @@ impl CliConfig {
     }
 }
 
-/// Per-context CLI overrides from contexts/<name>/cli.toml
+/// Per-context CLI overrides from `contexts/<name>/cli.toml`
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CliConfigOverride {
     pub render_markdown: Option<bool>,
