@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.1] - 2026-02-24
 
 ### Bug Fixes
 
