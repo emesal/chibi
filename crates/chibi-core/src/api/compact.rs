@@ -1278,6 +1278,230 @@ mod tests {
         assert!(has_anchor, "expected a compaction anchor in the transcript");
     }
 
+    // === stress / correctness test ===
+
+    /// Integration stress test: large transcript with repeated rolling compaction.
+    ///
+    /// Builds a synthetic 90-message transcript (deterministic, seeded from a fixed
+    /// message table), then drives `rolling_compact` in a loop until the context
+    /// stabilises at ≤4 non-system messages.  Per-round invariants:
+    ///
+    /// - no orphaned tool results
+    /// - system messages preserved throughout
+    /// - summary is non-empty after each round
+    /// - non-system message count strictly decreases (or has hit the ≤4 floor)
+    /// - a compaction anchor is written to the transcript each round
+    ///
+    /// After full compaction the final context is re-loaded and verified to be
+    /// coherent (parseable, no corrupt JSON, loadable via `get_or_create_context`).
+    ///
+    /// Gated on `CHIBI_API_KEY`.  Free models may be slow; the test allows up to
+    /// 20 compaction rounds as a safety cap.
+    ///
+    /// Skip with: `unset CHIBI_API_KEY`
+    /// Run with:  `CHIBI_API_KEY=<key> cargo test large_transcript_stress -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn large_transcript_stress_repeated_rolling_compaction() {
+        let Ok(api_key) = std::env::var("CHIBI_API_KEY") else {
+            eprintln!("CHIBI_API_KEY not set — skipping large transcript stress test");
+            return;
+        };
+
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "stress-rolling";
+
+        // --- Build a deterministic 90-message synthetic transcript ---
+        //
+        // Pattern (repeating slice):
+        //   user, assistant, user, assistant+tool_call, tool_result, user, assistant
+        // This gives a realistic mix of plain exchanges and tool interactions.
+        // IDs are stable strings so the LLM decision path can identify messages.
+        // If the LLM returns unrecognised IDs the fallback (oldest-N%) activates —
+        // both paths are valid and all invariants must hold for both.
+        let topics = [
+            ("What is Rust?", "Rust is a systems language focused on safety and performance."),
+            ("Explain ownership.", "Ownership ensures memory safety without a garbage collector."),
+            ("How does borrowing work?", "Borrowing allows references without transferring ownership."),
+            ("What are lifetimes?", "Lifetimes annotate how long references are valid."),
+            ("Describe traits.", "Traits define shared behaviour across types."),
+            ("What is async/await?", "Async/await enables non-blocking I/O with a cooperative model."),
+            ("Explain enums.", "Enums represent a value that can be one of several variants."),
+            ("What are closures?", "Closures capture their environment and can be stored or passed."),
+            ("How do iterators work?", "Iterators lazily produce a sequence of values."),
+            ("What is pattern matching?", "Pattern matching deconstructs values into their components."),
+        ];
+
+        let mut messages: Vec<serde_json::Value> = vec![
+            json!({ "role": "system", "_id": "sys-1", "content": "You are a knowledgeable Rust tutor." }),
+        ];
+
+        for (i, (question, answer)) in topics.iter().cycle().take(30).enumerate() {
+            let base = i * 3;
+            let uid = format!("u{}", base);
+            let aid = format!("a{}", base);
+            messages.push(json!({ "role": "user",      "_id": uid, "content": question }));
+            messages.push(json!({ "role": "assistant",  "_id": aid, "content": answer  }));
+
+            // Every third exchange: inject a tool call + result pair
+            if i % 3 == 2 {
+                let tc_id  = format!("tc{}", base);
+                let tcm_id = format!("atc{}", base);
+                let tr_id  = format!("tr{}", base);
+                messages.push(json!({
+                    "role": "assistant",
+                    "_id": tcm_id,
+                    "tool_calls": [{
+                        "id": tc_id,
+                        "function": { "name": "lookup_docs", "arguments": format!("{{\"topic\":\"{}\"}}", i) }
+                    }]
+                }));
+                messages.push(json!({
+                    "role": "tool",
+                    "_id": tr_id,
+                    "tool_call_id": tc_id,
+                    "content": format!("Documentation for topic {} retrieved successfully.", i)
+                }));
+            }
+        }
+
+        // Confirm we built a sufficiently large transcript (should be ~100 messages)
+        let non_system_initial: usize = messages
+            .iter()
+            .filter(|m| m["role"].as_str() != Some("system"))
+            .count();
+        assert!(
+            non_system_initial >= 80,
+            "expected ≥80 non-system messages to start, got {non_system_initial}"
+        );
+        eprintln!("stress test: built transcript with {non_system_initial} non-system messages");
+
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = messages;
+        app.save_context(&context).unwrap();
+
+        let mut resolved = dummy_resolved_config();
+        resolved.api_key = Some(api_key);
+        resolved.model = "ratatoskr:free/agentic".to_string();
+        resolved.rolling_compact_drop_percentage = 50.0;
+
+        let mut prev_non_system_count = non_system_initial;
+        let max_rounds = 20;
+
+        for round in 1..=max_rounds {
+            let before = app.get_or_create_context(ctx_name).unwrap();
+            let non_system_before: usize = before
+                .messages
+                .iter()
+                .filter(|m| m["role"].as_str() != Some("system"))
+                .count();
+
+            if non_system_before <= 4 {
+                eprintln!("stress test: stable at round {round} ({non_system_before} non-system msgs) — done");
+                break;
+            }
+
+            eprintln!("stress test: round {round} — {non_system_before} non-system messages");
+
+            let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
+            assert!(result.is_ok(), "round {round}: rolling_compact failed: {:?}", result);
+
+            let after = app.get_or_create_context(ctx_name).unwrap();
+
+            // --- Per-round invariants ---
+
+            // 1. System messages are fully preserved.
+            let system_after = after
+                .messages
+                .iter()
+                .filter(|m| m["role"].as_str() == Some("system"))
+                .count();
+            assert!(
+                system_after >= 1,
+                "round {round}: system messages must be preserved (found {system_after})"
+            );
+
+            // 2. No orphaned tool results.
+            let remaining_tc_ids: HashSet<String> = after
+                .messages
+                .iter()
+                .filter_map(|m| m["tool_calls"].as_array())
+                .flatten()
+                .filter_map(|tc| tc["id"].as_str().map(|s| s.to_string()))
+                .collect();
+            let orphaned: Vec<_> = after
+                .messages
+                .iter()
+                .filter(|m| m["role"].as_str() == Some("tool"))
+                .filter(|m| {
+                    let tc_id = m["tool_call_id"].as_str().unwrap_or("");
+                    !remaining_tc_ids.contains(tc_id)
+                })
+                .collect();
+            assert!(
+                orphaned.is_empty(),
+                "round {round}: found orphaned tool results: {:?}",
+                orphaned
+            );
+
+            // 3. Summary grows or stays non-empty.
+            assert!(
+                !after.summary.is_empty(),
+                "round {round}: summary must be non-empty after compaction"
+            );
+
+            // 4. Non-system message count strictly decreases (or already at floor).
+            let non_system_after: usize = after
+                .messages
+                .iter()
+                .filter(|m| m["role"].as_str() != Some("system"))
+                .count();
+            if non_system_before > 4 {
+                assert!(
+                    non_system_after < prev_non_system_count,
+                    "round {round}: expected message count to decrease from {prev_non_system_count}, got {non_system_after}"
+                );
+            }
+            prev_non_system_count = non_system_after;
+
+            // 5. Compaction anchor written to transcript.
+            let entries = app.read_transcript_entries(ctx_name).unwrap();
+            let anchor_count = entries
+                .iter()
+                .filter(|e| e.entry_type == crate::context::ENTRY_TYPE_COMPACTION)
+                .count();
+            assert!(
+                anchor_count >= round,
+                "round {round}: expected at least {round} compaction anchor(s) in transcript, found {anchor_count}"
+            );
+
+            if non_system_after <= 4 {
+                eprintln!("stress test: floor reached after round {round} ({non_system_after} msgs)");
+                break;
+            }
+        }
+
+        // --- Final coherence check ---
+        // Context must be loadable and parseable with no corrupt JSON.
+        let final_ctx = app.get_or_create_context(ctx_name).unwrap();
+        assert!(
+            !final_ctx.summary.is_empty(),
+            "final context: summary must be non-empty"
+        );
+        // Re-serialise and re-parse every message to confirm no corruption.
+        for (idx, msg) in final_ctx.messages.iter().enumerate() {
+            let serialised = serde_json::to_string(msg)
+                .unwrap_or_else(|e| panic!("final context: message {idx} failed to serialise: {e}"));
+            serde_json::from_str::<serde_json::Value>(&serialised)
+                .unwrap_or_else(|e| panic!("final context: message {idx} failed to re-parse: {e}"));
+        }
+        eprintln!(
+            "stress test: final context has {} messages, summary len={}",
+            final_ctx.messages.len(),
+            final_ctx.summary.len()
+        );
+    }
+
     // === helpers ===
 
     /// Minimal ResolvedConfig for tests that never reach the LLM.
