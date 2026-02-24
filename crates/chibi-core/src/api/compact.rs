@@ -979,6 +979,123 @@ mod tests {
         );
     }
 
+    /// Integration test: full rolling_compact pipeline with a real LLM.
+    ///
+    /// Gated on CHIBI_API_KEY. Uses ratatoskr:free/summariser (free OpenRouter preset).
+    /// Either the LLM decision path or the fallback path may activate depending on
+    /// whether the model returns valid IDs — both are correct behaviours.
+    ///
+    /// Skip with: unset CHIBI_API_KEY
+    /// Run with:  CHIBI_API_KEY=<key> cargo test rolling_compact_real_llm -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn rolling_compact_real_llm_reduces_message_count_and_writes_anchor() {
+        let Ok(api_key) = std::env::var("CHIBI_API_KEY") else {
+            eprintln!("CHIBI_API_KEY not set — skipping rolling compaction integration test");
+            return;
+        };
+
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "integration-rolling";
+
+        // Build a 12-message context: system + user/assistant pairs + one tool exchange.
+        // _ids are set so the LLM decision path can identify messages to drop.
+        // If the LLM returns unrecognised IDs, the fallback (drop oldest N%) activates —
+        // both paths are valid and the invariants below hold for both.
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("You are a helpful assistant."),
+            msg("user", "Tell me about Rust."),
+            msg("assistant", "Rust is a systems language focused on safety."),
+            msg("user", "What about async?"),
+            msg("assistant", "Async in Rust uses futures and tokio."),
+            msg("user", "How do I write a test?"),
+            msg("assistant", "Use #[test] for unit tests."),
+            msg("user", "What is compaction?"),
+            msg("assistant", "Compaction archives old messages into a summary."),
+            assistant_with_tools("m10", &["tc1"]),
+            tool_result("m11", "tc1"),
+            msg("user", "Thanks, that was helpful!"),
+        ];
+        app.save_context(&context).unwrap();
+
+        // Real ResolvedConfig pointing at free/summariser via OpenRouter.
+        // free/agentic is a valid fallback if summariser is unavailable.
+        let mut resolved = dummy_resolved_config();
+        resolved.api_key = Some(api_key);
+        resolved.model = "ratatoskr:free/summariser".to_string();
+        resolved.rolling_compact_drop_percentage = 50.0;
+
+        let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "rolling_compact failed: {:?}", result);
+
+        let after = app.get_or_create_context(ctx_name).unwrap();
+
+        // 1. Message count decreased
+        let after_non_system: Vec<_> = after
+            .messages
+            .iter()
+            .filter(|m| m["role"].as_str() != Some("system"))
+            .collect();
+        assert!(
+            after_non_system.len() < 11,
+            "expected fewer than 11 non-system messages after compaction, got {}",
+            after_non_system.len()
+        );
+
+        // 2. Summary is non-empty
+        assert!(
+            !after.summary.is_empty(),
+            "summary should be non-empty after compaction"
+        );
+
+        // 3. System messages preserved (none removed)
+        let system_count = after
+            .messages
+            .iter()
+            .filter(|m| m["role"].as_str() == Some("system"))
+            .count();
+        let original_system_count = 1;
+        assert_eq!(
+            system_count, original_system_count,
+            "system messages should be preserved"
+        );
+
+        // 4. No orphaned tool results: every tool message must have a corresponding
+        //    assistant message with a matching tool_call id still present.
+        let remaining_tool_call_ids: std::collections::HashSet<String> = after
+            .messages
+            .iter()
+            .filter_map(|m| m["tool_calls"].as_array())
+            .flatten()
+            .filter_map(|tc| tc["id"].as_str().map(|s| s.to_string()))
+            .collect();
+        let orphaned_tool_results: Vec<_> = after
+            .messages
+            .iter()
+            .filter(|m| m["role"].as_str() == Some("tool"))
+            .filter(|m| {
+                let tc_id = m["tool_call_id"].as_str().unwrap_or("");
+                !remaining_tool_call_ids.contains(tc_id)
+            })
+            .collect();
+        assert!(
+            orphaned_tool_results.is_empty(),
+            "found orphaned tool results: {:?}",
+            orphaned_tool_results
+        );
+
+        // 5. Transcript anchor was written (finalize_compaction side effect)
+        let entries = app.read_transcript_entries(ctx_name).unwrap();
+        let has_compaction_anchor = entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_COMPACTION);
+        assert!(
+            has_compaction_anchor,
+            "expected a compaction anchor in the transcript"
+        );
+    }
+
     // === helpers ===
 
     /// Minimal ResolvedConfig for tests that never reach the LLM.
