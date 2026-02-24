@@ -1096,6 +1096,188 @@ mod tests {
         );
     }
 
+    // === manual compaction tests ===
+
+    #[tokio::test]
+    async fn manual_compact_early_return_few_messages() {
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-manual-early-return";
+
+        // 2 messages → guard triggers, returns Ok immediately
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            msg("user", "hello"),
+            msg("assistant", "hi"),
+        ];
+        app.save_context(&context).unwrap();
+
+        let resolved = dummy_resolved_config();
+        let result = compact_context_with_llm_manual(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "expected Ok for ≤2 messages, got {:?}", result);
+
+        // Context must be unchanged
+        let after = app.get_or_create_context(ctx_name).unwrap();
+        assert_eq!(after.messages.len(), 2, "context should be unchanged");
+        assert!(after.summary.is_empty(), "summary should still be empty");
+    }
+
+    #[tokio::test]
+    async fn manual_compact_empty_summary_returns_error() {
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-manual-empty-summary";
+
+        // 3 messages so the guard doesn't trigger
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            msg("user", "a"),
+            msg("assistant", "b"),
+            msg("user", "c"),
+        ];
+        app.save_context(&context).unwrap();
+
+        // Stub returns empty string
+        let (stub_url, _handle) = spawn_stub_server("".to_string()).await;
+        let resolved = stub_resolved_config(&stub_url);
+        let result = compact_context_with_llm_manual(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_err(), "expected Err for empty summary");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Empty summary"),
+            "expected 'Empty summary' in error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_compact_stub_llm_produces_bootstrap_context() {
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-manual-stub-bootstrap";
+
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("You are a helpful assistant."),
+            msg("user", "Tell me about Rust."),
+            msg("assistant", "Rust is a systems language."),
+            msg("user", "What about ownership?"),
+            msg("assistant", "Ownership is Rust's memory model."),
+        ];
+        app.save_context(&context).unwrap();
+
+        let stub_summary = "Rust discussion: safety, ownership, memory model.";
+        let (stub_url, _handle) = spawn_stub_server(stub_summary.to_string()).await;
+        let resolved = stub_resolved_config(&stub_url);
+        let result = compact_context_with_llm_manual(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "compact failed: {:?}", result);
+
+        let after = app.get_or_create_context(ctx_name).unwrap();
+
+        // 1. Summary populated
+        assert!(
+            !after.summary.is_empty(),
+            "summary should be non-empty after compaction"
+        );
+
+        // 2. Original messages replaced — system prompts are stored separately in
+        //    context_meta, not persisted in the transcript; bootstrap has exactly 1
+        //    message: the user message containing the summary block.
+        assert_eq!(
+            after.messages.len(),
+            1,
+            "expected exactly 1 bootstrap message (user), got {}",
+            after.messages.len()
+        );
+
+        // 3. User message contains the summary block
+        let user_msg = after
+            .messages
+            .iter()
+            .find(|m| m["role"].as_str() == Some("user"))
+            .expect("expected a user message in bootstrap");
+        let content = user_msg["content"].as_str().unwrap_or("");
+        assert!(
+            content.contains("--- SUMMARY ---"),
+            "user message should contain '--- SUMMARY ---', got: {content}"
+        );
+
+        // 4. Transcript anchor written
+        let entries = app.read_transcript_entries(ctx_name).unwrap();
+        let has_anchor = entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_COMPACTION);
+        assert!(has_anchor, "expected a compaction anchor in the transcript");
+    }
+
+    /// Integration test: full manual compact pipeline with a real LLM.
+    ///
+    /// Gated on CHIBI_API_KEY. Uses ratatoskr:free/text-generation (free OpenRouter preset).
+    ///
+    /// Skip with: unset CHIBI_API_KEY
+    /// Run with:  CHIBI_API_KEY=<key> cargo test manual_compact_real_llm -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn manual_compact_real_llm_produces_bootstrap_context() {
+        let Ok(api_key) = std::env::var("CHIBI_API_KEY") else {
+            eprintln!("CHIBI_API_KEY not set — skipping manual compaction integration test");
+            return;
+        };
+
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "integration-manual";
+
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("You are a helpful assistant."),
+            msg("user", "Tell me about Rust."),
+            msg("assistant", "Rust is a systems language focused on safety."),
+            msg("user", "What about ownership?"),
+            msg("assistant", "Ownership is Rust's memory management model."),
+        ];
+        app.save_context(&context).unwrap();
+
+        let mut resolved = dummy_resolved_config();
+        resolved.api_key = Some(api_key);
+        resolved.model = "ratatoskr:free/text-generation".to_string();
+
+        let result = compact_context_with_llm_manual(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "manual compact failed: {:?}", result);
+
+        let after = app.get_or_create_context(ctx_name).unwrap();
+
+        // 1. Summary non-empty
+        assert!(
+            !after.summary.is_empty(),
+            "summary should be non-empty after compaction"
+        );
+
+        // 2. Bootstrap has exactly 1 message — the user message with the summary block.
+        //    System prompts are stored separately in context_meta and not persisted in
+        //    the transcript, so they don't appear when re-loading the context.
+        assert_eq!(
+            after.messages.len(),
+            1,
+            "expected exactly 1 bootstrap message (user), got {}",
+            after.messages.len()
+        );
+
+        // 3. User message contains summary block
+        let user_msg = after
+            .messages
+            .iter()
+            .find(|m| m["role"].as_str() == Some("user"))
+            .expect("expected a user message in bootstrap");
+        let content = user_msg["content"].as_str().unwrap_or("");
+        assert!(
+            content.contains("--- SUMMARY ---"),
+            "user message should contain '--- SUMMARY ---', got: {content}"
+        );
+
+        // 4. Transcript anchor written
+        let entries = app.read_transcript_entries(ctx_name).unwrap();
+        let has_anchor = entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_COMPACTION);
+        assert!(has_anchor, "expected a compaction anchor in the transcript");
+    }
+
     // === helpers ===
 
     /// Minimal ResolvedConfig for tests that never reach the LLM.
