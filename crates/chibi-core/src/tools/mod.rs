@@ -16,6 +16,7 @@ pub mod coding_tools;
 pub mod file_tools;
 mod hooks;
 pub mod mcp;
+pub(crate) mod paths;
 mod plugins;
 pub mod security;
 pub mod vfs_tools;

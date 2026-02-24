@@ -4,14 +4,17 @@
 //! development work: run commands, explore directory trees, search by glob or
 //! regex, edit files in a structured way, and query a codebase index.
 //!
-//! All path parameters are resolved relative to `project_root`, which is
-//! set during `Chibi::load_with_options` from options, env, or CWD.
+//! All path parameters are resolved and security-validated via
+//! [`paths::resolve_tool_path`], which resolves relative paths against
+//! `project_root` and checks OS paths against `file_tools_allowed_paths`.
 
 use std::io::{self, BufRead, ErrorKind};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
-use super::file_tools::{ResolvedPath, vfs_block_on};
+use super::file_tools::vfs_block_on;
+use super::paths::{ResolvedPath, resolve_tool_path};
+use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;
 use crate::vfs::{Vfs, VfsPath};
 
@@ -302,40 +305,6 @@ pub fn is_coding_tool(name: &str) -> bool {
     )
 }
 
-// === Path Resolution ===
-
-/// Resolve a path string relative to project_root.
-///
-/// Absolute paths are returned as-is. Relative paths are joined with project_root.
-/// Paths starting with `vfs:///` are resolved as VFS paths; a malformed VFS URI
-/// returns an error rather than silently falling back to an OS path.
-fn resolve_path(project_root: &Path, path_str: &str) -> io::Result<ResolvedPath> {
-    if VfsPath::is_vfs_uri(path_str) {
-        Ok(ResolvedPath::Vfs(VfsPath::from_uri(path_str)?))
-    } else {
-        let p = Path::new(path_str);
-        if p.is_absolute() {
-            Ok(ResolvedPath::Os(p.to_path_buf()))
-        } else {
-            Ok(ResolvedPath::Os(project_root.join(p)))
-        }
-    }
-}
-
-/// Extract an OS path from a `ResolvedPath`, returning an error for VFS paths.
-///
-/// Used by tools that operate on the OS filesystem (dir_list, glob_files,
-/// grep_files) and don't support VFS paths.
-fn require_os_path(resolved: ResolvedPath, tool_name: &str) -> io::Result<PathBuf> {
-    match resolved {
-        ResolvedPath::Os(p) => Ok(p),
-        ResolvedPath::Vfs(_) => Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            format!("{} does not support vfs:// paths", tool_name),
-        )),
-    }
-}
-
 // === Tool Execution ===
 
 /// Execute a coding tool by name.
@@ -345,21 +314,23 @@ fn require_os_path(resolved: ResolvedPath, tool_name: &str) -> io::Result<PathBu
 /// The `tools` slice is forwarded to `index_update` for language plugin dispatch;
 /// pass `&[]` when the plugin list is unavailable.
 ///
+/// `config` is required for path security validation via [`resolve_tool_path`].
 /// `vfs` and `caller` are passed through to `execute_file_edit` for VFS path support.
 pub async fn execute_coding_tool(
     tool_name: &str,
     args: &serde_json::Value,
     project_root: &Path,
+    config: &ResolvedConfig,
     tools: &[super::Tool],
     vfs: &Vfs,
     caller: &str,
 ) -> Option<io::Result<String>> {
     match tool_name {
         SHELL_EXEC_TOOL_NAME => Some(execute_shell_exec(args, project_root).await),
-        DIR_LIST_TOOL_NAME => Some(execute_dir_list(args, project_root)),
-        GLOB_FILES_TOOL_NAME => Some(execute_glob_files(args, project_root)),
-        GREP_FILES_TOOL_NAME => Some(execute_grep_files(args, project_root)),
-        FILE_EDIT_TOOL_NAME => Some(execute_file_edit(args, project_root, vfs, caller)),
+        DIR_LIST_TOOL_NAME => Some(execute_dir_list(args, project_root, config)),
+        GLOB_FILES_TOOL_NAME => Some(execute_glob_files(args, project_root, config)),
+        GREP_FILES_TOOL_NAME => Some(execute_grep_files(args, project_root, config)),
+        FILE_EDIT_TOOL_NAME => Some(execute_file_edit(args, project_root, config, vfs, caller)),
         INDEX_UPDATE_TOOL_NAME => Some(execute_index_update(args, project_root, tools)),
         INDEX_QUERY_TOOL_NAME => Some(execute_index_query(args, project_root)),
         INDEX_STATUS_TOOL_NAME => Some(execute_index_status(project_root)),
@@ -426,12 +397,16 @@ async fn execute_shell_exec(args: &serde_json::Value, project_root: &Path) -> io
 // --- dir_list ---
 
 /// Execute dir_list: produce an indented directory tree with sizes and type tags.
-fn execute_dir_list(args: &serde_json::Value, project_root: &Path) -> io::Result<String> {
+fn execute_dir_list(
+    args: &serde_json::Value,
+    project_root: &Path,
+    config: &ResolvedConfig,
+) -> io::Result<String> {
     let path_str = args.get_str_or("path", ".");
     let depth = args.get_u64_or("depth", 1) as usize;
     let show_hidden = args.get_str_or("show_hidden", "false") == "true";
 
-    let root = require_os_path(resolve_path(project_root, path_str)?, "dir_list")?;
+    let root = resolve_tool_path(path_str, project_root, config)?.require_os("dir_list")?;
 
     if !root.exists() {
         return Err(io::Error::new(
@@ -537,7 +512,11 @@ fn format_size(bytes: u64) -> String {
 // --- glob_files ---
 
 /// Execute glob_files: walk the directory tree respecting .gitignore and match a glob.
-fn execute_glob_files(args: &serde_json::Value, project_root: &Path) -> io::Result<String> {
+fn execute_glob_files(
+    args: &serde_json::Value,
+    project_root: &Path,
+    config: &ResolvedConfig,
+) -> io::Result<String> {
     use ignore::WalkBuilder;
     use ignore::overrides::OverrideBuilder;
 
@@ -545,7 +524,7 @@ fn execute_glob_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
     let path_str = args.get_str_or("path", ".");
     let max_results = args.get_u64_or("max_results", 100) as usize;
 
-    let root = require_os_path(resolve_path(project_root, path_str)?, "glob_files")?;
+    let root = resolve_tool_path(path_str, project_root, config)?.require_os("glob_files")?;
 
     if !root.exists() {
         return Err(io::Error::new(
@@ -600,7 +579,11 @@ fn execute_glob_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
 // --- grep_files ---
 
 /// Execute grep_files: regex-search files under a directory with optional context.
-fn execute_grep_files(args: &serde_json::Value, project_root: &Path) -> io::Result<String> {
+fn execute_grep_files(
+    args: &serde_json::Value,
+    project_root: &Path,
+    config: &ResolvedConfig,
+) -> io::Result<String> {
     use ignore::WalkBuilder;
     use ignore::overrides::OverrideBuilder;
     use regex::Regex;
@@ -618,7 +601,7 @@ fn execute_grep_files(args: &serde_json::Value, project_root: &Path) -> io::Resu
         )
     })?;
 
-    let root = require_os_path(resolve_path(project_root, path_str)?, "grep_files")?;
+    let root = resolve_tool_path(path_str, project_root, config)?.require_os("grep_files")?;
 
     if !root.exists() {
         return Err(io::Error::new(
@@ -765,6 +748,7 @@ enum EditOperation {
 fn execute_file_edit(
     args: &serde_json::Value,
     project_root: &Path,
+    config: &ResolvedConfig,
     vfs: &Vfs,
     caller: &str,
 ) -> io::Result<String> {
@@ -772,7 +756,7 @@ fn execute_file_edit(
     let operation_str = require_str_param(args, "operation")?;
     let op = parse_edit_operation(&operation_str, args)?;
 
-    let resolved = resolve_path(project_root, &path_str)?;
+    let resolved = resolve_tool_path(&path_str, project_root, config)?;
 
     match resolved {
         ResolvedPath::Os(file_path) => execute_file_edit_os(&file_path, op),
@@ -1099,6 +1083,7 @@ async fn execute_fetch_url(args: &serde_json::Value) -> io::Result<String> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     // --- Helpers ---
@@ -1122,6 +1107,13 @@ mod tests {
             map.insert(k.to_string(), v.clone());
         }
         serde_json::Value::Object(map)
+    }
+
+    /// Create a config that allows access to the given directory.
+    fn make_config_for(dir: &TempDir) -> ResolvedConfig {
+        let mut config = ResolvedConfig::default();
+        config.file_tools_allowed_paths = vec![dir.path().to_string_lossy().to_string()];
+        config
     }
 
     // --- Registry ---
@@ -1167,44 +1159,6 @@ mod tests {
         assert!(names.contains(&FETCH_URL_TOOL_NAME));
     }
 
-    // --- Path Resolution ---
-
-    #[test]
-    fn test_resolve_path_absolute() {
-        let root = Path::new("/some/root");
-        match resolve_path(root, "/absolute/path").unwrap() {
-            ResolvedPath::Os(p) => assert_eq!(p, PathBuf::from("/absolute/path")),
-            ResolvedPath::Vfs(_) => panic!("expected Os path"),
-        }
-    }
-
-    #[test]
-    fn test_resolve_path_relative() {
-        let root = Path::new("/some/root");
-        match resolve_path(root, "relative/path").unwrap() {
-            ResolvedPath::Os(p) => assert_eq!(p, PathBuf::from("/some/root/relative/path")),
-            ResolvedPath::Vfs(_) => panic!("expected Os path"),
-        }
-    }
-
-    #[test]
-    fn test_resolve_path_vfs_uri() {
-        let root = Path::new("/some/root");
-        match resolve_path(root, "vfs:///shared/file.txt").unwrap() {
-            ResolvedPath::Vfs(p) => assert_eq!(p.as_str(), "/shared/file.txt"),
-            ResolvedPath::Os(_) => panic!("expected Vfs path"),
-        }
-    }
-
-    #[test]
-    fn test_resolve_path_invalid_vfs_uri_errors() {
-        let root = Path::new("/some/root");
-        // `is_vfs_uri` is true (starts with vfs:///) but path contains "//" making it invalid
-        assert!(resolve_path(root, "vfs:////etc").is_err());
-        // double-dot traversal is also invalid
-        assert!(resolve_path(root, "vfs:///../etc").is_err());
-    }
-
     // --- dir_list ---
 
     #[test]
@@ -1218,7 +1172,7 @@ mod tests {
             ("path", serde_json::json!(".")),
             ("depth", serde_json::json!(2)),
         ]);
-        let result = execute_dir_list(&a, dir.path()).unwrap();
+        let result = execute_dir_list(&a, dir.path(), &make_config_for(&dir)).unwrap();
 
         assert!(result.contains("file.txt"));
         assert!(result.contains("subdir/"));
@@ -1236,7 +1190,7 @@ mod tests {
             ("path", serde_json::json!(".")),
             ("depth", serde_json::json!(1)),
         ]);
-        let result = execute_dir_list(&a, dir.path()).unwrap();
+        let result = execute_dir_list(&a, dir.path(), &make_config_for(&dir)).unwrap();
 
         assert!(result.contains("subdir/"));
         assert!(!result.contains("deep.txt"));
@@ -1252,7 +1206,7 @@ mod tests {
             ("path", serde_json::json!(".")),
             ("show_hidden", serde_json::json!("false")),
         ]);
-        let result = execute_dir_list(&hidden_off, dir.path()).unwrap();
+        let result = execute_dir_list(&hidden_off, dir.path(), &make_config_for(&dir)).unwrap();
         assert!(!result.contains(".hidden"));
         assert!(result.contains("visible.txt"));
 
@@ -1260,7 +1214,7 @@ mod tests {
             ("path", serde_json::json!(".")),
             ("show_hidden", serde_json::json!("true")),
         ]);
-        let result = execute_dir_list(&hidden_on, dir.path()).unwrap();
+        let result = execute_dir_list(&hidden_on, dir.path(), &make_config_for(&dir)).unwrap();
         assert!(result.contains(".hidden"));
     }
 
@@ -1274,7 +1228,7 @@ mod tests {
         fs::write(dir.path().join("README.md"), "# readme").unwrap();
 
         let a = args(&[("pattern", serde_json::json!("*.rs"))]);
-        let result = execute_glob_files(&a, dir.path()).unwrap();
+        let result = execute_glob_files(&a, dir.path(), &make_config_for(&dir)).unwrap();
 
         assert!(result.contains("main.rs"));
         assert!(result.contains("lib.rs"));
@@ -1292,7 +1246,7 @@ mod tests {
             ("pattern", serde_json::json!("*.txt")),
             ("max_results", serde_json::json!(3)),
         ]);
-        let result = execute_glob_files(&a, dir.path()).unwrap();
+        let result = execute_glob_files(&a, dir.path(), &make_config_for(&dir)).unwrap();
         assert_eq!(result.lines().count(), 3);
     }
 
@@ -1302,7 +1256,7 @@ mod tests {
         fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
 
         let a = args(&[("pattern", serde_json::json!("*.py"))]);
-        let result = execute_glob_files(&a, dir.path()).unwrap();
+        let result = execute_glob_files(&a, dir.path(), &make_config_for(&dir)).unwrap();
         assert!(result.contains("No files found"));
     }
 
@@ -1318,7 +1272,7 @@ mod tests {
         );
 
         let a = args(&[("pattern", serde_json::json!("println"))]);
-        let result = execute_grep_files(&a, dir.path()).unwrap();
+        let result = execute_grep_files(&a, dir.path(), &make_config_for(&dir)).unwrap();
 
         assert!(result.contains("println"));
         assert!(result.contains("src.rs"));
@@ -1330,7 +1284,7 @@ mod tests {
         make_temp_file(&dir, "code.rs", "fn nothing() {}\n");
 
         let a = args(&[("pattern", serde_json::json!("NONEXISTENT_PATTERN_XYZ"))]);
-        let result = execute_grep_files(&a, dir.path()).unwrap();
+        let result = execute_grep_files(&a, dir.path(), &make_config_for(&dir)).unwrap();
         assert!(result.contains("No matches found"));
     }
 
@@ -1345,7 +1299,7 @@ mod tests {
             ("pattern", serde_json::json!("search_term")),
             ("file_pattern", serde_json::json!("*.rs")),
         ]);
-        let result = execute_grep_files(&a, dir.path()).unwrap();
+        let result = execute_grep_files(&a, dir.path(), &make_config_for(&dir)).unwrap();
 
         assert!(result.contains("code.rs"));
         assert!(!result.contains("note.txt"));
@@ -1360,7 +1314,7 @@ mod tests {
             ("pattern", serde_json::json!("MATCH")),
             ("context_lines", serde_json::json!(1)),
         ]);
-        let result = execute_grep_files(&a, dir.path()).unwrap();
+        let result = execute_grep_files(&a, dir.path(), &make_config_for(&dir)).unwrap();
 
         // Context should include surrounding lines
         assert!(result.contains("line2"));
@@ -1382,7 +1336,14 @@ mod tests {
             ("line_end", serde_json::json!(2)),
             ("content", serde_json::json!("BBB")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nBBB\nccc\n");
     }
@@ -1398,7 +1359,14 @@ mod tests {
             ("line_start", serde_json::json!(2)),
             ("content", serde_json::json!("NEW")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nNEW\nbbb\n");
     }
@@ -1414,7 +1382,14 @@ mod tests {
             ("line_start", serde_json::json!(1)),
             ("content", serde_json::json!("NEW")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nNEW\nbbb\n");
     }
@@ -1430,7 +1405,14 @@ mod tests {
             ("line_start", serde_json::json!(2)),
             ("line_end", serde_json::json!(2)),
         ]);
-        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nccc\n");
     }
@@ -1446,7 +1428,14 @@ mod tests {
             ("find", serde_json::json!("hello")),
             ("replace", serde_json::json!("goodbye")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         // Only first occurrence replaced
         assert_eq!(content, "goodbye world\nhello again\n");
@@ -1464,7 +1453,13 @@ mod tests {
             ("line_end", serde_json::json!(6)),
             ("content", serde_json::json!("x")),
         ]);
-        let result = execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test");
+        let result = execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        );
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
     }
@@ -1478,7 +1473,13 @@ mod tests {
             ("path", serde_json::json!("f.txt")),
             ("operation", serde_json::json!("teleport")),
         ]);
-        let result = execute_file_edit(&a, dir.path(), &make_test_vfs(&dir), "test");
+        let result = execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        );
         assert!(result.is_err());
     }
 
@@ -1677,7 +1678,7 @@ mod tests {
             ("line_end", serde_json::json!(2)),
             ("content", serde_json::json!("BBB")),
         ]);
-        execute_file_edit(&a, dir.path(), &vfs, "ctx").unwrap();
+        execute_file_edit(&a, dir.path(), &make_config_for(&dir), &vfs, "ctx").unwrap();
         let data = vfs.read("ctx", &path).await.unwrap();
         assert_eq!(String::from_utf8_lossy(&data), "aaa\nBBB\nccc\n");
     }
@@ -1697,7 +1698,7 @@ mod tests {
             ("find", serde_json::json!("hello")),
             ("replace", serde_json::json!("goodbye")),
         ]);
-        execute_file_edit(&a, dir.path(), &vfs, "ctx").unwrap();
+        execute_file_edit(&a, dir.path(), &make_config_for(&dir), &vfs, "ctx").unwrap();
         let data = vfs.read("ctx", &path).await.unwrap();
         // Only first occurrence replaced
         assert_eq!(
@@ -1722,7 +1723,7 @@ mod tests {
             ("content", serde_json::json!("hacked")),
         ]);
         // planner trying to write to coder's home — should be denied
-        let result = execute_file_edit(&a, dir.path(), &vfs, "planner");
+        let result = execute_file_edit(&a, dir.path(), &make_config_for(&dir), &vfs, "planner");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
     }
@@ -1731,7 +1732,7 @@ mod tests {
     fn test_dir_list_rejects_vfs_path() {
         let dir = tempfile::tempdir().unwrap();
         let a = args(&[("path", serde_json::json!("vfs:///shared"))]);
-        let result = execute_dir_list(&a, dir.path());
+        let result = execute_dir_list(&a, dir.path(), &make_config_for(&dir));
         assert!(result.is_err());
         assert!(
             result

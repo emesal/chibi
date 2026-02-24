@@ -5,22 +5,13 @@
 //! `path="vfs:///sys/tool_cache/..."` to examine cached content.
 
 use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
+use super::paths::{ResolvedPath, resolve_tool_path};
 use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;
 use crate::state::AppState;
 use crate::vfs::VfsPath;
 use std::io::{self, BufRead, ErrorKind};
 use std::path::{Path, PathBuf};
-
-/// A resolved tool path — either an OS path or a VFS path.
-///
-/// Returned by `resolve_file_path` so callers can branch on OS vs VFS
-/// without re-parsing the URI.
-#[derive(Debug)]
-pub(crate) enum ResolvedPath {
-    Os(PathBuf),
-    Vfs(VfsPath),
-}
 
 // === Tool Name Constants ===
 
@@ -168,41 +159,6 @@ pub fn get_file_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
     FILE_TOOL_DEFS.iter().find(|d| d.name == name)
 }
 
-// === Path Resolution ===
-
-/// Resolve a file path from the `path` argument.
-///
-/// When a relative `path` is provided, it is resolved against `project_root`
-/// before validation so that tools work correctly even when the process CWD
-/// differs from the project root.
-///
-/// Paths starting with `vfs:///` are resolved as VFS paths and bypass OS
-/// path validation entirely.
-fn resolve_file_path(
-    _app: &AppState,
-    _context_name: &str,
-    args: &serde_json::Value,
-    config: &ResolvedConfig,
-    project_root: &Path,
-) -> io::Result<ResolvedPath> {
-    let path = args
-        .get_str("path")
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Must provide path"))?;
-
-    if VfsPath::is_vfs_uri(path) {
-        let vfs_path = VfsPath::from_uri(path)?;
-        return Ok(ResolvedPath::Vfs(vfs_path));
-    }
-
-    let resolved_path = if Path::new(path).is_relative() {
-        project_root.join(path).to_string_lossy().to_string()
-    } else {
-        path.to_string()
-    };
-    let resolved = super::security::validate_file_path(&resolved_path, config)?;
-    Ok(ResolvedPath::Os(resolved))
-}
-
 // === Tool Execution ===
 
 // --- Helpers for parameter extraction ---
@@ -236,7 +192,10 @@ fn execute_file_head_or_tail(
     direction: ReadDirection,
     project_root: &Path,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config, project_root)?;
+    let path_str = args
+        .get_str("path")
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Must provide path"))?;
+    let path = resolve_tool_path(path_str, project_root, config)?;
     let n = args.get_u64_or("lines", 50) as usize;
 
     match path {
@@ -314,7 +273,10 @@ pub fn execute_file_lines(
     config: &ResolvedConfig,
     project_root: &Path,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config, project_root)?;
+    let path_str = args
+        .get_str("path")
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Must provide path"))?;
+    let path = resolve_tool_path(path_str, project_root, config)?;
     let start = require_u64_param(args, "start")? as usize;
     let end = require_u64_param(args, "end")? as usize;
 
@@ -367,7 +329,10 @@ pub fn execute_file_grep(
     config: &ResolvedConfig,
     project_root: &Path,
 ) -> io::Result<String> {
-    let path = resolve_file_path(app, context_name, args, config, project_root)?;
+    let path_str = args
+        .get_str("path")
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Must provide path"))?;
+    let path = resolve_tool_path(path_str, project_root, config)?;
     let pattern = require_str_param(args, "pattern")?;
     let context_before = args.get_u64_or("context_before", 2) as usize;
     let context_after = args.get_u64_or("context_after", 2) as usize;
@@ -736,99 +701,12 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
     }
 
-    // === resolve_file_path project_root tests ===
-
-    use crate::config::{ApiParams, ToolsConfig};
-    use crate::partition::StorageConfig;
-    use std::collections::BTreeMap;
+    // === Path resolution tests are in tools/paths.rs ===
 
     fn make_test_config(allowed_paths: Vec<String>) -> ResolvedConfig {
-        ResolvedConfig {
-            api_key: Some("test-key".to_string()),
-            model: "test-model".to_string(),
-            context_window_limit: 128000,
-            warn_threshold_percent: 0.8,
-            no_tool_calls: false,
-            auto_compact: false,
-            auto_compact_threshold: 0.9,
-            fuel: 5,
-            fuel_empty_response_cost: 15,
-            username: "user".to_string(),
-            reflection_enabled: false,
-            reflection_character_limit: 10000,
-            rolling_compact_drop_percentage: 50.0,
-            tool_output_cache_threshold: 5000,
-            tool_cache_max_age_days: 7,
-            auto_cleanup_cache: false,
-            tool_cache_preview_chars: 500,
-            file_tools_allowed_paths: allowed_paths,
-            api: ApiParams::default(),
-            tools: ToolsConfig::default(),
-            fallback_tool: "call_agent".to_string(),
-            storage: StorageConfig::default(),
-            url_policy: None,
-            subagent_cost_tier: "free".to_string(),
-            extra: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn test_resolve_file_path_relative_uses_project_root() {
-        let project_dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(project_dir.path().join("docs")).unwrap();
-        std::fs::write(project_dir.path().join("docs/readme.md"), "hello world").unwrap();
-
-        let config = make_test_config(vec![project_dir.path().to_string_lossy().to_string()]);
-        let home = tempfile::tempdir().unwrap();
-        let app = AppState::load(Some(home.path().to_path_buf())).unwrap();
-
-        let args = serde_json::json!({"path": "docs/readme.md"});
-        let result = resolve_file_path(&app, "test", &args, &config, project_dir.path());
-        assert!(
-            result.is_ok(),
-            "relative path should resolve against project_root: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
-    fn test_resolve_file_path_absolute_ignores_project_root() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let other_dir = tempfile::tempdir().unwrap();
-        let file = other_dir.path().join("test.txt");
-        std::fs::write(&file, "content").unwrap();
-
-        let config = make_test_config(vec![other_dir.path().to_string_lossy().to_string()]);
-        let home = tempfile::tempdir().unwrap();
-        let app = AppState::load(Some(home.path().to_path_buf())).unwrap();
-
-        let args = serde_json::json!({"path": file.to_string_lossy().to_string()});
-        let result = resolve_file_path(&app, "test", &args, &config, project_dir.path());
-        assert!(
-            result.is_ok(),
-            "absolute path should resolve without project_root: {:?}",
-            result.err()
-        );
-        match result.unwrap() {
-            ResolvedPath::Os(p) => assert_eq!(p, file.canonicalize().unwrap()),
-            ResolvedPath::Vfs(_) => panic!("expected Os path"),
-        }
-    }
-
-    #[test]
-    fn test_resolve_file_path_relative_outside_allowed_fails() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let allowed_dir = tempfile::tempdir().unwrap();
-        // Create file under project_dir but allowed_dir is different
-        std::fs::write(project_dir.path().join("secret.txt"), "secret").unwrap();
-
-        let config = make_test_config(vec![allowed_dir.path().to_string_lossy().to_string()]);
-        let home = tempfile::tempdir().unwrap();
-        let app = AppState::load(Some(home.path().to_path_buf())).unwrap();
-
-        let args = serde_json::json!({"path": "secret.txt"});
-        let result = resolve_file_path(&app, "test", &args, &config, project_dir.path());
-        assert!(result.is_err(), "path outside allowed dirs should fail");
+        let mut config = ResolvedConfig::default();
+        config.file_tools_allowed_paths = allowed_paths;
+        config
     }
 
     // === Integration tests: full execute path with project_root ===
@@ -877,22 +755,6 @@ mod tests {
         let backend = LocalBackend::new(vfs_dir.path().to_path_buf());
         app.vfs = Vfs::new(Box::new(backend));
         app
-    }
-
-    #[test]
-    fn test_resolve_file_path_vfs_uri() {
-        let home = tempfile::tempdir().unwrap();
-        let vfs_dir = tempfile::tempdir().unwrap();
-        let app = make_vfs_app(&home, &vfs_dir);
-        let config = make_test_config(vec![]);
-
-        let args = serde_json::json!({"path": "vfs:///shared/notes.txt"});
-        let result = resolve_file_path(&app, "ctx", &args, &config, Path::new("/unused"));
-        assert!(result.is_ok());
-        match result.unwrap() {
-            ResolvedPath::Vfs(p) => assert_eq!(p.as_str(), "/shared/notes.txt"),
-            ResolvedPath::Os(_) => panic!("expected VFS path"),
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
