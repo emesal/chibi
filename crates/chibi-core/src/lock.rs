@@ -151,7 +151,7 @@ impl ContextLock {
         now.saturating_sub(lock_timestamp) > stale_threshold
     }
 
-    /// Get display status for a context: Some("[active]"), Some("[stale]"), or None
+    /// Get display status for a context: Some("\[active\]"), Some("\[stale\]"), or None
     pub fn get_status(context_dir: &Path, heartbeat_secs: u64) -> Option<&'static str> {
         let lock_path = context_dir.join(".lock");
         if !lock_path.exists() {

@@ -74,7 +74,7 @@ pub struct ChibiInput {
     /// Disable markdown rendering (CLI-only presentation concern)
     #[serde(default)]
     pub raw: bool,
-    /// Debug: render a markdown file and quit (CLI-only, from --debug md=<FILE>)
+    /// Debug: render a markdown file and quit (CLI-only, from `--debug md=<FILE>`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub md_file: Option<String>,
     /// Debug: force markdown rendering even when stdout is not a TTY (CLI-only)

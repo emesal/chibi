@@ -792,7 +792,7 @@ pub struct ModelMetadata {
 
 /// Fully resolved configuration with all overrides applied.
 /// Note: This is the core resolved config. CLI extends this with presentation fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ResolvedConfig {
     /// API key for the provider. `None` = keyless (free-tier openrouter).
     pub api_key: Option<String>,

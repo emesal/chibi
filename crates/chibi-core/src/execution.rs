@@ -1019,6 +1019,139 @@ mod tests {
         );
     }
 
+    /// backdate a VFS entry's mtime so cleanup treats it as expired.
+    fn backdate_vfs_entry(chibi: &Chibi, vfs_path: &str, age: std::time::Duration) {
+        let os_path = chibi.app.chibi_dir.join("vfs").join(&vfs_path[1..]);
+        let past = std::time::SystemTime::now() - age;
+        let times = std::fs::FileTimes::new().set_modified(past);
+        std::fs::File::options()
+            .write(true)
+            .open(&os_path)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn execute_command_auto_cleanup_emits_event() {
+        let (mut chibi, _dir) = create_test_chibi();
+        chibi.app.config.auto_cleanup_cache = true;
+        chibi.app.config.tool_cache_max_age_days = 7;
+
+        let ctx_name = "cleanup-emit";
+        chibi.app.ensure_context_dir(ctx_name).unwrap();
+
+        let path = VfsPath::new(&format!("/sys/tool_cache/{ctx_name}/entry1")).unwrap();
+        chibi
+            .app
+            .vfs
+            .write(SYSTEM_CALLER, &path, b"cached result")
+            .await
+            .unwrap();
+
+        // backdate to 10 days ago
+        backdate_vfs_entry(
+            &chibi,
+            path.as_str(),
+            std::time::Duration::from_secs(10 * 86400),
+        );
+
+        let config = chibi.resolve_config(ctx_name, None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            ctx_name,
+            &Command::NoOp,
+            &flags,
+            &config,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        {
+            let events = sink.events.borrow();
+            let cleanup_event = events
+                .iter()
+                .find(|e| matches!(e, CommandEvent::CacheCleanup { .. }));
+            assert!(
+                cleanup_event.is_some(),
+                "CacheCleanup event should be emitted when expired entries exist"
+            );
+            if let Some(CommandEvent::CacheCleanup {
+                removed,
+                max_age_days,
+            }) = cleanup_event
+            {
+                assert_eq!(*removed, 1);
+                assert_eq!(*max_age_days, 7);
+            }
+        } // drop borrow before await
+
+        // entry should be gone
+        assert!(
+            !chibi.app.vfs.exists(SYSTEM_CALLER, &path).await.unwrap(),
+            "expired entry should be removed after auto-cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_command_clear_cache_dispatch() {
+        let (mut chibi, _dir) = create_test_chibi();
+
+        let ctx_name = "clear-dispatch";
+        chibi.app.ensure_context_dir(ctx_name).unwrap();
+
+        for name in ["e1", "e2"] {
+            let path = VfsPath::new(&format!("/sys/tool_cache/{ctx_name}/{name}")).unwrap();
+            chibi
+                .app
+                .vfs
+                .write(SYSTEM_CALLER, &path, b"data")
+                .await
+                .unwrap();
+        }
+
+        let config = chibi.resolve_config(ctx_name, None).unwrap();
+        let flags = ExecutionFlags::default();
+        let sink = CaptureSink::new();
+        let mut response = CollectingSink::default();
+
+        execute_command(
+            &mut chibi,
+            ctx_name,
+            &Command::ClearCache { name: None },
+            &flags,
+            &config,
+            &sink,
+            &mut response,
+        )
+        .await
+        .unwrap();
+
+        // verify result message
+        {
+            let results = sink.results.borrow();
+            assert!(
+                results.iter().any(|r| r.contains("Cleared tool cache")),
+                "should emit 'Cleared tool cache' result message"
+            );
+        } // drop borrow before await
+
+        // verify entries gone
+        for name in ["e1", "e2"] {
+            let path = VfsPath::new(&format!("/sys/tool_cache/{ctx_name}/{name}")).unwrap();
+            assert!(
+                !chibi.app.vfs.exists(SYSTEM_CALLER, &path).await.unwrap(),
+                "entry {name} should be gone after ClearCache"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn dispatch_set_model_saves_to_local_config() {
         let (mut chibi, _dir) = create_test_chibi();

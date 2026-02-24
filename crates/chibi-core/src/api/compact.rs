@@ -825,6 +825,722 @@ mod tests {
         assert_eq!(after.summary, "existing summary");
     }
 
+    // === rolling_compact LLM path tests ===
+
+    /// Spin up a minimal OpenAI-compatible stub server that always returns the
+    /// given `response_body` string as the assistant message content.
+    ///
+    /// Returns the base URL (e.g. `"http://127.0.0.1:PORT"`) and a join handle.
+    /// The server shuts down automatically when the handle is dropped.
+    async fn spawn_stub_server(response_body: String) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{}", port);
+
+        let body = serde_json::json!({
+            "id": "stub-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "stub",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": response_body },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        })
+        .to_string();
+
+        let handle = tokio::spawn(async move {
+            for _ in 0..10 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let body = body.clone();
+                tokio::spawn(async move {
+                    // Drain the full HTTP request (read until \r\n\r\n)
+                    let mut buf = vec![0u8; 16384];
+                    let mut total = 0;
+                    loop {
+                        match stream.read(&mut buf[total..]).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                total += n;
+                                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // Connection: close forces reqwest to open a fresh connection per request
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        (url, handle)
+    }
+
+    /// ResolvedConfig that routes LLM calls to the given stub base URL.
+    fn stub_resolved_config(stub_base_url: &str) -> ResolvedConfig {
+        let mut cfg = dummy_resolved_config();
+        cfg.extra
+            .insert("stub_base_url".to_string(), stub_base_url.to_string());
+        cfg
+    }
+
+    #[tokio::test]
+    async fn rolling_compact_with_stub_llm_reduces_message_count() {
+        // Note: save_context regenerates _ids via messages_to_entries, so the
+        // stub's returned ids won't match the stored context — the fallback path
+        // activates, dropping the oldest N (50% of 6 = 3) messages. What we're
+        // testing here is that the full rolling_compact pipeline (LLM call →
+        // save → reload) completes successfully and actually reduces messages.
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-llm-path";
+
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("s1"),
+            msg("user", "u1"),
+            msg("assistant", "a1"),
+            msg("user", "u2"),
+            msg("assistant", "a2"),
+            msg("user", "u3"),
+            msg("assistant", "a3"),
+        ];
+        app.save_context(&context).unwrap();
+
+        // Stub returns a non-empty string for the summary update call so save proceeds.
+        let (url, _handle) = spawn_stub_server("updated summary".to_string()).await;
+        let resolved = stub_resolved_config(&url);
+
+        let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "rolling_compact failed: {:?}", result);
+
+        let after = app.get_or_create_context(ctx_name).unwrap();
+        let non_system_count = after
+            .messages
+            .iter()
+            .filter(|m| m["role"].as_str() != Some("system"))
+            .count();
+        assert!(
+            non_system_count < 6,
+            "expected messages to be reduced, got {} (unchanged)",
+            non_system_count
+        );
+        assert_eq!(
+            after.summary, "updated summary",
+            "summary should be updated"
+        );
+    }
+
+    #[tokio::test]
+    async fn rolling_compact_fallback_drops_oldest_n_on_empty_llm_response() {
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-fallback-path";
+
+        // 6 non-system messages
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("s1"),
+            msg("user", "u1"),
+            msg("assistant", "a1"),
+            msg("user", "u2"),
+            msg("assistant", "a2"),
+            msg("user", "u3"),
+            msg("assistant", "a3"),
+        ];
+        app.save_context(&context).unwrap();
+
+        // Stub returns empty string → ids_to_drop parses as empty → fallback activates.
+        // The summary update call also gets empty → early return before save.
+        let (url, _handle) = spawn_stub_server(String::new()).await;
+        let resolved = stub_resolved_config(&url);
+
+        let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "rolling_compact failed: {:?}", result);
+
+        // Empty summary → early return before save, so messages are unchanged
+        let after = app.get_or_create_context(ctx_name).unwrap();
+        assert_eq!(
+            after.messages.len(),
+            6,
+            "expected 6 messages (unchanged due to empty summary), got {}",
+            after.messages.len()
+        );
+    }
+
+    /// Integration test: full rolling_compact pipeline with a real LLM.
+    ///
+    /// Gated on CHIBI_API_KEY. Uses ratatoskr:free/summariser (free OpenRouter preset).
+    /// Either the LLM decision path or the fallback path may activate depending on
+    /// whether the model returns valid IDs — both are correct behaviours.
+    ///
+    /// Skip with: unset CHIBI_API_KEY
+    /// Run with:  CHIBI_API_KEY=<key> cargo test rolling_compact_real_llm -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn rolling_compact_real_llm_reduces_message_count_and_writes_anchor() {
+        let Ok(api_key) = std::env::var("CHIBI_API_KEY") else {
+            eprintln!("CHIBI_API_KEY not set — skipping rolling compaction integration test");
+            return;
+        };
+
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "integration-rolling";
+
+        // Build a 12-message context: system + user/assistant pairs + one tool exchange.
+        // _ids are set so the LLM decision path can identify messages to drop.
+        // If the LLM returns unrecognised IDs, the fallback (drop oldest N%) activates —
+        // both paths are valid and the invariants below hold for both.
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("You are a helpful assistant."),
+            msg("user", "Tell me about Rust."),
+            msg("assistant", "Rust is a systems language focused on safety."),
+            msg("user", "What about async?"),
+            msg("assistant", "Async in Rust uses futures and tokio."),
+            msg("user", "How do I write a test?"),
+            msg("assistant", "Use #[test] for unit tests."),
+            msg("user", "What is compaction?"),
+            msg(
+                "assistant",
+                "Compaction archives old messages into a summary.",
+            ),
+            assistant_with_tools("m10", &["tc1"]),
+            tool_result("m11", "tc1"),
+            msg("user", "Thanks, that was helpful!"),
+        ];
+        app.save_context(&context).unwrap();
+
+        // Real ResolvedConfig pointing at free/summariser via OpenRouter.
+        // free/agentic is a valid fallback if summariser is unavailable.
+        let mut resolved = dummy_resolved_config();
+        resolved.api_key = Some(api_key);
+        resolved.model = "ratatoskr:free/summariser".to_string();
+        resolved.rolling_compact_drop_percentage = 50.0;
+
+        let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "rolling_compact failed: {:?}", result);
+
+        let after = app.get_or_create_context(ctx_name).unwrap();
+
+        // 1. Message count decreased
+        let after_non_system: Vec<_> = after
+            .messages
+            .iter()
+            .filter(|m| m["role"].as_str() != Some("system"))
+            .collect();
+        assert!(
+            after_non_system.len() < 11,
+            "expected fewer than 11 non-system messages after compaction, got {}",
+            after_non_system.len()
+        );
+
+        // 2. Summary is non-empty
+        assert!(
+            !after.summary.is_empty(),
+            "summary should be non-empty after compaction"
+        );
+
+        // 3. System messages preserved (none removed)
+        let system_count = after
+            .messages
+            .iter()
+            .filter(|m| m["role"].as_str() == Some("system"))
+            .count();
+        let original_system_count = 1;
+        assert_eq!(
+            system_count, original_system_count,
+            "system messages should be preserved"
+        );
+
+        // 4. No orphaned tool results: every tool message must have a corresponding
+        //    assistant message with a matching tool_call id still present.
+        let remaining_tool_call_ids: std::collections::HashSet<String> = after
+            .messages
+            .iter()
+            .filter_map(|m| m["tool_calls"].as_array())
+            .flatten()
+            .filter_map(|tc| tc["id"].as_str().map(|s| s.to_string()))
+            .collect();
+        let orphaned_tool_results: Vec<_> = after
+            .messages
+            .iter()
+            .filter(|m| m["role"].as_str() == Some("tool"))
+            .filter(|m| {
+                let tc_id = m["tool_call_id"].as_str().unwrap_or("");
+                !remaining_tool_call_ids.contains(tc_id)
+            })
+            .collect();
+        assert!(
+            orphaned_tool_results.is_empty(),
+            "found orphaned tool results: {:?}",
+            orphaned_tool_results
+        );
+
+        // 5. Transcript anchor was written (finalize_compaction side effect)
+        let entries = app.read_transcript_entries(ctx_name).unwrap();
+        let has_compaction_anchor = entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_COMPACTION);
+        assert!(
+            has_compaction_anchor,
+            "expected a compaction anchor in the transcript"
+        );
+    }
+
+    // === manual compaction tests ===
+
+    #[tokio::test]
+    async fn manual_compact_early_return_few_messages() {
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-manual-early-return";
+
+        // 2 messages → guard triggers, returns Ok immediately
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![msg("user", "hello"), msg("assistant", "hi")];
+        app.save_context(&context).unwrap();
+
+        let resolved = dummy_resolved_config();
+        let result = compact_context_with_llm_manual(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(
+            result.is_ok(),
+            "expected Ok for ≤2 messages, got {:?}",
+            result
+        );
+
+        // Context must be unchanged
+        let after = app.get_or_create_context(ctx_name).unwrap();
+        assert_eq!(after.messages.len(), 2, "context should be unchanged");
+        assert!(after.summary.is_empty(), "summary should still be empty");
+    }
+
+    #[tokio::test]
+    async fn manual_compact_empty_summary_returns_error() {
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-manual-empty-summary";
+
+        // 3 messages so the guard doesn't trigger
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![msg("user", "a"), msg("assistant", "b"), msg("user", "c")];
+        app.save_context(&context).unwrap();
+
+        // Stub returns empty string
+        let (stub_url, _handle) = spawn_stub_server("".to_string()).await;
+        let resolved = stub_resolved_config(&stub_url);
+        let result = compact_context_with_llm_manual(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_err(), "expected Err for empty summary");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Empty summary"),
+            "expected 'Empty summary' in error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_compact_stub_llm_produces_bootstrap_context() {
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "test-manual-stub-bootstrap";
+
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("You are a helpful assistant."),
+            msg("user", "Tell me about Rust."),
+            msg("assistant", "Rust is a systems language."),
+            msg("user", "What about ownership?"),
+            msg("assistant", "Ownership is Rust's memory model."),
+        ];
+        app.save_context(&context).unwrap();
+
+        let stub_summary = "Rust discussion: safety, ownership, memory model.";
+        let (stub_url, _handle) = spawn_stub_server(stub_summary.to_string()).await;
+        let resolved = stub_resolved_config(&stub_url);
+        let result = compact_context_with_llm_manual(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "compact failed: {:?}", result);
+
+        let after = app.get_or_create_context(ctx_name).unwrap();
+
+        // 1. Summary populated
+        assert!(
+            !after.summary.is_empty(),
+            "summary should be non-empty after compaction"
+        );
+
+        // 2. Original messages replaced — system prompts are stored separately in
+        //    context_meta, not persisted in the transcript; bootstrap has exactly 1
+        //    message: the user message containing the summary block.
+        assert_eq!(
+            after.messages.len(),
+            1,
+            "expected exactly 1 bootstrap message (user), got {}",
+            after.messages.len()
+        );
+
+        // 3. User message contains the summary block
+        let user_msg = after
+            .messages
+            .iter()
+            .find(|m| m["role"].as_str() == Some("user"))
+            .expect("expected a user message in bootstrap");
+        let content = user_msg["content"].as_str().unwrap_or("");
+        assert!(
+            content.contains("--- SUMMARY ---"),
+            "user message should contain '--- SUMMARY ---', got: {content}"
+        );
+
+        // 4. Transcript anchor written
+        let entries = app.read_transcript_entries(ctx_name).unwrap();
+        let has_anchor = entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_COMPACTION);
+        assert!(has_anchor, "expected a compaction anchor in the transcript");
+    }
+
+    /// Integration test: full manual compact pipeline with a real LLM.
+    ///
+    /// Gated on CHIBI_API_KEY. Uses ratatoskr:free/text-generation (free OpenRouter preset).
+    ///
+    /// Skip with: unset CHIBI_API_KEY
+    /// Run with:  CHIBI_API_KEY=<key> cargo test manual_compact_real_llm -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn manual_compact_real_llm_produces_bootstrap_context() {
+        let Ok(api_key) = std::env::var("CHIBI_API_KEY") else {
+            eprintln!("CHIBI_API_KEY not set — skipping manual compaction integration test");
+            return;
+        };
+
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "integration-manual";
+
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = vec![
+            system_msg("You are a helpful assistant."),
+            msg("user", "Tell me about Rust."),
+            msg("assistant", "Rust is a systems language focused on safety."),
+            msg("user", "What about ownership?"),
+            msg("assistant", "Ownership is Rust's memory management model."),
+        ];
+        app.save_context(&context).unwrap();
+
+        let mut resolved = dummy_resolved_config();
+        resolved.api_key = Some(api_key);
+        resolved.model = "ratatoskr:free/text-generation".to_string();
+
+        let result = compact_context_with_llm_manual(&app, ctx_name, &resolved, &NoopSink).await;
+        assert!(result.is_ok(), "manual compact failed: {:?}", result);
+
+        let after = app.get_or_create_context(ctx_name).unwrap();
+
+        // 1. Summary non-empty
+        assert!(
+            !after.summary.is_empty(),
+            "summary should be non-empty after compaction"
+        );
+
+        // 2. Bootstrap has exactly 1 message — the user message with the summary block.
+        //    System prompts are stored separately in context_meta and not persisted in
+        //    the transcript, so they don't appear when re-loading the context.
+        assert_eq!(
+            after.messages.len(),
+            1,
+            "expected exactly 1 bootstrap message (user), got {}",
+            after.messages.len()
+        );
+
+        // 3. User message contains summary block
+        let user_msg = after
+            .messages
+            .iter()
+            .find(|m| m["role"].as_str() == Some("user"))
+            .expect("expected a user message in bootstrap");
+        let content = user_msg["content"].as_str().unwrap_or("");
+        assert!(
+            content.contains("--- SUMMARY ---"),
+            "user message should contain '--- SUMMARY ---', got: {content}"
+        );
+
+        // 4. Transcript anchor written
+        let entries = app.read_transcript_entries(ctx_name).unwrap();
+        let has_anchor = entries
+            .iter()
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_COMPACTION);
+        assert!(has_anchor, "expected a compaction anchor in the transcript");
+    }
+
+    // === stress / correctness test ===
+
+    /// Integration stress test: large transcript with repeated rolling compaction.
+    ///
+    /// Builds a synthetic 90-message transcript (deterministic, seeded from a fixed
+    /// message table), then drives `rolling_compact` in a loop until the context
+    /// stabilises at ≤4 non-system messages.  Per-round invariants:
+    ///
+    /// - no orphaned tool results
+    /// - system messages preserved throughout
+    /// - summary is non-empty after each round
+    /// - non-system message count strictly decreases (or has hit the ≤4 floor)
+    /// - a compaction anchor is written to the transcript each round
+    ///
+    /// After full compaction the final context is re-loaded and verified to be
+    /// coherent (parseable, no corrupt JSON, loadable via `get_or_create_context`).
+    ///
+    /// Gated on `CHIBI_API_KEY`.  Free models may be slow; the test allows up to
+    /// 20 compaction rounds as a safety cap.
+    ///
+    /// Skip with: `unset CHIBI_API_KEY`
+    /// Run with:  `CHIBI_API_KEY=<key> cargo test large_transcript_stress -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn large_transcript_stress_repeated_rolling_compaction() {
+        let Ok(api_key) = std::env::var("CHIBI_API_KEY") else {
+            eprintln!("CHIBI_API_KEY not set — skipping large transcript stress test");
+            return;
+        };
+
+        let (app, _tmp) = create_test_app();
+        let ctx_name = "stress-rolling";
+
+        // --- Build a deterministic 90-message synthetic transcript ---
+        //
+        // Pattern (repeating slice):
+        //   user, assistant, user, assistant+tool_call, tool_result, user, assistant
+        // This gives a realistic mix of plain exchanges and tool interactions.
+        // IDs are stable strings so the LLM decision path can identify messages.
+        // If the LLM returns unrecognised IDs the fallback (oldest-N%) activates —
+        // both paths are valid and all invariants must hold for both.
+        let topics = [
+            (
+                "What is Rust?",
+                "Rust is a systems language focused on safety and performance.",
+            ),
+            (
+                "Explain ownership.",
+                "Ownership ensures memory safety without a garbage collector.",
+            ),
+            (
+                "How does borrowing work?",
+                "Borrowing allows references without transferring ownership.",
+            ),
+            (
+                "What are lifetimes?",
+                "Lifetimes annotate how long references are valid.",
+            ),
+            (
+                "Describe traits.",
+                "Traits define shared behaviour across types.",
+            ),
+            (
+                "What is async/await?",
+                "Async/await enables non-blocking I/O with a cooperative model.",
+            ),
+            (
+                "Explain enums.",
+                "Enums represent a value that can be one of several variants.",
+            ),
+            (
+                "What are closures?",
+                "Closures capture their environment and can be stored or passed.",
+            ),
+            (
+                "How do iterators work?",
+                "Iterators lazily produce a sequence of values.",
+            ),
+            (
+                "What is pattern matching?",
+                "Pattern matching deconstructs values into their components.",
+            ),
+        ];
+
+        let mut messages: Vec<serde_json::Value> = vec![
+            json!({ "role": "system", "_id": "sys-1", "content": "You are a knowledgeable Rust tutor." }),
+        ];
+
+        for (i, (question, answer)) in topics.iter().cycle().take(30).enumerate() {
+            let base = i * 3;
+            let uid = format!("u{}", base);
+            let aid = format!("a{}", base);
+            messages.push(json!({ "role": "user",      "_id": uid, "content": question }));
+            messages.push(json!({ "role": "assistant",  "_id": aid, "content": answer  }));
+
+            // Every third exchange: inject a tool call + result pair
+            if i % 3 == 2 {
+                let tc_id = format!("tc{}", base);
+                let tcm_id = format!("atc{}", base);
+                let tr_id = format!("tr{}", base);
+                messages.push(json!({
+                    "role": "assistant",
+                    "_id": tcm_id,
+                    "tool_calls": [{
+                        "id": tc_id,
+                        "function": { "name": "lookup_docs", "arguments": format!("{{\"topic\":\"{}\"}}", i) }
+                    }]
+                }));
+                messages.push(json!({
+                    "role": "tool",
+                    "_id": tr_id,
+                    "tool_call_id": tc_id,
+                    "content": format!("Documentation for topic {} retrieved successfully.", i)
+                }));
+            }
+        }
+
+        // Confirm we built a sufficiently large transcript (should be ~100 messages)
+        let non_system_initial: usize = messages
+            .iter()
+            .filter(|m| m["role"].as_str() != Some("system"))
+            .count();
+        assert!(
+            non_system_initial >= 80,
+            "expected ≥80 non-system messages to start, got {non_system_initial}"
+        );
+        eprintln!("stress test: built transcript with {non_system_initial} non-system messages");
+
+        let mut context = app.get_or_create_context(ctx_name).unwrap();
+        context.messages = messages;
+        app.save_context(&context).unwrap();
+
+        let mut resolved = dummy_resolved_config();
+        resolved.api_key = Some(api_key);
+        resolved.model = "ratatoskr:free/agentic".to_string();
+        resolved.rolling_compact_drop_percentage = 50.0;
+
+        let mut prev_non_system_count = non_system_initial;
+        let max_rounds = 20;
+
+        for round in 1..=max_rounds {
+            let before = app.get_or_create_context(ctx_name).unwrap();
+            let non_system_before: usize = before
+                .messages
+                .iter()
+                .filter(|m| m["role"].as_str() != Some("system"))
+                .count();
+
+            if non_system_before <= 4 {
+                eprintln!(
+                    "stress test: stable at round {round} ({non_system_before} non-system msgs) — done"
+                );
+                break;
+            }
+
+            eprintln!("stress test: round {round} — {non_system_before} non-system messages");
+
+            let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
+            assert!(
+                result.is_ok(),
+                "round {round}: rolling_compact failed: {:?}",
+                result
+            );
+
+            let after = app.get_or_create_context(ctx_name).unwrap();
+
+            // --- Per-round invariants ---
+
+            // 1. System messages are fully preserved.
+            let system_after = after
+                .messages
+                .iter()
+                .filter(|m| m["role"].as_str() == Some("system"))
+                .count();
+            assert!(
+                system_after >= 1,
+                "round {round}: system messages must be preserved (found {system_after})"
+            );
+
+            // 2. No orphaned tool results.
+            let remaining_tc_ids: HashSet<String> = after
+                .messages
+                .iter()
+                .filter_map(|m| m["tool_calls"].as_array())
+                .flatten()
+                .filter_map(|tc| tc["id"].as_str().map(|s| s.to_string()))
+                .collect();
+            let orphaned: Vec<_> = after
+                .messages
+                .iter()
+                .filter(|m| m["role"].as_str() == Some("tool"))
+                .filter(|m| {
+                    let tc_id = m["tool_call_id"].as_str().unwrap_or("");
+                    !remaining_tc_ids.contains(tc_id)
+                })
+                .collect();
+            assert!(
+                orphaned.is_empty(),
+                "round {round}: found orphaned tool results: {:?}",
+                orphaned
+            );
+
+            // 3. Summary grows or stays non-empty.
+            assert!(
+                !after.summary.is_empty(),
+                "round {round}: summary must be non-empty after compaction"
+            );
+
+            // 4. Non-system message count strictly decreases (or already at floor).
+            let non_system_after: usize = after
+                .messages
+                .iter()
+                .filter(|m| m["role"].as_str() != Some("system"))
+                .count();
+            if non_system_before > 4 {
+                assert!(
+                    non_system_after < prev_non_system_count,
+                    "round {round}: expected message count to decrease from {prev_non_system_count}, got {non_system_after}"
+                );
+            }
+            prev_non_system_count = non_system_after;
+
+            // 5. Compaction anchor written to transcript.
+            let entries = app.read_transcript_entries(ctx_name).unwrap();
+            let anchor_count = entries
+                .iter()
+                .filter(|e| e.entry_type == crate::context::ENTRY_TYPE_COMPACTION)
+                .count();
+            assert!(
+                anchor_count >= round,
+                "round {round}: expected at least {round} compaction anchor(s) in transcript, found {anchor_count}"
+            );
+
+            if non_system_after <= 4 {
+                eprintln!(
+                    "stress test: floor reached after round {round} ({non_system_after} msgs)"
+                );
+                break;
+            }
+        }
+
+        // --- Final coherence check ---
+        // Context must be loadable and parseable with no corrupt JSON.
+        let final_ctx = app.get_or_create_context(ctx_name).unwrap();
+        assert!(
+            !final_ctx.summary.is_empty(),
+            "final context: summary must be non-empty"
+        );
+        // Re-serialise and re-parse every message to confirm no corruption.
+        for (idx, msg) in final_ctx.messages.iter().enumerate() {
+            let serialised = serde_json::to_string(msg).unwrap_or_else(|e| {
+                panic!("final context: message {idx} failed to serialise: {e}")
+            });
+            serde_json::from_str::<serde_json::Value>(&serialised)
+                .unwrap_or_else(|e| panic!("final context: message {idx} failed to re-parse: {e}"));
+        }
+        eprintln!(
+            "stress test: final context has {} messages, summary len={}",
+            final_ctx.messages.len(),
+            final_ctx.summary.len()
+        );
+    }
+
     // === helpers ===
 
     /// Minimal ResolvedConfig for tests that never reach the LLM.

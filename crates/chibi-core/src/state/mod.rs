@@ -368,8 +368,8 @@ impl AppState {
                 Ok(m) => m,
                 Err(_) => continue,
             };
-            if let Some(created) = meta.created
-                && is_cache_entry_expired(created, max_age_days)
+            if let Some(modified) = meta.modified
+                && is_cache_entry_expired(modified, max_age_days)
             {
                 let _ = self.vfs.delete(crate::vfs::SYSTEM_CALLER, &file_path).await;
                 removed += 1;
@@ -1103,17 +1103,15 @@ fn is_context_entry(entry: &TranscriptEntry) -> bool {
     )
 }
 
-/// Check whether a cache entry's creation timestamp is older than `max_age_days`.
-///
-/// The `+1` offset means `max_age_days=0` tolerates entries less than 1 day old,
-/// preventing accidental deletion of entries created during the current session.
+/// check whether a cache entry's modification timestamp is older than `max_age_days`.
+/// the `+1` offset means `max_age_days=0` tolerates entries less than 1 day old.
 pub(crate) fn is_cache_entry_expired(
-    created: chrono::DateTime<chrono::Utc>,
+    timestamp: chrono::DateTime<chrono::Utc>,
     max_age_days: u64,
 ) -> bool {
     let max_age = chrono::Duration::days((max_age_days + 1) as i64);
     let cutoff = chrono::Utc::now() - max_age;
-    created < cutoff
+    timestamp < cutoff
 }
 
 #[cfg(test)]

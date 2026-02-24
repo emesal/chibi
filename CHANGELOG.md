@@ -3,7 +3,14 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.9.0] - 2026-02-22
+## [0.9.1] - 2026-02-24
+
+### Bug Fixes
+
+- **docs:** Resolve all rustdoc link and HTML tag warnings ([`b1a96d2`](https://github.com/emesal/chibi/commit/b1a96d2f092b3d454547abe6325ca26f476c596a))
+
+- Unified path resolver for all file-accessing builtin tools, #192 ([`942f95d`](https://github.com/emesal/chibi/commit/942f95dece4785c4a8f23efad008ae8896ab2b53))
+
 
 ### Chores
 
@@ -14,10 +21,33 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Sync all docs/ with reality ([`035fdd8`](https://github.com/emesal/chibi/commit/035fdd821705eeee53717a0fcd1be7aabf047046))
 
+- Update CHANGELOG for v0.9.0 ([`a491623`](https://github.com/emesal/chibi/commit/a491623aa2d7227680e4b9b201a1c97739972e88))
+
 
 ### Refactoring
 
 - **config:** Fold models.toml into config.toml and local.toml ([`64de559`](https://github.com/emesal/chibi/commit/64de559f3caffa7567d2bca34bcc328fcda12c7e))
+
+- Extract apply_pre_tool_results and apply_pre_tool_output_results from execute_tool_pure ([`e633dfe`](https://github.com/emesal/chibi/commit/e633dfef6bdf4bc6aaf7e0291f3e1511422e3b58))
+
+
+### Tests
+
+- **compact:** Add unit + integration tests for compaction logic, closes #168 ([`a68f149`](https://github.com/emesal/chibi/commit/a68f14932c3c94acd6cbd3c75997e6ef060effdd))
+
+- **cache:** TTL expiry integration + execute_command cache tests, closes #172 ([`2be0c90`](https://github.com/emesal/chibi/commit/2be0c9056f097ee1cd4b3833824591390ef6edb5))
+
+- **hooks:** PreTool, PreToolOutput, and PreApiTools filter tests, #173 ([`0631f31`](https://github.com/emesal/chibi/commit/0631f313f621dc99bb5de9a32b1b5eb58ca38d2b))
+
+- **hooks:** PreApiRequest modification + PreAgenticLoop/PostToolBatch override tests, #173 ([`1b00083`](https://github.com/emesal/chibi/commit/1b00083c4276183123eef23fd8450d9348bb0a84))
+
+- **hooks:** Failure cascade + ordering tests, #173 ([`744b447`](https://github.com/emesal/chibi/commit/744b447f140f7014aaaf89bbd570b781fe515d1e))
+
+- **compaction:** Rolling_compact real-LLM integration test, #169 ([`74b94a8`](https://github.com/emesal/chibi/commit/74b94a85310f45e08e344d22e7ba7ea8e38d232a))
+
+- **compaction:** Unit tests for manual compact — early return, empty summary, bootstrap structure ([`313e140`](https://github.com/emesal/chibi/commit/313e140c180a3fa8884c84000f1daaf08476fc06))
+
+- **compaction:** Large transcript stress test — repeated rolling compaction, #174 ([`24f7ed1`](https://github.com/emesal/chibi/commit/24f7ed121afad71aeb4398b273adf129e8f7208b))
 
 
 ## [0.8.10] - 2026-02-22

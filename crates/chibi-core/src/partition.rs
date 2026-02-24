@@ -282,8 +282,8 @@ impl Default for RotationPolicy {
 /// # Caching Strategy
 ///
 /// The state is updated incrementally:
-/// - [`record_append()`] updates after writing an entry
-/// - [`reset()`] clears after rotation
+/// - `record_append()` updates after writing an entry
+/// - `reset()` clears after rotation
 ///
 /// For cross-session caching (e.g., in `AppState`), the state can be cloned
 /// and restored via [`PartitionManager::load_with_cached_state()`].
@@ -526,7 +526,7 @@ impl PartitionManager {
     /// Returns a clone of the current active partition state for caching.
     ///
     /// Use this to capture state after operations and restore it later via
-    /// [`load_with_cached_state()`].
+    /// [`PartitionManager::load_with_cached_state()`].
     pub fn active_state(&self) -> ActiveState {
         self.active.clone()
     }

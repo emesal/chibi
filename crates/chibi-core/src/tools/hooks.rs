@@ -409,4 +409,94 @@ echo 'OK'
         assert_eq!(results[1].0, "second_hook");
         assert_eq!(results[1].1.as_str().unwrap(), "second");
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_execute_hook_failure_cascade() {
+        // Middle hook fails (exit 1) — first and third should still produce results
+        let dir = tempfile::tempdir().unwrap();
+
+        let ok1 = create_test_script(dir.path(), "ok1.sh", b"#!/bin/bash\necho '{\"order\": 1}'");
+        let fail = create_test_script(dir.path(), "fail.sh", b"#!/bin/bash\nexit 1");
+        let ok2 = create_test_script(dir.path(), "ok2.sh", b"#!/bin/bash\necho '{\"order\": 3}'");
+
+        let tools = vec![
+            Tool {
+                name: "ok1".to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+                path: ok1,
+                hooks: vec![HookPoint::PreMessage],
+                metadata: ToolMetadata::new(),
+                summary_params: vec![],
+            },
+            Tool {
+                name: "fail".to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+                path: fail,
+                hooks: vec![HookPoint::PreMessage],
+                metadata: ToolMetadata::new(),
+                summary_params: vec![],
+            },
+            Tool {
+                name: "ok2".to_string(),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+                path: ok2,
+                hooks: vec![HookPoint::PreMessage],
+                metadata: ToolMetadata::new(),
+                summary_params: vec![],
+            },
+        ];
+
+        let results =
+            execute_hook_with_retry(&tools, HookPoint::PreMessage, &serde_json::json!({})).unwrap();
+
+        assert_eq!(results.len(), 2, "failed hook should be skipped silently");
+        assert_eq!(results[0].0, "ok1");
+        assert_eq!(results[0].1["order"], 1);
+        assert_eq!(results[1].0, "ok2");
+        assert_eq!(results[1].1["order"], 3);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_execute_hook_ordering() {
+        // Results must arrive in tool registration order
+        let dir = tempfile::tempdir().unwrap();
+
+        let scripts: Vec<_> = (1..=3)
+            .map(|i| {
+                create_test_script(
+                    dir.path(),
+                    &format!("hook{i}.sh"),
+                    format!("#!/bin/bash\necho '{{\"order\": {i}}}'").as_bytes(),
+                )
+            })
+            .collect();
+
+        let tools: Vec<_> = scripts
+            .into_iter()
+            .enumerate()
+            .map(|(i, path)| Tool {
+                name: format!("hook{}", i + 1),
+                description: String::new(),
+                parameters: serde_json::json!({}),
+                path,
+                hooks: vec![HookPoint::PreMessage],
+                metadata: ToolMetadata::new(),
+                summary_params: vec![],
+            })
+            .collect();
+
+        let results =
+            execute_hook_with_retry(&tools, HookPoint::PreMessage, &serde_json::json!({})).unwrap();
+
+        assert_eq!(results.len(), 3);
+        for (i, (name, value)) in results.iter().enumerate() {
+            assert_eq!(*name, format!("hook{}", i + 1));
+            assert_eq!(value["order"], (i + 1) as u64);
+        }
+    }
 }

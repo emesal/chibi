@@ -173,9 +173,20 @@ fn to_ratatoskr_reasoning(reasoning: &config::ReasoningConfig) -> RatatoskrReaso
 ///
 /// Passes `api_key` as `Option<&str>` to ratatoskr — `None` enables keyless
 /// free-tier access via openrouter.
+///
+/// If `config.extra["stub_base_url"]` is set, registers an OpenAI-compatible
+/// stub provider at that URL instead of (or in addition to) OpenRouter.
+/// Intended for unit tests that spin up a local HTTP stub server.
 pub fn build_gateway(config: &ResolvedConfig) -> io::Result<EmbeddedGateway> {
-    Ratatoskr::builder()
-        .openrouter(config.api_key.as_deref())
+    // When a stub URL is set (test mode), skip OpenRouter entirely so the
+    // gateway doesn't require or try an API key.
+    let builder = if let Some(url) = config.extra.get("stub_base_url").map(|v| v.as_str()) {
+        Ratatoskr::builder().stub(url)
+    } else {
+        Ratatoskr::builder().openrouter(config.api_key.as_deref())
+    };
+
+    builder
         .build()
         .map_err(|e| io::Error::other(format!("Failed to build gateway: {}", e)))
 }

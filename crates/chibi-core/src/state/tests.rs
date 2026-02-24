@@ -1849,6 +1849,92 @@ async fn test_cleanup_all_tool_caches_fresh_entries_survive() {
     assert_eq!(removed, 0, "no fresh entries should be removed");
 }
 
+/// backdate a VFS entry's mtime so `cleanup_tool_cache` treats it as expired.
+/// `age` is subtracted from `SystemTime::now()`.
+fn backdate_vfs_entry(app: &AppState, vfs_path: &str, age: std::time::Duration) {
+    // VFS local backend root = chibi_dir/vfs; VFS path starts with '/'
+    let os_path = app.chibi_dir.join("vfs").join(&vfs_path[1..]);
+    let past = std::time::SystemTime::now() - age;
+    let times = std::fs::FileTimes::new().set_modified(past);
+    std::fs::File::options()
+        .write(true)
+        .open(&os_path)
+        .unwrap()
+        .set_times(times)
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_cleanup_removes_expired_entry() {
+    let (app, _temp) = create_test_app();
+    let ctx = "expire-ctx";
+
+    let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
+    app.vfs
+        .write(crate::vfs::SYSTEM_CALLER, &path, b"old data")
+        .await
+        .unwrap();
+
+    // backdate to 10 days ago — exceeds max_age_days=7 (cutoff = 8 days ago)
+    backdate_vfs_entry(
+        &app,
+        path.as_str(),
+        std::time::Duration::from_secs(10 * 86400),
+    );
+
+    let removed = app.cleanup_tool_cache(ctx, 7).await.unwrap();
+    assert_eq!(removed, 1, "expired entry should be removed");
+
+    let exists = app
+        .vfs
+        .exists(crate::vfs::SYSTEM_CALLER, &path)
+        .await
+        .unwrap();
+    assert!(!exists, "expired entry should be gone from VFS");
+}
+
+#[tokio::test]
+async fn test_cleanup_mixed_fresh_and_expired() {
+    let (app, _temp) = create_test_app();
+    let ctx = "mixed-ctx";
+
+    let fresh = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/fresh")).unwrap();
+    let stale = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/stale")).unwrap();
+
+    app.vfs
+        .write(crate::vfs::SYSTEM_CALLER, &fresh, b"new")
+        .await
+        .unwrap();
+    app.vfs
+        .write(crate::vfs::SYSTEM_CALLER, &stale, b"old")
+        .await
+        .unwrap();
+
+    backdate_vfs_entry(
+        &app,
+        stale.as_str(),
+        std::time::Duration::from_secs(10 * 86400),
+    );
+
+    let removed = app.cleanup_tool_cache(ctx, 7).await.unwrap();
+    assert_eq!(removed, 1, "only the stale entry should be removed");
+
+    assert!(
+        app.vfs
+            .exists(crate::vfs::SYSTEM_CALLER, &fresh)
+            .await
+            .unwrap(),
+        "fresh entry should survive"
+    );
+    assert!(
+        !app.vfs
+            .exists(crate::vfs::SYSTEM_CALLER, &stale)
+            .await
+            .unwrap(),
+        "stale entry should be gone"
+    );
+}
+
 // === Flow-control entry tests ===
 
 #[test]
