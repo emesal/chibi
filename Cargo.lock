@@ -991,7 +991,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chibi-cli"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "base64",
  "chibi-core",
@@ -1017,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "chibi-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "base64",
  "chrono",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "chibi-json"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "chibi-core",
  "schemars 0.8.22",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "chibi-mcp-bridge"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "dirs 6.0.0",
  "ratatoskr",
@@ -3695,8 +3695,8 @@ dependencies = [
 
 [[package]]
 name = "ratatoskr"
-version = "0.3.6"
-source = "git+https://github.com/emesal/ratatoskr.git?branch=main#e017d5cc573be004b449372fbeea1f204d24d9ae"
+version = "0.3.7"
+source = "git+https://github.com/emesal/ratatoskr.git?branch=main#456954be14b9ed2b9999a8b3ae09512a54e17ae5"
 dependencies = [
  "async-trait",
  "dirs 5.0.1",
