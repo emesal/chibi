@@ -704,9 +704,10 @@ mod tests {
     // === Path resolution tests are in tools/paths.rs ===
 
     fn make_test_config(allowed_paths: Vec<String>) -> ResolvedConfig {
-        let mut config = ResolvedConfig::default();
-        config.file_tools_allowed_paths = allowed_paths;
-        config
+        ResolvedConfig {
+            file_tools_allowed_paths: allowed_paths,
+            ..Default::default()
+        }
     }
 
     // === Integration tests: full execute path with project_root ===

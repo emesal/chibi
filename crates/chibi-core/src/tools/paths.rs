@@ -69,9 +69,10 @@ mod tests {
     use tempfile::TempDir;
 
     fn make_config(allowed: &[&str]) -> ResolvedConfig {
-        let mut config = ResolvedConfig::default();
-        config.file_tools_allowed_paths = allowed.iter().map(|s| s.to_string()).collect();
-        config
+        ResolvedConfig {
+            file_tools_allowed_paths: allowed.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     #[test]

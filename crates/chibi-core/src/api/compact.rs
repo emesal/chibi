@@ -1012,7 +1012,10 @@ mod tests {
             msg("user", "How do I write a test?"),
             msg("assistant", "Use #[test] for unit tests."),
             msg("user", "What is compaction?"),
-            msg("assistant", "Compaction archives old messages into a summary."),
+            msg(
+                "assistant",
+                "Compaction archives old messages into a summary.",
+            ),
             assistant_with_tools("m10", &["tc1"]),
             tool_result("m11", "tc1"),
             msg("user", "Thanks, that was helpful!"),
@@ -1105,15 +1108,16 @@ mod tests {
 
         // 2 messages → guard triggers, returns Ok immediately
         let mut context = app.get_or_create_context(ctx_name).unwrap();
-        context.messages = vec![
-            msg("user", "hello"),
-            msg("assistant", "hi"),
-        ];
+        context.messages = vec![msg("user", "hello"), msg("assistant", "hi")];
         app.save_context(&context).unwrap();
 
         let resolved = dummy_resolved_config();
         let result = compact_context_with_llm_manual(&app, ctx_name, &resolved, &NoopSink).await;
-        assert!(result.is_ok(), "expected Ok for ≤2 messages, got {:?}", result);
+        assert!(
+            result.is_ok(),
+            "expected Ok for ≤2 messages, got {:?}",
+            result
+        );
 
         // Context must be unchanged
         let after = app.get_or_create_context(ctx_name).unwrap();
@@ -1128,11 +1132,7 @@ mod tests {
 
         // 3 messages so the guard doesn't trigger
         let mut context = app.get_or_create_context(ctx_name).unwrap();
-        context.messages = vec![
-            msg("user", "a"),
-            msg("assistant", "b"),
-            msg("user", "c"),
-        ];
+        context.messages = vec![msg("user", "a"), msg("assistant", "b"), msg("user", "c")];
         app.save_context(&context).unwrap();
 
         // Stub returns empty string
@@ -1320,16 +1320,46 @@ mod tests {
         // If the LLM returns unrecognised IDs the fallback (oldest-N%) activates —
         // both paths are valid and all invariants must hold for both.
         let topics = [
-            ("What is Rust?", "Rust is a systems language focused on safety and performance."),
-            ("Explain ownership.", "Ownership ensures memory safety without a garbage collector."),
-            ("How does borrowing work?", "Borrowing allows references without transferring ownership."),
-            ("What are lifetimes?", "Lifetimes annotate how long references are valid."),
-            ("Describe traits.", "Traits define shared behaviour across types."),
-            ("What is async/await?", "Async/await enables non-blocking I/O with a cooperative model."),
-            ("Explain enums.", "Enums represent a value that can be one of several variants."),
-            ("What are closures?", "Closures capture their environment and can be stored or passed."),
-            ("How do iterators work?", "Iterators lazily produce a sequence of values."),
-            ("What is pattern matching?", "Pattern matching deconstructs values into their components."),
+            (
+                "What is Rust?",
+                "Rust is a systems language focused on safety and performance.",
+            ),
+            (
+                "Explain ownership.",
+                "Ownership ensures memory safety without a garbage collector.",
+            ),
+            (
+                "How does borrowing work?",
+                "Borrowing allows references without transferring ownership.",
+            ),
+            (
+                "What are lifetimes?",
+                "Lifetimes annotate how long references are valid.",
+            ),
+            (
+                "Describe traits.",
+                "Traits define shared behaviour across types.",
+            ),
+            (
+                "What is async/await?",
+                "Async/await enables non-blocking I/O with a cooperative model.",
+            ),
+            (
+                "Explain enums.",
+                "Enums represent a value that can be one of several variants.",
+            ),
+            (
+                "What are closures?",
+                "Closures capture their environment and can be stored or passed.",
+            ),
+            (
+                "How do iterators work?",
+                "Iterators lazily produce a sequence of values.",
+            ),
+            (
+                "What is pattern matching?",
+                "Pattern matching deconstructs values into their components.",
+            ),
         ];
 
         let mut messages: Vec<serde_json::Value> = vec![
@@ -1345,9 +1375,9 @@ mod tests {
 
             // Every third exchange: inject a tool call + result pair
             if i % 3 == 2 {
-                let tc_id  = format!("tc{}", base);
+                let tc_id = format!("tc{}", base);
                 let tcm_id = format!("atc{}", base);
-                let tr_id  = format!("tr{}", base);
+                let tr_id = format!("tr{}", base);
                 messages.push(json!({
                     "role": "assistant",
                     "_id": tcm_id,
@@ -1397,14 +1427,20 @@ mod tests {
                 .count();
 
             if non_system_before <= 4 {
-                eprintln!("stress test: stable at round {round} ({non_system_before} non-system msgs) — done");
+                eprintln!(
+                    "stress test: stable at round {round} ({non_system_before} non-system msgs) — done"
+                );
                 break;
             }
 
             eprintln!("stress test: round {round} — {non_system_before} non-system messages");
 
             let result = rolling_compact(&app, ctx_name, &resolved, &NoopSink).await;
-            assert!(result.is_ok(), "round {round}: rolling_compact failed: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "round {round}: rolling_compact failed: {:?}",
+                result
+            );
 
             let after = app.get_or_create_context(ctx_name).unwrap();
 
@@ -1476,7 +1512,9 @@ mod tests {
             );
 
             if non_system_after <= 4 {
-                eprintln!("stress test: floor reached after round {round} ({non_system_after} msgs)");
+                eprintln!(
+                    "stress test: floor reached after round {round} ({non_system_after} msgs)"
+                );
                 break;
             }
         }
@@ -1490,8 +1528,9 @@ mod tests {
         );
         // Re-serialise and re-parse every message to confirm no corruption.
         for (idx, msg) in final_ctx.messages.iter().enumerate() {
-            let serialised = serde_json::to_string(msg)
-                .unwrap_or_else(|e| panic!("final context: message {idx} failed to serialise: {e}"));
+            let serialised = serde_json::to_string(msg).unwrap_or_else(|e| {
+                panic!("final context: message {idx} failed to serialise: {e}")
+            });
             serde_json::from_str::<serde_json::Value>(&serialised)
                 .unwrap_or_else(|e| panic!("final context: message {idx} failed to re-parse: {e}"));
         }

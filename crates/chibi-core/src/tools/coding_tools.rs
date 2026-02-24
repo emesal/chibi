@@ -1111,9 +1111,10 @@ mod tests {
 
     /// Create a config that allows access to the given directory.
     fn make_config_for(dir: &TempDir) -> ResolvedConfig {
-        let mut config = ResolvedConfig::default();
-        config.file_tools_allowed_paths = vec![dir.path().to_string_lossy().to_string()];
-        config
+        ResolvedConfig {
+            file_tools_allowed_paths: vec![dir.path().to_string_lossy().to_string()],
+            ..Default::default()
+        }
     }
 
     // --- Registry ---
