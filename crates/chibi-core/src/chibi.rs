@@ -394,15 +394,17 @@ impl Chibi {
 
         // shell tools (async, no permission gating in chibi.rs)
         if tools::is_shell_tool(name)
-            && let Some(result) = tools::execute_shell_tool(name, &args, &self.project_root).await {
-                return result;
-            }
+            && let Some(result) = tools::execute_shell_tool(name, &args, &self.project_root).await
+        {
+            return result;
+        }
 
         // network tools (async, no permission gating in chibi.rs)
         if tools::is_network_tool(name)
-            && let Some(result) = tools::execute_network_tool(name, &args).await {
-                return result;
-            }
+            && let Some(result) = tools::execute_network_tool(name, &args).await
+        {
+            return result;
+        }
 
         // index tools (sync, no permission gating)
         if tools::is_index_tool(name) {
