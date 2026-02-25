@@ -9,7 +9,7 @@ use crate::config::ResolvedConfig;
 use crate::context::{Context, now_timestamp};
 use crate::gateway;
 use crate::output::{CommandEvent, OutputSink};
-use crate::state::AppState;
+use crate::state::{AppState, format_flock_sections, load_flock_contexts};
 use crate::tools;
 use serde_json::json;
 use std::io;
@@ -110,10 +110,10 @@ pub async fn rolling_compact(
     });
     let _ = tools::execute_hook(&tools, tools::HookPoint::PreRollingCompact, &hook_data);
 
-    // Load todos to guide compaction decisions.
-    // Goals are now flock-scoped (task 16 will replace this with load_flock_contexts).
-    let goals = String::new();
+    // Load todos and flock goals to guide compaction decisions.
     let todos = app.load_todos(context_name)?;
+    let flock_contexts = load_flock_contexts(&app.vfs, context_name).unwrap_or_default();
+    let goals = format_flock_sections(&flock_contexts);
 
     // Build message list in transcript format for LLM to analyze.
     // For tool messages, include a summary representation.
@@ -163,7 +163,7 @@ pub async fn rolling_compact(
             &if goals.is_empty() {
                 String::new()
             } else {
-                format!("CURRENT GOALS:\n{}\n\n", goals)
+                format!("{}\n\n", goals)
             },
         )
         .replace(
@@ -289,7 +289,7 @@ pub async fn rolling_compact(
             &if goals.is_empty() {
                 String::new()
             } else {
-                format!("\nCURRENT GOALS:\n{}\n", goals)
+                format!("\n{}\n", goals)
             },
         )
         .replace(

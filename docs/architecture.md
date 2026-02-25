@@ -16,12 +16,12 @@ chibi-mcp-bridge (binary, async daemon)
 ### chibi-core — Library crate (reusable logic)
 
 - `chibi.rs` — Main `Chibi` struct, tool execution
-- `context.rs`, `state/` — Context management, file I/O, config resolution
+- `context.rs`, `state/` — Context management, file I/O, config resolution; `state/flocks.rs` loads per-flock goals/prompts for prompt injection
 - `api/` — Request building, streaming, agentic loop (`send.rs`), compaction, `ResponseSink` trait (`sink.rs`), request/response logging (`logging.rs`)
 - `gateway.rs` — Type conversions between chibi and ratatoskr; context window auto-resolution
 - `model_info.rs` — Model metadata retrieval and formatting
 - `tools/` — Plugins (`plugins.rs`), hooks (`hooks.rs`), built-in tools organised by permission group (`memory.rs`, `fs_read.rs`, `fs_write.rs`, `shell.rs`, `network.rs`, `index.rs`, `flow.rs`, `vfs_tools.rs`), canonical path resolver (`paths.rs`), URL and file path security policy (`security.rs`), MCP bridge client (`mcp.rs`)
-- `vfs/` — Virtual file system: path validation (`path.rs`), backend trait (`backend.rs`), permission model (`permissions.rs`), local backend (`local.rs`), types (`types.rs`), `Vfs` orchestrator (`vfs.rs`)
+- `vfs/` — Virtual file system: path validation (`path.rs`), backend trait (`backend.rs`), permission model (`permissions.rs`), local backend (`local.rs`), types (`types.rs`), `Vfs` orchestrator (`vfs.rs`), flock operations and registry (`flock.rs`), typed caller enum (`caller.rs`)
 - `vfs_cache.rs` — Tool output caching helpers (cache ID generation, VFS path mapping, cache eligibility)
 - `partition.rs` — Partitioned transcript storage with bloom filters
 - `config.rs` — Core configuration types (`Config`, `LocalConfig`, `ResolvedConfig`)
@@ -93,12 +93,15 @@ MCP tools use virtual `mcp://server/tool` paths and appear as regular `Tool` str
 ├── vfs/                       # Virtual file system (shared storage)
 │   ├── shared/                # World-writable zone
 │   ├── home/<context>/        # Per-context home directories
-│   └── sys/                   # System-only zone
+│   │   └── todos.md           # Context todos (VFS-managed)
+│   ├── sys/                   # System-only zone (tool cache, etc.)
+│   ├── site/                  # Site-wide flock (goals.md, prompt.md)
+│   └── flocks/<name>/         # Named flock (goals.md, prompt.md, members.json)
 └── contexts/<name>/
     ├── context.jsonl          # LLM window (compaction-bounded)
     ├── transcript/            # Authoritative log (partitioned)
-    ├── local.toml, todos.md, goals.md, inbox.jsonl, summary.md
-    └── tool_cache/
+    ├── local.toml, inbox.jsonl, summary.md
+    └── tool_cache/            # (legacy; new caching uses vfs/sys/)
 ```
 
 Home directory: `--home` flag > `CHIBI_HOME` env > `~/.chibi`

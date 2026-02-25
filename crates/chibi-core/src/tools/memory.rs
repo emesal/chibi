@@ -4,7 +4,7 @@
 
 use super::{BuiltinToolDef, ToolPropertyDef, require_str_param, vfs_block_on};
 use crate::config::ResolvedConfig;
-use crate::state::AppState;
+use crate::state::{AppState, load_flock_contexts};
 use crate::vfs::{VfsCaller, VfsPath, flock::resolve_flock_vfs_root};
 use std::io::{self, ErrorKind};
 use std::path::Path;
@@ -144,7 +144,7 @@ pub fn execute_memory_tool(
         GOALS_TOOL_NAME => Some((|| {
             let flock = require_str_param(args, "flock")?;
             let content = require_str_param(args, "content")?;
-            let root = resolve_flock_vfs_root(&flock, &app.vfs.site_id())
+            let root = resolve_flock_vfs_root(&flock, app.vfs.site_id())
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
             let path = VfsPath::new(&format!("{}/goals.md", root.as_str()))
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
@@ -204,7 +204,7 @@ pub fn execute_reflection_tool(
 
 /// Execute read_context: read the state of another context (read-only).
 ///
-/// Returns a JSON object with the context's summary, todos, goals, and
+/// Returns a JSON object with the context's summary, todos, flock_goals, and
 /// optionally recent messages from context.jsonl.
 fn execute_read_context(
     app: &AppState,
@@ -238,10 +238,23 @@ fn execute_read_context(
     let todos = app.load_todos_for(context_name).unwrap_or_default();
     result.insert("todos".to_string(), serde_json::Value::String(todos));
 
-    // Goals are now flock-scoped (task 15 will update this to use load_flock_contexts).
+    // Goals are flock-scoped: load all flock contexts for the target and format
+    // as an attributed flock_goals array for the caller.
+    let flock_contexts = load_flock_contexts(&app.vfs, context_name).unwrap_or_default();
+    let flock_goals: Vec<serde_json::Value> = flock_contexts
+        .iter()
+        .filter_map(|fc| {
+            fc.goals.as_ref().map(|g| {
+                serde_json::json!({
+                    "flock": fc.flock_name,
+                    "goals": g,
+                })
+            })
+        })
+        .collect();
     result.insert(
-        "goals".to_string(),
-        serde_json::Value::String(String::new()),
+        "flock_goals".to_string(),
+        serde_json::Value::Array(flock_goals),
     );
 
     if include_messages {
