@@ -84,6 +84,16 @@ pub enum Command {
     ShowVersion,
     /// No operation - context switch only, no action
     NoOp,
+    /// Create a new flock and join current context to it (--flock-create)
+    FlockCreate { name: String },
+    /// Delete a flock entirely (--flock-delete)
+    FlockDelete { name: String },
+    /// Join a flock (--flock-join CTX FLOCK)
+    FlockJoin { flock: String, context: String },
+    /// Leave a flock (--flock-leave CTX FLOCK)
+    FlockLeave { flock: String, context: String },
+    /// List all flocks (--flock-list)
+    FlockList,
 }
 
 /// Debug feature keys

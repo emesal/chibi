@@ -14,7 +14,7 @@ use crate::config::ResolvedConfig;
 use crate::context;
 use crate::input::{Command, ExecutionFlags, Inspectable};
 use crate::output::{CommandEvent, OutputSink};
-use crate::state::StatePaths;
+use crate::state::{StatePaths, format_flock_sections, load_flock_contexts};
 
 /// Side effects of command execution that binaries may need to act on.
 ///
@@ -150,7 +150,13 @@ async fn dispatch_command<S: ResponseSink>(
                 );
                 let marker = if name == context { "* " } else { "  " };
                 let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
-                output.emit_result(&format!("{}{}{}", marker, name, status_str));
+                let explicit_flocks = chibi.app.vfs.flock_list_for(&name).await.unwrap_or_default();
+                let flock_str = if explicit_flocks.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", explicit_flocks.join(", "))
+                };
+                output.emit_result(&format!("{}{}{}{}", marker, name, flock_str, status_str));
             }
             Ok(CommandEffect::None)
         }
@@ -170,6 +176,12 @@ async fn dispatch_command<S: ResponseSink>(
                     ctx.summary.lines().next().unwrap_or("")
                 ));
             }
+            // Show flock memberships (site flock + explicit)
+            let site_flock = format!("site:{}", chibi.app.vfs.site_id());
+            let explicit_flocks = chibi.app.vfs.flock_list_for(context).await.unwrap_or_default();
+            let mut all_flocks = vec![site_flock];
+            all_flocks.extend(explicit_flocks);
+            output.emit_result(&format!("Flocks: {}", all_flocks.join(", ")));
             Ok(CommandEffect::None)
         }
         Command::DestroyContext { name } => {
@@ -307,6 +319,41 @@ async fn dispatch_command<S: ResponseSink>(
             Ok(CommandEffect::None)
         }
         Command::NoOp => Ok(CommandEffect::None),
+
+        // --- flock management commands ---
+        Command::FlockCreate { name } => {
+            // Join current context to the flock, creating it if it doesn't exist.
+            chibi.app.vfs.flock_join(name, context).await?;
+            output.emit_result(&format!("Created flock '{}' (joined as '{}')", name, context));
+            Ok(CommandEffect::None)
+        }
+        Command::FlockDelete { name } => {
+            chibi.app.vfs.flock_delete(name).await?;
+            output.emit_result(&format!("Deleted flock '{}'", name));
+            Ok(CommandEffect::None)
+        }
+        Command::FlockJoin { flock, context: ctx } => {
+            chibi.app.vfs.flock_join(flock, ctx).await?;
+            output.emit_result(&format!("Context '{}' joined flock '{}'", ctx, flock));
+            Ok(CommandEffect::None)
+        }
+        Command::FlockLeave { flock, context: ctx } => {
+            chibi.app.vfs.flock_leave(flock, ctx).await?;
+            output.emit_result(&format!("Context '{}' left flock '{}'", ctx, flock));
+            Ok(CommandEffect::None)
+        }
+        Command::FlockList => {
+            let flocks = chibi.app.vfs.flock_list_all().await?;
+            if flocks.is_empty() {
+                output.emit_result("(no flocks)");
+            } else {
+                for f in &flocks {
+                    let members: Vec<&str> = f.members.iter().map(|m| m.context.as_str()).collect();
+                    output.emit_result(&format!("{}: [{}]", f.name, members.join(", ")));
+                }
+            }
+            Ok(CommandEffect::None)
+        }
 
         // --- send-path commands ---
         Command::SendPrompt { prompt } => {
@@ -528,9 +575,13 @@ fn inspect_context(
             Ok(None)
         }
         Inspectable::Goals => {
-            // Goals are now flock-scoped. This branch will be replaced in task 9
-            // with load_flock_contexts + format_flock_sections.
-            output.emit_result("(goals are now flock-scoped, use -n goals once task 9 is done)");
+            let flock_contexts = load_flock_contexts(&chibi.app.vfs, context)?;
+            let formatted = format_flock_sections(&flock_contexts);
+            if formatted.is_empty() {
+                output.emit_result("(no goals)");
+            } else {
+                output.emit_markdown(formatted.trim())?;
+            }
             Ok(None)
         }
         Inspectable::Home => {

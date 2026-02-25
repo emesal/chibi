@@ -2,9 +2,10 @@
 //! Memory tools: reflection, todos, goals, read_context.
 //! These tools read and write internal context state.
 
-use super::{BuiltinToolDef, ToolPropertyDef};
+use super::{BuiltinToolDef, ToolPropertyDef, require_str_param, vfs_block_on};
 use crate::config::ResolvedConfig;
 use crate::state::AppState;
+use crate::vfs::{VfsCaller, VfsPath, flock::resolve_flock_vfs_root};
 use std::io::{self, ErrorKind};
 use std::path::Path;
 
@@ -12,6 +13,8 @@ pub const REFLECTION_TOOL_NAME: &str = "update_reflection";
 pub const TODOS_TOOL_NAME: &str = "update_todos";
 pub const GOALS_TOOL_NAME: &str = "update_goals";
 pub const READ_CONTEXT_TOOL_NAME: &str = "read_context";
+pub const FLOCK_JOIN_TOOL_NAME: &str = "flock_join";
+pub const FLOCK_LEAVE_TOOL_NAME: &str = "flock_leave";
 
 pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
     BuiltinToolDef {
@@ -40,15 +43,23 @@ pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
     },
     BuiltinToolDef {
         name: GOALS_TOOL_NAME,
-        description: "Update the goals for this context. Goals are high-level objectives that persist between conversation rounds and guide your work. Use goals to track what you're trying to achieve overall.",
-        properties: &[ToolPropertyDef {
-            name: "content",
-            prop_type: "string",
-            description: "The goals content (markdown format)",
-            default: None,
-        }],
-        required: &["content"],
-        summary_params: &[],
+        description: "Update the goals for a flock. Goals are high-level objectives shared by all contexts in a flock. Use 'site' to update site-wide goals or a specific flock name for team goals.",
+        properties: &[
+            ToolPropertyDef {
+                name: "flock",
+                prop_type: "string",
+                description: "The flock to update goals for ('site' for site-wide, or a named flock)",
+                default: None,
+            },
+            ToolPropertyDef {
+                name: "content",
+                prop_type: "string",
+                description: "The goals content (markdown format)",
+                default: None,
+            },
+        ],
+        required: &["flock", "content"],
+        summary_params: &["flock"],
     },
     BuiltinToolDef {
         name: READ_CONTEXT_TOOL_NAME,
@@ -75,6 +86,30 @@ pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
         ],
         required: &["context_name"],
         summary_params: &["context_name"],
+    },
+    BuiltinToolDef {
+        name: FLOCK_JOIN_TOOL_NAME,
+        description: "Join a flock (named group of contexts that share goals). Creates the flock if it doesn't exist.",
+        properties: &[ToolPropertyDef {
+            name: "flock",
+            prop_type: "string",
+            description: "Name of the flock to join (lowercase alphanumeric + hyphens)",
+            default: None,
+        }],
+        required: &["flock"],
+        summary_params: &["flock"],
+    },
+    BuiltinToolDef {
+        name: FLOCK_LEAVE_TOOL_NAME,
+        description: "Leave a flock. Cannot leave the site flock.",
+        properties: &[ToolPropertyDef {
+            name: "flock",
+            prop_type: "string",
+            description: "Name of the flock to leave",
+            default: None,
+        }],
+        required: &["flock"],
+        summary_params: &["flock"],
     },
 ];
 
@@ -106,14 +141,16 @@ pub fn execute_memory_tool(
                     .map(|_| format!("Todos updated ({} characters).", content.len())),
             )
         }
-        GOALS_TOOL_NAME => {
-            // Goals are now flock-scoped. This branch will be replaced in task 9
-            // with flock-aware goal writing via resolve_flock_vfs_root.
-            Some(Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "goals are now flock-scoped; use the 'flock' parameter (task 9)",
-            )))
-        }
+        GOALS_TOOL_NAME => Some((|| {
+            let flock = require_str_param(args, "flock")?;
+            let content = require_str_param(args, "content")?;
+            let root = resolve_flock_vfs_root(&flock, &app.vfs.site_id())
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            let path = VfsPath::new(&format!("{}/goals.md", root.as_str()))
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            vfs_block_on(app.vfs.write(VfsCaller::Context(context_name), &path, content.as_bytes()))
+                .map(|_| format!("Goals updated for flock '{}' ({} characters).", flock, content.len()))
+        })()),
         REFLECTION_TOOL_NAME => {
             let limit = config
                 .map(|c| c.reflection_character_limit)
@@ -124,6 +161,16 @@ pub fn execute_memory_tool(
             let target = args.get("context_name").and_then(|v| v.as_str())?;
             Some(execute_read_context(app, target, args))
         }
+        FLOCK_JOIN_TOOL_NAME => Some((|| {
+            let flock = require_str_param(args, "flock")?;
+            vfs_block_on(app.vfs.flock_join(&flock, context_name))
+                .map(|_| format!("Joined flock '{}'.", flock))
+        })()),
+        FLOCK_LEAVE_TOOL_NAME => Some((|| {
+            let flock = require_str_param(args, "flock")?;
+            vfs_block_on(app.vfs.flock_leave(&flock, context_name))
+                .map(|_| format!("Left flock '{}'.", flock))
+        })()),
         _ => None,
     }
 }
@@ -314,6 +361,6 @@ mod tests {
 
     #[test]
     fn test_memory_defs_count() {
-        assert_eq!(MEMORY_TOOL_DEFS.len(), 4);
+        assert_eq!(MEMORY_TOOL_DEFS.len(), 6);
     }
 }

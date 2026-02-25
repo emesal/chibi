@@ -8,6 +8,7 @@
 mod config_resolution;
 mod context_ops;
 mod entries;
+pub mod flocks;
 mod paths;
 mod prompts;
 
@@ -17,6 +18,7 @@ pub use entries::{
     create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
 };
+pub use flocks::{FlockContext, format_flock_sections, load_flock_contexts};
 pub use paths::StatePaths;
 
 use crate::jsonl::read_jsonl_file;

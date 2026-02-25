@@ -19,7 +19,7 @@ use crate::output::NoopSink;
 use crate::state::{
     AppState, create_assistant_message_entry, create_flow_control_call_entry,
     create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
-    create_user_message_entry,
+    create_user_message_entry, format_flock_sections, load_flock_contexts,
 };
 use crate::tools::{self, Tool};
 use crate::vfs::path::VfsPath;
@@ -475,15 +475,19 @@ fn build_full_system_prompt<S: ResponseSink>(
 
     // Load context-specific state
     let todos = app.load_todos(context_name)?;
-    // Goals are now flock-scoped (task 9 will replace this with load_flock_contexts).
-    let goals = String::new();
+    let flock_contexts = load_flock_contexts(&app.vfs, context_name)?;
 
     // Execute pre_system_prompt hook - can inject content before system prompt sections
     let pre_sys_hook_data = serde_json::json!({
         "context_name": context_name,
         "summary": summary,
         "todos": todos,
-        "goals": goals,
+        "flock_goals": flock_contexts.iter()
+            .filter_map(|fc| fc.goals.as_ref().map(|g| serde_json::json!({
+                "flock": fc.flock_name,
+                "goals": g,
+            })))
+            .collect::<Vec<_>>(),
     });
     let pre_sys_hook_results =
         tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data)?;
@@ -536,10 +540,10 @@ fn build_full_system_prompt<S: ResponseSink>(
         full_system_prompt.push_str(summary);
     }
 
-    // Add goals if present
-    if !goals.is_empty() {
-        full_system_prompt.push_str("\n\n--- CURRENT GOALS ---\n");
-        full_system_prompt.push_str(&goals);
+    // Add flock goals/prompts if present
+    let flock_sections = format_flock_sections(&flock_contexts);
+    if !flock_sections.is_empty() {
+        full_system_prompt.push_str(&flock_sections);
     }
 
     // Add todos if present
@@ -564,7 +568,12 @@ fn build_full_system_prompt<S: ResponseSink>(
         "context_name": context_name,
         "summary": summary,
         "todos": todos,
-        "goals": goals,
+        "flock_goals": flock_contexts.iter()
+            .filter_map(|fc| fc.goals.as_ref().map(|g| serde_json::json!({
+                "flock": fc.flock_name,
+                "goals": g,
+            })))
+            .collect::<Vec<_>>(),
     });
     let post_sys_hook_results = tools::execute_hook(
         tools,
