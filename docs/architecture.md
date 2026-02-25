@@ -20,7 +20,7 @@ chibi-mcp-bridge (binary, async daemon)
 - `api/` — Request building, streaming, agentic loop (`send.rs`), compaction, `ResponseSink` trait (`sink.rs`), request/response logging (`logging.rs`)
 - `gateway.rs` — Type conversions between chibi and ratatoskr; context window auto-resolution
 - `model_info.rs` — Model metadata retrieval and formatting
-- `tools/` — Plugins (`plugins.rs`), hooks (`hooks.rs`), built-in tools (`builtin.rs`, `coding_tools.rs`, `file_tools.rs`, `agent_tools.rs`, `vfs_tools.rs`), canonical path resolver (`paths.rs`), URL and file path security policy (`security.rs`), MCP bridge client (`mcp.rs`)
+- `tools/` — Plugins (`plugins.rs`), hooks (`hooks.rs`), built-in tools organised by permission group (`memory.rs`, `fs_read.rs`, `fs_write.rs`, `shell.rs`, `network.rs`, `index.rs`, `flow.rs`, `vfs_tools.rs`), canonical path resolver (`paths.rs`), URL and file path security policy (`security.rs`), MCP bridge client (`mcp.rs`)
 - `vfs/` — Virtual file system: path validation (`path.rs`), backend trait (`backend.rs`), permission model (`permissions.rs`), local backend (`local.rs`), types (`types.rs`), `Vfs` orchestrator (`vfs.rs`)
 - `vfs_cache.rs` — Tool output caching helpers (cache ID generation, VFS path mapping, cache eligibility)
 - `partition.rs` — Partitioned transcript storage with bloom filters
