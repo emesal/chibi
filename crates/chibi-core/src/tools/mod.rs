@@ -18,6 +18,9 @@ mod flow;
 mod fs_read;
 mod fs_write;
 mod hooks;
+mod index;
+mod network;
+mod shell;
 mod memory;
 pub mod mcp;
 pub(crate) mod paths;
@@ -88,13 +91,9 @@ pub use builtin::{
     builtin_tools_to_api_format, execute_builtin_tool, get_builtin_tool_def, is_builtin_tool,
 };
 
-// Re-export coding tool registry functions and execution
+// Re-export coding tool registry functions and execution (legacy; only kept for dispatch/tests)
 pub use coding_tools::{
     CODING_TOOL_DEFS, all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool,
-};
-pub use coding_tools::{
-    FETCH_URL_TOOL_NAME, INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME,
-    INDEX_UPDATE_TOOL_NAME, SHELL_EXEC_TOOL_NAME,
 };
 
 // Re-export file tool registry functions
@@ -114,6 +113,24 @@ pub use fs_read::{
 pub use fs_write::{
     FS_WRITE_TOOL_DEFS, FILE_EDIT_TOOL_NAME, WRITE_FILE_TOOL_NAME,
     all_fs_write_tools_to_api_format, execute_fs_write_tool, execute_write_file, is_fs_write_tool,
+};
+
+// Re-export shell tool registry functions and execution
+pub use shell::{
+    SHELL_TOOL_DEFS, SHELL_EXEC_TOOL_NAME,
+    all_shell_tools_to_api_format, execute_shell_tool, is_shell_tool,
+};
+
+// Re-export network tool registry functions and execution
+pub use network::{
+    NETWORK_TOOL_DEFS, FETCH_URL_TOOL_NAME,
+    all_network_tools_to_api_format, execute_network_tool, is_network_tool,
+};
+
+// Re-export index tool registry functions and execution
+pub use index::{
+    INDEX_TOOL_DEFS, INDEX_UPDATE_TOOL_NAME, INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME,
+    all_index_tools_to_api_format, execute_index_tool, is_index_tool,
 };
 
 // Re-export VFS tool registry functions and execution
@@ -181,16 +198,12 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         .chain(fs_read::FS_READ_TOOL_DEFS.iter())
         // fs_write: write_file, file_edit
         .chain(fs_write::FS_WRITE_TOOL_DEFS.iter())
-        // coding_tools: shell_exec, index_*, fetch_url (read/write tools now in fs_*)
-        .chain(coding_tools::CODING_TOOL_DEFS.iter().filter(|d| {
-            !matches!(
-                d.name,
-                coding_tools::DIR_LIST_TOOL_NAME
-                    | coding_tools::GLOB_FILES_TOOL_NAME
-                    | coding_tools::GREP_FILES_TOOL_NAME
-                    | coding_tools::FILE_EDIT_TOOL_NAME
-            )
-        }))
+        // shell: shell_exec
+        .chain(shell::SHELL_TOOL_DEFS.iter())
+        // network: fetch_url
+        .chain(network::NETWORK_TOOL_DEFS.iter())
+        // index: index_update, index_query, index_status
+        .chain(index::INDEX_TOOL_DEFS.iter())
         .chain(vfs_tools::VFS_TOOL_DEFS.iter())
         .map(|def| def.name)
         .collect()
@@ -465,12 +478,14 @@ mod tests {
         assert!(names.contains(&"file_edit")); // coding tool
         assert!(names.contains(&"vfs_list")); // vfs tool
 
-        // Should be: memory + flow + fs_read + fs_write + (coding minus dir/glob/grep/file_edit) + vfs
+        // Should be: memory + flow + fs_read + fs_write + shell + network + index + vfs
         let expected_count = memory::MEMORY_TOOL_DEFS.len()
             + flow::FLOW_TOOL_DEFS.len()
             + fs_read::FS_READ_TOOL_DEFS.len()
             + fs_write::FS_WRITE_TOOL_DEFS.len()
-            + coding_tools::CODING_TOOL_DEFS.len() - 4 // minus dir_list/glob_files/grep_files/file_edit
+            + shell::SHELL_TOOL_DEFS.len()
+            + network::NETWORK_TOOL_DEFS.len()
+            + index::INDEX_TOOL_DEFS.len()
             + vfs_tools::VFS_TOOL_DEFS.len();
         assert_eq!(names.len(), expected_count);
     }
