@@ -14,6 +14,7 @@ pub mod agent_tools;
 mod builtin;
 pub mod coding_tools;
 pub mod file_tools;
+mod flow;
 mod hooks;
 mod memory;
 pub mod mcp;
@@ -65,34 +66,25 @@ pub use hooks::execute_hook;
 // Re-export plugin functions
 pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
 
-// Re-export built-in tool constants (used by api module)
-pub use builtin::{CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME};
-pub use builtin::{MODEL_INFO_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
-
 // Re-export memory tool constants and functions
 pub use memory::{
-    GOALS_TOOL_NAME, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME, TODOS_TOOL_NAME,
-    all_memory_tools_to_api_format, execute_memory_tool, is_memory_tool,
-    MEMORY_TOOL_DEFS,
+    GOALS_TOOL_NAME, MEMORY_TOOL_DEFS, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME,
+    TODOS_TOOL_NAME, all_memory_tools_to_api_format, execute_memory_tool, is_memory_tool,
 };
 
-// Re-export handoff types for control flow
-pub use builtin::{Handoff, HandoffTarget};
+// Re-export flow tool constants, types and functions
+pub use flow::{
+    CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME, FLOW_TOOL_DEFS, MODEL_INFO_TOOL_NAME,
+    SEND_MESSAGE_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SUMMARIZE_CONTENT_TOOL_NAME,
+    Handoff, HandoffTarget, SpawnOptions,
+    all_flow_tools_to_api_format, execute_flow_tool, flow_tool_metadata, is_flow_tool, spawn_agent,
+};
 
-// Re-export builtin tool registry lookup
-pub use builtin::{get_builtin_tool_def, is_builtin_tool};
-
-// Re-export registry-based tool generation
-pub use builtin::{all_builtin_tools_to_api_format, builtin_tools_to_api_format};
-
-// Re-export built-in tool execution functions
-pub use builtin::execute_builtin_tool;
-
-// Re-export tool metadata functions
-pub use builtin::builtin_tool_metadata;
-
-// Re-export summary_params lookup
-pub use builtin::builtin_summary_params;
+// Re-export builtin tool registry lookup and execution (includes memory + flow delegation)
+pub use builtin::{
+    all_builtin_tools_to_api_format, builtin_summary_params, builtin_tool_metadata,
+    builtin_tools_to_api_format, execute_builtin_tool, get_builtin_tool_def, is_builtin_tool,
+};
 
 // Re-export coding tool registry functions and execution
 pub use coding_tools::{
@@ -116,14 +108,8 @@ pub use vfs_tools::{all_vfs_tools_to_api_format, execute_vfs_tool, is_vfs_tool};
 // Re-export file write tool names for permission gating
 pub use file_tools::WRITE_FILE_TOOL_NAME;
 
-// Re-export agent tool registry functions
-pub use agent_tools::{all_agent_tools_to_api_format, get_agent_tool_def};
-
-// Re-export agent tool execution and utilities
-pub use agent_tools::{execute_agent_tool, is_agent_tool, spawn_agent};
-
-// Re-export agent tool types and constants
-pub use agent_tools::{SPAWN_AGENT_TOOL_NAME, SUMMARIZE_CONTENT_TOOL_NAME, SpawnOptions};
+// Re-export agent tool registry functions (still used transitionally; will be removed in task 8)
+pub use agent_tools::{all_agent_tools_to_api_format, execute_agent_tool, get_agent_tool_def, is_agent_tool};
 
 // Re-export security utilities
 pub use security::{
@@ -179,9 +165,8 @@ pub struct Tool {
 pub fn builtin_tool_names() -> Vec<&'static str> {
     memory::MEMORY_TOOL_DEFS
         .iter()
-        .chain(builtin::BUILTIN_TOOL_DEFS.iter())
+        .chain(flow::FLOW_TOOL_DEFS.iter())
         .chain(file_tools::FILE_TOOL_DEFS.iter())
-        .chain(agent_tools::AGENT_TOOL_DEFS.iter())
         .chain(coding_tools::CODING_TOOL_DEFS.iter())
         .chain(vfs_tools::VFS_TOOL_DEFS.iter())
         .map(|def| def.name)
@@ -459,9 +444,8 @@ mod tests {
 
         // Should be the sum of all registries
         let expected_count = memory::MEMORY_TOOL_DEFS.len()
-            + builtin::BUILTIN_TOOL_DEFS.len()
+            + flow::FLOW_TOOL_DEFS.len()
             + file_tools::FILE_TOOL_DEFS.len()
-            + agent_tools::AGENT_TOOL_DEFS.len()
             + coding_tools::CODING_TOOL_DEFS.len()
             + vfs_tools::VFS_TOOL_DEFS.len();
         assert_eq!(names.len(), expected_count);

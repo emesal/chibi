@@ -2262,8 +2262,9 @@ mod tests {
 
     #[test]
     fn test_classify_tool_type_agent() {
+        // spawn_agent and summarize_content moved to flow group (builtin) in task 3
         for name in ["spawn_agent", "summarize_content"] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::Agent, "{name}");
+            assert_eq!(classify_tool_type(name, &[]), ToolType::Builtin, "{name}");
         }
     }
 
@@ -2391,6 +2392,7 @@ mod tests {
         let config = ToolsConfig {
             include: None,
             exclude: None,
+            // spawn_agent is now "builtin" (flow group), not "agent" — excluding "agent" no longer removes it
             exclude_categories: Some(vec!["coding".to_string(), "agent".to_string()]),
         };
         let result = filter_tools_by_config(tools, &config, &[]);
@@ -2398,7 +2400,7 @@ mod tests {
             .iter()
             .filter_map(|t| t.get("function")?.get("name")?.as_str())
             .collect();
-        assert_eq!(names, vec!["file_head", "update_todos"]);
+        assert_eq!(names, vec!["file_head", "spawn_agent", "update_todos"]);
     }
 
     #[test]
