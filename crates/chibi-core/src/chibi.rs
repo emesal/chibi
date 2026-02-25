@@ -386,7 +386,7 @@ impl Chibi {
                 &self.project_root,
                 &config,
                 &self.app.vfs,
-                context_name,
+                crate::vfs::VfsCaller::Context(context_name),
             ) {
                 return result;
             }

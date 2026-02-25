@@ -1673,7 +1673,7 @@ async fn test_clear_tool_cache_via_vfs() {
 
     let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{}/entry1", ctx)).unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"data")
+        .write(crate::vfs::VfsCaller::System, &path, b"data")
         .await
         .unwrap();
 
@@ -1681,7 +1681,7 @@ async fn test_clear_tool_cache_via_vfs() {
 
     let exists = app
         .vfs
-        .exists(crate::vfs::SYSTEM_CALLER, &path)
+        .exists(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap();
     assert!(!exists, "cache entry should be deleted after clear");
@@ -1694,7 +1694,7 @@ async fn test_cleanup_old_tool_caches_removes_expired() {
 
     let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{}/entry1", ctx)).unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"old data")
+        .write(crate::vfs::VfsCaller::System, &path, b"old data")
         .await
         .unwrap();
 
@@ -1741,13 +1741,13 @@ async fn test_cache_write_then_read_hit() {
     let path = crate::vfs::VfsPath::new("/sys/tool_cache/ctx/entry1").unwrap();
 
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"cached output")
+        .write(crate::vfs::VfsCaller::System, &path, b"cached output")
         .await
         .unwrap();
 
     let data = app
         .vfs
-        .read(crate::vfs::SYSTEM_CALLER, &path)
+        .read(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap();
     assert_eq!(data, b"cached output");
@@ -1760,7 +1760,7 @@ async fn test_cache_read_miss() {
 
     let err = app
         .vfs
-        .read(crate::vfs::SYSTEM_CALLER, &path)
+        .read(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
@@ -1772,12 +1772,12 @@ async fn test_cache_per_context_isolation() {
 
     let path_a = crate::vfs::VfsPath::new("/sys/tool_cache/ctx-a/entry1").unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path_a, b"data-a")
+        .write(crate::vfs::VfsCaller::System, &path_a, b"data-a")
         .await
         .unwrap();
 
     let dir_b = crate::vfs::VfsPath::new("/sys/tool_cache/ctx-b").unwrap();
-    let result = app.vfs.list(crate::vfs::SYSTEM_CALLER, &dir_b).await;
+    let result = app.vfs.list(crate::vfs::VfsCaller::System, &dir_b).await;
     match result {
         Ok(entries) => assert!(entries.is_empty(), "ctx-b should have no entries"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // also fine
@@ -1793,7 +1793,7 @@ async fn test_clear_tool_cache_removes_all_entries() {
     for name in ["e1", "e2", "e3"] {
         let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
         app.vfs
-            .write(crate::vfs::SYSTEM_CALLER, &path, b"data")
+            .write(crate::vfs::VfsCaller::System, &path, b"data")
             .await
             .unwrap();
     }
@@ -1804,7 +1804,7 @@ async fn test_clear_tool_cache_removes_all_entries() {
         let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
         let exists = app
             .vfs
-            .exists(crate::vfs::SYSTEM_CALLER, &path)
+            .exists(crate::vfs::VfsCaller::System, &path)
             .await
             .unwrap();
         assert!(!exists, "entry {name} should be gone after clear");
@@ -1818,7 +1818,7 @@ async fn test_cleanup_tool_cache_fresh_entries_survive() {
 
     let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"fresh")
+        .write(crate::vfs::VfsCaller::System, &path, b"fresh")
         .await
         .unwrap();
 
@@ -1827,7 +1827,7 @@ async fn test_cleanup_tool_cache_fresh_entries_survive() {
 
     let exists = app
         .vfs
-        .exists(crate::vfs::SYSTEM_CALLER, &path)
+        .exists(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap();
     assert!(exists, "fresh entry should still exist");
@@ -1840,7 +1840,7 @@ async fn test_cleanup_all_tool_caches_fresh_entries_survive() {
     for ctx in ["ctx-x", "ctx-y"] {
         let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
         app.vfs
-            .write(crate::vfs::SYSTEM_CALLER, &path, b"fresh")
+            .write(crate::vfs::VfsCaller::System, &path, b"fresh")
             .await
             .unwrap();
     }
@@ -1871,7 +1871,7 @@ async fn test_cleanup_removes_expired_entry() {
 
     let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"old data")
+        .write(crate::vfs::VfsCaller::System, &path, b"old data")
         .await
         .unwrap();
 
@@ -1887,7 +1887,7 @@ async fn test_cleanup_removes_expired_entry() {
 
     let exists = app
         .vfs
-        .exists(crate::vfs::SYSTEM_CALLER, &path)
+        .exists(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap();
     assert!(!exists, "expired entry should be gone from VFS");
@@ -1902,11 +1902,11 @@ async fn test_cleanup_mixed_fresh_and_expired() {
     let stale = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/stale")).unwrap();
 
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &fresh, b"new")
+        .write(crate::vfs::VfsCaller::System, &fresh, b"new")
         .await
         .unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &stale, b"old")
+        .write(crate::vfs::VfsCaller::System, &stale, b"old")
         .await
         .unwrap();
 
@@ -1921,14 +1921,14 @@ async fn test_cleanup_mixed_fresh_and_expired() {
 
     assert!(
         app.vfs
-            .exists(crate::vfs::SYSTEM_CALLER, &fresh)
+            .exists(crate::vfs::VfsCaller::System, &fresh)
             .await
             .unwrap(),
         "fresh entry should survive"
     );
     assert!(
         !app.vfs
-            .exists(crate::vfs::SYSTEM_CALLER, &stale)
+            .exists(crate::vfs::VfsCaller::System, &stale)
             .await
             .unwrap(),
         "stale entry should be gone"

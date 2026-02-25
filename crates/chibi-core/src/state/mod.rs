@@ -336,7 +336,7 @@ impl AppState {
         let dir_str = format!("/sys/tool_cache/{}", name);
         let dir = crate::vfs::VfsPath::new(&dir_str)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-        match self.vfs.delete(crate::vfs::SYSTEM_CALLER, &dir).await {
+        match self.vfs.delete(crate::vfs::VfsCaller::System, &dir).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
@@ -358,7 +358,7 @@ impl AppState {
             Err(_) => return Ok(0),
         };
 
-        let entries = match self.vfs.list(crate::vfs::SYSTEM_CALLER, &dir).await {
+        let entries = match self.vfs.list(crate::vfs::VfsCaller::System, &dir).await {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
             Err(e) => return Err(e),
@@ -376,7 +376,7 @@ impl AppState {
             };
             let meta = match self
                 .vfs
-                .metadata(crate::vfs::SYSTEM_CALLER, &file_path)
+                .metadata(crate::vfs::VfsCaller::System, &file_path)
                 .await
             {
                 Ok(m) => m,
@@ -385,7 +385,10 @@ impl AppState {
             if let Some(modified) = meta.modified
                 && is_cache_entry_expired(modified, max_age_days)
             {
-                let _ = self.vfs.delete(crate::vfs::SYSTEM_CALLER, &file_path).await;
+                let _ = self
+                    .vfs
+                    .delete(crate::vfs::VfsCaller::System, &file_path)
+                    .await;
                 removed += 1;
             }
         }
@@ -399,7 +402,7 @@ impl AppState {
         let root = crate::vfs::VfsPath::new("/sys/tool_cache")
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
 
-        let ctx_dirs = match self.vfs.list(crate::vfs::SYSTEM_CALLER, &root).await {
+        let ctx_dirs = match self.vfs.list(crate::vfs::VfsCaller::System, &root).await {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
             Err(e) => return Err(e),

@@ -554,7 +554,7 @@ mod tests {
     use crate::context::{Context, ContextEntry, now_timestamp};
     use crate::output::CaptureSink;
     use crate::test_support::create_test_chibi;
-    use crate::vfs::{SYSTEM_CALLER, VfsPath};
+    use crate::vfs::{VfsCaller, VfsPath};
 
     // === pre-command lifecycle ===
 
@@ -956,7 +956,7 @@ mod tests {
         chibi
             .app
             .vfs
-            .write(SYSTEM_CALLER, &path, b"cached result")
+            .write(VfsCaller::System, &path, b"cached result")
             .await
             .unwrap();
 
@@ -990,7 +990,12 @@ mod tests {
 
         // Entry must still be present
         assert!(
-            chibi.app.vfs.exists(SYSTEM_CALLER, &path).await.unwrap(),
+            chibi
+                .app
+                .vfs
+                .exists(VfsCaller::System, &path)
+                .await
+                .unwrap(),
             "fresh cache entry should survive cleanup"
         );
     }
@@ -1052,7 +1057,7 @@ mod tests {
         chibi
             .app
             .vfs
-            .write(SYSTEM_CALLER, &path, b"cached result")
+            .write(VfsCaller::System, &path, b"cached result")
             .await
             .unwrap();
 
@@ -1101,7 +1106,12 @@ mod tests {
 
         // entry should be gone
         assert!(
-            !chibi.app.vfs.exists(SYSTEM_CALLER, &path).await.unwrap(),
+            !chibi
+                .app
+                .vfs
+                .exists(VfsCaller::System, &path)
+                .await
+                .unwrap(),
             "expired entry should be removed after auto-cleanup"
         );
     }
@@ -1118,7 +1128,7 @@ mod tests {
             chibi
                 .app
                 .vfs
-                .write(SYSTEM_CALLER, &path, b"data")
+                .write(VfsCaller::System, &path, b"data")
                 .await
                 .unwrap();
         }
@@ -1153,7 +1163,12 @@ mod tests {
         for name in ["e1", "e2"] {
             let path = VfsPath::new(&format!("/sys/tool_cache/{ctx_name}/{name}")).unwrap();
             assert!(
-                !chibi.app.vfs.exists(SYSTEM_CALLER, &path).await.unwrap(),
+                !chibi
+                    .app
+                    .vfs
+                    .exists(VfsCaller::System, &path)
+                    .await
+                    .unwrap(),
                 "entry {name} should be gone after ClearCache"
             );
         }

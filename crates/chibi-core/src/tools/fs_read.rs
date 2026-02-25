@@ -11,6 +11,7 @@ use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;
 use crate::state::AppState;
+use crate::vfs::VfsCaller;
 
 // === Tool Name Constants ===
 
@@ -336,7 +337,7 @@ fn execute_file_head_or_tail(
             }
         },
         ResolvedPath::Vfs(vfs_path) => {
-            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let data = vfs_block_on(app.vfs.read(VfsCaller::Context(context_name), &vfs_path))?;
             let content = String::from_utf8_lossy(&data);
             let all_lines: Vec<&str> = content.lines().collect();
             let selected = match direction {
@@ -440,7 +441,7 @@ pub fn execute_file_lines(
             Ok(lines.join("\n"))
         }
         ResolvedPath::Vfs(vfs_path) => {
-            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let data = vfs_block_on(app.vfs.read(VfsCaller::Context(context_name), &vfs_path))?;
             let content = String::from_utf8_lossy(&data);
             let lines: Vec<&str> = content
                 .lines()
@@ -477,7 +478,7 @@ pub fn execute_file_grep(
             grep_in_memory(&content, &pattern, context_before, context_after)?
         }
         ResolvedPath::Vfs(vfs_path) => {
-            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let data = vfs_block_on(app.vfs.read(VfsCaller::Context(context_name), &vfs_path))?;
             let content = String::from_utf8_lossy(&data).into_owned();
             grep_in_memory(&content, &pattern, context_before, context_after)?
         }
@@ -1174,7 +1175,11 @@ mod tests {
 
         let vfs_path = VfsPath::new("/shared/data.txt").unwrap();
         app.vfs
-            .write("ctx", &vfs_path, b"line1\nline2\nline3\nline4\nline5")
+            .write(
+                VfsCaller::Context("ctx"),
+                &vfs_path,
+                b"line1\nline2\nline3\nline4\nline5",
+            )
             .await
             .unwrap();
 
@@ -1199,7 +1204,11 @@ mod tests {
 
         let vfs_path = VfsPath::new("/shared/data.txt").unwrap();
         app.vfs
-            .write("ctx", &vfs_path, b"line1\nline2\nline3\nline4\nline5")
+            .write(
+                VfsCaller::Context("ctx"),
+                &vfs_path,
+                b"line1\nline2\nline3\nline4\nline5",
+            )
             .await
             .unwrap();
 
@@ -1224,7 +1233,11 @@ mod tests {
 
         let vfs_path = VfsPath::new("/shared/data.txt").unwrap();
         app.vfs
-            .write("ctx", &vfs_path, b"line1\nline2\nline3\nline4\nline5")
+            .write(
+                VfsCaller::Context("ctx"),
+                &vfs_path,
+                b"line1\nline2\nline3\nline4\nline5",
+            )
             .await
             .unwrap();
 
@@ -1253,7 +1266,7 @@ mod tests {
         let vfs_path = VfsPath::new("/shared/code.rs").unwrap();
         app.vfs
             .write(
-                "ctx",
+                VfsCaller::Context("ctx"),
                 &vfs_path,
                 b"fn hello() {\n    println!(\"world\");\n}\n",
             )

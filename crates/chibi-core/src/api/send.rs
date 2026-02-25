@@ -993,7 +993,7 @@ async fn execute_tool_pure(
                     project_root,
                     resolved_config,
                     &app.vfs,
-                    context_name,
+                    crate::vfs::VfsCaller::Context(context_name),
                 ),
                 &tool_call.name,
             )
@@ -1025,7 +1025,7 @@ async fn execute_tool_pure(
                         project_root,
                         resolved_config,
                         &app.vfs,
-                        context_name,
+                        crate::vfs::VfsCaller::Context(context_name),
                     ),
                     &tool_call.name,
                 ),
@@ -1036,7 +1036,13 @@ async fn execute_tool_pure(
         // VFS tools enforce their own zone-based permission model.
         // No PreFileRead/PreFileWrite hooks needed.
         unwrap_tool_dispatch(
-            tools::execute_vfs_tool(&app.vfs, context_name, &tool_call.name, &args).await,
+            tools::execute_vfs_tool(
+                &app.vfs,
+                crate::vfs::VfsCaller::Context(context_name),
+                &tool_call.name,
+                &args,
+            )
+            .await,
             &tool_call.name,
         )
     } else if tools::is_shell_tool(&tool_call.name) {
@@ -1223,7 +1229,11 @@ async fn execute_tool_pure(
 
             match app
                 .vfs
-                .write(crate::vfs::SYSTEM_CALLER, &vfs_path, tool_result.as_bytes())
+                .write(
+                    crate::vfs::VfsCaller::System,
+                    &vfs_path,
+                    tool_result.as_bytes(),
+                )
                 .await
             {
                 Ok(()) => {
@@ -2634,7 +2644,11 @@ mod tests {
         // Seed content directly through the VFS (use /shared/ — writable by any non-system context)
         let vfs_path = crate::vfs::VfsPath::new("/shared/hello.txt").unwrap();
         app.vfs
-            .write("default", &vfs_path, b"line1\nline2\nline3")
+            .write(
+                crate::vfs::VfsCaller::Context("default"),
+                &vfs_path,
+                b"line1\nline2\nline3",
+            )
             .await
             .unwrap();
 
@@ -2743,7 +2757,7 @@ mod tests {
 
         // Write the cache entry
         app.vfs
-            .write(crate::vfs::SYSTEM_CALLER, &vfs_path, large.as_bytes())
+            .write(crate::vfs::VfsCaller::System, &vfs_path, large.as_bytes())
             .await
             .unwrap();
 
@@ -2753,7 +2767,11 @@ mod tests {
         assert!(stub.contains("test_tool"));
 
         // LLM can read content via vfs:/// path
-        let content = app.vfs.read(ctx_name, &vfs_path).await.unwrap();
+        let content = app
+            .vfs
+            .read(crate::vfs::VfsCaller::System, &vfs_path)
+            .await
+            .unwrap();
         assert_eq!(content, large.as_bytes());
 
         // Fresh entry is NOT removed by cleanup (max_age_days=0 → delete after >1 day)
@@ -2764,7 +2782,7 @@ mod tests {
         app.clear_tool_cache(ctx_name).await.unwrap();
         let exists = app
             .vfs
-            .exists(crate::vfs::SYSTEM_CALLER, &vfs_path)
+            .exists(crate::vfs::VfsCaller::System, &vfs_path)
             .await
             .unwrap();
         assert!(!exists, "cache entry should be gone after clear");
