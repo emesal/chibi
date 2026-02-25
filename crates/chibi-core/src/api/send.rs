@@ -405,7 +405,7 @@ fn apply_hook_overrides<S: ResponseSink>(
     for (hook_name, hook_result) in hook_results {
         if let Some(fallback_str) = hook_result.get_str("fallback") {
             // Use builtin metadata since hooks can only override to builtins
-            let meta = tools::builtin_tool_metadata(fallback_str);
+            let meta = tools::flow_tool_metadata(fallback_str);
             let new_fallback = if meta.ends_turn {
                 tools::HandoffTarget::User {
                     message: String::new(),
@@ -892,14 +892,14 @@ async fn execute_tool_pure(
         }
     } else if tool_call.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
         "Error: Reflection tool is not enabled".to_string()
-    } else if let Some(builtin_result) = tools::execute_builtin_tool(
+    } else if let Some(memory_result) = tools::execute_memory_tool(
         app,
         context_name,
         &tool_call.name,
         &args,
         Some(resolved_config),
     ) {
-        match builtin_result {
+        match memory_result {
             Ok(r) => r,
             Err(e) => format!("Error: {}", e),
         }
@@ -1881,8 +1881,22 @@ pub async fn send_prompt<S: ResponseSink>(
 
         // === Prepare Tools ===
         let mut all_tools = tools::tools_to_api_format(tools);
-        all_tools.extend(tools::builtin_tools_to_api_format(use_reflection));
-        all_tools.extend(tools::all_file_tools_to_api_format());
+        all_tools.extend(
+            tools::all_memory_tools_to_api_format()
+                .into_iter()
+                .filter(|t| {
+                    use_reflection
+                        || t.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            != Some(tools::REFLECTION_TOOL_NAME)
+                }),
+        );
+        all_tools.extend(tools::all_fs_read_tools_to_api_format());
+        all_tools.extend(tools::all_fs_write_tools_to_api_format());
+        all_tools.extend(tools::all_shell_tools_to_api_format());
+        all_tools.extend(tools::all_network_tools_to_api_format());
+        all_tools.extend(tools::all_index_tools_to_api_format());
 
         // Resolve available preset capability names for the current cost tier so the
         // LLM sees valid values in the spawn_agent tool description.
@@ -1898,8 +1912,7 @@ pub async fn send_prompt<S: ResponseSink>(
             }
         };
         let preset_cap_refs: Vec<&str> = preset_capabilities.iter().map(String::as_str).collect();
-        all_tools.extend(tools::all_agent_tools_to_api_format(&preset_cap_refs));
-        all_tools.extend(tools::all_coding_tools_to_api_format());
+        all_tools.extend(tools::all_flow_tools_to_api_format(&preset_cap_refs));
         all_tools.extend(tools::all_vfs_tools_to_api_format());
         annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
         all_tools = filter_tools_by_config(all_tools, &resolved_config.tools, tools);

@@ -10,10 +10,6 @@
 //! - URL and file path security policies
 //! - Hook system for plugin lifecycle events (31 hook points)
 
-pub mod agent_tools;
-mod builtin;
-pub mod coding_tools;
-pub mod file_tools;
 mod flow;
 mod fs_read;
 mod fs_write;
@@ -52,6 +48,36 @@ pub struct BuiltinToolDef {
     pub summary_params: &'static [&'static str],
 }
 
+impl BuiltinToolDef {
+    /// Convert this tool definition to API format.
+    pub fn to_api_format(&self) -> serde_json::Value {
+        let mut props = serde_json::Map::new();
+        for prop in self.properties {
+            let mut prop_obj = serde_json::json!({
+                "type": prop.prop_type,
+                "description": prop.description,
+            });
+            if let Some(default) = prop.default {
+                prop_obj["default"] = serde_json::json!(default);
+            }
+            props.insert(prop.name.to_string(), prop_obj);
+        }
+
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": props,
+                    "required": self.required,
+                }
+            }
+        })
+    }
+}
+
 /// Extract a required string parameter from tool args.
 ///
 /// Shared helper for all tool modules that parse JSON arguments.
@@ -86,23 +112,6 @@ pub use flow::{
     spawn_agent,
 };
 
-// Re-export builtin tool registry lookup and execution (includes memory + flow delegation)
-pub use builtin::{
-    all_builtin_tools_to_api_format, builtin_summary_params, builtin_tool_metadata,
-    builtin_tools_to_api_format, execute_builtin_tool, get_builtin_tool_def, is_builtin_tool,
-};
-
-// Re-export coding tool registry functions and execution (legacy; only kept for dispatch/tests)
-pub use coding_tools::{
-    CODING_TOOL_DEFS, all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool,
-};
-
-// Re-export file tool registry functions
-pub use file_tools::{all_file_tools_to_api_format, get_file_tool_def};
-
-// Re-export file tool execution and utilities
-pub use file_tools::{execute_file_tool, is_file_tool};
-
 // Re-export fs_read tool registry functions and execution
 pub use fs_read::{
     FS_READ_TOOL_DEFS, FILE_HEAD_TOOL_NAME, FILE_TAIL_TOOL_NAME, FILE_LINES_TOOL_NAME,
@@ -136,9 +145,6 @@ pub use index::{
 
 // Re-export VFS tool registry functions and execution
 pub use vfs_tools::{all_vfs_tools_to_api_format, execute_vfs_tool, is_vfs_tool};
-
-// Re-export agent tool registry functions (still used transitionally; will be removed in task 8)
-pub use agent_tools::{all_agent_tools_to_api_format, execute_agent_tool, get_agent_tool_def, is_agent_tool};
 
 // Re-export security utilities
 pub use security::{
@@ -210,14 +216,32 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         .collect()
 }
 
-/// Get metadata for any tool (plugin or builtin)
+/// Get metadata for any tool (plugin or builtin).
 ///
-/// Checks plugins first, then falls back to builtin_tool_metadata for known builtins.
+/// Checks plugins first, then delegates to flow_tool_metadata for known flow tools.
 pub fn get_tool_metadata(tools: &[Tool], name: &str) -> ToolMetadata {
     if let Some(tool) = tools.iter().find(|t| t.name == name) {
         return tool.metadata.clone();
     }
-    builtin_tool_metadata(name)
+    flow_tool_metadata(name)
+}
+
+/// Look up summary_params for a built-in tool by name.
+///
+/// Searches all tool groups. Returns an empty slice if the tool is not found.
+fn builtin_summary_params(name: &str) -> &'static [&'static str] {
+    memory::MEMORY_TOOL_DEFS
+        .iter()
+        .chain(flow::FLOW_TOOL_DEFS.iter())
+        .chain(fs_read::FS_READ_TOOL_DEFS.iter())
+        .chain(fs_write::FS_WRITE_TOOL_DEFS.iter())
+        .chain(shell::SHELL_TOOL_DEFS.iter())
+        .chain(network::NETWORK_TOOL_DEFS.iter())
+        .chain(index::INDEX_TOOL_DEFS.iter())
+        .chain(vfs_tools::VFS_TOOL_DEFS.iter())
+        .find(|def| def.name == name)
+        .map(|def| def.summary_params)
+        .unwrap_or(&[])
 }
 
 /// Build a concise summary string from a tool's declared summary_params and actual arguments.
