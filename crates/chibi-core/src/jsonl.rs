@@ -1,6 +1,13 @@
 //! JSONL read/write utilities.
 //!
 //! Generic functions for working with JSONL (JSON Lines) files.
+//!
+//! # Diagnostics
+//!
+//! Malformed lines are skipped with an `eprintln!` warning. This crate has no
+//! logging dependency; `eprintln!` is the consistent warning mechanism used
+//! throughout `chibi-core`. When a structured logging crate is adopted, all
+//! such calls should be migrated together.
 
 use serde::de::DeserializeOwned;
 use std::fs::File;

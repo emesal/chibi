@@ -124,8 +124,8 @@ impl ContextState {
 }
 
 pub fn is_valid_context_name(name: &str) -> bool {
-    // Reject reserved names
-    if name == "-" || crate::vfs::is_reserved_caller_name(name) {
+    // Reject reserved names and names starting with '-' (clashes with CLI flag syntax).
+    if name.starts_with('-') || crate::vfs::is_reserved_caller_name(name) {
         return false;
     }
     !name.is_empty()
@@ -135,10 +135,12 @@ pub fn is_valid_context_name(name: &str) -> bool {
 }
 
 pub fn validate_context_name(name: &str) -> io::Result<()> {
-    if name == "-" {
+    if name.starts_with('-') {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
-            "Invalid context name '-'. This is a reserved name used to reference the previous context.",
+            format!(
+                "Invalid context name '{name}'. Context names cannot start with a dash (reserved for CLI flags).",
+            ),
         ));
     }
     if !is_valid_context_name(name) {
@@ -354,8 +356,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        assert!(err.to_string().contains("reserved name"));
-        assert!(err.to_string().contains("previous context"));
+        assert!(err.to_string().contains("cannot start with a dash"));
     }
 
     #[test]
@@ -406,17 +407,14 @@ mod tests {
 
     #[test]
     fn test_context_name_all_dashes() {
-        // Names like "--" or "---" are technically valid by current rules
-        // (alphanumeric OR dash OR underscore) but might be problematic
-        // Question: Should these be valid? They could conflict with CLI flags.
-        // Current behavior: valid (all chars are dashes, which are allowed)
-        assert!(is_valid_context_name("--"));
-        assert!(is_valid_context_name("---"));
+        // "--" and "---" start with '-' so they are rejected (CLI flag conflict).
+        assert!(!is_valid_context_name("--"));
+        assert!(!is_valid_context_name("---"));
     }
 
     #[test]
     fn test_context_name_all_underscores() {
-        // Similar edge case with underscores
+        // Similar edge case with underscores — leading '_' is fine
         assert!(is_valid_context_name("_"));
         assert!(is_valid_context_name("__"));
         assert!(is_valid_context_name("___"));
@@ -424,10 +422,11 @@ mod tests {
 
     #[test]
     fn test_context_name_leading_dash() {
-        // Leading dash could be problematic with CLI parsing
-        assert!(is_valid_context_name("-mycontext"));
-        // Single dash is reserved for previous context reference
+        // Any leading dash is rejected to avoid CLI flag conflicts.
+        assert!(!is_valid_context_name("-mycontext"));
         assert!(!is_valid_context_name("-"));
+        assert!(!is_valid_context_name("--"));
+        assert!(!is_valid_context_name("---"));
     }
 
     #[test]

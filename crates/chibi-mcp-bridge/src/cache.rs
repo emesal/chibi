@@ -8,6 +8,22 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Atomically write a string to a file via temp file + rename.
+///
+/// Prevents a partially-written file from being observed by concurrent readers.
+fn atomic_write_text(path: &Path, content: &str) -> io::Result<()> {
+    use std::io::Write as _;
+    let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&tmp_path)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&tmp_path, path)
+}
+
 /// Persistent summary cache backed by a JSONL file.
 pub struct SummaryCache {
     entries: HashMap<String, String>,
@@ -46,6 +62,9 @@ impl SummaryCache {
     }
 
     /// Save the cache to disk as JSONL.
+    ///
+    /// Uses an atomic write (temp file + rename) to prevent partial writes from
+    /// corrupting the cache file on crash or concurrent access.
     pub fn save(&self) -> io::Result<()> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -62,7 +81,7 @@ impl SummaryCache {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        std::fs::write(&self.path, content)
+        atomic_write_text(&self.path, &content)
     }
 
     /// Look up a cached summary for a tool.

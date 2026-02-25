@@ -563,8 +563,6 @@ struct StreamingResponse {
     full_response: String,
     /// Tool calls extracted from the response.
     tool_calls: Vec<ratatoskr::ToolCall>,
-    /// Whether any tool calls were present.
-    has_tool_calls: bool,
     /// Response metadata (usage stats, model info).
     response_meta: Option<serde_json::Value>,
 }
@@ -609,7 +607,6 @@ async fn collect_streaming_response<S: ResponseSink>(
 
     let mut full_response = String::new();
     let mut tool_calls: Vec<ratatoskr::ToolCall> = Vec::new();
-    let mut has_tool_calls = false;
     let mut response_meta: Option<serde_json::Value> = None;
     let mut is_first_content = true;
 
@@ -642,8 +639,6 @@ async fn collect_streaming_response<S: ResponseSink>(
                 sink.handle(ResponseEvent::Reasoning(&chunk))?;
             }
             ChatEvent::ToolCallStart { index, id, name } => {
-                has_tool_calls = true;
-
                 // Prevent memory exhaustion
                 if index >= MAX_TOOL_CALLS {
                     eprintln!(
@@ -685,7 +680,6 @@ async fn collect_streaming_response<S: ResponseSink>(
     Ok(StreamingResponse {
         full_response,
         tool_calls,
-        has_tool_calls,
         response_meta,
     })
 }
@@ -891,7 +885,14 @@ async fn execute_tool_pure(
         let raw_path = args.get_str("path").unwrap_or("");
         if VfsPath::is_vfs_uri(raw_path) {
             unwrap_tool_dispatch(
-                tools::execute_file_tool(app, context_name, &tool_call.name, &args, resolved_config, project_root),
+                tools::execute_file_tool(
+                    app,
+                    context_name,
+                    &tool_call.name,
+                    &args,
+                    resolved_config,
+                    project_root,
+                ),
                 &tool_call.name,
             )
         // Write tools need permission via pre_file_write hook
@@ -908,7 +909,14 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => unwrap_tool_dispatch(
-                    tools::execute_file_tool(app, context_name, &tool_call.name, &args, resolved_config, project_root),
+                    tools::execute_file_tool(
+                        app,
+                        context_name,
+                        &tool_call.name,
+                        &args,
+                        resolved_config,
+                        project_root,
+                    ),
                     &tool_call.name,
                 ),
                 Err(reason) => format!("Error: {}", reason),
@@ -948,7 +956,14 @@ async fn execute_tool_pure(
                 format!("Error: {}", reason)
             } else {
                 unwrap_tool_dispatch(
-                    tools::execute_file_tool(app, context_name, &tool_call.name, &args, resolved_config, project_root),
+                    tools::execute_file_tool(
+                        app,
+                        context_name,
+                        &tool_call.name,
+                        &args,
+                        resolved_config,
+                        project_root,
+                    ),
                     &tool_call.name,
                 )
             }
@@ -1027,15 +1042,19 @@ async fn execute_tool_pure(
                 &hook_data,
                 permission_handler,
             )? {
-                Ok(()) => {
-                    unwrap_tool_dispatch(
-                        tools::execute_coding_tool(
-                            &tool_call.name, &args, project_root, resolved_config,
-                            tools, &app.vfs, context_name,
-                        ).await,
+                Ok(()) => unwrap_tool_dispatch(
+                    tools::execute_coding_tool(
                         &tool_call.name,
+                        &args,
+                        project_root,
+                        resolved_config,
+                        tools,
+                        &app.vfs,
+                        context_name,
                     )
-                }
+                    .await,
+                    &tool_call.name,
+                ),
                 Err(reason) => format!("Error: {}", reason),
             }
         } else if tool_call.name == tools::FILE_EDIT_TOOL_NAME {
@@ -1051,15 +1070,19 @@ async fn execute_tool_pure(
                 &hook_data,
                 permission_handler,
             )? {
-                Ok(()) => {
-                    unwrap_tool_dispatch(
-                        tools::execute_coding_tool(
-                            &tool_call.name, &args, project_root, resolved_config,
-                            tools, &app.vfs, context_name,
-                        ).await,
+                Ok(()) => unwrap_tool_dispatch(
+                    tools::execute_coding_tool(
                         &tool_call.name,
+                        &args,
+                        project_root,
+                        resolved_config,
+                        tools,
+                        &app.vfs,
+                        context_name,
                     )
-                }
+                    .await,
+                    &tool_call.name,
+                ),
                 Err(reason) => format!("Error: {}", reason),
             }
         } else if tool_call.name == tools::FETCH_URL_TOOL_NAME {
@@ -1134,9 +1157,15 @@ async fn execute_tool_pure(
             // index_update, index_query, index_status
             unwrap_tool_dispatch(
                 tools::execute_coding_tool(
-                    &tool_call.name, &args, project_root, resolved_config,
-                    tools, &app.vfs, context_name,
-                ).await,
+                    &tool_call.name,
+                    &args,
+                    project_root,
+                    resolved_config,
+                    tools,
+                    &app.vfs,
+                    context_name,
+                )
+                .await,
                 &tool_call.name,
             )
         }
@@ -1965,7 +1994,7 @@ pub async fn send_prompt<S: ResponseSink>(
             sink.handle(ResponseEvent::Finished)?;
 
             // Handle tool calls
-            if response.has_tool_calls && !response.tool_calls.is_empty() {
+            if !response.tool_calls.is_empty() {
                 process_tool_calls(
                     app,
                     context_name,

@@ -383,7 +383,7 @@ pub async fn compact_context_by_name(
     let context = app.load_context(context_name)?;
     let message_count = context.messages.len();
 
-    if message_count == 0 || message_count <= 2 {
+    if message_count <= 2 {
         return Ok(());
     }
 

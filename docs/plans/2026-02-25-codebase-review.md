@@ -48,17 +48,17 @@ Full codebase review of chibi at commit `bae75691` (dev branch).
 
 ## Suggestions
 
-- [ ] **#14** `AppState` missing doc comment (`state/mod.rs:39`)
-- [ ] **#15** context names `--`/`---` valid but problematic for CLI
-- [ ] **#16** most `Config` fields lack `#[doc]` comments
-- [ ] **#17** `set_field("api.stop")` silently stores to `extra` map instead of parsing
-- [ ] **#18** `ResolvedConfig` doesn't derive `Serialize`
-- [ ] **#19** `has_tool_calls` field possibly redundant with `!tool_calls.is_empty()`
-- [ ] **#20** `compact_context_by_name` redundant condition `message_count == 0 || message_count <= 2`
-- [ ] **#21** `read_jsonl_file` uses `eprintln!` in a library crate
-- [ ] **#22** `execute_tool` re-derives project root from env instead of `self.project_root`
-- [ ] **#23** `create_test_script` duplicated in hooks.rs and plugins.rs tests
-- [ ] **#24** MCP spawn-mutex can be orphaned on crash
-- [ ] **#25** `BoxFuture` type alias duplicated in backend.rs and local.rs
-- [ ] **#26** `check_write` exact match vs `is_reserved_caller_name` case-insensitive — intentional but undocumented
-- [ ] **#27** `touch_lockfile` and `SummaryCache::save` not atomic, inconsistent with project patterns
+- [x] **#14** `AppState` missing doc comment (`state/mod.rs:39`) *(fixed)*
+- [x] **#15** context names `--`/`---` valid but problematic for CLI *(fixed: reject names starting with `-`; updated tests)*
+- [x] **#16** most `Config` fields lack `#[doc]` comments *(fixed: all fields in `Config` and `LocalConfig` documented)*
+- [x] **#17** `set_field("api.stop")` silently stores to `extra` map instead of parsing *(fixed: added match arm, parses comma-separated tokens)*
+- [x] **#18** `ResolvedConfig` doesn't derive `Serialize` *(fixed)*
+- [x] **#19** `has_tool_calls` field possibly redundant with `!tool_calls.is_empty()` *(fixed: removed field)*
+- [x] **#20** `compact_context_by_name` redundant condition `message_count == 0 || message_count <= 2` *(fixed: simplified to `<= 2`)*
+- [x] **#21** `read_jsonl_file` uses `eprintln!` in a library crate *(documented: project-wide pattern, migrate when logging crate adopted)*
+- [x] **#22** `execute_tool` re-derives project root from env instead of `self.project_root` *(fixed)*
+- [x] **#23** `create_test_script` duplicated in hooks.rs and plugins.rs tests *(fixed: shared `test_helpers` module in `tools/mod.rs`)*
+- [x] **#24** MCP spawn-mutex can be orphaned on crash *(fixed: stale check on mutex file age > 60s)*
+- [x] **#25** `BoxFuture` type alias duplicated in backend.rs and local.rs *(fixed: `pub(super)` in backend.rs, import in local.rs)*
+- [x] **#26** `check_write` exact match vs `is_reserved_caller_name` case-insensitive — intentional but undocumented *(fixed: doc comment explains the asymmetry and security rationale)*
+- [x] **#27** `touch_lockfile` and `SummaryCache::save` not atomic, inconsistent with project patterns *(fixed: `atomic_write` helper in mcp-bridge)*

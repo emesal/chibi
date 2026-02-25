@@ -286,6 +286,7 @@ pub fn find_tool<'a>(tools: &'a [Tool], name: &str) -> Option<&'a Tool> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_helpers::create_test_script;
     use super::*;
     use std::path::PathBuf;
 
@@ -377,28 +378,6 @@ mod tests {
         assert!(meta.parallel);
         assert!(!meta.flow_control);
         assert!(!meta.ends_turn);
-    }
-
-    /// Helper to create a test script and make it executable.
-    /// Uses sync_all and retries on ETXTBSY to handle race conditions.
-    #[cfg(unix)]
-    fn create_test_script(dir: &std::path::Path, name: &str, content: &[u8]) -> PathBuf {
-        use std::io::Write as _;
-        use std::os::unix::fs::PermissionsExt;
-
-        let script_path = dir.join(name);
-
-        {
-            let mut file = std::fs::File::create(&script_path).unwrap();
-            file.write_all(content).unwrap();
-            file.sync_all().unwrap();
-        }
-
-        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).unwrap();
-
-        script_path
     }
 
     /// Execute a tool with retry on ETXTBSY (text file busy).
