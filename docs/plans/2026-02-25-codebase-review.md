@@ -16,8 +16,8 @@ Full codebase review of chibi at commit `bae75691` (dev branch).
 - [x] **#3 `save_and_register_context` stale in-memory state** *(documented: by-design)*
   `AppState` takes `&self` — in-memory mutation is impossible without interior mutability. Disk is the source of truth. Added doc comment explaining the design.
 
-- [ ] **#4 dual request-building paths** *(deferred — architectural refactor, needs own session)*
-  `api/request.rs` (`build_request_body`) and `gateway.rs` (`to_chat_options`) both convert config to API params with nearly identical logic. New params must be added in two places. Risk of drift between logged request and actual request.
+- [x] **#4 dual request-building paths** *(fixed: `to_chat_options` is now the single source; `build_request_body` and `request.rs` deleted)*
+  `to_chat_options` in `gateway.rs` is the single source of truth. In `send.rs`, `ChatOptions` is serialised to JSON for the `pre_api_request` hook, and deserialised back after hook modifications so overrides reach the actual API call. `PromptOptions` moved to `send.rs`.
 
 - [x] **#5 `compact_context_with_llm` incorrect doc comment** *(fixed)*
   Doc now correctly describes rolling compaction delegation.

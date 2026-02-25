@@ -5,7 +5,6 @@
 
 pub mod compact;
 pub mod logging;
-pub mod request;
 pub mod send;
 pub mod sink;
 
@@ -13,6 +12,5 @@ pub use compact::{
     compact_context_by_name, compact_context_with_llm, compact_context_with_llm_manual,
     rolling_compact,
 };
-pub use request::PromptOptions;
-pub use send::send_prompt;
+pub use send::{PromptOptions, send_prompt};
 pub use sink::{CollectingSink, ResponseEvent, ResponseSink};

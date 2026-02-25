@@ -139,14 +139,14 @@ pub fn ensure_bridge_running(home: &Path) -> io::Result<SocketAddr> {
     // The mutex is only held during spawn+poll (~10s), so 60s is very conservative.
     if let Ok(meta) = std::fs::metadata(&spawn_mutex)
         && let Ok(modified) = meta.modified()
-            && modified
-                .elapsed()
-                .unwrap_or(std::time::Duration::ZERO)
-                .as_secs()
-                > 60
-            {
-                let _ = std::fs::remove_file(&spawn_mutex);
-            }
+        && modified
+            .elapsed()
+            .unwrap_or(std::time::Duration::ZERO)
+            .as_secs()
+            > 60
+    {
+        let _ = std::fs::remove_file(&spawn_mutex);
+    }
 
     // Try to acquire the spawn-mutex exclusively.
     let we_spawn = std::fs::OpenOptions::new()

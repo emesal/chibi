@@ -6,7 +6,6 @@
 
 use super::compact::compact_context_with_llm;
 use super::logging::{log_request_if_enabled, log_response_meta_if_enabled};
-use super::request::{PromptOptions, build_request_body};
 use super::sink::{ResponseEvent, ResponseSink};
 use crate::chibi::PermissionHandler;
 use crate::config::{ResolvedConfig, ToolsConfig};
@@ -14,6 +13,7 @@ use crate::context::{InboxEntry, now_timestamp};
 use crate::gateway::{
     build_gateway, json_tool_to_definition, to_chat_options, to_ratatoskr_message,
 };
+use crate::input::DebugKey;
 use crate::json_ext::JsonExt;
 use crate::output::NoopSink;
 use crate::state::{
@@ -25,11 +25,38 @@ use crate::tools::{self, Tool};
 use crate::vfs::path::VfsPath;
 use futures_util::stream::StreamExt;
 // ModelGateway trait must be in scope to call chat_stream() on EmbeddedGateway
-use ratatoskr::{ChatEvent, ModelGateway};
+use ratatoskr::{ChatEvent, ChatOptions, ModelGateway};
 use serde_json::json;
 use std::io::{self, ErrorKind};
 use std::path::Path;
 use uuid::Uuid;
+
+/// Options for controlling prompt execution behaviour.
+#[derive(Debug, Clone)]
+pub struct PromptOptions<'a> {
+    pub use_reflection: bool,
+    pub debug: &'a [DebugKey],
+    pub force_render: bool,
+    /// Optional override for the fallback handoff target.
+    pub fallback_override: Option<crate::tools::HandoffTarget>,
+}
+
+impl<'a> PromptOptions<'a> {
+    pub fn new(use_reflection: bool, debug: &'a [DebugKey], force_render: bool) -> Self {
+        Self {
+            use_reflection,
+            debug,
+            force_render,
+            fallback_override: None,
+        }
+    }
+
+    /// Set the fallback handoff target override.
+    pub fn with_fallback(mut self, fallback: crate::tools::HandoffTarget) -> Self {
+        self.fallback_override = Some(fallback);
+        self
+    }
+}
 
 /// Maximum number of simultaneous tool calls allowed (prevents memory exhaustion from malicious responses)
 const MAX_TOOL_CALLS: usize = 100;
@@ -571,8 +598,12 @@ struct StreamingResponse {
 ///
 /// Handles: SSE parsing, content accumulation, tool call reconstruction.
 /// Pure I/O - no hooks or side effects beyond streaming to sink.
+///
+/// `options` is the canonical source of API parameters and must be derived
+/// from (and reflect any hook modifications to) the request body JSON.
 async fn collect_streaming_response<S: ResponseSink>(
     resolved_config: &ResolvedConfig,
+    options: &ChatOptions,
     messages: &[serde_json::Value],
     all_tools: &[serde_json::Value],
     sink: &mut S,
@@ -596,12 +627,9 @@ async fn collect_streaming_response<S: ResponseSink>(
         Some(tool_defs.as_slice())
     };
 
-    // Build options
-    let options = to_chat_options(resolved_config);
-
     // Get streaming response
     let mut stream = gateway
-        .chat_stream(&ratatoskr_messages, tools_opt, &options)
+        .chat_stream(&ratatoskr_messages, tools_opt, options)
         .await
         .map_err(|e| io::Error::other(format!("Gateway error: {}", e)))?;
 
@@ -1922,13 +1950,23 @@ pub async fn send_prompt<S: ResponseSink>(
         all_tools = filter_tools_from_hook_results(all_tools, &hook_results, sink)?;
 
         // === Build Request ===
+        // Derive ChatOptions from config (single source of truth for API params).
+        // Serialise to JSON for hook inspection/modification, then deserialise
+        // back so hook changes are honoured in the actual API call.
         let tools_for_request = if resolved_config.no_tool_calls {
             None
         } else {
             Some(all_tools.as_slice())
         };
-        let mut request_body =
-            build_request_body(&resolved_config, &messages, tools_for_request, true);
+        let base_options = to_chat_options(&resolved_config);
+        let mut request_body = serde_json::to_value(&base_options).unwrap_or_else(|_| json!({}));
+        request_body["messages"] = json!(messages);
+        request_body["stream"] = json!(true);
+        if let Some(tools) = tools_for_request
+            && !tools.is_empty()
+        {
+            request_body["tools"] = json!(tools);
+        }
 
         // Execute pre_api_request hook
         let mut hook_data = json!({
@@ -1941,6 +1979,11 @@ pub async fn send_prompt<S: ResponseSink>(
         }
         let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
         request_body = apply_request_modifications(request_body, &hook_results, sink)?;
+
+        // Deserialise ChatOptions from the (potentially hook-modified) request body
+        // so API parameter overrides from hooks are honoured in the actual call.
+        let chat_options: ChatOptions =
+            serde_json::from_value(request_body.clone()).unwrap_or(base_options);
 
         // === Initialize Handoff ===
         let fallback = options.fallback_override.clone().unwrap_or_else(|| {
@@ -1982,8 +2025,14 @@ pub async fn send_prompt<S: ResponseSink>(
             sink.handle(ResponseEvent::StartResponse)?;
             log_request_if_enabled(app, context_name, debug, &request_body);
 
-            let response =
-                collect_streaming_response(&resolved_config, &messages, &all_tools, sink).await?;
+            let response = collect_streaming_response(
+                &resolved_config,
+                &chat_options,
+                &messages,
+                &all_tools,
+                sink,
+            )
+            .await?;
 
             // Log response metadata
             if let Some(ref meta) = response.response_meta {
@@ -3130,5 +3179,124 @@ mod tests {
         let mut sink = CollectingSink::default();
         apply_hook_overrides(&mut handoff, &mut fuel, false, &results, &mut sink).unwrap();
         assert_eq!(fuel, 15, "first sets to 20, second subtracts 5");
+    }
+
+    // ========================================================================
+    // Request body construction and hook round-trip
+    //
+    // These tests verify that `to_chat_options` is the single source of truth:
+    // the JSON request body is derived from ChatOptions, and hook modifications
+    // to that JSON are reflected in the ChatOptions passed to the actual API call.
+    // ========================================================================
+
+    fn make_chat_options_with_temp(temp: f32) -> ChatOptions {
+        use crate::config;
+        let api = config::ApiParams {
+            temperature: Some(temp),
+            ..Default::default()
+        };
+        let config = crate::config::ResolvedConfig {
+            api_key: None,
+            model: "test-model".to_string(),
+            context_window_limit: 4096,
+            warn_threshold_percent: 80.0,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 0.9,
+            fuel: 10,
+            fuel_empty_response_cost: 15,
+            username: "test".to_string(),
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 10000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: false,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api,
+            tools: config::ToolsConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            storage: crate::partition::StorageConfig::default(),
+            url_policy: None,
+            subagent_cost_tier: "free".to_string(),
+            extra: std::collections::BTreeMap::new(),
+        };
+        to_chat_options(&config)
+    }
+
+    #[test]
+    fn request_body_serialises_chat_options_fields() {
+        // ChatOptions serialised to JSON must contain the configured API param.
+        let opts = make_chat_options_with_temp(0.7);
+        let body = serde_json::to_value(&opts).unwrap();
+        assert_eq!(body["model"], "test-model");
+        // f32 → JSON → f64 loses precision; compare within tolerance.
+        let temp = body["temperature"].as_f64().unwrap();
+        assert!(
+            (temp - 0.7).abs() < 1e-6,
+            "temperature should be ~0.7, got {temp}"
+        );
+    }
+
+    #[test]
+    fn hook_modification_round_trips_into_chat_options() {
+        // After a hook overrides temperature in the JSON body, deserialising
+        // back to ChatOptions must reflect the new value — this is the fix for
+        // hook changes being silently ignored in the actual API call.
+        let base_opts = make_chat_options_with_temp(0.7);
+        let mut body = serde_json::to_value(&base_opts).unwrap();
+        body["messages"] = serde_json::json!([]);
+        body["stream"] = serde_json::json!(true);
+
+        // Simulate hook override
+        let hook_results = vec![(
+            "tuner".to_string(),
+            serde_json::json!({"request_body": {"temperature": 0.1, "max_tokens": 512}}),
+        )];
+        let mut sink = CollectingSink::default();
+        let modified = apply_request_modifications(body, &hook_results, &mut sink).unwrap();
+
+        // Round-trip back to ChatOptions
+        let updated_opts: ChatOptions = serde_json::from_value(modified).unwrap();
+        assert_eq!(updated_opts.temperature, Some(0.1));
+        assert_eq!(updated_opts.max_tokens, Some(512));
+    }
+
+    #[test]
+    fn hook_modification_round_trip_fallback_on_invalid_json() {
+        // If the hook produces an invalid request body that can't be deserialised,
+        // the caller falls back to the original base options.
+        let base_opts = make_chat_options_with_temp(0.5);
+        let invalid_body = serde_json::json!({"model": 12345, "temperature": "not-a-number"});
+        let updated_opts: ChatOptions =
+            serde_json::from_value(invalid_body).unwrap_or(base_opts.clone());
+        // Falls back to base
+        assert_eq!(updated_opts.temperature, Some(0.5));
+    }
+
+    #[test]
+    fn no_tool_calls_suppresses_tools_in_request_body() {
+        // When no_tool_calls is set, the tools key must be absent from the body
+        // (so the API doesn't receive tool definitions).
+        let tools_json = vec![serde_json::json!({"type": "function", "function": {"name": "foo"}})];
+        let tools_for_request: Option<&[serde_json::Value]> = None; // no_tool_calls path
+        let mut body = serde_json::json!({"model": "m", "stream": true});
+        if let Some(tools) = tools_for_request
+            && !tools.is_empty()
+        {
+            body["tools"] = serde_json::json!(tools);
+        }
+        assert!(body.get("tools").is_none());
+
+        // And with tools enabled, they must appear.
+        let tools_for_request: Option<&[serde_json::Value]> = Some(&tools_json);
+        let mut body = serde_json::json!({"model": "m", "stream": true});
+        if let Some(tools) = tools_for_request
+            && !tools.is_empty()
+        {
+            body["tools"] = serde_json::json!(tools);
+        }
+        assert!(body["tools"].as_array().is_some());
     }
 }
