@@ -110,8 +110,9 @@ pub async fn rolling_compact(
     });
     let _ = tools::execute_hook(&tools, tools::HookPoint::PreRollingCompact, &hook_data);
 
-    // Load goals and todos to guide compaction decisions
-    let goals = app.load_goals(context_name)?;
+    // Load todos to guide compaction decisions.
+    // Goals are now flock-scoped (task 16 will replace this with load_flock_contexts).
+    let goals = String::new();
     let todos = app.load_todos(context_name)?;
 
     // Build message list in transcript format for LLM to analyze.
@@ -903,7 +904,7 @@ mod tests {
         cfg
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rolling_compact_with_stub_llm_reduces_message_count() {
         // Note: save_context regenerates _ids via messages_to_entries, so the
         // stub's returned ids won't match the stored context — the fallback path
@@ -949,7 +950,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rolling_compact_fallback_drops_oldest_n_on_empty_llm_response() {
         let (app, _tmp) = create_test_app();
         let ctx_name = "test-fallback-path";

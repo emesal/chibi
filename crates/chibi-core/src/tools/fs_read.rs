@@ -282,20 +282,31 @@ pub fn execute_fs_read_tool(
 }
 
 // === VFS bridge ===
-
 /// Bridge an async VFS future into synchronous tool dispatch.
 ///
-/// Uses `block_in_place` + `block_on` so that it works both from pure sync
-/// callers (where the current thread is free) and from sync code inside a
-/// tokio runtime (e.g. tool dispatch in `execute_tool_pure`). The
+/// Uses `block_in_place` + `block_on` so that it works from sync code inside a
+/// tokio multi-thread runtime (e.g. tool dispatch in `execute_tool_pure`). The
 /// `block_in_place` call tells the runtime scheduler to move other tasks off
 /// this thread while we block.
 ///
 /// **Runtime requirement:** `block_in_place` panics on `current_thread`
 /// runtimes. Any test that calls VFS tools must use:
 /// `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`
+///
+/// If called outside of any tokio runtime (e.g. plain `#[test]`), spins up a
+/// temporary current-thread runtime.
 pub(crate) fn vfs_block_on<F: std::future::Future>(f: F) -> F::Output {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(f)),
+        Err(_) => {
+            // No runtime active — spin up a temporary one.
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build temporary tokio runtime")
+                .block_on(f)
+        }
+    }
 }
 
 // === file_head / file_tail ===

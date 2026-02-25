@@ -528,12 +528,9 @@ fn inspect_context(
             Ok(None)
         }
         Inspectable::Goals => {
-            let goals = chibi.app.load_goals_for(context)?;
-            if goals.is_empty() {
-                output.emit_result("(no goals)");
-            } else {
-                output.emit_markdown(goals.trim_end())?;
-            }
+            // Goals are now flock-scoped. This branch will be replaced in task 9
+            // with load_flock_contexts + format_flock_sections.
+            output.emit_result("(goals are now flock-scoped, use -n goals once task 9 is done)");
             Ok(None)
         }
         Inspectable::Home => {

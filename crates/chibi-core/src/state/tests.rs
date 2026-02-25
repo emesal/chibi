@@ -60,19 +60,8 @@ fn test_context_file() {
     assert!(file.ends_with("contexts/mycontext/context.jsonl"));
 }
 
-#[test]
-fn test_todos_file() {
-    let (app, _temp) = create_test_app();
-    let file = app.todos_file("mycontext");
-    assert!(file.ends_with("contexts/mycontext/todos.md"));
-}
-
-#[test]
-fn test_goals_file() {
-    let (app, _temp) = create_test_app();
-    let file = app.goals_file("mycontext");
-    assert!(file.ends_with("contexts/mycontext/goals.md"));
-}
+// todos_file and goals_file removed in task 7: todos are VFS-backed,
+// goals are flock-scoped.
 
 #[test]
 fn test_inbox_file() {
@@ -313,15 +302,8 @@ fn test_todos_empty_returns_empty_string() {
     assert_eq!(loaded, "");
 }
 
-#[test]
-fn test_goals_save_and_load() {
-    let (app, _temp) = create_test_app();
-
-    app.save_goals("default", "Build something awesome")
-        .unwrap();
-    let loaded = app.load_goals("default").unwrap();
-    assert_eq!(loaded, "Build something awesome");
-}
+// Goals are now flock-scoped (removed save_goals/load_goals in task 7).
+// Flock goal tests are in state/flocks.rs (task 9).
 
 // === Local config tests ===
 

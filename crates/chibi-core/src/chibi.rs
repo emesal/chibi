@@ -790,7 +790,7 @@ mod tests {
         assert!(err.to_string().contains("nonexistent_tool"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_execute_tool_builtin() {
         let (chibi, _tmp) = create_test_chibi();
         let result = chibi

@@ -123,6 +123,9 @@ pub use fs_read::{
     all_fs_read_tools_to_api_format, execute_fs_read_tool, is_fs_read_tool,
 };
 
+// Bridge for blocking async VFS calls from synchronous contexts.
+pub(crate) use fs_read::vfs_block_on;
+
 // Re-export fs_write tool registry functions and execution
 pub use fs_write::{
     FILE_EDIT_TOOL_NAME, FS_WRITE_TOOL_DEFS, WRITE_FILE_TOOL_NAME,

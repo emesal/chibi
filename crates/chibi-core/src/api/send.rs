@@ -475,7 +475,8 @@ fn build_full_system_prompt<S: ResponseSink>(
 
     // Load context-specific state
     let todos = app.load_todos(context_name)?;
-    let goals = app.load_goals(context_name)?;
+    // Goals are now flock-scoped (task 9 will replace this with load_flock_contexts).
+    let goals = String::new();
 
     // Execute pre_system_prompt hook - can inject content before system prompt sections
     let pre_sys_hook_data = serde_json::json!({

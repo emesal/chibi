@@ -107,11 +107,12 @@ pub fn execute_memory_tool(
             )
         }
         GOALS_TOOL_NAME => {
-            let content = args.get("content").and_then(|v| v.as_str())?;
-            Some(
-                app.save_goals(context_name, content)
-                    .map(|_| format!("Goals updated ({} characters).", content.len())),
-            )
+            // Goals are now flock-scoped. This branch will be replaced in task 9
+            // with flock-aware goal writing via resolve_flock_vfs_root.
+            Some(Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "goals are now flock-scoped; use the 'flock' parameter (task 9)",
+            )))
         }
         REFLECTION_TOOL_NAME => {
             let limit = config
@@ -190,8 +191,11 @@ fn execute_read_context(
     let todos = app.load_todos_for(context_name).unwrap_or_default();
     result.insert("todos".to_string(), serde_json::Value::String(todos));
 
-    let goals = app.load_goals_for(context_name).unwrap_or_default();
-    result.insert("goals".to_string(), serde_json::Value::String(goals));
+    // Goals are now flock-scoped (task 15 will update this to use load_flock_contexts).
+    result.insert(
+        "goals".to_string(),
+        serde_json::Value::String(String::new()),
+    );
 
     if include_messages {
         match app.read_context_entries(context_name) {

@@ -103,10 +103,13 @@ impl AppState {
             ));
         }
         fs::create_dir_all(&vfs_root)?;
+        // Bootstrap /site/ VFS directory (sync, directly on filesystem).
+        let _ = fs::create_dir_all(vfs_root.join("site"));
         let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
 
         let hostname_override = config.site.as_ref().and_then(|s| s.hostname.as_deref());
         let site = crate::site::load_or_create(&chibi_dir, hostname_override)?;
+
         let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend), &site.site_id);
 
         Ok(AppState {
@@ -199,7 +202,9 @@ impl AppState {
             ));
         }
         fs::create_dir_all(&vfs_root)?;
-        let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
+        // Bootstrap /site/ VFS directory (sync, directly on filesystem).
+        let _ = fs::create_dir_all(vfs_root.join("site"));
+        let vfs_backend = crate::vfs::LocalBackend::new(vfs_root.clone());
 
         let hostname_override = config.site.as_ref().and_then(|s| s.hostname.as_deref());
         let site = crate::site::load_or_create(&chibi_dir, hostname_override)?;
