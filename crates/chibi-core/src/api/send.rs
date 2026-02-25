@@ -2101,7 +2101,8 @@ pub async fn send_prompt<S: ResponseSink>(
                             return Ok(());
                         }
                         let prompt_preview = if continue_prompt.len() > 80 {
-                            format!("{}...", &continue_prompt[..77])
+                            let end = continue_prompt.floor_char_boundary(77);
+                            format!("{}...", &continue_prompt[..end])
                         } else {
                             continue_prompt.clone()
                         };

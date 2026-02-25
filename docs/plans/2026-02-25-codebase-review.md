@@ -4,10 +4,9 @@ Full codebase review of chibi at commit `bae75691` (dev branch).
 
 ## Critical
 
-- [ ] **#1 byte-boundary panics on multi-byte UTF-8**
+- [x] **#1 byte-boundary panics on multi-byte UTF-8** *(fixed: `floor_char_boundary`)*
   `api/compact.rs:134` — `&content[..500]` panics on non-ASCII
   `api/send.rs:2104` — `&continue_prompt[..77]` panics on non-ASCII
-  Fix: use `floor_char_boundary` or the `char_indices().nth()` pattern already used in manual compaction at `compact.rs:460-464`.
 
 ## Important
 

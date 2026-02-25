@@ -131,7 +131,8 @@ pub async fn rolling_compact(
             } else {
                 let content = m["content"].as_str().unwrap_or("");
                 if content.len() > 500 {
-                    format!("{}... [truncated]", &content[..500])
+                    let end = content.floor_char_boundary(500);
+                    format!("{}... [truncated]", &content[..end])
                 } else {
                     content.to_string()
                 }
