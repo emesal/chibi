@@ -3,12 +3,17 @@
 //! This module provides the extensible tool system:
 //! - Plugin loading and execution from the plugins directory
 //! - MCP bridge client for tools from remote MCP servers
-//! - Built-in tools for reflection, todos, goals, and messaging
-//! - Coding tools for shell execution, file editing, and codebase indexing
-//! - File tools for examining cached tool outputs
-//! - Agent tools for sub-agent spawning and content retrieval
+//! - Built-in tools organised by permission/capability group:
+//!   - `memory`: reflection, todos, goals, read_context
+//!   - `fs_read`: read-only file and directory access
+//!   - `fs_write`: file write and edit (triggers PreFileWrite hooks)
+//!   - `shell`: OS command execution (triggers PreShellExec hooks)
+//!   - `network`: outbound HTTP (triggers PreFetchUrl hooks)
+//!   - `index`: codebase index management
+//!   - `flow`: control flow, spawning, coordination, model introspection
+//!   - `vfs_tools`: virtual filesystem operations
 //! - URL and file path security policies
-//! - Hook system for plugin lifecycle events (31 hook points)
+//! - Hook system for plugin lifecycle events
 
 mod flow;
 mod fs_read;
@@ -193,24 +198,19 @@ pub struct Tool {
     pub summary_params: Vec<String>,
 }
 
-/// Collect names of all built-in tools (core, file, agent, coding, vfs).
+/// Collect names of all built-in tools across all groups.
 ///
-/// Returns a flat list of tool names from all internal registries.
-/// New tool categories should be added here when introduced.
+/// Returns a flat list from: memory, fs_read, fs_write, shell, network, index, flow, vfs.
+/// Add new groups here when introduced.
 pub fn builtin_tool_names() -> Vec<&'static str> {
     memory::MEMORY_TOOL_DEFS
         .iter()
-        .chain(flow::FLOW_TOOL_DEFS.iter())
-        // fs_read: file_head/tail/lines/grep, dir_list, glob_files, grep_files
         .chain(fs_read::FS_READ_TOOL_DEFS.iter())
-        // fs_write: write_file, file_edit
         .chain(fs_write::FS_WRITE_TOOL_DEFS.iter())
-        // shell: shell_exec
         .chain(shell::SHELL_TOOL_DEFS.iter())
-        // network: fetch_url
         .chain(network::NETWORK_TOOL_DEFS.iter())
-        // index: index_update, index_query, index_status
         .chain(index::INDEX_TOOL_DEFS.iter())
+        .chain(flow::FLOW_TOOL_DEFS.iter())
         .chain(vfs_tools::VFS_TOOL_DEFS.iter())
         .map(|def| def.name)
         .collect()
