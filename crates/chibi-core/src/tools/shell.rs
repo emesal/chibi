@@ -71,7 +71,10 @@ pub async fn execute_shell_tool(
 // === shell_exec implementation ===
 
 /// Execute shell_exec: run a command with a timeout and return structured JSON output.
-pub async fn execute_shell_exec(args: &serde_json::Value, project_root: &Path) -> io::Result<String> {
+pub async fn execute_shell_exec(
+    args: &serde_json::Value,
+    project_root: &Path,
+) -> io::Result<String> {
     use tokio::time::{Duration, timeout};
 
     let command = require_str_param(args, "command")?;

@@ -6,8 +6,8 @@
 use std::io::{self, BufRead, ErrorKind};
 use std::path::Path;
 
-use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use super::paths::{ResolvedPath, resolve_tool_path};
+use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;
 use crate::state::AppState;
@@ -245,10 +245,34 @@ pub fn execute_fs_read_tool(
     project_root: &Path,
 ) -> Option<io::Result<String>> {
     match tool_name {
-        FILE_HEAD_TOOL_NAME => Some(execute_file_head(app, context_name, args, config, project_root)),
-        FILE_TAIL_TOOL_NAME => Some(execute_file_tail(app, context_name, args, config, project_root)),
-        FILE_LINES_TOOL_NAME => Some(execute_file_lines(app, context_name, args, config, project_root)),
-        FILE_GREP_TOOL_NAME => Some(execute_file_grep(app, context_name, args, config, project_root)),
+        FILE_HEAD_TOOL_NAME => Some(execute_file_head(
+            app,
+            context_name,
+            args,
+            config,
+            project_root,
+        )),
+        FILE_TAIL_TOOL_NAME => Some(execute_file_tail(
+            app,
+            context_name,
+            args,
+            config,
+            project_root,
+        )),
+        FILE_LINES_TOOL_NAME => Some(execute_file_lines(
+            app,
+            context_name,
+            args,
+            config,
+            project_root,
+        )),
+        FILE_GREP_TOOL_NAME => Some(execute_file_grep(
+            app,
+            context_name,
+            args,
+            config,
+            project_root,
+        )),
         DIR_LIST_TOOL_NAME => Some(execute_dir_list(args, project_root, config)),
         GLOB_FILES_TOOL_NAME => Some(execute_glob_files(args, project_root, config)),
         GREP_FILES_TOOL_NAME => Some(execute_grep_files(args, project_root, config)),
@@ -335,7 +359,14 @@ pub fn execute_file_head(
     config: &ResolvedConfig,
     project_root: &Path,
 ) -> io::Result<String> {
-    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Head, project_root)
+    execute_file_head_or_tail(
+        app,
+        context_name,
+        args,
+        config,
+        ReadDirection::Head,
+        project_root,
+    )
 }
 
 /// Execute file_tail tool
@@ -346,7 +377,14 @@ pub fn execute_file_tail(
     config: &ResolvedConfig,
     project_root: &Path,
 ) -> io::Result<String> {
-    execute_file_head_or_tail(app, context_name, args, config, ReadDirection::Tail, project_root)
+    execute_file_head_or_tail(
+        app,
+        context_name,
+        args,
+        config,
+        ReadDirection::Tail,
+        project_root,
+    )
 }
 
 // === file_lines ===
@@ -1015,10 +1053,12 @@ mod tests {
         let a = args(&[("path", serde_json::json!("vfs:///shared"))]);
         let result = execute_dir_list(&a, dir.path(), &make_config_for(&dir));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not support vfs://"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not support vfs://")
+        );
     }
 
     // === glob_files tests ===

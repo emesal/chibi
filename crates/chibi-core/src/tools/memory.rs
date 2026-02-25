@@ -2,11 +2,11 @@
 //! Memory tools: reflection, todos, goals, read_context.
 //! These tools read and write internal context state.
 
+use super::{BuiltinToolDef, ToolPropertyDef};
 use crate::config::ResolvedConfig;
 use crate::state::AppState;
 use std::io::{self, ErrorKind};
 use std::path::Path;
-use super::{BuiltinToolDef, ToolPropertyDef};
 
 pub const REFLECTION_TOOL_NAME: &str = "update_reflection";
 pub const TODOS_TOOL_NAME: &str = "update_todos";

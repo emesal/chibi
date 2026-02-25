@@ -6,9 +6,9 @@
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
-use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use super::fs_read::vfs_block_on;
 use super::paths::{ResolvedPath, resolve_tool_path};
+use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::config::ResolvedConfig;
 use crate::vfs::{Vfs, VfsPath};
 
@@ -546,11 +546,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let vfs = make_test_vfs(&home);
 
-        let result = execute_write_file(
-            "vfs:///shared/doc.txt",
-            "hello vfs",
-            Some((&vfs, "ctx")),
-        );
+        let result = execute_write_file("vfs:///shared/doc.txt", "hello vfs", Some((&vfs, "ctx")));
         assert!(result.is_ok());
         assert!(result.unwrap().contains("written successfully"));
 
@@ -564,11 +560,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let vfs = make_test_vfs(&home);
 
-        let result = execute_write_file(
-            "vfs:///sys/config.txt",
-            "forbidden",
-            Some((&vfs, "ctx")),
-        );
+        let result = execute_write_file("vfs:///sys/config.txt", "forbidden", Some((&vfs, "ctx")));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
     }
@@ -587,7 +579,14 @@ mod tests {
             ("line_end", serde_json::json!(2)),
             ("content", serde_json::json!("BBB")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_config_for(&dir), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nBBB\nccc\n");
     }
@@ -603,7 +602,14 @@ mod tests {
             ("line_start", serde_json::json!(2)),
             ("content", serde_json::json!("NEW")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_config_for(&dir), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nNEW\nbbb\n");
     }
@@ -619,7 +625,14 @@ mod tests {
             ("line_start", serde_json::json!(1)),
             ("content", serde_json::json!("NEW")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_config_for(&dir), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nNEW\nbbb\n");
     }
@@ -635,7 +648,14 @@ mod tests {
             ("line_start", serde_json::json!(2)),
             ("line_end", serde_json::json!(2)),
         ]);
-        execute_file_edit(&a, dir.path(), &make_config_for(&dir), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "aaa\nccc\n");
     }
@@ -651,7 +671,14 @@ mod tests {
             ("find", serde_json::json!("hello")),
             ("replace", serde_json::json!("goodbye")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_config_for(&dir), &make_test_vfs(&dir), "test").unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        )
+        .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
         assert_eq!(content, "goodbye world\nhello again\n");
     }
@@ -668,7 +695,13 @@ mod tests {
             ("line_end", serde_json::json!(6)),
             ("content", serde_json::json!("x")),
         ]);
-        let result = execute_file_edit(&a, dir.path(), &make_config_for(&dir), &make_test_vfs(&dir), "test");
+        let result = execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        );
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
     }
@@ -682,7 +715,13 @@ mod tests {
             ("path", serde_json::json!("f.txt")),
             ("operation", serde_json::json!("teleport")),
         ]);
-        let result = execute_file_edit(&a, dir.path(), &make_config_for(&dir), &make_test_vfs(&dir), "test");
+        let result = execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &make_test_vfs(&dir),
+            "test",
+        );
         assert!(result.is_err());
     }
 

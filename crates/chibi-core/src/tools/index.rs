@@ -261,10 +261,12 @@ mod tests {
         let a = args(&[("name", serde_json::json!("foo"))]);
         let result = execute_index_query(&a, dir.path());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("No codebase index"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No codebase index")
+        );
     }
 
     #[test]

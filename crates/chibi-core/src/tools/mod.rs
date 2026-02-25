@@ -20,13 +20,13 @@ mod fs_read;
 mod fs_write;
 mod hooks;
 mod index;
-mod network;
-mod shell;
-mod memory;
 pub mod mcp;
+mod memory;
+mod network;
 pub(crate) mod paths;
 mod plugins;
 pub mod security;
+mod shell;
 pub mod vfs_tools;
 
 use std::io::{self, ErrorKind};
@@ -110,41 +110,40 @@ pub use memory::{
 
 // Re-export flow tool constants, types and functions
 pub use flow::{
-    CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME, FLOW_TOOL_DEFS, MODEL_INFO_TOOL_NAME,
-    SEND_MESSAGE_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SUMMARIZE_CONTENT_TOOL_NAME,
-    Handoff, HandoffTarget, SpawnOptions,
-    all_flow_tools_to_api_format, execute_flow_tool, flow_tool_metadata, is_flow_tool, is_url,
-    spawn_agent,
+    CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME, FLOW_TOOL_DEFS, Handoff, HandoffTarget,
+    MODEL_INFO_TOOL_NAME, SEND_MESSAGE_TOOL_NAME, SPAWN_AGENT_TOOL_NAME,
+    SUMMARIZE_CONTENT_TOOL_NAME, SpawnOptions, all_flow_tools_to_api_format, execute_flow_tool,
+    flow_tool_metadata, is_flow_tool, is_url, spawn_agent,
 };
 
 // Re-export fs_read tool registry functions and execution
 pub use fs_read::{
-    FS_READ_TOOL_DEFS, FILE_HEAD_TOOL_NAME, FILE_TAIL_TOOL_NAME, FILE_LINES_TOOL_NAME,
-    FILE_GREP_TOOL_NAME, DIR_LIST_TOOL_NAME, GLOB_FILES_TOOL_NAME, GREP_FILES_TOOL_NAME,
+    DIR_LIST_TOOL_NAME, FILE_GREP_TOOL_NAME, FILE_HEAD_TOOL_NAME, FILE_LINES_TOOL_NAME,
+    FILE_TAIL_TOOL_NAME, FS_READ_TOOL_DEFS, GLOB_FILES_TOOL_NAME, GREP_FILES_TOOL_NAME,
     all_fs_read_tools_to_api_format, execute_fs_read_tool, is_fs_read_tool,
 };
 
 // Re-export fs_write tool registry functions and execution
 pub use fs_write::{
-    FS_WRITE_TOOL_DEFS, FILE_EDIT_TOOL_NAME, WRITE_FILE_TOOL_NAME,
+    FILE_EDIT_TOOL_NAME, FS_WRITE_TOOL_DEFS, WRITE_FILE_TOOL_NAME,
     all_fs_write_tools_to_api_format, execute_fs_write_tool, execute_write_file, is_fs_write_tool,
 };
 
 // Re-export shell tool registry functions and execution
 pub use shell::{
-    SHELL_TOOL_DEFS, SHELL_EXEC_TOOL_NAME,
-    all_shell_tools_to_api_format, execute_shell_tool, is_shell_tool,
+    SHELL_EXEC_TOOL_NAME, SHELL_TOOL_DEFS, all_shell_tools_to_api_format, execute_shell_tool,
+    is_shell_tool,
 };
 
 // Re-export network tool registry functions and execution
 pub use network::{
-    NETWORK_TOOL_DEFS, FETCH_URL_TOOL_NAME,
-    all_network_tools_to_api_format, execute_network_tool, is_network_tool,
+    FETCH_URL_TOOL_NAME, NETWORK_TOOL_DEFS, all_network_tools_to_api_format, execute_network_tool,
+    is_network_tool,
 };
 
 // Re-export index tool registry functions and execution
 pub use index::{
-    INDEX_TOOL_DEFS, INDEX_UPDATE_TOOL_NAME, INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME,
+    INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_TOOL_DEFS, INDEX_UPDATE_TOOL_NAME,
     all_index_tools_to_api_format, execute_index_tool, is_index_tool,
 };
 

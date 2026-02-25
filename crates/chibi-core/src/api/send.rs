@@ -1101,13 +1101,7 @@ async fn execute_tool_pure(
         }
     } else if tools::is_index_tool(&tool_call.name) {
         unwrap_tool_dispatch(
-            tools::execute_index_tool(
-                &tool_call.name,
-                &args,
-                project_root,
-                resolved_config,
-                tools,
-            ),
+            tools::execute_index_tool(&tool_call.name, &args, project_root, resolved_config, tools),
             &tool_call.name,
         )
     } else if tools::is_flow_tool(&tool_call.name) {
@@ -2369,10 +2363,7 @@ mod tests {
         );
         assert!(names.contains(&"dir_list"), "fs_read tool should remain");
         assert!(names.contains(&"file_head"), "fs_read tool should remain");
-        assert!(
-            names.contains(&"update_todos"),
-            "memory tool should remain"
-        );
+        assert!(names.contains(&"update_todos"), "memory tool should remain");
         assert!(names.contains(&"spawn_agent"), "flow tool should remain");
     }
 

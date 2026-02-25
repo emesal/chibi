@@ -355,8 +355,7 @@ impl Chibi {
         args: serde_json::Value,
     ) -> io::Result<String> {
         // Memory tools (sync)
-        if let Some(result) =
-            tools::execute_memory_tool(&self.app, context_name, name, &args, None)
+        if let Some(result) = tools::execute_memory_tool(&self.app, context_name, name, &args, None)
         {
             return result;
         }
@@ -394,20 +393,16 @@ impl Chibi {
         }
 
         // shell tools (async, no permission gating in chibi.rs)
-        if tools::is_shell_tool(name) {
-            if let Some(result) =
-                tools::execute_shell_tool(name, &args, &self.project_root).await
-            {
+        if tools::is_shell_tool(name)
+            && let Some(result) = tools::execute_shell_tool(name, &args, &self.project_root).await {
                 return result;
             }
-        }
 
         // network tools (async, no permission gating in chibi.rs)
-        if tools::is_network_tool(name) {
-            if let Some(result) = tools::execute_network_tool(name, &args).await {
+        if tools::is_network_tool(name)
+            && let Some(result) = tools::execute_network_tool(name, &args).await {
                 return result;
             }
-        }
 
         // index tools (sync, no permission gating)
         if tools::is_index_tool(name) {
@@ -421,14 +416,15 @@ impl Chibi {
 
         // flow tools (async: spawn_agent, summarize_content; sync: send_message)
         if name == tools::SEND_MESSAGE_TOOL_NAME {
-            let to = args
-                .get("to")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Missing 'to' parameter"))?;
+            let to = args.get("to").and_then(|v| v.as_str()).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Missing 'to' parameter")
+            })?;
             let content = args
                 .get("content")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Missing 'content' parameter"))?;
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "Missing 'content' parameter")
+                })?;
             return self
                 .app
                 .send_inbox_message_from(context_name, to, content)

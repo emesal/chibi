@@ -610,7 +610,9 @@ mod tests {
 
     #[test]
     fn test_handoff_explicit_takes_precedence() {
-        let fallback = HandoffTarget::User { message: "fallback".to_string() };
+        let fallback = HandoffTarget::User {
+            message: "fallback".to_string(),
+        };
         let mut handoff = Handoff::new(fallback);
         handoff.set_agent("explicit prompt".to_string());
 
@@ -626,7 +628,9 @@ mod tests {
 
     #[test]
     fn test_handoff_last_wins() {
-        let fallback = HandoffTarget::Agent { prompt: String::new() };
+        let fallback = HandoffTarget::Agent {
+            prompt: String::new(),
+        };
         let mut handoff = Handoff::new(fallback);
         handoff.set_agent("first".to_string());
         handoff.set_user("second".to_string());
@@ -640,14 +644,18 @@ mod tests {
 
     #[test]
     fn test_handoff_ends_turn_requested_user() {
-        let mut handoff = Handoff::new(HandoffTarget::Agent { prompt: String::new() });
+        let mut handoff = Handoff::new(HandoffTarget::Agent {
+            prompt: String::new(),
+        });
         handoff.set_user("bye".to_string());
         assert!(handoff.ends_turn_requested());
     }
 
     #[test]
     fn test_handoff_ends_turn_requested_agent() {
-        let mut handoff = Handoff::new(HandoffTarget::User { message: String::new() });
+        let mut handoff = Handoff::new(HandoffTarget::User {
+            message: String::new(),
+        });
         handoff.set_agent("continue".to_string());
         assert!(!handoff.ends_turn_requested());
     }
@@ -658,7 +666,9 @@ mod tests {
     fn test_send_message_tool_api_format() {
         let tool = get_tool_api(SEND_MESSAGE_TOOL_NAME);
         assert_eq!(tool["function"]["name"], SEND_MESSAGE_TOOL_NAME);
-        let required = tool["function"]["parameters"]["required"].as_array().unwrap();
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
         assert!(required.contains(&json!("to")));
         assert!(required.contains(&json!("content")));
     }
@@ -691,7 +701,9 @@ mod tests {
         let tool = get_tool_api(SPAWN_AGENT_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], SPAWN_AGENT_TOOL_NAME);
-        let required = tool["function"]["parameters"]["required"].as_array().unwrap();
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
         assert!(required.contains(&json!("system_prompt")));
         assert!(required.contains(&json!("input")));
         assert_eq!(required.len(), 2);
@@ -700,7 +712,9 @@ mod tests {
     #[test]
     fn test_summarize_content_tool_api_format() {
         let tool = get_tool_api(SUMMARIZE_CONTENT_TOOL_NAME);
-        let required = tool["function"]["parameters"]["required"].as_array().unwrap();
+        let required = tool["function"]["parameters"]["required"]
+            .as_array()
+            .unwrap();
         assert!(required.contains(&json!("source")));
         assert!(required.contains(&json!("instructions")));
         assert_eq!(required.len(), 2);
@@ -741,7 +755,10 @@ mod tests {
     #[test]
     fn test_apply_spawn_options_model_override() {
         let config = make_test_config();
-        let opts = SpawnOptions { model: Some("new-model".to_string()), ..Default::default() };
+        let opts = SpawnOptions {
+            model: Some("new-model".to_string()),
+            ..Default::default()
+        };
         let result = apply_spawn_options(&config, &opts, None);
         assert_eq!(result.model, "new-model");
     }
@@ -749,7 +766,10 @@ mod tests {
     #[test]
     fn test_apply_spawn_options_temperature_override() {
         let config = make_test_config();
-        let opts = SpawnOptions { temperature: Some(0.9), ..Default::default() };
+        let opts = SpawnOptions {
+            temperature: Some(0.9),
+            ..Default::default()
+        };
         let result = apply_spawn_options(&config, &opts, None);
         assert_eq!(result.api.temperature, Some(0.9));
     }
@@ -782,7 +802,10 @@ mod tests {
     #[test]
     fn test_apply_preset_defaults_preserves_existing() {
         use ratatoskr::PresetParameters;
-        let params = PresetParameters { temperature: Some(0.3), ..Default::default() };
+        let params = PresetParameters {
+            temperature: Some(0.3),
+            ..Default::default()
+        };
         let mut api = crate::config::ApiParams::defaults();
         api.temperature = Some(0.9);
         apply_preset_defaults(&params, &mut api);
