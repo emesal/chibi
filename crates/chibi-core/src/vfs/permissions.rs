@@ -8,32 +8,31 @@
 
 use std::io::{self, ErrorKind};
 
+use super::caller::VfsCaller;
 use super::path::VfsPath;
-
-/// Reserved caller name with unrestricted write access to all zones.
-pub const SYSTEM_CALLER: &str = "SYSTEM";
 
 /// Check whether a caller name is reserved and cannot be used as a context name.
 pub fn is_reserved_caller_name(name: &str) -> bool {
-    name.eq_ignore_ascii_case(SYSTEM_CALLER)
+    name.eq_ignore_ascii_case("SYSTEM")
 }
 
 /// Check read permission. Always succeeds — all zones are world-readable.
-pub fn check_read(_caller: &str, _path: &VfsPath) -> io::Result<()> {
+pub fn check_read(_caller: VfsCaller<'_>, _path: &VfsPath) -> io::Result<()> {
     Ok(())
 }
 
 /// Check write permission based on caller identity and path zone.
 ///
-/// The `SYSTEM_CALLER` check uses an exact byte match (`==`) intentionally.
-/// `is_reserved_caller_name` accepts case variants ("system", "System", etc.)
-/// to block them from being registered as context names, but write bypass
-/// requires the literal `"SYSTEM"` string — case variants are denied.
-/// This prevents privilege escalation via a lookalike caller name.
-pub fn check_write(caller: &str, path: &VfsPath) -> io::Result<()> {
-    if caller == SYSTEM_CALLER {
+/// `VfsCaller::System` has unrestricted write access to all zones.
+/// `VfsCaller::Context` is subject to zone-based rules.
+pub fn check_write(caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<()> {
+    if caller == VfsCaller::System {
         return Ok(());
     }
+
+    let VfsCaller::Context(name) = caller else {
+        unreachable!()
+    };
 
     let p = path.as_str();
 
@@ -45,7 +44,7 @@ pub fn check_write(caller: &str, path: &VfsPath) -> io::Result<()> {
     // /home/<caller>/ — owner-writable
     if let Some(rest) = p.strip_prefix("/home/") {
         let owner = rest.split('/').next().unwrap_or("");
-        if owner == caller {
+        if owner == name {
             return Ok(());
         }
     }
@@ -54,7 +53,7 @@ pub fn check_write(caller: &str, path: &VfsPath) -> io::Result<()> {
         ErrorKind::PermissionDenied,
         format!(
             "context '{}' cannot write to '{}' (writable zones: /shared/, /home/{}/)",
-            caller, path, caller
+            name, path, name
         ),
     ))
 }
@@ -69,39 +68,39 @@ mod tests {
         let sys = VfsPath::new("/sys/config").unwrap();
         let shared = VfsPath::new("/shared/foo").unwrap();
         let home = VfsPath::new("/home/ctx/file").unwrap();
-        assert!(check_write(SYSTEM_CALLER, &sys).is_ok());
-        assert!(check_write(SYSTEM_CALLER, &shared).is_ok());
-        assert!(check_write(SYSTEM_CALLER, &home).is_ok());
+        assert!(check_write(VfsCaller::System, &sys).is_ok());
+        assert!(check_write(VfsCaller::System, &shared).is_ok());
+        assert!(check_write(VfsCaller::System, &home).is_ok());
     }
 
     #[test]
     fn test_context_can_write_shared() {
         let p = VfsPath::new("/shared/tasks.md").unwrap();
-        assert!(check_write("planner", &p).is_ok());
+        assert!(check_write(VfsCaller::Context("planner"), &p).is_ok());
     }
 
     #[test]
     fn test_context_can_write_own_home() {
         let p = VfsPath::new("/home/planner/notes.md").unwrap();
-        assert!(check_write("planner", &p).is_ok());
+        assert!(check_write(VfsCaller::Context("planner"), &p).is_ok());
     }
 
     #[test]
     fn test_context_cannot_write_other_home() {
         let p = VfsPath::new("/home/coder/notes.md").unwrap();
-        assert!(check_write("planner", &p).is_err());
+        assert!(check_write(VfsCaller::Context("planner"), &p).is_err());
     }
 
     #[test]
     fn test_context_cannot_write_sys() {
         let p = VfsPath::new("/sys/info").unwrap();
-        assert!(check_write("planner", &p).is_err());
+        assert!(check_write(VfsCaller::Context("planner"), &p).is_err());
     }
 
     #[test]
     fn test_context_cannot_write_root() {
         let p = VfsPath::new("/random_file").unwrap();
-        assert!(check_write("planner", &p).is_err());
+        assert!(check_write(VfsCaller::Context("planner"), &p).is_err());
     }
 
     #[test]
@@ -109,7 +108,7 @@ mod tests {
         let paths = ["/shared/x", "/home/other/x", "/sys/x", "/root_file"];
         for p in &paths {
             let path = VfsPath::new(p).unwrap();
-            assert!(check_read("anyctx", &path).is_ok());
+            assert!(check_read(VfsCaller::Context("anyctx"), &path).is_ok());
         }
     }
 

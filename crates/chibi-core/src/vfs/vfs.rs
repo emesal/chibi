@@ -18,11 +18,12 @@ use super::backend::VfsBackend;
 use super::path::VfsPath;
 use super::permissions;
 use super::types::{VfsEntry, VfsMetadata};
+use crate::vfs::caller::VfsCaller;
 
 /// Core VFS router and permission enforcer.
 ///
-/// All public methods take a `caller` (context name or `SYSTEM_CALLER`) and
-/// enforce zone-based permissions before delegating to the backend.
+/// All public methods take a `caller` (`VfsCaller`) and enforce zone-based
+/// permissions before delegating to the backend.
 pub struct Vfs {
     backend: Box<dyn VfsBackend>,
 }
@@ -35,57 +36,77 @@ impl Vfs {
 
     // -- read operations (always allowed) --
 
-    pub async fn read(&self, caller: &str, path: &VfsPath) -> io::Result<Vec<u8>> {
+    pub async fn read(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<Vec<u8>> {
         permissions::check_read(caller, path)?;
         self.backend.read(path).await
     }
 
-    pub async fn list(&self, caller: &str, path: &VfsPath) -> io::Result<Vec<VfsEntry>> {
+    pub async fn list(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<Vec<VfsEntry>> {
         permissions::check_read(caller, path)?;
         self.backend.list(path).await
     }
 
-    pub async fn exists(&self, caller: &str, path: &VfsPath) -> io::Result<bool> {
+    pub async fn exists(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<bool> {
         permissions::check_read(caller, path)?;
         self.backend.exists(path).await
     }
 
-    pub async fn metadata(&self, caller: &str, path: &VfsPath) -> io::Result<VfsMetadata> {
+    pub async fn metadata(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<VfsMetadata> {
         permissions::check_read(caller, path)?;
         self.backend.metadata(path).await
     }
 
     // -- write operations (permission-checked) --
 
-    pub async fn write(&self, caller: &str, path: &VfsPath, data: &[u8]) -> io::Result<()> {
+    pub async fn write(
+        &self,
+        caller: VfsCaller<'_>,
+        path: &VfsPath,
+        data: &[u8],
+    ) -> io::Result<()> {
         permissions::check_write(caller, path)?;
         self.backend.write(path, data).await
     }
 
-    pub async fn append(&self, caller: &str, path: &VfsPath, data: &[u8]) -> io::Result<()> {
+    pub async fn append(
+        &self,
+        caller: VfsCaller<'_>,
+        path: &VfsPath,
+        data: &[u8],
+    ) -> io::Result<()> {
         permissions::check_write(caller, path)?;
         self.backend.append(path, data).await
     }
 
-    pub async fn delete(&self, caller: &str, path: &VfsPath) -> io::Result<()> {
+    pub async fn delete(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<()> {
         permissions::check_write(caller, path)?;
         self.backend.delete(path).await
     }
 
-    pub async fn mkdir(&self, caller: &str, path: &VfsPath) -> io::Result<()> {
+    pub async fn mkdir(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<()> {
         permissions::check_write(caller, path)?;
         self.backend.mkdir(path).await
     }
 
     /// Copy a file. Caller must have read on src and write on dst.
-    pub async fn copy(&self, caller: &str, src: &VfsPath, dst: &VfsPath) -> io::Result<()> {
+    pub async fn copy(
+        &self,
+        caller: VfsCaller<'_>,
+        src: &VfsPath,
+        dst: &VfsPath,
+    ) -> io::Result<()> {
         permissions::check_read(caller, src)?;
         permissions::check_write(caller, dst)?;
         self.backend.copy(src, dst).await
     }
 
     /// Rename (move) a file. Caller must have write on both src and dst.
-    pub async fn rename(&self, caller: &str, src: &VfsPath, dst: &VfsPath) -> io::Result<()> {
+    pub async fn rename(
+        &self,
+        caller: VfsCaller<'_>,
+        src: &VfsPath,
+        dst: &VfsPath,
+    ) -> io::Result<()> {
         permissions::check_write(caller, src)?;
         permissions::check_write(caller, dst)?;
         self.backend.rename(src, dst).await
@@ -95,8 +116,7 @@ impl Vfs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::LocalBackend;
-    use crate::vfs::permissions::SYSTEM_CALLER;
+    use crate::vfs::{LocalBackend, VfsCaller};
     use tempfile::TempDir;
 
     fn setup() -> (TempDir, Vfs) {
@@ -110,8 +130,10 @@ mod tests {
     async fn test_write_to_shared_allowed() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/shared/test.txt").unwrap();
-        vfs.write("ctx", &path, b"hi").await.unwrap();
-        let data = vfs.read("ctx", &path).await.unwrap();
+        vfs.write(VfsCaller::Context("ctx"), &path, b"hi")
+            .await
+            .unwrap();
+        let data = vfs.read(VfsCaller::Context("ctx"), &path).await.unwrap();
         assert_eq!(data, b"hi");
     }
 
@@ -119,15 +141,25 @@ mod tests {
     async fn test_write_to_own_home_allowed() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/home/planner/file.md").unwrap();
-        vfs.write("planner", &path, b"ok").await.unwrap();
-        assert_eq!(vfs.read("planner", &path).await.unwrap(), b"ok");
+        vfs.write(VfsCaller::Context("planner"), &path, b"ok")
+            .await
+            .unwrap();
+        assert_eq!(
+            vfs.read(VfsCaller::Context("planner"), &path)
+                .await
+                .unwrap(),
+            b"ok"
+        );
     }
 
     #[tokio::test]
     async fn test_write_to_other_home_denied() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/home/coder/file.md").unwrap();
-        let err = vfs.write("planner", &path, b"nope").await.unwrap_err();
+        let err = vfs
+            .write(VfsCaller::Context("planner"), &path, b"nope")
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 
@@ -135,7 +167,10 @@ mod tests {
     async fn test_write_to_sys_denied() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/sys/data").unwrap();
-        let err = vfs.write("ctx", &path, b"nope").await.unwrap_err();
+        let err = vfs
+            .write(VfsCaller::Context("ctx"), &path, b"nope")
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 
@@ -143,16 +178,24 @@ mod tests {
     async fn test_system_can_write_sys() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/sys/data").unwrap();
-        vfs.write(SYSTEM_CALLER, &path, b"ok").await.unwrap();
-        assert_eq!(vfs.read("anyctx", &path).await.unwrap(), b"ok");
+        vfs.write(VfsCaller::System, &path, b"ok").await.unwrap();
+        assert_eq!(
+            vfs.read(VfsCaller::Context("anyctx"), &path).await.unwrap(),
+            b"ok"
+        );
     }
 
     #[tokio::test]
     async fn test_read_other_home_allowed() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/home/coder/file.md").unwrap();
-        vfs.write("coder", &path, b"public").await.unwrap();
-        let data = vfs.read("planner", &path).await.unwrap();
+        vfs.write(VfsCaller::Context("coder"), &path, b"public")
+            .await
+            .unwrap();
+        let data = vfs
+            .read(VfsCaller::Context("planner"), &path)
+            .await
+            .unwrap();
         assert_eq!(data, b"public");
     }
 
@@ -161,8 +204,13 @@ mod tests {
         let (_dir, vfs) = setup();
         let src = VfsPath::new("/shared/src.txt").unwrap();
         let dst = VfsPath::new("/home/coder/dst.txt").unwrap();
-        vfs.write("ctx", &src, b"data").await.unwrap();
-        let err = vfs.copy("planner", &src, &dst).await.unwrap_err();
+        vfs.write(VfsCaller::Context("ctx"), &src, b"data")
+            .await
+            .unwrap();
+        let err = vfs
+            .copy(VfsCaller::Context("planner"), &src, &dst)
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 
@@ -171,8 +219,13 @@ mod tests {
         let (_dir, vfs) = setup();
         let src = VfsPath::new("/home/planner/file.txt").unwrap();
         let dst = VfsPath::new("/home/coder/file.txt").unwrap();
-        vfs.write("planner", &src, b"data").await.unwrap();
-        let err = vfs.rename("planner", &src, &dst).await.unwrap_err();
+        vfs.write(VfsCaller::Context("planner"), &src, b"data")
+            .await
+            .unwrap();
+        let err = vfs
+            .rename(VfsCaller::Context("planner"), &src, &dst)
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 
@@ -180,8 +233,13 @@ mod tests {
     async fn test_delete_checks_write_permission() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/home/coder/file.txt").unwrap();
-        vfs.write("coder", &path, b"data").await.unwrap();
-        let err = vfs.delete("planner", &path).await.unwrap_err();
+        vfs.write(VfsCaller::Context("coder"), &path, b"data")
+            .await
+            .unwrap();
+        let err = vfs
+            .delete(VfsCaller::Context("planner"), &path)
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 
@@ -189,7 +247,10 @@ mod tests {
     async fn test_mkdir_checks_write_permission() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/sys/forbidden").unwrap();
-        let err = vfs.mkdir("ctx", &path).await.unwrap_err();
+        let err = vfs
+            .mkdir(VfsCaller::Context("ctx"), &path)
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 
@@ -197,7 +258,10 @@ mod tests {
     async fn test_append_checks_write_permission() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/home/coder/log.txt").unwrap();
-        let err = vfs.append("planner", &path, b"nope").await.unwrap_err();
+        let err = vfs
+            .append(VfsCaller::Context("planner"), &path, b"nope")
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 
@@ -205,7 +269,10 @@ mod tests {
     async fn test_list_always_allowed() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/home/coder").unwrap();
-        let entries = vfs.list("planner", &path).await.unwrap();
+        let entries = vfs
+            .list(VfsCaller::Context("planner"), &path)
+            .await
+            .unwrap();
         assert!(entries.is_empty());
     }
 
@@ -213,8 +280,13 @@ mod tests {
     async fn test_metadata_always_allowed() {
         let (_dir, vfs) = setup();
         let path = VfsPath::new("/shared/m.txt").unwrap();
-        vfs.write("ctx", &path, b"data").await.unwrap();
-        let meta = vfs.metadata("othercxt", &path).await.unwrap();
+        vfs.write(VfsCaller::Context("ctx"), &path, b"data")
+            .await
+            .unwrap();
+        let meta = vfs
+            .metadata(VfsCaller::Context("othercxt"), &path)
+            .await
+            .unwrap();
         assert_eq!(meta.size, 4);
     }
 }
