@@ -233,7 +233,7 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
 
 /// Look up summary_params for a built-in tool by name.
 ///
-/// Searches all built-in registries (core, file, coding, agent). Returns
+/// Searches all built-in registries (core, file, coding, agent, VFS). Returns
 /// an empty slice if the tool is not found.
 pub fn builtin_summary_params(name: &str) -> &'static [&'static str] {
     BUILTIN_TOOL_DEFS
@@ -241,6 +241,7 @@ pub fn builtin_summary_params(name: &str) -> &'static [&'static str] {
         .chain(super::file_tools::FILE_TOOL_DEFS.iter())
         .chain(super::coding_tools::CODING_TOOL_DEFS.iter())
         .chain(super::agent_tools::AGENT_TOOL_DEFS.iter())
+        .chain(super::vfs_tools::VFS_TOOL_DEFS.iter())
         .find(|def| def.name == name)
         .map(|def| def.summary_params)
         .unwrap_or(&[])

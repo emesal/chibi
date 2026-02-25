@@ -787,6 +787,18 @@ fn apply_pre_tool_output_results(
 ///
 /// Performs all tool execution logic (hooks, dispatch, caching, output hooks)
 /// without touching the sink or handoff state. Collects verbose diagnostics
+/// Unwrap a tool dispatch result (`Option<Result<String>>`) into a result string.
+///
+/// Converts the three-variant pattern used by `execute_*_tool` functions into
+/// a single `String`: `Ok(r)` → result, `Err(e)` → error message, `None` → unknown tool.
+fn unwrap_tool_dispatch(result: Option<io::Result<String>>, tool_name: &str) -> String {
+    match result {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => format!("Error: {}", e),
+        None => format!("Error: Unknown tool '{}'", tool_name),
+    }
+}
+
 /// into `ToolExecutionResult::diagnostics` for the caller to emit.
 ///
 /// This enables concurrent execution via `join_all` since it doesn't require
@@ -878,18 +890,10 @@ async fn execute_tool_pure(
         // VFS paths bypass OS permission gating; zone-based permissions are enforced inside execute_file_tool.
         let raw_path = args.get_str("path").unwrap_or("");
         if VfsPath::is_vfs_uri(raw_path) {
-            match tools::execute_file_tool(
-                app,
-                context_name,
+            unwrap_tool_dispatch(
+                tools::execute_file_tool(app, context_name, &tool_call.name, &args, resolved_config, project_root),
                 &tool_call.name,
-                &args,
-                resolved_config,
-                project_root,
-            ) {
-                Some(Ok(r)) => r,
-                Some(Err(e)) => format!("Error: {}", e),
-                None => format!("Error: Unknown file tool '{}'", tool_call.name),
-            }
+            )
         // Write tools need permission via pre_file_write hook
         } else if tool_call.name == tools::WRITE_FILE_TOOL_NAME {
             let hook_data = serde_json::json!({
@@ -903,18 +907,10 @@ async fn execute_tool_pure(
                 &hook_data,
                 permission_handler,
             )? {
-                Ok(()) => match tools::execute_file_tool(
-                    app,
-                    context_name,
+                Ok(()) => unwrap_tool_dispatch(
+                    tools::execute_file_tool(app, context_name, &tool_call.name, &args, resolved_config, project_root),
                     &tool_call.name,
-                    &args,
-                    resolved_config,
-                    project_root,
-                ) {
-                    Some(Ok(r)) => r,
-                    Some(Err(e)) => format!("Error: {}", e),
-                    None => format!("Error: Unknown file tool '{}'", tool_call.name),
-                },
+                ),
                 Err(reason) => format!("Error: {}", reason),
             }
         } else {
@@ -951,28 +947,19 @@ async fn execute_tool_pure(
             if let Some(reason) = permission_denied {
                 format!("Error: {}", reason)
             } else {
-                match tools::execute_file_tool(
-                    app,
-                    context_name,
+                unwrap_tool_dispatch(
+                    tools::execute_file_tool(app, context_name, &tool_call.name, &args, resolved_config, project_root),
                     &tool_call.name,
-                    &args,
-                    resolved_config,
-                    project_root,
-                ) {
-                    Some(Ok(r)) => r,
-                    Some(Err(e)) => format!("Error: {}", e),
-                    None => format!("Error: Unknown file tool '{}'", tool_call.name),
-                }
+                )
             }
         }
     } else if tools::is_vfs_tool(&tool_call.name) {
         // VFS tools enforce their own zone-based permission model.
         // No PreFileRead/PreFileWrite hooks needed.
-        match tools::execute_vfs_tool(&app.vfs, context_name, &tool_call.name, &args).await {
-            Some(Ok(r)) => r,
-            Some(Err(e)) => format!("Error: {}", e),
-            None => format!("Error: Unknown VFS tool '{}'", tool_call.name),
-        }
+        unwrap_tool_dispatch(
+            tools::execute_vfs_tool(&app.vfs, context_name, &tool_call.name, &args).await,
+            &tool_call.name,
+        )
     } else if tools::is_agent_tool(&tool_call.name) {
         // URL policy / permission check for summarize_content
         if tool_call.name == tools::SUMMARIZE_CONTENT_TOOL_NAME
@@ -1041,21 +1028,13 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    match tools::execute_coding_tool(
+                    unwrap_tool_dispatch(
+                        tools::execute_coding_tool(
+                            &tool_call.name, &args, project_root, resolved_config,
+                            tools, &app.vfs, context_name,
+                        ).await,
                         &tool_call.name,
-                        &args,
-                        project_root,
-                        resolved_config,
-                        tools,
-                        &app.vfs,
-                        context_name,
                     )
-                    .await
-                    {
-                        Some(Ok(r)) => r,
-                        Some(Err(e)) => format!("Error: {}", e),
-                        None => format!("Error: Unknown coding tool '{}'", tool_call.name),
-                    }
                 }
                 Err(reason) => format!("Error: {}", reason),
             }
@@ -1073,21 +1052,13 @@ async fn execute_tool_pure(
                 permission_handler,
             )? {
                 Ok(()) => {
-                    match tools::execute_coding_tool(
+                    unwrap_tool_dispatch(
+                        tools::execute_coding_tool(
+                            &tool_call.name, &args, project_root, resolved_config,
+                            tools, &app.vfs, context_name,
+                        ).await,
                         &tool_call.name,
-                        &args,
-                        project_root,
-                        resolved_config,
-                        tools,
-                        &app.vfs,
-                        context_name,
                     )
-                    .await
-                    {
-                        Some(Ok(r)) => r,
-                        Some(Err(e)) => format!("Error: {}", e),
-                        None => format!("Error: Unknown coding tool '{}'", tool_call.name),
-                    }
                 }
                 Err(reason) => format!("Error: {}", reason),
             }
@@ -1161,21 +1132,13 @@ async fn execute_tool_pure(
         } else {
             // Ungated coding tools: dir_list, glob_files, grep_files,
             // index_update, index_query, index_status
-            match tools::execute_coding_tool(
+            unwrap_tool_dispatch(
+                tools::execute_coding_tool(
+                    &tool_call.name, &args, project_root, resolved_config,
+                    tools, &app.vfs, context_name,
+                ).await,
                 &tool_call.name,
-                &args,
-                project_root,
-                resolved_config,
-                tools,
-                &app.vfs,
-                context_name,
             )
-            .await
-            {
-                Some(Ok(r)) => r,
-                Some(Err(e)) => format!("Error: {}", e),
-                None => format!("Error: Unknown coding tool '{}'", tool_call.name),
-            }
         }
     } else if let Some(tool) = tools::find_tool(tools, &tool_call.name) {
         if tools::mcp::is_mcp_tool(tool) {

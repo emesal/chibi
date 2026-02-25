@@ -87,7 +87,9 @@ pub fn execute_hook(
             // stdin is dropped here, closing the pipe and signaling EOF
         }
 
-        let output = child.wait_with_output().map_err(|e| {
+        let timeout = std::time::Duration::from_secs(super::PLUGIN_TIMEOUT_SECS);
+        let context = format!("hook {} on {}", hook.as_ref(), tool.name);
+        let output = super::wait_with_timeout(child, timeout, &context).map_err(|e| {
             io::Error::other(format!(
                 "Failed to execute hook {} on {}: {}",
                 hook.as_ref(),

@@ -10,41 +10,41 @@ Full codebase review of chibi at commit `bae75691` (dev branch).
 
 ## Important
 
-- [ ] **#2 flow-control entries: `is_context_entry` vs `entries_to_messages` contradiction**
-  `state/mod.rs` — `is_context_entry` returns true for flow-control entries, but `entries_to_messages` silently skips them. Doc comment at `context.rs:178` says they should be suppressed from context.jsonl. Either exclude from `is_context_entry` or handle in `entries_to_messages`.
+- [x] **#2 flow-control entries: `is_context_entry` vs `entries_to_messages` contradiction** *(fixed: updated stale doc comments)*
+  The code was correct — flow-control entries are stored in context.jsonl but excluded from API messages by `entries_to_messages()`. The doc comment at `context.rs:176` was stale.
 
-- [ ] **#3 `save_and_register_context` stale in-memory state**
-  `state/context_ops.rs:27-51` — writes new context to disk but never updates `self.state.contexts` in memory. Subsequent calls see stale state until `sync_state_with_filesystem()`.
+- [x] **#3 `save_and_register_context` stale in-memory state** *(documented: by-design)*
+  `AppState` takes `&self` — in-memory mutation is impossible without interior mutability. Disk is the source of truth. Added doc comment explaining the design.
 
-- [ ] **#4 dual request-building paths**
+- [ ] **#4 dual request-building paths** *(deferred — architectural refactor, needs own session)*
   `api/request.rs` (`build_request_body`) and `gateway.rs` (`to_chat_options`) both convert config to API params with nearly identical logic. New params must be added in two places. Risk of drift between logged request and actual request.
 
-- [ ] **#5 `compact_context_with_llm` incorrect doc comment**
-  `api/compact.rs:351-359` — doc says "full compaction: summarizes all messages and starts fresh" but it delegates to `rolling_compact`. Incorrect per project standards.
+- [x] **#5 `compact_context_with_llm` incorrect doc comment** *(fixed)*
+  Doc now correctly describes rolling compaction delegation.
 
-- [ ] **#6 `execute_tool_pure` duplication**
-  `api/send.rs:795-1307` — 400-line function with ~8x duplicated `match` dispatch pattern (`Some(Ok(r))/Some(Err(e))/None`). Extract a helper.
+- [x] **#6 `execute_tool_pure` duplication** *(fixed: `unwrap_tool_dispatch` helper)*
+  Extracted helper for `Option<io::Result<String>>` → `String` dispatch pattern. Eliminated ~8 repetitions.
 
-- [ ] **#7 `docs/plugins.md` vs `docs/hooks.md` disagreement**
-  plugins.md says `pre_api_tools` returns `{"remove": [...]}`, hooks.md says `{"exclude": [...]}`. plugins.md says `pre_agentic_loop` returns `{"handoff": ...}`, hooks.md says `{"fallback": ...}`. hooks.md is authoritative; plugins.md needs updating.
+- [x] **#7 `docs/plugins.md` vs `docs/hooks.md` disagreement** *(fixed both)*
+  Updated plugins.md to use correct field names. Also fixed hooks.md — `on_start` does receive payload (`chibi_home`, `project_root`, `tool_count`), not empty `{}`.
 
-- [ ] **#8 `PRESET_DESCRIPTION_PLACEHOLDER` in agent tool def**
-  `tools/agent_tools.rs:67` — placeholder description visible if schema accessed directly (bypassing `all_agent_tools_to_api_format`). Replace with a real description.
+- [x] **#8 `PRESET_DESCRIPTION_PLACEHOLDER` in agent tool def** *(fixed)*
+  Replaced with real description.
 
-- [ ] **#9 `builtin_summary_params` missing VFS tools**
-  `tools/builtin.rs:238-247` — chains 4 registries but skips `vfs_tools::VFS_TOOL_DEFS`. Tool call summaries produce `None` for VFS tools.
+- [x] **#9 `builtin_summary_params` missing VFS tools** *(fixed)*
+  Added `vfs_tools::VFS_TOOL_DEFS` to the chain.
 
-- [ ] **#10 no timeout on hook/plugin execution**
-  `tools/hooks.rs:52-118` and `tools/plugins.rs:241-279` — `wait_with_output()` with no timeout. A hung plugin freezes the entire application. Every other process execution in the codebase has timeout protection.
+- [x] **#10 no timeout on hook/plugin execution** *(fixed: 30s timeout)*
+  Added `wait_with_timeout` utility in tools/mod.rs. Both hooks.rs and plugins.rs now use it. Timeout kills the child process via PID.
 
-- [ ] **#11 `PostIndexFile` hook receives cumulative stats**
-  `index/indexer.rs:252-258` — `stats.symbols_added` and `stats.refs_added` are cumulative across all files, not per-file counts. Hook consumers get inflating numbers.
+- [x] **#11 `PostIndexFile` hook receives cumulative stats** *(fixed: per-file deltas)*
+  Snapshot cumulative counts before each file, compute delta for the hook payload.
 
-- [ ] **#12 stale/duplicated doc comment**
-  `chibi-cli/src/config.rs:281-288` — `ResolvedConfig::get_field` has a partial TODO that cuts off mid-sentence, followed by a replacement doc comment pasted below instead of replacing the original.
+- [x] **#12 stale/duplicated doc comment** *(fixed)*
+  Removed partial TODO and duplicate doc comment.
 
-- [ ] **#13 `InspectConfigList` hardcoded items duplicated**
-  CLI (`main.rs:423-431`) and JSON (`main.rs:113-121`) both hardcode `["system_prompt", "reflection", "todos", "goals", "home"]`. Should be a constant in core.
+- [x] **#13 `InspectConfigList` hardcoded items duplicated** *(fixed: `INSPECTABLE_ITEMS` constant)*
+  Moved to `execution.rs`, exported via `chibi_core::INSPECTABLE_ITEMS`. Both binaries reference the constant.
 
 ## Suggestions
 

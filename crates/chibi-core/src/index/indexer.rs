@@ -225,6 +225,10 @@ pub fn update_index(
             conn.execute("DELETE FROM refs WHERE from_file_id = ?1", [file_id])
                 .map_err(|e| io::Error::other(format!("failed to delete refs: {}", e)))?;
 
+            // Snapshot cumulative counts to compute per-file deltas for the hook.
+            let symbols_before = stats.symbols_added;
+            let refs_before = stats.refs_added;
+
             // If a language plugin exists, dispatch to it for symbol extraction.
             if let Some(plugin) = plugin {
                 let content = std::fs::read_to_string(&abs_path).unwrap_or_default();
@@ -246,14 +250,16 @@ pub fn update_index(
                 }
             }
 
+            let file_symbols = stats.symbols_added - symbols_before;
+            let file_refs = stats.refs_added - refs_before;
             stats.files_indexed += 1;
 
             // Fire PostIndexFile hook (observe only — errors are non-fatal).
             let hook_data = serde_json::json!({
                 "path": rel_path,
                 "lang": lang,
-                "symbol_count": stats.symbols_added,
-                "ref_count": stats.refs_added,
+                "symbol_count": file_symbols,
+                "ref_count": file_refs,
             });
             let _ = execute_hook(tools, HookPoint::PostIndexFile, &hook_data);
         }

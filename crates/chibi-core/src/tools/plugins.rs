@@ -260,8 +260,9 @@ pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value) -> io::Result<St
         // stdin is dropped here, closing the pipe and signaling EOF
     }
 
-    let output = child
-        .wait_with_output()
+    let timeout = std::time::Duration::from_secs(super::PLUGIN_TIMEOUT_SECS);
+    let context = format!("plugin tool '{}'", tool.name);
+    let output = super::wait_with_timeout(child, timeout, &context)
         .map_err(|e| io::Error::other(format!("Failed to execute tool: {}", e)))?;
 
     if !output.status.success() {

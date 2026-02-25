@@ -1094,6 +1094,11 @@ impl AppState {
 
 /// Returns true if a transcript entry should be included in context.jsonl.
 ///
+/// Most entry types are included — they are stored in context.jsonl for
+/// record-keeping but `entries_to_messages()` controls which ones become
+/// API messages. Flow-control entries, for example, are stored but skipped
+/// during message reconstruction.
+///
 /// Transcript-only entries (never written to context):
 /// - `system_prompt_changed` — prompt change events, stored in context_meta.json
 fn is_context_entry(entry: &TranscriptEntry) -> bool {

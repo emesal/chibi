@@ -348,7 +348,11 @@ pub async fn rolling_compact(
     Ok(())
 }
 
-/// Full compaction: summarizes all messages and starts fresh (auto-triggered)
+/// Auto-triggered compaction: delegates to rolling compaction.
+///
+/// Rolling compaction summarises older messages while preserving recent ones,
+/// keeping the context window within budget without discarding everything.
+/// For full compaction (manual `-c` flag), see `compact_context_with_llm_manual`.
 pub async fn compact_context_with_llm(
     app: &AppState,
     context_name: &str,

@@ -129,13 +129,23 @@ When a hook fires, registered plugins are called with:
 
 ## Hook Data by Type
 
-### on_start / on_end
+### on_start
+
+```json
+{
+  "chibi_home": "/home/user/.chibi",
+  "project_root": "/home/user/project",
+  "tool_count": 15
+}
+```
+
+### on_end
 
 ```json
 {}
 ```
 
-These hooks receive an empty payload. Session context is no longer passed to lifecycle hooks.
+`on_end` receives an empty payload.
 
 ### pre_message
 
