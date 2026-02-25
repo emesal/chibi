@@ -440,6 +440,16 @@ pub struct VfsConfig {
     pub backend: String,
 }
 
+/// Site identity configuration.
+///
+/// Optional hostname override; if absent the OS hostname is used. This is
+/// global-only (not per-context) since site identity is a startup singleton.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SiteConfig {
+    /// Override the hostname used when deriving `site_id`. `None` = use OS hostname.
+    pub hostname: Option<String>,
+}
+
 fn default_vfs_backend() -> String {
     "local".to_string()
 }
@@ -673,6 +683,10 @@ pub struct Config {
     /// startup-time singleton and not per-context configurable.
     #[serde(default)]
     pub vfs: VfsConfig,
+    /// Site identity configuration. Not in ResolvedConfig — site identity is a
+    /// startup-time singleton and not per-context configurable.
+    #[serde(default)]
+    pub site: Option<SiteConfig>,
     /// URL security policy for sensitive URL handling
     #[serde(default)]
     pub url_policy: Option<UrlPolicy>,

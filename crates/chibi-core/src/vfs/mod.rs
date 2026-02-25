@@ -23,6 +23,7 @@
 
 pub mod backend;
 pub mod caller;
+pub mod flock;
 pub mod local;
 pub mod path;
 pub mod permissions;
@@ -47,7 +48,7 @@ mod integration_tests {
     fn setup() -> (TempDir, Vfs) {
         let dir = TempDir::new().unwrap();
         let backend = LocalBackend::new(dir.path().to_path_buf());
-        (dir, Vfs::new(Box::new(backend)))
+        (dir, Vfs::new(Box::new(backend), "test-site-0000"))
     }
 
     #[tokio::test]

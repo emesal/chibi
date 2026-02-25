@@ -58,6 +58,8 @@ pub struct AppState {
     pub prompts_dir: PathBuf,
     /// Directory containing plugin directories (`~/.chibi/plugins/`).
     pub plugins_dir: PathBuf,
+    /// Site identity for this chibi installation.
+    pub site_id: String,
     /// Shared virtual file system.
     pub vfs: crate::vfs::Vfs,
     /// Cache of active partition state per context, avoiding repeated file scans.
@@ -102,17 +104,20 @@ impl AppState {
         }
         fs::create_dir_all(&vfs_root)?;
         let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
-        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
+
+        let hostname_override = config.site.as_ref().and_then(|s| s.hostname.as_deref());
+        let site = crate::site::load_or_create(&chibi_dir, hostname_override)?;
+        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend), &site.site_id);
 
         Ok(AppState {
             config,
-
             state,
             chibi_dir,
             state_path,
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            site_id: site.site_id,
             vfs,
             active_state_cache: RefCell::new(HashMap::new()),
         })
@@ -195,7 +200,10 @@ impl AppState {
         }
         fs::create_dir_all(&vfs_root)?;
         let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
-        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
+
+        let hostname_override = config.site.as_ref().and_then(|s| s.hostname.as_deref());
+        let site = crate::site::load_or_create(&chibi_dir, hostname_override)?;
+        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend), &site.site_id);
 
         let mut app = AppState {
             config,
@@ -205,6 +213,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            site_id: site.site_id,
             vfs,
             active_state_cache: RefCell::new(HashMap::new()),
         };

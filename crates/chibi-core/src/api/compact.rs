@@ -629,6 +629,7 @@ mod tests {
             url_policy: None,
             subagent_cost_tier: "free".to_string(),
             models: Default::default(),
+            site: None,
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)

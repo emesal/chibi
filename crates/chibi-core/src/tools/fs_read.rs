@@ -873,7 +873,7 @@ mod tests {
     fn make_vfs_app(home: &TempDir, vfs_dir: &TempDir) -> AppState {
         let mut app = AppState::load(Some(home.path().to_path_buf())).unwrap();
         let backend = LocalBackend::new(vfs_dir.path().to_path_buf());
-        app.vfs = Vfs::new(Box::new(backend));
+        app.vfs = Vfs::new(Box::new(backend), "test-site-0000");
         app
     }
 

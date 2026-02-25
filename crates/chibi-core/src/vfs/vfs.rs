@@ -26,12 +26,26 @@ use crate::vfs::caller::VfsCaller;
 /// permissions before delegating to the backend.
 pub struct Vfs {
     backend: Box<dyn VfsBackend>,
+    /// Site identifier for this installation (e.g. `"myhost-a1b2c3d4"`).
+    /// Used for flock permission checks and registry membership.
+    site_id: String,
 }
 
 impl Vfs {
     /// Create a new VFS wrapping the given backend.
-    pub fn new(backend: Box<dyn VfsBackend>) -> Self {
-        Self { backend }
+    ///
+    /// `site_id` is the stable site identifier used for flock permission checks.
+    /// Pass `"test-site-0000"` in tests.
+    pub fn new(backend: Box<dyn VfsBackend>, site_id: impl Into<String>) -> Self {
+        Self {
+            backend,
+            site_id: site_id.into(),
+        }
+    }
+
+    /// Return the site identifier for this installation.
+    pub fn site_id(&self) -> &str {
+        &self.site_id
     }
 
     // -- read operations (always allowed) --
@@ -122,7 +136,7 @@ mod tests {
     fn setup() -> (TempDir, Vfs) {
         let dir = TempDir::new().unwrap();
         let backend = LocalBackend::new(dir.path().to_path_buf());
-        let vfs = Vfs::new(Box::new(backend));
+        let vfs = Vfs::new(Box::new(backend), "test-site-0000");
         (dir, vfs)
     }
 

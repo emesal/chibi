@@ -472,7 +472,7 @@ mod tests {
 
     fn make_test_vfs(dir: &TempDir) -> Vfs {
         let backend = LocalBackend::new(dir.path().to_path_buf());
-        Vfs::new(Box::new(backend))
+        Vfs::new(Box::new(backend), "test-site-0000")
     }
 
     // === Registry tests ===

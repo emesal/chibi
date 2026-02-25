@@ -269,7 +269,7 @@ mod tests {
     fn setup_vfs() -> (TempDir, Vfs) {
         let dir = TempDir::new().unwrap();
         let backend = LocalBackend::new(dir.path().to_path_buf());
-        (dir, Vfs::new(Box::new(backend)))
+        (dir, Vfs::new(Box::new(backend), "test-site-0000"))
     }
 
     #[tokio::test]
