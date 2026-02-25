@@ -21,9 +21,42 @@ mod plugins;
 pub mod security;
 pub mod vfs_tools;
 
+use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 
 pub use hooks::HookPoint;
+
+/// Property definition for a tool parameter
+pub struct ToolPropertyDef {
+    pub name: &'static str,
+    pub prop_type: &'static str,
+    pub description: &'static str,
+    /// Optional default value (for integer defaults only, as used by file tools)
+    pub default: Option<i64>,
+}
+
+/// Built-in tool definition for declarative registry
+pub struct BuiltinToolDef {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub properties: &'static [ToolPropertyDef],
+    pub required: &'static [&'static str],
+    /// Parameter names whose values should appear in tool-call notices.
+    pub summary_params: &'static [&'static str],
+}
+
+/// Extract a required string parameter from tool args.
+///
+/// Shared helper for all tool modules that parse JSON arguments.
+pub fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String> {
+    use crate::json_ext::JsonExt;
+    args.get_str(name).map(String::from).ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Missing '{}' parameter", name),
+        )
+    })
+}
 
 // Re-export hook execution
 pub use hooks::execute_hook;

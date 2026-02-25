@@ -4,7 +4,7 @@
 //! `vfs:///sys/tool_cache/<context>/<id>`. Use these tools with
 //! `path="vfs:///sys/tool_cache/..."` to examine cached content.
 
-use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
+use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use super::paths::{ResolvedPath, resolve_tool_path};
 use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;

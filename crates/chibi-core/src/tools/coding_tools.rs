@@ -11,7 +11,7 @@
 use std::io::{self, BufRead, ErrorKind};
 use std::path::Path;
 
-use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
+use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use super::file_tools::vfs_block_on;
 use super::paths::{ResolvedPath, resolve_tool_path};
 use crate::config::ResolvedConfig;

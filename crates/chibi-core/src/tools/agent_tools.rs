@@ -7,7 +7,7 @@
 //! Sub-agent calls are non-streaming (results are tool outputs, not user-facing).
 //! Hooks (`pre_spawn_agent` / `post_spawn_agent`) allow plugins to intercept or observe.
 
-use super::builtin::{BuiltinToolDef, ToolPropertyDef};
+use super::{BuiltinToolDef, ToolPropertyDef};
 use super::{HookPoint, Tool, execute_hook};
 use crate::config::ResolvedConfig;
 use crate::gateway;
