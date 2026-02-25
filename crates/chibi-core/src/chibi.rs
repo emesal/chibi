@@ -354,18 +354,18 @@ impl Chibi {
         name: &str,
         args: serde_json::Value,
     ) -> io::Result<String> {
-        // Try built-in tools first
+        // Memory tools (sync)
         if let Some(result) =
-            tools::execute_builtin_tool(&self.app, context_name, name, &args, None)
+            tools::execute_memory_tool(&self.app, context_name, name, &args, None)
         {
             return result;
         }
 
-        // Try file tools
-        if tools::is_file_tool(name) {
+        // fs_read tools (sync, no permission gating in chibi.rs)
+        if tools::is_fs_read_tool(name) {
             let mut config = self.app.resolve_config(context_name, None)?;
             tools::ensure_project_root_allowed(&mut config, &self.project_root);
-            if let Some(result) = tools::execute_file_tool(
+            if let Some(result) = tools::execute_fs_read_tool(
                 &self.app,
                 context_name,
                 name,
@@ -377,29 +377,73 @@ impl Chibi {
             }
         }
 
-        // Try coding tools
-        if tools::is_coding_tool(name) {
+        // fs_write tools (sync, no permission gating in chibi.rs)
+        if tools::is_fs_write_tool(name) {
             let mut config = self.app.resolve_config(context_name, None)?;
             tools::ensure_project_root_allowed(&mut config, &self.project_root);
-            if let Some(result) = tools::execute_coding_tool(
+            if let Some(result) = tools::execute_fs_write_tool(
                 name,
                 &args,
                 &self.project_root,
                 &config,
-                &self.tools,
                 &self.app.vfs,
                 context_name,
-            )
-            .await
+            ) {
+                return result;
+            }
+        }
+
+        // shell tools (async, no permission gating in chibi.rs)
+        if tools::is_shell_tool(name) {
+            if let Some(result) =
+                tools::execute_shell_tool(name, &args, &self.project_root).await
             {
                 return result;
             }
         }
 
-        // Try agent tools
-        if tools::is_agent_tool(name) {
+        // network tools (async, no permission gating in chibi.rs)
+        if tools::is_network_tool(name) {
+            if let Some(result) = tools::execute_network_tool(name, &args).await {
+                return result;
+            }
+        }
+
+        // index tools (sync, no permission gating)
+        if tools::is_index_tool(name) {
             let config = self.app.resolve_config(context_name, None)?;
-            return tools::execute_agent_tool(&config, name, &args, &self.tools).await;
+            if let Some(result) =
+                tools::execute_index_tool(name, &args, &self.project_root, &config, &self.tools)
+            {
+                return result;
+            }
+        }
+
+        // flow tools (async: spawn_agent, summarize_content; sync: send_message)
+        if name == tools::SEND_MESSAGE_TOOL_NAME {
+            let to = args
+                .get("to")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Missing 'to' parameter"))?;
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Missing 'content' parameter"))?;
+            return self
+                .app
+                .send_inbox_message_from(context_name, to, content)
+                .map(|_| format!("Message sent to '{}'", to));
+        }
+        if tools::is_flow_tool(name) {
+            let config = self.app.resolve_config(context_name, None)?;
+            return match tools::execute_flow_tool(&config, name, &args, &self.tools).await {
+                Ok(Some(r)) => Ok(r),
+                Ok(None) => Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Flow tool '{}' not found", name),
+                )),
+                Err(e) => Err(e),
+            };
         }
 
         // Try MCP tools (virtual path mcp://server/tool)

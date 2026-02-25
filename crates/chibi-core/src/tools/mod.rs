@@ -82,7 +82,8 @@ pub use flow::{
     CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME, FLOW_TOOL_DEFS, MODEL_INFO_TOOL_NAME,
     SEND_MESSAGE_TOOL_NAME, SPAWN_AGENT_TOOL_NAME, SUMMARIZE_CONTENT_TOOL_NAME,
     Handoff, HandoffTarget, SpawnOptions,
-    all_flow_tools_to_api_format, execute_flow_tool, flow_tool_metadata, is_flow_tool, spawn_agent,
+    all_flow_tools_to_api_format, execute_flow_tool, flow_tool_metadata, is_flow_tool, is_url,
+    spawn_agent,
 };
 
 // Re-export builtin tool registry lookup and execution (includes memory + flow delegation)
