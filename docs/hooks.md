@@ -129,13 +129,23 @@ When a hook fires, registered plugins are called with:
 
 ## Hook Data by Type
 
-### on_start / on_end
+### on_start
+
+```json
+{
+  "chibi_home": "/home/user/.chibi",
+  "project_root": "/home/user/project",
+  "tool_count": 15
+}
+```
+
+### on_end
 
 ```json
 {}
 ```
 
-These hooks receive an empty payload. Session context is no longer passed to lifecycle hooks.
+`on_end` receives an empty payload.
 
 ### pre_message
 
@@ -234,13 +244,17 @@ Called after tools are filtered but before the HTTP request is sent. Allows modi
     "model": "anthropic/claude-sonnet-4",
     "messages": [...],
     "tools": [...],
+    "stream": true,
     "temperature": 0.7,
+    "cache_prompt": true,
     ...
   },
   "fuel_remaining": 30,
   "fuel_total": 30
 }
 ```
+
+> **Note on field names:** The request body reflects chibi's internal representation. Some fields differ from raw OpenAI/OpenRouter API names: prompt caching appears as `cache_prompt`; reasoning exclude appears as `exclude_from_output`. These are the field names to use when overriding via this hook.
 
 **Can return (to modify request):**
 ```json
@@ -252,7 +266,7 @@ Called after tools are filtered but before the HTTP request is sent. Allows modi
 }
 ```
 
-Returned fields are **merged** into the request body, not replaced entirely. This allows targeted modifications without needing to echo back the entire body.
+Returned fields are **merged** into the request body, not replaced entirely. This allows targeted modifications without needing to echo back the entire body. Modifications are applied to the actual API call — not just to logging.
 
 ### pre_agentic_loop
 

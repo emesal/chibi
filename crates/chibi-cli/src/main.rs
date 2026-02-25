@@ -422,7 +422,7 @@ async fn execute_from_input(
         }
         CommandEffect::InspectConfigList { context: _ } => {
             handler.emit_result("Inspectable items:");
-            for name in ["system_prompt", "reflection", "todos", "goals", "home"] {
+            for name in chibi_core::INSPECTABLE_ITEMS {
                 handler.emit_result(&format!("  {}", name));
             }
             for field in ResolvedConfig::list_fields() {

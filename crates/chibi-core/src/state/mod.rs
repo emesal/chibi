@@ -36,13 +36,27 @@ use std::io::{self, BufReader, ErrorKind, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// Runtime application state.
+///
+/// Holds all in-memory handles needed to serve API operations: resolved global
+/// config, current context list, directory paths, the VFS instance, and a
+/// lazy cache of per-context partition state.  Disk is the source of truth —
+/// `AppState` carries no interior mutability beyond the partition cache, and
+/// individual fields are never mutated in place.
 pub struct AppState {
+    /// Global configuration loaded from `~/.chibi/config.toml`.
     pub config: Config,
+    /// In-memory list of all known contexts (names and metadata).
     pub state: ContextState,
+    /// Root chibi data directory (typically `~/.chibi`).
     pub chibi_dir: PathBuf,
+    /// Path to the `state.json` file that records all context metadata.
     pub state_path: PathBuf,
+    /// Directory containing per-context subdirectories (`~/.chibi/contexts/`).
     pub contexts_dir: PathBuf,
+    /// Directory containing system prompt files (`~/.chibi/prompts/`).
     pub prompts_dir: PathBuf,
+    /// Directory containing plugin directories (`~/.chibi/plugins/`).
     pub plugins_dir: PathBuf,
     /// Shared virtual file system.
     pub vfs: crate::vfs::Vfs,
@@ -1093,6 +1107,11 @@ impl AppState {
 }
 
 /// Returns true if a transcript entry should be included in context.jsonl.
+///
+/// Most entry types are included — they are stored in context.jsonl for
+/// record-keeping but `entries_to_messages()` controls which ones become
+/// API messages. Flow-control entries, for example, are stored but skipped
+/// during message reconstruction.
 ///
 /// Transcript-only entries (never written to context):
 /// - `system_prompt_changed` — prompt change events, stored in context_meta.json

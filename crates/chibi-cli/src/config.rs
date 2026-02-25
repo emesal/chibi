@@ -278,10 +278,6 @@ pub struct ResolvedConfig {
 }
 
 impl ResolvedConfig {
-    /// Get a config field value by path.
-    /// First checks presentation fields, then delegates to core.
-    ///
-    /// TODO: currently unused since inspect moved to core, which only sees
     /// Get a CLI config field value by path.
     ///
     /// Handles CLI-specific fields (render_markdown, image.*, etc.) and

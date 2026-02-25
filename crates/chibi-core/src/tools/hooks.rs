@@ -87,7 +87,9 @@ pub fn execute_hook(
             // stdin is dropped here, closing the pipe and signaling EOF
         }
 
-        let output = child.wait_with_output().map_err(|e| {
+        let timeout = std::time::Duration::from_secs(super::PLUGIN_TIMEOUT_SECS);
+        let context = format!("hook {} on {}", hook.as_ref(), tool.name);
+        let output = super::wait_with_timeout(child, timeout, &context).map_err(|e| {
             io::Error::other(format!(
                 "Failed to execute hook {} on {}: {}",
                 hook.as_ref(),
@@ -189,28 +191,7 @@ mod tests {
     }
 
     use super::super::ToolMetadata;
-    use std::path::PathBuf;
-
-    /// Helper to create a test script and make it executable.
-    #[cfg(unix)]
-    fn create_test_script(dir: &std::path::Path, name: &str, content: &[u8]) -> PathBuf {
-        use std::io::Write as _;
-        use std::os::unix::fs::PermissionsExt;
-
-        let script_path = dir.join(name);
-
-        {
-            let mut file = std::fs::File::create(&script_path).unwrap();
-            file.write_all(content).unwrap();
-            file.sync_all().unwrap();
-        }
-
-        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).unwrap();
-
-        script_path
-    }
+    use super::super::test_helpers::create_test_script;
 
     /// Execute a hook with retry on ETXTBSY (text file busy).
     fn execute_hook_with_retry(

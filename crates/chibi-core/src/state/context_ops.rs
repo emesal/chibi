@@ -24,11 +24,16 @@ impl AppState {
         })
     }
 
+    /// Save a context and ensure it is registered in state.json.
+    ///
+    /// Note: this updates disk state only — `self.state.contexts` is not mutated
+    /// (AppState is `&self`). Callers that need the updated context list should
+    /// use `sync_state_with_filesystem()` to reload from disk.
     pub fn save_and_register_context(&self, context: &Context) -> io::Result<()> {
         self.save_context(context)?;
 
         // Ensure the context is tracked in state.
-        // Important: Read state from disk to get the authoritative list of contexts,
+        // Read state from disk to get the authoritative list of contexts,
         // rather than using in-memory state which may be stale.
         if !self.state.contexts.iter().any(|e| e.name == context.name) {
             let disk_state = if self.state_path.exists() {

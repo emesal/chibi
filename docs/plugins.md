@@ -104,8 +104,8 @@ Hooks can return JSON to stdout. For most hooks, this is informational. Some hoo
 - `pre_send_message`: Return `{"delivered": true, "via": "..."}` to intercept message delivery
 - `pre_spawn_agent`: Return `{"response": "..."}` to replace the LLM call, or `{"block": true, "message": "..."}` to block it
 - `pre_cache_output`: Return `{"summary": "..."}` to provide a custom summary instead of caching
-- `pre_api_tools`: Return `{"remove": ["tool_name"]}` to filter tools from the API request
-- `pre_agentic_loop` / `post_tool_batch`: Return `{"handoff": "user"|"agent"|"none"}` to override the fallback
+- `pre_api_tools`: Return `{"exclude": ["tool_name"]}` or `{"include": ["tool_name"]}` to filter tools
+- `pre_agentic_loop` / `post_tool_batch`: Return `{"fallback": "call_user"|"call_agent"}` to override the fallback, or `{"fuel": N}` / `{"fuel_delta": N}` to adjust fuel
 
 Return empty output or `{}` if you have nothing to contribute.
 

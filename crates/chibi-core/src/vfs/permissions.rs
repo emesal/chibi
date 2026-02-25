@@ -24,6 +24,12 @@ pub fn check_read(_caller: &str, _path: &VfsPath) -> io::Result<()> {
 }
 
 /// Check write permission based on caller identity and path zone.
+///
+/// The `SYSTEM_CALLER` check uses an exact byte match (`==`) intentionally.
+/// `is_reserved_caller_name` accepts case variants ("system", "System", etc.)
+/// to block them from being registered as context names, but write bypass
+/// requires the literal `"SYSTEM"` string — case variants are denied.
+/// This prevents privilege escalation via a lookalike caller name.
 pub fn check_write(caller: &str, path: &VfsPath) -> io::Result<()> {
     if caller == SYSTEM_CALLER {
         return Ok(());

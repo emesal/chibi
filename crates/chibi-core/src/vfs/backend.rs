@@ -32,7 +32,7 @@ use super::path::VfsPath;
 use super::types::{VfsEntry, VfsMetadata};
 
 /// Boxed, Send future — the return type for all backend methods.
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub(super) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Storage backend for the virtual file system.
 ///

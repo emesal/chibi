@@ -281,6 +281,75 @@ pub(crate) async fn fetch_url_with_limit(
     }
 }
 
+/// Default timeout for hook and plugin execution (30 seconds).
+///
+/// Prevents hung plugins from blocking the entire application.
+pub(crate) const PLUGIN_TIMEOUT_SECS: u64 = 30;
+
+/// Wait for a child process with a timeout, killing it if exceeded.
+///
+/// Returns the process output on success, or a timeout error if the process
+/// does not complete within the given duration. On timeout, the child process
+/// is killed via its PID to prevent zombie accumulation.
+pub(crate) fn wait_with_timeout(
+    child: std::process::Child,
+    timeout: std::time::Duration,
+    context: &str,
+) -> std::io::Result<std::process::Output> {
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let result = child.wait_with_output();
+        // Send the result back; if the receiver is gone (timeout), the child
+        // is already killed and this thread exits cleanly.
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(_) => {
+            // Timeout — kill the child by PID. The wait thread will unblock
+            // once the process exits and clean up naturally.
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status();
+            Err(std::io::Error::other(format!(
+                "Timed out after {}s: {}",
+                timeout.as_secs(),
+                context,
+            )))
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) mod test_helpers {
+    use std::path::{Path, PathBuf};
+
+    /// Helper to create a test script and make it executable.
+    /// Uses sync_all to ensure the file is fully written before execution.
+    #[cfg(unix)]
+    pub(super) fn create_test_script(dir: &Path, name: &str, content: &[u8]) -> PathBuf {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt;
+
+        let script_path = dir.join(name);
+
+        {
+            let mut file = std::fs::File::create(&script_path).unwrap();
+            file.write_all(content).unwrap();
+            file.sync_all().unwrap();
+        }
+
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+
+        script_path
+    }
+}
+
 // Tests for Tool struct are in plugins.rs
 
 #[cfg(test)]
