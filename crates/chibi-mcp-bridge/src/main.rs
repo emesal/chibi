@@ -150,6 +150,22 @@ fn is_lockfile_stale(lock_path: &Path) -> bool {
     now.saturating_sub(timestamp) > stale_threshold
 }
 
+/// Atomically write bytes to a file via a temp file + rename.
+///
+/// Prevents a partially-written file from being observed by concurrent readers.
+fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let tmp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&tmp_path)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    fs::rename(&tmp_path, path)
+}
+
 /// Touch the lockfile by updating its timestamp field.
 fn touch_lockfile(lock_path: &Path) -> std::io::Result<()> {
     let content = fs::read_to_string(lock_path)?;
@@ -161,8 +177,7 @@ fn touch_lockfile(lock_path: &Path) -> std::io::Result<()> {
         .as_secs();
     lock["timestamp"] = serde_json::json!(now);
     let json = serde_json::to_string(&lock).map_err(std::io::Error::other)?;
-    fs::write(lock_path, json)?;
-    Ok(())
+    atomic_write(lock_path, json.as_bytes())
 }
 
 /// Remove the lockfile on shutdown.

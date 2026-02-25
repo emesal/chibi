@@ -131,7 +131,8 @@ pub async fn rolling_compact(
             } else {
                 let content = m["content"].as_str().unwrap_or("");
                 if content.len() > 500 {
-                    format!("{}... [truncated]", &content[..500])
+                    let end = content.floor_char_boundary(500);
+                    format!("{}... [truncated]", &content[..end])
                 } else {
                     content.to_string()
                 }
@@ -347,7 +348,11 @@ pub async fn rolling_compact(
     Ok(())
 }
 
-/// Full compaction: summarizes all messages and starts fresh (auto-triggered)
+/// Auto-triggered compaction: delegates to rolling compaction.
+///
+/// Rolling compaction summarises older messages while preserving recent ones,
+/// keeping the context window within budget without discarding everything.
+/// For full compaction (manual `-c` flag), see `compact_context_with_llm_manual`.
 pub async fn compact_context_with_llm(
     app: &AppState,
     context_name: &str,
@@ -378,7 +383,7 @@ pub async fn compact_context_by_name(
     let context = app.load_context(context_name)?;
     let message_count = context.messages.len();
 
-    if message_count == 0 || message_count <= 2 {
+    if message_count <= 2 {
         return Ok(());
     }
 

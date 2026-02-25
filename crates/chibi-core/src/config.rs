@@ -598,21 +598,28 @@ fn default_subagent_cost_tier() -> String {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
+    /// API key for the LLM provider. `None` = keyless (e.g. free-tier OpenRouter).
     pub api_key: Option<String>,
     #[serde(default)]
+    /// Model identifier to use for API requests. `None` = use the ratatoskr default preset.
     pub model: Option<String>,
     #[serde(default)]
+    /// Maximum context window size in tokens. `None` = derive from model metadata.
     pub context_window_limit: Option<usize>,
     #[serde(default = "default_warn_threshold_percent")]
+    /// Percentage of context window used before a token-count warning is shown.
     pub warn_threshold_percent: f32,
     /// Omit tools from API requests entirely (pure text mode)
     #[serde(default = "default_no_tool_calls")]
     pub no_tool_calls: bool,
     #[serde(default = "default_auto_compact")]
+    /// Automatically compact the context when it nears the token limit.
     pub auto_compact: bool,
     #[serde(default = "default_auto_compact_threshold")]
+    /// Percentage of context window that triggers auto-compaction.
     pub auto_compact_threshold: f32,
     #[serde(default = "default_reflection_enabled")]
+    /// Enable the reflection tool so the LLM can query its own context window.
     pub reflection_enabled: bool,
     /// Maximum characters for reflection tool output
     #[serde(default = "default_reflection_character_limit")]
@@ -626,12 +633,14 @@ pub struct Config {
     #[serde(default = "default_fuel_empty_response_cost")]
     pub fuel_empty_response_cost: usize,
     #[serde(default = "default_username")]
+    /// Display name used for the human role in conversations.
     pub username: String,
     /// Lock heartbeat interval in seconds. Intentionally global-only (not in ResolvedConfig)
     /// since lock behaviour must be consistent regardless of active context.
     #[serde(default = "default_lock_heartbeat_seconds")]
     pub lock_heartbeat_seconds: u64,
     #[serde(default = "default_rolling_compact_drop_percentage")]
+    /// Percentage of oldest messages to drop during rolling compaction.
     pub rolling_compact_drop_percentage: f32,
     /// Threshold (in chars) above which tool output is cached
     #[serde(default = "default_tool_output_cache_threshold")]
@@ -680,21 +689,31 @@ pub struct Config {
 /// Note: Core fields only. Presentation overrides are in CLI layer.
 #[derive(Debug, Serialize, Deserialize, Default, JsonSchema)]
 pub struct LocalConfig {
+    /// Model identifier override for this context. `None` = use global config.
     pub model: Option<String>,
+    /// API key override for this context. `None` = use global config.
     pub api_key: Option<String>,
+    /// Display name override for this context. `None` = use global config.
     pub username: Option<String>,
     /// Per-context no tool calls override
     pub no_tool_calls: Option<bool>,
+    /// Auto-compact override for this context. `None` = use global config.
     pub auto_compact: Option<bool>,
+    /// Auto-compact threshold override for this context. `None` = use global config.
     pub auto_compact_threshold: Option<f32>,
     /// Per-context fuel budget override. `0` means unlimited.
     pub fuel: Option<usize>,
     /// Per-context fuel cost for empty responses. Ignored when `fuel = 0`.
     pub fuel_empty_response_cost: Option<usize>,
+    /// Token warning threshold override for this context. `None` = use global config.
     pub warn_threshold_percent: Option<f32>,
+    /// Context window limit override for this context. `None` = use global config.
     pub context_window_limit: Option<usize>,
+    /// Reflection tool override for this context. `None` = use global config.
     pub reflection_enabled: Option<bool>,
+    /// Reflection character limit override for this context. `None` = use global config.
     pub reflection_character_limit: Option<usize>,
+    /// Rolling compaction drop percentage override for this context. `None` = use global config.
     pub rolling_compact_drop_percentage: Option<f32>,
     /// Threshold (in chars) above which tool output is cached
     pub tool_output_cache_threshold: Option<usize>,
@@ -792,7 +811,7 @@ pub struct ModelMetadata {
 
 /// Fully resolved configuration with all overrides applied.
 /// Note: This is the core resolved config. CLI extends this with presentation fields.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ResolvedConfig {
     /// API key for the provider. `None` = keyless (free-tier openrouter).
     pub api_key: Option<String>,
@@ -1052,6 +1071,20 @@ impl ResolvedConfig {
                         .parse::<u64>()
                         .map_err(|_| format!("invalid u64 for '{}': {}", path, value))?,
                 );
+            }
+            "api.stop" => {
+                // Accept a comma-separated list of stop sequences (e.g. "END, STOP").
+                // Each token is trimmed; an empty string clears the field.
+                let tokens: Vec<String> = value
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                self.api.stop = if tokens.is_empty() {
+                    None
+                } else {
+                    Some(tokens)
+                };
             }
 
             // Reasoning config (api.reasoning.*)

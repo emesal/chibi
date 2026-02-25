@@ -3,20 +3,15 @@
 //! Maps `VfsPath` values to OS paths under a root directory (typically
 //! `~/.chibi/vfs/`). Uses `safe_io::atomic_write` for write operations.
 
-use std::future::Future;
 use std::io;
 use std::path::PathBuf;
-use std::pin::Pin;
 
 use chrono::{DateTime, Utc};
 use tokio::fs;
 
-use super::backend::VfsBackend;
+use super::backend::{BoxFuture, VfsBackend};
 use super::path::VfsPath;
 use super::types::{VfsEntry, VfsEntryKind, VfsMetadata};
-
-/// Boxed, Send future — matches the backend trait's return type.
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Filesystem-backed VFS storage.
 ///

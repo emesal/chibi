@@ -379,15 +379,12 @@ impl Chibi {
 
         // Try coding tools
         if tools::is_coding_tool(name) {
-            let project_root = std::env::var("CHIBI_PROJECT_ROOT")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
             let mut config = self.app.resolve_config(context_name, None)?;
-            tools::ensure_project_root_allowed(&mut config, &project_root);
+            tools::ensure_project_root_allowed(&mut config, &self.project_root);
             if let Some(result) = tools::execute_coding_tool(
                 name,
                 &args,
-                &project_root,
+                &self.project_root,
                 &config,
                 &self.tools,
                 &self.app.vfs,

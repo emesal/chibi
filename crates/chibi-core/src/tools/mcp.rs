@@ -120,6 +120,13 @@ pub fn read_bridge_address(home: &Path) -> io::Result<SocketAddr> {
 /// 2. Acquire spawn-mutex (O_CREAT | O_EXCL). If another process holds it,
 ///    skip spawning and just poll for the bridge lockfile.
 /// 3. Spawn bridge, poll for lockfile (up to 10s), release spawn-mutex.
+///
+/// # Crash safety
+///
+/// The spawn-mutex is acquired atomically (`O_CREAT | O_EXCL`) and removed
+/// after the spawn+poll window. If the holder crashes before removing it, the
+/// file is orphaned. To handle this, any spawn-mutex older than 60 seconds is
+/// treated as stale and removed before retrying acquisition.
 pub fn ensure_bridge_running(home: &Path) -> io::Result<SocketAddr> {
     // Fast path: bridge is already running.
     if let Ok(addr) = read_bridge_address(home) {
@@ -127,6 +134,19 @@ pub fn ensure_bridge_running(home: &Path) -> io::Result<SocketAddr> {
     }
 
     let spawn_mutex = home.join("mcp-bridge-spawning.lock");
+
+    // Remove a stale spawn-mutex (orphaned by a crashed process).
+    // The mutex is only held during spawn+poll (~10s), so 60s is very conservative.
+    if let Ok(meta) = std::fs::metadata(&spawn_mutex)
+        && let Ok(modified) = meta.modified()
+        && modified
+            .elapsed()
+            .unwrap_or(std::time::Duration::ZERO)
+            .as_secs()
+            > 60
+    {
+        let _ = std::fs::remove_file(&spawn_mutex);
+    }
 
     // Try to acquire the spawn-mutex exclusively.
     let we_spawn = std::fs::OpenOptions::new()

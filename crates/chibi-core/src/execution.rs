@@ -34,6 +34,13 @@ pub enum CommandEffect {
     InspectConfigList { context: String },
 }
 
+/// Non-config inspectable items (system prompt, reflection, etc.).
+///
+/// These are context-specific files that can be inspected via `-i` but are not
+/// config fields. Binaries combine this list with `ResolvedConfig::list_fields()`
+/// to produce the full inspectable items list.
+pub const INSPECTABLE_ITEMS: &[&str] = &["system_prompt", "reflection", "todos", "goals", "home"];
+
 /// Execute a command with full lifecycle management.
 ///
 /// Handles init, housekeeping (auto-destroy, context touch), command dispatch,

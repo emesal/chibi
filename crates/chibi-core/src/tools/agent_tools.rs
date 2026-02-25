@@ -63,7 +63,7 @@ pub static AGENT_TOOL_DEFS: &[BuiltinToolDef] = &[
             ToolPropertyDef {
                 name: "preset",
                 prop_type: "string",
-                description: "PRESET_DESCRIPTION_PLACEHOLDER",
+                description: "Named preset configuration for the sub-agent (dynamically populated)",
                 default: None,
             },
         ],
