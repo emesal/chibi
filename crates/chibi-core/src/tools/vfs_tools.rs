@@ -4,7 +4,7 @@
 //! Each tool parses `vfs://` URIs from JSON args and delegates to the
 //! appropriate `Vfs` method, returning human-readable result strings.
 
-use super::builtin::{BuiltinToolDef, ToolPropertyDef, require_str_param};
+use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::vfs::{Vfs, VfsEntryKind, VfsPath};
 use std::io;
 

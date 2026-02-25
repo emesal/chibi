@@ -64,11 +64,14 @@ const MAX_TOOL_CALLS: usize = 100;
 /// Tool type classification for pre_api_tools hook
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolType {
-    Builtin,
-    File,
+    Memory,
+    FsRead,
+    FsWrite,
+    Shell,
+    Network,
+    Index,
+    Flow,
     Vfs,
-    Agent,
-    Coding,
     Mcp,
     Plugin,
 }
@@ -76,11 +79,14 @@ enum ToolType {
 impl ToolType {
     fn as_str(&self) -> &'static str {
         match self {
-            ToolType::Builtin => "builtin",
-            ToolType::File => "file",
+            ToolType::Memory => "memory",
+            ToolType::FsRead => "fs_read",
+            ToolType::FsWrite => "fs_write",
+            ToolType::Shell => "shell",
+            ToolType::Network => "network",
+            ToolType::Index => "index",
+            ToolType::Flow => "flow",
             ToolType::Vfs => "vfs",
-            ToolType::Agent => "agent",
-            ToolType::Coding => "coding",
             ToolType::Mcp => "mcp",
             ToolType::Plugin => "plugin",
         }
@@ -92,16 +98,22 @@ impl ToolType {
 /// Delegates to the authoritative `is_*_tool()` functions in each tool module,
 /// ensuring classification stays in sync with tool registration automatically.
 fn classify_tool_type(name: &str, plugin_tools: &[Tool]) -> ToolType {
-    if tools::is_builtin_tool(name) {
-        ToolType::Builtin
-    } else if tools::is_file_tool(name) {
-        ToolType::File
+    if tools::is_memory_tool(name) {
+        ToolType::Memory
+    } else if tools::is_fs_read_tool(name) {
+        ToolType::FsRead
+    } else if tools::is_fs_write_tool(name) {
+        ToolType::FsWrite
+    } else if tools::is_shell_tool(name) {
+        ToolType::Shell
+    } else if tools::is_network_tool(name) {
+        ToolType::Network
+    } else if tools::is_index_tool(name) {
+        ToolType::Index
+    } else if tools::is_flow_tool(name) {
+        ToolType::Flow
     } else if tools::is_vfs_tool(name) {
         ToolType::Vfs
-    } else if tools::is_agent_tool(name) {
-        ToolType::Agent
-    } else if tools::is_coding_tool(name) {
-        ToolType::Coding
     } else if plugin_tools
         .iter()
         .any(|t| t.name == name && tools::mcp::is_mcp_tool(t))
@@ -393,7 +405,7 @@ fn apply_hook_overrides<S: ResponseSink>(
     for (hook_name, hook_result) in hook_results {
         if let Some(fallback_str) = hook_result.get_str("fallback") {
             // Use builtin metadata since hooks can only override to builtins
-            let meta = tools::builtin_tool_metadata(fallback_str);
+            let meta = tools::flow_tool_metadata(fallback_str);
             let new_fallback = if meta.ends_turn {
                 tools::HandoffTarget::User {
                     message: String::new(),
@@ -880,14 +892,14 @@ async fn execute_tool_pure(
         }
     } else if tool_call.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
         "Error: Reflection tool is not enabled".to_string()
-    } else if let Some(builtin_result) = tools::execute_builtin_tool(
+    } else if let Some(memory_result) = tools::execute_memory_tool(
         app,
         context_name,
         &tool_call.name,
         &args,
         Some(resolved_config),
     ) {
-        match builtin_result {
+        match memory_result {
             Ok(r) => r,
             Err(e) => format!("Error: {}", e),
         }
@@ -908,12 +920,12 @@ async fn execute_tool_pure(
             }
             None => "Error: missing required 'model' parameter".to_string(),
         }
-    } else if tools::is_file_tool(&tool_call.name) {
-        // VFS paths bypass OS permission gating; zone-based permissions are enforced inside execute_file_tool.
+    } else if tools::is_fs_read_tool(&tool_call.name) {
+        // VFS paths bypass OS permission gating; zone-based permissions enforced inside execute_fs_read_tool.
         let raw_path = args.get_str("path").unwrap_or("");
         if VfsPath::is_vfs_uri(raw_path) {
             unwrap_tool_dispatch(
-                tools::execute_file_tool(
+                tools::execute_fs_read_tool(
                     app,
                     context_name,
                     &tool_call.name,
@@ -923,32 +935,6 @@ async fn execute_tool_pure(
                 ),
                 &tool_call.name,
             )
-        // Write tools need permission via pre_file_write hook
-        } else if tool_call.name == tools::WRITE_FILE_TOOL_NAME {
-            let hook_data = serde_json::json!({
-                "tool_name": tool_call.name,
-                "path": raw_path,
-                "content": args.get_str("content"),
-            });
-            match check_permission(
-                tools,
-                tools::HookPoint::PreFileWrite,
-                &hook_data,
-                permission_handler,
-            )? {
-                Ok(()) => unwrap_tool_dispatch(
-                    tools::execute_file_tool(
-                        app,
-                        context_name,
-                        &tool_call.name,
-                        &args,
-                        resolved_config,
-                        project_root,
-                    ),
-                    &tool_call.name,
-                ),
-                Err(reason) => format!("Error: {}", reason),
-            }
         } else {
             // Read-only file tools: auto-allow inside allowed paths, prompt outside
             let resolved_path_str =
@@ -976,7 +962,7 @@ async fn execute_tool_pure(
                     Err(e) => Some(e.to_string()),
                 }
             } else {
-                // cache_id access (no path) — always allowed
+                // cache_id / no-path access — always allowed
                 None
             };
 
@@ -984,7 +970,7 @@ async fn execute_tool_pure(
                 format!("Error: {}", reason)
             } else {
                 unwrap_tool_dispatch(
-                    tools::execute_file_tool(
+                    tools::execute_fs_read_tool(
                         app,
                         context_name,
                         &tool_call.name,
@@ -996,6 +982,56 @@ async fn execute_tool_pure(
                 )
             }
         }
+    } else if tools::is_fs_write_tool(&tool_call.name) {
+        // VFS paths are handled inside execute_fs_write_tool; OS paths need PreFileWrite gate.
+        let raw_path = args.get_str("path").unwrap_or("");
+        if VfsPath::is_vfs_uri(raw_path) {
+            unwrap_tool_dispatch(
+                tools::execute_fs_write_tool(
+                    &tool_call.name,
+                    &args,
+                    project_root,
+                    resolved_config,
+                    &app.vfs,
+                    context_name,
+                ),
+                &tool_call.name,
+            )
+        } else {
+            let hook_data = if tool_call.name == tools::FILE_EDIT_TOOL_NAME {
+                serde_json::json!({
+                    "tool_name": tool_call.name,
+                    "path": raw_path,
+                    "operation": args.get_str("operation").unwrap_or(""),
+                    "content": args.get_str("content"),
+                })
+            } else {
+                serde_json::json!({
+                    "tool_name": tool_call.name,
+                    "path": raw_path,
+                    "content": args.get_str("content"),
+                })
+            };
+            match check_permission(
+                tools,
+                tools::HookPoint::PreFileWrite,
+                &hook_data,
+                permission_handler,
+            )? {
+                Ok(()) => unwrap_tool_dispatch(
+                    tools::execute_fs_write_tool(
+                        &tool_call.name,
+                        &args,
+                        project_root,
+                        resolved_config,
+                        &app.vfs,
+                        context_name,
+                    ),
+                    &tool_call.name,
+                ),
+                Err(reason) => format!("Error: {}", reason),
+            }
+        }
     } else if tools::is_vfs_tool(&tool_call.name) {
         // VFS tools enforce their own zone-based permission model.
         // No PreFileRead/PreFileWrite hooks needed.
@@ -1003,11 +1039,76 @@ async fn execute_tool_pure(
             tools::execute_vfs_tool(&app.vfs, context_name, &tool_call.name, &args).await,
             &tool_call.name,
         )
-    } else if tools::is_agent_tool(&tool_call.name) {
-        // URL policy / permission check for summarize_content
+    } else if tools::is_shell_tool(&tool_call.name) {
+        let hook_data = serde_json::json!({
+            "tool_name": tool_call.name,
+            "command": args.get_str("command").unwrap_or(""),
+        });
+        match check_permission(
+            tools,
+            tools::HookPoint::PreShellExec,
+            &hook_data,
+            permission_handler,
+        )? {
+            Ok(()) => unwrap_tool_dispatch(
+                tools::execute_shell_tool(&tool_call.name, &args, project_root).await,
+                &tool_call.name,
+            ),
+            Err(reason) => format!("Error: {}", reason),
+        }
+    } else if tools::is_network_tool(&tool_call.name) {
+        // URL policy / permission check for fetch_url
+        let url = args.get_str("url").unwrap_or("");
+        let safety = tools::classify_url(url);
+
+        let denied = if let Some(ref policy) = resolved_config.url_policy {
+            tools::evaluate_url_policy(url, &safety, policy) == tools::UrlAction::Deny
+        } else {
+            false
+        };
+
+        if denied {
+            let reason = match &safety {
+                tools::UrlSafety::Sensitive(cat) => cat.to_string(),
+                tools::UrlSafety::Safe => "denied by URL policy".to_string(),
+            };
+            format!("Permission denied: {}", reason)
+        } else if let tools::UrlSafety::Sensitive(category) = &safety {
+            // No policy — fall back to permission handler for sensitive URLs
+            let hook_data = json!({
+                "tool_name": tool_call.name,
+                "url": url,
+                "safety": "sensitive",
+                "reason": category.to_string(),
+            });
+            match check_permission(
+                tools,
+                tools::HookPoint::PreFetchUrl,
+                &hook_data,
+                permission_handler,
+            )? {
+                Ok(()) => unwrap_tool_dispatch(
+                    tools::execute_network_tool(&tool_call.name, &args).await,
+                    &tool_call.name,
+                ),
+                Err(reason) => format!("Permission denied: {}", reason),
+            }
+        } else {
+            unwrap_tool_dispatch(
+                tools::execute_network_tool(&tool_call.name, &args).await,
+                &tool_call.name,
+            )
+        }
+    } else if tools::is_index_tool(&tool_call.name) {
+        unwrap_tool_dispatch(
+            tools::execute_index_tool(&tool_call.name, &args, project_root, resolved_config, tools),
+            &tool_call.name,
+        )
+    } else if tools::is_flow_tool(&tool_call.name) {
+        // URL policy / permission check for summarize_content when source is a URL
         if tool_call.name == tools::SUMMARIZE_CONTENT_TOOL_NAME
             && let Some(source) = args.get_str("source")
-            && tools::agent_tools::is_url(source)
+            && tools::is_url(source)
         {
             let safety = tools::classify_url(source);
 
@@ -1027,7 +1128,7 @@ async fn execute_tool_pure(
                     });
                 }
             } else if let tools::UrlSafety::Sensitive(category) = &safety {
-                // no policy — existing behaviour: check permission handler
+                // no policy — fall back to permission handler
                 let hook_data = json!({
                     "tool_name": tool_call.name,
                     "url": source,
@@ -1053,149 +1154,10 @@ async fn execute_tool_pure(
                 }
             }
         }
-        match tools::execute_agent_tool(resolved_config, &tool_call.name, &args, tools).await {
-            Ok(r) => r,
+        match tools::execute_flow_tool(resolved_config, &tool_call.name, &args, tools).await {
+            Ok(Some(r)) => r,
+            Ok(None) => format!("Error: Unknown flow tool '{}'", tool_call.name),
             Err(e) => format!("Error: {}", e),
-        }
-    } else if tools::is_coding_tool(&tool_call.name) {
-        // Gated coding tools need permission checks
-        if tool_call.name == tools::SHELL_EXEC_TOOL_NAME {
-            let hook_data = serde_json::json!({
-                "tool_name": tool_call.name,
-                "command": args.get_str("command").unwrap_or(""),
-            });
-            match check_permission(
-                tools,
-                tools::HookPoint::PreShellExec,
-                &hook_data,
-                permission_handler,
-            )? {
-                Ok(()) => unwrap_tool_dispatch(
-                    tools::execute_coding_tool(
-                        &tool_call.name,
-                        &args,
-                        project_root,
-                        resolved_config,
-                        tools,
-                        &app.vfs,
-                        context_name,
-                    )
-                    .await,
-                    &tool_call.name,
-                ),
-                Err(reason) => format!("Error: {}", reason),
-            }
-        } else if tool_call.name == tools::FILE_EDIT_TOOL_NAME {
-            let hook_data = serde_json::json!({
-                "tool_name": tool_call.name,
-                "path": args.get_str("path").unwrap_or(""),
-                "operation": args.get_str("operation").unwrap_or(""),
-                "content": args.get_str("content"),
-            });
-            match check_permission(
-                tools,
-                tools::HookPoint::PreFileWrite,
-                &hook_data,
-                permission_handler,
-            )? {
-                Ok(()) => unwrap_tool_dispatch(
-                    tools::execute_coding_tool(
-                        &tool_call.name,
-                        &args,
-                        project_root,
-                        resolved_config,
-                        tools,
-                        &app.vfs,
-                        context_name,
-                    )
-                    .await,
-                    &tool_call.name,
-                ),
-                Err(reason) => format!("Error: {}", reason),
-            }
-        } else if tool_call.name == tools::FETCH_URL_TOOL_NAME {
-            // URL policy / permission check for fetch_url (mirrors summarize_content gating)
-            let url = args.get_str("url").unwrap_or("");
-            let safety = tools::classify_url(url);
-
-            let denied = if let Some(ref policy) = resolved_config.url_policy {
-                tools::evaluate_url_policy(url, &safety, policy) == tools::UrlAction::Deny
-            } else {
-                false
-            };
-
-            if denied {
-                let reason = match &safety {
-                    tools::UrlSafety::Sensitive(cat) => cat.to_string(),
-                    tools::UrlSafety::Safe => "denied by URL policy".to_string(),
-                };
-                format!("Permission denied: {}", reason)
-            } else if let tools::UrlSafety::Sensitive(category) = &safety {
-                // No policy — fall back to permission handler for sensitive URLs
-                let hook_data = json!({
-                    "tool_name": tool_call.name,
-                    "url": url,
-                    "safety": "sensitive",
-                    "reason": category.to_string(),
-                });
-                match check_permission(
-                    tools,
-                    tools::HookPoint::PreFetchUrl,
-                    &hook_data,
-                    permission_handler,
-                )? {
-                    Ok(()) => {
-                        match tools::execute_coding_tool(
-                            &tool_call.name,
-                            &args,
-                            project_root,
-                            resolved_config,
-                            tools,
-                            &app.vfs,
-                            context_name,
-                        )
-                        .await
-                        {
-                            Some(Ok(r)) => r,
-                            Some(Err(e)) => format!("Error: {}", e),
-                            None => format!("Error: Unknown coding tool '{}'", tool_call.name),
-                        }
-                    }
-                    Err(reason) => format!("Permission denied: {}", reason),
-                }
-            } else {
-                match tools::execute_coding_tool(
-                    &tool_call.name,
-                    &args,
-                    project_root,
-                    resolved_config,
-                    tools,
-                    &app.vfs,
-                    context_name,
-                )
-                .await
-                {
-                    Some(Ok(r)) => r,
-                    Some(Err(e)) => format!("Error: {}", e),
-                    None => format!("Error: Unknown coding tool '{}'", tool_call.name),
-                }
-            }
-        } else {
-            // Ungated coding tools: dir_list, glob_files, grep_files,
-            // index_update, index_query, index_status
-            unwrap_tool_dispatch(
-                tools::execute_coding_tool(
-                    &tool_call.name,
-                    &args,
-                    project_root,
-                    resolved_config,
-                    tools,
-                    &app.vfs,
-                    context_name,
-                )
-                .await,
-                &tool_call.name,
-            )
         }
     } else if let Some(tool) = tools::find_tool(tools, &tool_call.name) {
         if tools::mcp::is_mcp_tool(tool) {
@@ -1913,8 +1875,22 @@ pub async fn send_prompt<S: ResponseSink>(
 
         // === Prepare Tools ===
         let mut all_tools = tools::tools_to_api_format(tools);
-        all_tools.extend(tools::builtin_tools_to_api_format(use_reflection));
-        all_tools.extend(tools::all_file_tools_to_api_format());
+        all_tools.extend(
+            tools::all_memory_tools_to_api_format()
+                .into_iter()
+                .filter(|t| {
+                    use_reflection
+                        || t.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            != Some(tools::REFLECTION_TOOL_NAME)
+                }),
+        );
+        all_tools.extend(tools::all_fs_read_tools_to_api_format());
+        all_tools.extend(tools::all_fs_write_tools_to_api_format());
+        all_tools.extend(tools::all_shell_tools_to_api_format());
+        all_tools.extend(tools::all_network_tools_to_api_format());
+        all_tools.extend(tools::all_index_tools_to_api_format());
 
         // Resolve available preset capability names for the current cost tier so the
         // LLM sees valid values in the spawn_agent tool description.
@@ -1930,8 +1906,7 @@ pub async fn send_prompt<S: ResponseSink>(
             }
         };
         let preset_cap_refs: Vec<&str> = preset_capabilities.iter().map(String::as_str).collect();
-        all_tools.extend(tools::all_agent_tools_to_api_format(&preset_cap_refs));
-        all_tools.extend(tools::all_coding_tools_to_api_format());
+        all_tools.extend(tools::all_flow_tools_to_api_format(&preset_cap_refs));
         all_tools.extend(tools::all_vfs_tools_to_api_format());
         annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
         all_tools = filter_tools_by_config(all_tools, &resolved_config.tools, tools);
@@ -2201,48 +2176,67 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_tool_type_builtin() {
+    fn test_classify_tool_type_memory() {
         for name in [
             "update_todos",
             "update_goals",
             "update_reflection",
-            "send_message",
-            "call_agent",
-            "call_user",
-            "model_info",
             "read_context",
         ] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::Builtin, "{name}");
+            assert_eq!(classify_tool_type(name, &[]), ToolType::Memory, "{name}");
         }
     }
 
     #[test]
-    fn test_classify_tool_type_file() {
+    fn test_classify_tool_type_fs_read() {
         for name in [
             "file_head",
             "file_tail",
             "file_lines",
             "file_grep",
-            "write_file",
+            "dir_list",
+            "glob_files",
+            "grep_files",
         ] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::File, "{name}");
+            assert_eq!(classify_tool_type(name, &[]), ToolType::FsRead, "{name}");
         }
     }
 
     #[test]
-    fn test_classify_tool_type_coding() {
+    fn test_classify_tool_type_fs_write() {
+        for name in ["write_file", "file_edit"] {
+            assert_eq!(classify_tool_type(name, &[]), ToolType::FsWrite, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_classify_tool_type_shell() {
+        assert_eq!(classify_tool_type("shell_exec", &[]), ToolType::Shell);
+    }
+
+    #[test]
+    fn test_classify_tool_type_network() {
+        assert_eq!(classify_tool_type("fetch_url", &[]), ToolType::Network);
+    }
+
+    #[test]
+    fn test_classify_tool_type_index() {
+        for name in ["index_update", "index_query", "index_status"] {
+            assert_eq!(classify_tool_type(name, &[]), ToolType::Index, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_classify_tool_type_flow() {
         for name in [
-            "shell_exec",
-            "dir_list",
-            "glob_files",
-            "grep_files",
-            "file_edit",
-            "fetch_url",
-            "index_update",
-            "index_query",
-            "index_status",
+            "send_message",
+            "call_agent",
+            "call_user",
+            "model_info",
+            "spawn_agent",
+            "summarize_content",
         ] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::Coding, "{name}");
+            assert_eq!(classify_tool_type(name, &[]), ToolType::Flow, "{name}");
         }
     }
 
@@ -2257,13 +2251,6 @@ mod tests {
             "vfs_delete",
         ] {
             assert_eq!(classify_tool_type(name, &[]), ToolType::Vfs, "{name}");
-        }
-    }
-
-    #[test]
-    fn test_classify_tool_type_agent() {
-        for name in ["spawn_agent", "summarize_content"] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::Agent, "{name}");
         }
     }
 
@@ -2289,11 +2276,14 @@ mod tests {
 
     #[test]
     fn test_tool_type_as_str() {
-        assert_eq!(ToolType::Builtin.as_str(), "builtin");
-        assert_eq!(ToolType::File.as_str(), "file");
+        assert_eq!(ToolType::Memory.as_str(), "memory");
+        assert_eq!(ToolType::FsRead.as_str(), "fs_read");
+        assert_eq!(ToolType::FsWrite.as_str(), "fs_write");
+        assert_eq!(ToolType::Shell.as_str(), "shell");
+        assert_eq!(ToolType::Network.as_str(), "network");
+        assert_eq!(ToolType::Index.as_str(), "index");
+        assert_eq!(ToolType::Flow.as_str(), "flow");
         assert_eq!(ToolType::Vfs.as_str(), "vfs");
-        assert_eq!(ToolType::Agent.as_str(), "agent");
-        assert_eq!(ToolType::Coding.as_str(), "coding");
         assert_eq!(ToolType::Mcp.as_str(), "mcp");
         assert_eq!(ToolType::Plugin.as_str(), "plugin");
     }
@@ -2345,8 +2335,11 @@ mod tests {
     fn test_filter_tools_by_category_exclude() {
         // shell_exec and dir_list are "coding" category tools
         // file_head is a "file" category tool
-        // update_todos is a "builtin" category tool
-        // spawn_agent is an "agent" category tool
+        // update_todos is a "memory" category tool
+        // spawn_agent is a "flow" category tool
+        // shell_exec is a "shell" category tool
+        // dir_list is an "fs_read" category tool
+        // file_head is an "fs_read" category tool
         let tools = vec![
             json!({"function": {"name": "shell_exec"}}),
             json!({"function": {"name": "dir_list"}}),
@@ -2357,7 +2350,7 @@ mod tests {
         let config = ToolsConfig {
             include: None,
             exclude: None,
-            exclude_categories: Some(vec!["coding".to_string()]),
+            exclude_categories: Some(vec!["shell".to_string()]),
         };
         let result = filter_tools_by_config(tools, &config, &[]);
         let names: Vec<&str> = result
@@ -2366,18 +2359,12 @@ mod tests {
             .collect();
         assert!(
             !names.contains(&"shell_exec"),
-            "coding tool should be excluded"
+            "shell tool should be excluded"
         );
-        assert!(
-            !names.contains(&"dir_list"),
-            "coding tool should be excluded"
-        );
-        assert!(names.contains(&"file_head"), "file tool should remain");
-        assert!(
-            names.contains(&"update_todos"),
-            "builtin tool should remain"
-        );
-        assert!(names.contains(&"spawn_agent"), "agent tool should remain");
+        assert!(names.contains(&"dir_list"), "fs_read tool should remain");
+        assert!(names.contains(&"file_head"), "fs_read tool should remain");
+        assert!(names.contains(&"update_todos"), "memory tool should remain");
+        assert!(names.contains(&"spawn_agent"), "flow tool should remain");
     }
 
     #[test]
@@ -2391,7 +2378,8 @@ mod tests {
         let config = ToolsConfig {
             include: None,
             exclude: None,
-            exclude_categories: Some(vec!["coding".to_string(), "agent".to_string()]),
+            // exclude shell and flow categories, keeping fs_read and memory
+            exclude_categories: Some(vec!["shell".to_string(), "flow".to_string()]),
         };
         let result = filter_tools_by_config(tools, &config, &[]);
         let names: Vec<&str> = result

@@ -3,27 +3,98 @@
 //! This module provides the extensible tool system:
 //! - Plugin loading and execution from the plugins directory
 //! - MCP bridge client for tools from remote MCP servers
-//! - Built-in tools for reflection, todos, goals, and messaging
-//! - Coding tools for shell execution, file editing, and codebase indexing
-//! - File tools for examining cached tool outputs
-//! - Agent tools for sub-agent spawning and content retrieval
+//! - Built-in tools organised by permission/capability group:
+//!   - `memory`: reflection, todos, goals, read_context
+//!   - `fs_read`: read-only file and directory access
+//!   - `fs_write`: file write and edit (triggers PreFileWrite hooks)
+//!   - `shell`: OS command execution (triggers PreShellExec hooks)
+//!   - `network`: outbound HTTP (triggers PreFetchUrl hooks)
+//!   - `index`: codebase index management
+//!   - `flow`: control flow, spawning, coordination, model introspection
+//!   - `vfs_tools`: virtual filesystem operations
 //! - URL and file path security policies
-//! - Hook system for plugin lifecycle events (31 hook points)
+//! - Hook system for plugin lifecycle events
 
-pub mod agent_tools;
-mod builtin;
-pub mod coding_tools;
-pub mod file_tools;
+mod flow;
+mod fs_read;
+mod fs_write;
 mod hooks;
+mod index;
 pub mod mcp;
+mod memory;
+mod network;
 pub(crate) mod paths;
 mod plugins;
 pub mod security;
+mod shell;
 pub mod vfs_tools;
 
+use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 
 pub use hooks::HookPoint;
+
+/// Property definition for a tool parameter
+pub struct ToolPropertyDef {
+    pub name: &'static str,
+    pub prop_type: &'static str,
+    pub description: &'static str,
+    /// Optional default value (for integer defaults only, as used by file tools)
+    pub default: Option<i64>,
+}
+
+/// Built-in tool definition for declarative registry
+pub struct BuiltinToolDef {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub properties: &'static [ToolPropertyDef],
+    pub required: &'static [&'static str],
+    /// Parameter names whose values should appear in tool-call notices.
+    pub summary_params: &'static [&'static str],
+}
+
+impl BuiltinToolDef {
+    /// Convert this tool definition to API format.
+    pub fn to_api_format(&self) -> serde_json::Value {
+        let mut props = serde_json::Map::new();
+        for prop in self.properties {
+            let mut prop_obj = serde_json::json!({
+                "type": prop.prop_type,
+                "description": prop.description,
+            });
+            if let Some(default) = prop.default {
+                prop_obj["default"] = serde_json::json!(default);
+            }
+            props.insert(prop.name.to_string(), prop_obj);
+        }
+
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": props,
+                    "required": self.required,
+                }
+            }
+        })
+    }
+}
+
+/// Extract a required string parameter from tool args.
+///
+/// Shared helper for all tool modules that parse JSON arguments.
+pub fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<String> {
+    use crate::json_ext::JsonExt;
+    args.get_str(name).map(String::from).ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("Missing '{}' parameter", name),
+        )
+    })
+}
 
 // Re-export hook execution
 pub use hooks::execute_hook;
@@ -31,60 +102,53 @@ pub use hooks::execute_hook;
 // Re-export plugin functions
 pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
 
-// Re-export built-in tool constants (used by api module)
-pub use builtin::{CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME};
-pub use builtin::{
-    MODEL_INFO_TOOL_NAME, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME,
+// Re-export memory tool constants and functions
+pub use memory::{
+    GOALS_TOOL_NAME, MEMORY_TOOL_DEFS, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME,
+    TODOS_TOOL_NAME, all_memory_tools_to_api_format, execute_memory_tool, is_memory_tool,
 };
 
-// Re-export handoff types for control flow
-pub use builtin::{Handoff, HandoffTarget};
-
-// Re-export builtin tool registry lookup
-pub use builtin::{get_builtin_tool_def, is_builtin_tool};
-
-// Re-export registry-based tool generation
-pub use builtin::{all_builtin_tools_to_api_format, builtin_tools_to_api_format};
-
-// Re-export built-in tool execution functions
-pub use builtin::execute_builtin_tool;
-
-// Re-export tool metadata functions
-pub use builtin::builtin_tool_metadata;
-
-// Re-export summary_params lookup
-pub use builtin::builtin_summary_params;
-
-// Re-export coding tool registry functions and execution
-pub use coding_tools::{
-    CODING_TOOL_DEFS, all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool,
-};
-pub use coding_tools::{
-    DIR_LIST_TOOL_NAME, FETCH_URL_TOOL_NAME, FILE_EDIT_TOOL_NAME, GLOB_FILES_TOOL_NAME,
-    GREP_FILES_TOOL_NAME, INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_UPDATE_TOOL_NAME,
-    SHELL_EXEC_TOOL_NAME,
+// Re-export flow tool constants, types and functions
+pub use flow::{
+    CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME, FLOW_TOOL_DEFS, Handoff, HandoffTarget,
+    MODEL_INFO_TOOL_NAME, SEND_MESSAGE_TOOL_NAME, SPAWN_AGENT_TOOL_NAME,
+    SUMMARIZE_CONTENT_TOOL_NAME, SpawnOptions, all_flow_tools_to_api_format, execute_flow_tool,
+    flow_tool_metadata, is_flow_tool, is_url, spawn_agent,
 };
 
-// Re-export file tool registry functions
-pub use file_tools::{all_file_tools_to_api_format, get_file_tool_def};
+// Re-export fs_read tool registry functions and execution
+pub use fs_read::{
+    DIR_LIST_TOOL_NAME, FILE_GREP_TOOL_NAME, FILE_HEAD_TOOL_NAME, FILE_LINES_TOOL_NAME,
+    FILE_TAIL_TOOL_NAME, FS_READ_TOOL_DEFS, GLOB_FILES_TOOL_NAME, GREP_FILES_TOOL_NAME,
+    all_fs_read_tools_to_api_format, execute_fs_read_tool, is_fs_read_tool,
+};
 
-// Re-export file tool execution and utilities
-pub use file_tools::{execute_file_tool, is_file_tool};
+// Re-export fs_write tool registry functions and execution
+pub use fs_write::{
+    FILE_EDIT_TOOL_NAME, FS_WRITE_TOOL_DEFS, WRITE_FILE_TOOL_NAME,
+    all_fs_write_tools_to_api_format, execute_fs_write_tool, execute_write_file, is_fs_write_tool,
+};
+
+// Re-export shell tool registry functions and execution
+pub use shell::{
+    SHELL_EXEC_TOOL_NAME, SHELL_TOOL_DEFS, all_shell_tools_to_api_format, execute_shell_tool,
+    is_shell_tool,
+};
+
+// Re-export network tool registry functions and execution
+pub use network::{
+    FETCH_URL_TOOL_NAME, NETWORK_TOOL_DEFS, all_network_tools_to_api_format, execute_network_tool,
+    is_network_tool,
+};
+
+// Re-export index tool registry functions and execution
+pub use index::{
+    INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_TOOL_DEFS, INDEX_UPDATE_TOOL_NAME,
+    all_index_tools_to_api_format, execute_index_tool, is_index_tool,
+};
 
 // Re-export VFS tool registry functions and execution
 pub use vfs_tools::{all_vfs_tools_to_api_format, execute_vfs_tool, is_vfs_tool};
-
-// Re-export file write tool names for permission gating
-pub use file_tools::WRITE_FILE_TOOL_NAME;
-
-// Re-export agent tool registry functions
-pub use agent_tools::{all_agent_tools_to_api_format, get_agent_tool_def};
-
-// Re-export agent tool execution and utilities
-pub use agent_tools::{execute_agent_tool, is_agent_tool, spawn_agent};
-
-// Re-export agent tool types and constants
-pub use agent_tools::{SPAWN_AGENT_TOOL_NAME, SUMMARIZE_CONTENT_TOOL_NAME, SpawnOptions};
 
 // Re-export security utilities
 pub use security::{
@@ -133,29 +197,50 @@ pub struct Tool {
     pub summary_params: Vec<String>,
 }
 
-/// Collect names of all built-in tools (core, file, agent, coding, vfs).
+/// Collect names of all built-in tools across all groups.
 ///
-/// Returns a flat list of tool names from all internal registries.
-/// New tool categories should be added here when introduced.
+/// Returns a flat list from: memory, fs_read, fs_write, shell, network, index, flow, vfs.
+/// Add new groups here when introduced.
 pub fn builtin_tool_names() -> Vec<&'static str> {
-    builtin::BUILTIN_TOOL_DEFS
+    memory::MEMORY_TOOL_DEFS
         .iter()
-        .chain(file_tools::FILE_TOOL_DEFS.iter())
-        .chain(agent_tools::AGENT_TOOL_DEFS.iter())
-        .chain(coding_tools::CODING_TOOL_DEFS.iter())
+        .chain(fs_read::FS_READ_TOOL_DEFS.iter())
+        .chain(fs_write::FS_WRITE_TOOL_DEFS.iter())
+        .chain(shell::SHELL_TOOL_DEFS.iter())
+        .chain(network::NETWORK_TOOL_DEFS.iter())
+        .chain(index::INDEX_TOOL_DEFS.iter())
+        .chain(flow::FLOW_TOOL_DEFS.iter())
         .chain(vfs_tools::VFS_TOOL_DEFS.iter())
         .map(|def| def.name)
         .collect()
 }
 
-/// Get metadata for any tool (plugin or builtin)
+/// Get metadata for any tool (plugin or builtin).
 ///
-/// Checks plugins first, then falls back to builtin_tool_metadata for known builtins.
+/// Checks plugins first, then delegates to flow_tool_metadata for known flow tools.
 pub fn get_tool_metadata(tools: &[Tool], name: &str) -> ToolMetadata {
     if let Some(tool) = tools.iter().find(|t| t.name == name) {
         return tool.metadata.clone();
     }
-    builtin_tool_metadata(name)
+    flow_tool_metadata(name)
+}
+
+/// Look up summary_params for a built-in tool by name.
+///
+/// Searches all tool groups. Returns an empty slice if the tool is not found.
+fn builtin_summary_params(name: &str) -> &'static [&'static str] {
+    memory::MEMORY_TOOL_DEFS
+        .iter()
+        .chain(flow::FLOW_TOOL_DEFS.iter())
+        .chain(fs_read::FS_READ_TOOL_DEFS.iter())
+        .chain(fs_write::FS_WRITE_TOOL_DEFS.iter())
+        .chain(shell::SHELL_TOOL_DEFS.iter())
+        .chain(network::NETWORK_TOOL_DEFS.iter())
+        .chain(index::INDEX_TOOL_DEFS.iter())
+        .chain(vfs_tools::VFS_TOOL_DEFS.iter())
+        .find(|def| def.name == name)
+        .map(|def| def.summary_params)
+        .unwrap_or(&[])
 }
 
 /// Build a concise summary string from a tool's declared summary_params and actual arguments.
@@ -417,11 +502,14 @@ mod tests {
         assert!(names.contains(&"file_edit")); // coding tool
         assert!(names.contains(&"vfs_list")); // vfs tool
 
-        // Should be the sum of all registries
-        let expected_count = builtin::BUILTIN_TOOL_DEFS.len()
-            + file_tools::FILE_TOOL_DEFS.len()
-            + agent_tools::AGENT_TOOL_DEFS.len()
-            + coding_tools::CODING_TOOL_DEFS.len()
+        // Should be: memory + flow + fs_read + fs_write + shell + network + index + vfs
+        let expected_count = memory::MEMORY_TOOL_DEFS.len()
+            + flow::FLOW_TOOL_DEFS.len()
+            + fs_read::FS_READ_TOOL_DEFS.len()
+            + fs_write::FS_WRITE_TOOL_DEFS.len()
+            + shell::SHELL_TOOL_DEFS.len()
+            + network::NETWORK_TOOL_DEFS.len()
+            + index::INDEX_TOOL_DEFS.len()
             + vfs_tools::VFS_TOOL_DEFS.len();
         assert_eq!(names.len(), expected_count);
     }
