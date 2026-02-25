@@ -59,7 +59,10 @@ pub fn format_flock_sections(contexts: &[FlockContext]) -> String {
     let mut out = String::new();
     for fc in contexts {
         if let Some(prompt) = &fc.prompt {
-            out.push_str(&format!("\n\n--- PROMPT [{}] ---\n{}", fc.flock_name, prompt));
+            out.push_str(&format!(
+                "\n\n--- PROMPT [{}] ---\n{}",
+                fc.flock_name, prompt
+            ));
         }
     }
     for fc in contexts {

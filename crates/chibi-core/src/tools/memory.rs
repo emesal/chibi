@@ -148,8 +148,17 @@ pub fn execute_memory_tool(
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
             let path = VfsPath::new(&format!("{}/goals.md", root.as_str()))
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-            vfs_block_on(app.vfs.write(VfsCaller::Context(context_name), &path, content.as_bytes()))
-                .map(|_| format!("Goals updated for flock '{}' ({} characters).", flock, content.len()))
+            vfs_block_on(
+                app.vfs
+                    .write(VfsCaller::Context(context_name), &path, content.as_bytes()),
+            )
+            .map(|_| {
+                format!(
+                    "Goals updated for flock '{}' ({} characters).",
+                    flock,
+                    content.len()
+                )
+            })
         })()),
         REFLECTION_TOOL_NAME => {
             let limit = config

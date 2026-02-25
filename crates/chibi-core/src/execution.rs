@@ -150,7 +150,12 @@ async fn dispatch_command<S: ResponseSink>(
                 );
                 let marker = if name == context { "* " } else { "  " };
                 let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
-                let explicit_flocks = chibi.app.vfs.flock_list_for(&name).await.unwrap_or_default();
+                let explicit_flocks = chibi
+                    .app
+                    .vfs
+                    .flock_list_for(&name)
+                    .await
+                    .unwrap_or_default();
                 let flock_str = if explicit_flocks.is_empty() {
                     String::new()
                 } else {
@@ -178,7 +183,12 @@ async fn dispatch_command<S: ResponseSink>(
             }
             // Show flock memberships (site flock + explicit)
             let site_flock = format!("site:{}", chibi.app.vfs.site_id());
-            let explicit_flocks = chibi.app.vfs.flock_list_for(context).await.unwrap_or_default();
+            let explicit_flocks = chibi
+                .app
+                .vfs
+                .flock_list_for(context)
+                .await
+                .unwrap_or_default();
             let mut all_flocks = vec![site_flock];
             all_flocks.extend(explicit_flocks);
             output.emit_result(&format!("Flocks: {}", all_flocks.join(", ")));
@@ -324,7 +334,10 @@ async fn dispatch_command<S: ResponseSink>(
         Command::FlockCreate { name } => {
             // Join current context to the flock, creating it if it doesn't exist.
             chibi.app.vfs.flock_join(name, context).await?;
-            output.emit_result(&format!("Created flock '{}' (joined as '{}')", name, context));
+            output.emit_result(&format!(
+                "Created flock '{}' (joined as '{}')",
+                name, context
+            ));
             Ok(CommandEffect::None)
         }
         Command::FlockDelete { name } => {
@@ -332,12 +345,18 @@ async fn dispatch_command<S: ResponseSink>(
             output.emit_result(&format!("Deleted flock '{}'", name));
             Ok(CommandEffect::None)
         }
-        Command::FlockJoin { flock, context: ctx } => {
+        Command::FlockJoin {
+            flock,
+            context: ctx,
+        } => {
             chibi.app.vfs.flock_join(flock, ctx).await?;
             output.emit_result(&format!("Context '{}' joined flock '{}'", ctx, flock));
             Ok(CommandEffect::None)
         }
-        Command::FlockLeave { flock, context: ctx } => {
+        Command::FlockLeave {
+            flock,
+            context: ctx,
+        } => {
             chibi.app.vfs.flock_leave(flock, ctx).await?;
             output.emit_result(&format!("Context '{}' left flock '{}'", ctx, flock));
             Ok(CommandEffect::None)
