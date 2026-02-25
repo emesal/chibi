@@ -15,6 +15,7 @@ mod builtin;
 pub mod coding_tools;
 pub mod file_tools;
 mod hooks;
+mod memory;
 pub mod mcp;
 pub(crate) mod paths;
 mod plugins;
@@ -66,8 +67,13 @@ pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
 
 // Re-export built-in tool constants (used by api module)
 pub use builtin::{CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME};
-pub use builtin::{
-    MODEL_INFO_TOOL_NAME, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME, SEND_MESSAGE_TOOL_NAME,
+pub use builtin::{MODEL_INFO_TOOL_NAME, SEND_MESSAGE_TOOL_NAME};
+
+// Re-export memory tool constants and functions
+pub use memory::{
+    GOALS_TOOL_NAME, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME, TODOS_TOOL_NAME,
+    all_memory_tools_to_api_format, execute_memory_tool, is_memory_tool,
+    MEMORY_TOOL_DEFS,
 };
 
 // Re-export handoff types for control flow
@@ -171,8 +177,9 @@ pub struct Tool {
 /// Returns a flat list of tool names from all internal registries.
 /// New tool categories should be added here when introduced.
 pub fn builtin_tool_names() -> Vec<&'static str> {
-    builtin::BUILTIN_TOOL_DEFS
+    memory::MEMORY_TOOL_DEFS
         .iter()
+        .chain(builtin::BUILTIN_TOOL_DEFS.iter())
         .chain(file_tools::FILE_TOOL_DEFS.iter())
         .chain(agent_tools::AGENT_TOOL_DEFS.iter())
         .chain(coding_tools::CODING_TOOL_DEFS.iter())
@@ -451,7 +458,8 @@ mod tests {
         assert!(names.contains(&"vfs_list")); // vfs tool
 
         // Should be the sum of all registries
-        let expected_count = builtin::BUILTIN_TOOL_DEFS.len()
+        let expected_count = memory::MEMORY_TOOL_DEFS.len()
+            + builtin::BUILTIN_TOOL_DEFS.len()
             + file_tools::FILE_TOOL_DEFS.len()
             + agent_tools::AGENT_TOOL_DEFS.len()
             + coding_tools::CODING_TOOL_DEFS.len()

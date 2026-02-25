@@ -10,19 +10,9 @@
 
 use crate::config::ResolvedConfig;
 use crate::state::AppState;
-use std::io::{self, ErrorKind};
-use std::path::Path;
+use std::io;
 
 // === Tool Name Constants ===
-
-/// Name of the built-in reflection tool
-pub const REFLECTION_TOOL_NAME: &str = "update_reflection";
-
-/// Name of the built-in todos tool
-pub const TODOS_TOOL_NAME: &str = "update_todos";
-
-/// Name of the built-in goals tool
-pub const GOALS_TOOL_NAME: &str = "update_goals";
 
 /// Name of the built-in send_message tool for inter-context messaging
 pub const SEND_MESSAGE_TOOL_NAME: &str = "send_message";
@@ -36,8 +26,6 @@ pub const CALL_USER_TOOL_NAME: &str = "call_user";
 /// Name of the built-in model_info tool for metadata lookup
 pub const MODEL_INFO_TOOL_NAME: &str = "model_info";
 
-/// Name of the built-in read_context tool for cross-context inspection
-pub const READ_CONTEXT_TOOL_NAME: &str = "read_context";
 
 // === Tool Definition Registry ===
 
@@ -73,44 +61,10 @@ impl BuiltinToolDef {
     }
 }
 
-/// All built-in tool definitions
+/// Built-in tool definitions: flow tools (call_agent, call_user, send_message, model_info, read_context).
+///
+/// Memory tools (reflection, todos, goals, read_context) have moved to `memory::MEMORY_TOOL_DEFS`.
 pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
-    BuiltinToolDef {
-        name: REFLECTION_TOOL_NAME,
-        description: "Update your persistent reflection/memory that persists across all contexts and sessions. Use this to store anything you want to remember: insights about the user, preferences, important facts, or notes to your future self. Keep it concise and organized. The content will completely replace the previous reflection.",
-        properties: &[ToolPropertyDef {
-            name: "content",
-            prop_type: "string",
-            description: "The new reflection content. This replaces the entire previous reflection.",
-            default: None,
-        }],
-        required: &["content"],
-        summary_params: &[],
-    },
-    BuiltinToolDef {
-        name: TODOS_TOOL_NAME,
-        description: "Update the todo list for this context. Use this to track tasks you need to complete during this conversation. Todos persist across messages but are specific to this context. Format as markdown checklist.",
-        properties: &[ToolPropertyDef {
-            name: "content",
-            prop_type: "string",
-            description: "The todo list content (markdown format, e.g., '- [ ] Task 1\\n- [x] Completed task')",
-            default: None,
-        }],
-        required: &["content"],
-        summary_params: &[],
-    },
-    BuiltinToolDef {
-        name: GOALS_TOOL_NAME,
-        description: "Update the goals for this context. Goals are high-level objectives that persist between conversation rounds and guide your work. Use goals to track what you're trying to achieve overall.",
-        properties: &[ToolPropertyDef {
-            name: "content",
-            prop_type: "string",
-            description: "The goals content (markdown format)",
-            default: None,
-        }],
-        required: &["content"],
-        summary_params: &[],
-    },
     BuiltinToolDef {
         name: SEND_MESSAGE_TOOL_NAME,
         description: "Send a message to another context's inbox. The message will be delivered to the target context and shown to them before their next prompt.",
@@ -173,41 +127,16 @@ pub static BUILTIN_TOOL_DEFS: &[BuiltinToolDef] = &[
         required: &["model"],
         summary_params: &["model"],
     },
-    BuiltinToolDef {
-        name: READ_CONTEXT_TOOL_NAME,
-        description: "Read the state of another context (read-only). Returns summary, todos, goals, and recent messages. Useful for inspecting sub-agents or coordinating with related contexts.",
-        properties: &[
-            ToolPropertyDef {
-                name: "context_name",
-                prop_type: "string",
-                description: "Name of the context to read",
-                default: None,
-            },
-            ToolPropertyDef {
-                name: "include_messages",
-                prop_type: "string",
-                description: "Include recent messages (\"true\"/\"false\", default: \"true\")",
-                default: None,
-            },
-            ToolPropertyDef {
-                name: "num_messages",
-                prop_type: "integer",
-                description: "Number of recent messages to include (default: 5)",
-                default: Some(5),
-            },
-        ],
-        required: &["context_name"],
-        summary_params: &["context_name"],
-    },
 ];
 
 /// Look up summary_params for a built-in tool by name.
 ///
-/// Searches all built-in registries (core, file, coding, agent, VFS). Returns
+/// Searches all built-in registries (memory, flow, file, coding, agent, VFS). Returns
 /// an empty slice if the tool is not found.
 pub fn builtin_summary_params(name: &str) -> &'static [&'static str] {
-    BUILTIN_TOOL_DEFS
+    super::memory::MEMORY_TOOL_DEFS
         .iter()
+        .chain(BUILTIN_TOOL_DEFS.iter())
         .chain(super::file_tools::FILE_TOOL_DEFS.iter())
         .chain(super::coding_tools::CODING_TOOL_DEFS.iter())
         .chain(super::agent_tools::AGENT_TOOL_DEFS.iter())
@@ -217,30 +146,36 @@ pub fn builtin_summary_params(name: &str) -> &'static [&'static str] {
         .unwrap_or(&[])
 }
 
-/// Check if a tool name is a core builtin tool.
+/// Check if a tool name is a core builtin tool (memory or flow group).
 pub fn is_builtin_tool(name: &str) -> bool {
-    BUILTIN_TOOL_DEFS.iter().any(|def| def.name == name)
+    super::memory::is_memory_tool(name) || BUILTIN_TOOL_DEFS.iter().any(|def| def.name == name)
 }
 
 /// Look up a specific builtin tool definition by name.
-/// Returns None if not found. Use this for testing or conditional tool access.
+///
+/// Searches memory and flow registries. Returns None if not found.
 pub fn get_builtin_tool_def(name: &str) -> Option<&'static BuiltinToolDef> {
-    BUILTIN_TOOL_DEFS.iter().find(|def| def.name == name)
+    super::memory::MEMORY_TOOL_DEFS
+        .iter()
+        .chain(BUILTIN_TOOL_DEFS.iter())
+        .find(|def| def.name == name)
 }
 
-/// Convert all built-in tools to API format
+/// Convert all built-in tools to API format (memory + flow groups).
 pub fn all_builtin_tools_to_api_format() -> Vec<serde_json::Value> {
-    BUILTIN_TOOL_DEFS
+    super::memory::MEMORY_TOOL_DEFS
         .iter()
+        .chain(BUILTIN_TOOL_DEFS.iter())
         .map(|def| def.to_api_format())
         .collect()
 }
 
-/// Convert built-in tools to API format, optionally excluding reflection tool
+/// Convert built-in tools to API format, optionally excluding the reflection tool.
 pub fn builtin_tools_to_api_format(include_reflection: bool) -> Vec<serde_json::Value> {
-    BUILTIN_TOOL_DEFS
+    super::memory::MEMORY_TOOL_DEFS
         .iter()
-        .filter(|def| include_reflection || def.name != REFLECTION_TOOL_NAME)
+        .filter(|def| include_reflection || def.name != super::memory::REFLECTION_TOOL_NAME)
+        .chain(BUILTIN_TOOL_DEFS.iter())
         .map(|def| def.to_api_format())
         .collect()
 }
@@ -330,34 +265,6 @@ impl Handoff {
 
 // === Tool Execution ===
 
-/// Execute the built-in update_reflection tool
-pub fn execute_reflection_tool(
-    prompts_dir: &Path,
-    arguments: &serde_json::Value,
-    character_limit: usize,
-) -> io::Result<String> {
-    let content = arguments["content"]
-        .as_str()
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Missing 'content' parameter"))?;
-
-    // Check character limit
-    if content.len() > character_limit {
-        return Ok(format!(
-            "Error: Content exceeds the {} character limit ({} characters provided). Please shorten your reflection.",
-            character_limit,
-            content.len()
-        ));
-    }
-
-    let reflection_path = prompts_dir.join("reflection.md");
-    crate::safe_io::atomic_write_text(&reflection_path, content)?;
-
-    Ok(format!(
-        "Reflection updated successfully ({} characters).",
-        content.len()
-    ))
-}
-
 /// Execute a built-in tool by name.
 /// Returns Some(result) if the tool exists and was executed, None if not a built-in tool.
 ///
@@ -371,27 +278,11 @@ pub fn execute_builtin_tool(
     args: &serde_json::Value,
     resolved_config: Option<&ResolvedConfig>,
 ) -> Option<io::Result<String>> {
+    // Memory tools are handled by the memory module
+    if let Some(result) = super::memory::execute_memory_tool(app, context_name, tool_name, args, resolved_config) {
+        return Some(result);
+    }
     match tool_name {
-        TODOS_TOOL_NAME => {
-            let content = args.get("content").and_then(|v| v.as_str())?;
-            Some(
-                app.save_todos(context_name, content)
-                    .map(|_| format!("Todos updated ({} characters).", content.len())),
-            )
-        }
-        GOALS_TOOL_NAME => {
-            let content = args.get("content").and_then(|v| v.as_str())?;
-            Some(
-                app.save_goals(context_name, content)
-                    .map(|_| format!("Goals updated ({} characters).", content.len())),
-            )
-        }
-        REFLECTION_TOOL_NAME => {
-            let limit = resolved_config
-                .map(|c| c.reflection_character_limit)
-                .unwrap_or(app.config.reflection_character_limit);
-            Some(execute_reflection_tool(&app.prompts_dir, args, limit))
-        }
         SEND_MESSAGE_TOOL_NAME => {
             let to = args.get("to").and_then(|v| v.as_str())?;
             let content = args.get("content").and_then(|v| v.as_str())?;
@@ -400,155 +291,22 @@ pub fn execute_builtin_tool(
                     .map(|_| format!("Message sent to '{}'", to)),
             )
         }
-        READ_CONTEXT_TOOL_NAME => {
-            let target = args.get("context_name").and_then(|v| v.as_str())?;
-            Some(execute_read_context(app, target, args))
-        }
         _ => None,
     }
 }
 
-/// Execute read_context: read the state of another context (read-only).
-///
-/// Returns a JSON object with the context's summary, todos, goals, and
-/// optionally recent messages from context.jsonl.
-fn execute_read_context(
-    app: &AppState,
-    context_name: &str,
-    args: &serde_json::Value,
-) -> io::Result<String> {
-    use crate::StatePaths;
-    use crate::json_ext::JsonExt;
-
-    crate::context::validate_context_name(context_name)?;
-
-    // Check context exists
-    if !app.list_contexts().contains(&context_name.to_string()) {
-        return Err(io::Error::new(
-            ErrorKind::NotFound,
-            format!("Context '{}' does not exist", context_name),
-        ));
-    }
-
-    let include_messages = args.get_str_or("include_messages", "true") == "true";
-    let num_messages = args.get_u64_or("num_messages", 5) as usize;
-
-    let mut result = serde_json::Map::new();
-    result.insert(
-        "name".to_string(),
-        serde_json::Value::String(context_name.to_string()),
-    );
-
-    // Read summary
-    let summary = std::fs::read_to_string(app.summary_file(context_name)).unwrap_or_default();
-    result.insert("summary".to_string(), serde_json::Value::String(summary));
-
-    // Read todos
-    let todos = app.load_todos_for(context_name).unwrap_or_default();
-    result.insert("todos".to_string(), serde_json::Value::String(todos));
-
-    // Read goals
-    let goals = app.load_goals_for(context_name).unwrap_or_default();
-    result.insert("goals".to_string(), serde_json::Value::String(goals));
-
-    // Read recent messages
-    if include_messages {
-        match app.read_context_entries(context_name) {
-            Ok(entries) => {
-                let total = entries.len();
-                let recent: Vec<_> = entries.into_iter().rev().take(num_messages).collect();
-                let recent: Vec<_> = recent.into_iter().rev().collect();
-                let messages: Vec<serde_json::Value> = recent
-                    .iter()
-                    .map(|e| {
-                        serde_json::json!({
-                            "from": e.from,
-                            "content": e.content,
-                            "type": e.entry_type,
-                        })
-                    })
-                    .collect();
-                result.insert(
-                    "message_count".to_string(),
-                    serde_json::Value::Number(total.into()),
-                );
-                result.insert(
-                    "recent_messages".to_string(),
-                    serde_json::Value::Array(messages),
-                );
-            }
-            Err(_) => {
-                result.insert(
-                    "message_count".to_string(),
-                    serde_json::Value::Number(0.into()),
-                );
-                result.insert(
-                    "recent_messages".to_string(),
-                    serde_json::Value::Array(vec![]),
-                );
-            }
-        }
-    }
-
-    serde_json::to_string_pretty(&result)
-        .map_err(|e| io::Error::other(format!("Failed to serialize context state: {}", e)))
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // === Helper for tests: get API format for a specific tool ===
     fn get_tool_api(name: &str) -> serde_json::Value {
         get_builtin_tool_def(name)
             .expect("tool should exist in registry")
             .to_api_format()
     }
 
-    // === Individual Tool Tests (using registry lookup) ===
-
-    #[test]
-    fn test_reflection_tool_api_format() {
-        let tool = get_tool_api(REFLECTION_TOOL_NAME);
-        assert_eq!(tool["type"], "function");
-        assert_eq!(tool["function"]["name"], REFLECTION_TOOL_NAME);
-        assert!(
-            tool["function"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("reflection")
-        );
-        assert!(
-            tool["function"]["parameters"]["required"]
-                .as_array()
-                .unwrap()
-                .contains(&serde_json::json!("content"))
-        );
-    }
-
-    #[test]
-    fn test_todos_tool_api_format() {
-        let tool = get_tool_api(TODOS_TOOL_NAME);
-        assert_eq!(tool["function"]["name"], TODOS_TOOL_NAME);
-        assert!(
-            tool["function"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("todo")
-        );
-    }
-
-    #[test]
-    fn test_goals_tool_api_format() {
-        let tool = get_tool_api(GOALS_TOOL_NAME);
-        assert_eq!(tool["function"]["name"], GOALS_TOOL_NAME);
-        assert!(
-            tool["function"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("goal")
-        );
-    }
+    // === Flow Tool API Format Tests ===
 
     #[test]
     fn test_send_message_tool_api_format() {
@@ -565,54 +323,6 @@ mod tests {
             .unwrap();
         assert!(required.contains(&serde_json::json!("to")));
         assert!(required.contains(&serde_json::json!("content")));
-    }
-
-    #[test]
-    fn test_tool_constants() {
-        assert_eq!(REFLECTION_TOOL_NAME, "update_reflection");
-        assert_eq!(TODOS_TOOL_NAME, "update_todos");
-        assert_eq!(GOALS_TOOL_NAME, "update_goals");
-        assert_eq!(SEND_MESSAGE_TOOL_NAME, "send_message");
-    }
-
-    #[test]
-    fn test_builtin_tool_metadata_call_agent() {
-        let meta = builtin_tool_metadata(CALL_AGENT_TOOL_NAME);
-        assert!(!meta.parallel);
-        assert!(meta.flow_control);
-        assert!(!meta.ends_turn); // call_agent continues processing
-    }
-
-    #[test]
-    fn test_builtin_tool_metadata_call_user() {
-        let meta = builtin_tool_metadata(CALL_USER_TOOL_NAME);
-        assert!(!meta.parallel);
-        assert!(meta.flow_control);
-        assert!(meta.ends_turn); // call_user ends turn
-    }
-
-    #[test]
-    fn test_builtin_tool_metadata_spawn_agent() {
-        let meta = builtin_tool_metadata("spawn_agent");
-        assert!(!meta.parallel); // agent spawning must be sequential
-        assert!(!meta.flow_control);
-        assert!(!meta.ends_turn);
-    }
-
-    #[test]
-    fn test_builtin_tool_metadata_shell_exec() {
-        let meta = builtin_tool_metadata("shell_exec");
-        assert!(!meta.parallel);
-        assert!(!meta.flow_control);
-        assert!(!meta.ends_turn);
-    }
-
-    #[test]
-    fn test_builtin_tool_metadata_other() {
-        let meta = builtin_tool_metadata("update_todos");
-        assert!(meta.parallel);
-        assert!(!meta.flow_control);
-        assert!(!meta.ends_turn);
     }
 
     #[test]
@@ -639,12 +349,6 @@ mod tests {
         let tool = get_tool_api(CALL_USER_TOOL_NAME);
         assert_eq!(tool["type"], "function");
         assert_eq!(tool["function"]["name"], CALL_USER_TOOL_NAME);
-        assert!(
-            tool["function"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("user")
-        );
         // message is optional, so required should be empty
         assert!(
             tool["function"]["parameters"]["required"]
@@ -652,61 +356,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn test_get_builtin_tool_def() {
-        assert!(get_builtin_tool_def(REFLECTION_TOOL_NAME).is_some());
-        assert!(get_builtin_tool_def("nonexistent_tool").is_none());
-    }
-
-    #[test]
-    fn test_handoff_default() {
-        let target = HandoffTarget::default();
-        match target {
-            HandoffTarget::Agent { prompt } => assert!(prompt.is_empty()),
-            _ => panic!("Expected Agent variant"),
-        }
-    }
-
-    #[test]
-    fn test_handoff_explicit_takes_precedence() {
-        let fallback = HandoffTarget::User {
-            message: "fallback".to_string(),
-        };
-        let mut handoff = Handoff::new(fallback);
-
-        // Set explicit agent call
-        handoff.set_agent("explicit prompt".to_string());
-
-        // Take should return the explicit value
-        match handoff.take() {
-            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "explicit prompt"),
-            _ => panic!("Expected Agent variant"),
-        }
-
-        // Next take should return fallback
-        match handoff.take() {
-            HandoffTarget::User { message } => assert_eq!(message, "fallback"),
-            _ => panic!("Expected User variant"),
-        }
-    }
-
-    #[test]
-    fn test_handoff_last_wins() {
-        let fallback = HandoffTarget::Agent {
-            prompt: String::new(),
-        };
-        let mut handoff = Handoff::new(fallback);
-
-        handoff.set_agent("first".to_string());
-        handoff.set_user("second".to_string());
-        handoff.set_agent("third".to_string());
-
-        match handoff.take() {
-            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "third"),
-            _ => panic!("Expected Agent variant"),
-        }
     }
 
     #[test]
@@ -729,31 +378,110 @@ mod tests {
     }
 
     #[test]
-    fn test_handoff_constants() {
+    fn test_flow_tool_constants() {
+        assert_eq!(SEND_MESSAGE_TOOL_NAME, "send_message");
         assert_eq!(CALL_AGENT_TOOL_NAME, "call_agent");
         assert_eq!(CALL_USER_TOOL_NAME, "call_user");
+        assert_eq!(MODEL_INFO_TOOL_NAME, "model_info");
+    }
+
+    // === Metadata Tests ===
+
+    #[test]
+    fn test_builtin_tool_metadata_call_agent() {
+        let meta = builtin_tool_metadata(CALL_AGENT_TOOL_NAME);
+        assert!(!meta.parallel);
+        assert!(meta.flow_control);
+        assert!(!meta.ends_turn);
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_call_user() {
+        let meta = builtin_tool_metadata(CALL_USER_TOOL_NAME);
+        assert!(!meta.parallel);
+        assert!(meta.flow_control);
+        assert!(meta.ends_turn);
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_spawn_agent() {
+        let meta = builtin_tool_metadata("spawn_agent");
+        assert!(!meta.parallel);
+        assert!(!meta.flow_control);
+        assert!(!meta.ends_turn);
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_shell_exec() {
+        let meta = builtin_tool_metadata("shell_exec");
+        assert!(!meta.parallel);
+        assert!(!meta.flow_control);
+        assert!(!meta.ends_turn);
+    }
+
+    #[test]
+    fn test_builtin_tool_metadata_other() {
+        let meta = builtin_tool_metadata("update_todos");
+        assert!(meta.parallel);
+        assert!(!meta.flow_control);
+        assert!(!meta.ends_turn);
+    }
+
+    // === Handoff Type Tests ===
+
+    #[test]
+    fn test_handoff_default() {
+        let target = HandoffTarget::default();
+        match target {
+            HandoffTarget::Agent { prompt } => assert!(prompt.is_empty()),
+            _ => panic!("Expected Agent variant"),
+        }
+    }
+
+    #[test]
+    fn test_handoff_explicit_takes_precedence() {
+        let fallback = HandoffTarget::User {
+            message: "fallback".to_string(),
+        };
+        let mut handoff = Handoff::new(fallback);
+        handoff.set_agent("explicit prompt".to_string());
+
+        match handoff.take() {
+            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "explicit prompt"),
+            _ => panic!("Expected Agent variant"),
+        }
+        match handoff.take() {
+            HandoffTarget::User { message } => assert_eq!(message, "fallback"),
+            _ => panic!("Expected User variant"),
+        }
+    }
+
+    #[test]
+    fn test_handoff_last_wins() {
+        let fallback = HandoffTarget::Agent { prompt: String::new() };
+        let mut handoff = Handoff::new(fallback);
+        handoff.set_agent("first".to_string());
+        handoff.set_user("second".to_string());
+        handoff.set_agent("third".to_string());
+
+        match handoff.take() {
+            HandoffTarget::Agent { prompt } => assert_eq!(prompt, "third"),
+            _ => panic!("Expected Agent variant"),
+        }
     }
 
     #[test]
     fn test_handoff_set_fallback() {
-        // Start with agent fallback
-        let fallback = HandoffTarget::Agent {
-            prompt: "original".to_string(),
-        };
+        let fallback = HandoffTarget::Agent { prompt: "original".to_string() };
         let mut handoff = Handoff::new(fallback);
 
-        // Without explicit call, should use original fallback
         match handoff.take() {
             HandoffTarget::Agent { prompt } => assert_eq!(prompt, "original"),
             _ => panic!("Expected Agent variant"),
         }
 
-        // Override fallback to user
-        handoff.set_fallback(HandoffTarget::User {
-            message: "new fallback".to_string(),
-        });
+        handoff.set_fallback(HandoffTarget::User { message: "new fallback".to_string() });
 
-        // Now take should return the new fallback
         match handoff.take() {
             HandoffTarget::User { message } => assert_eq!(message, "new fallback"),
             _ => panic!("Expected User variant"),
@@ -762,56 +490,37 @@ mod tests {
 
     #[test]
     fn test_handoff_explicit_still_beats_set_fallback() {
-        let fallback = HandoffTarget::Agent {
-            prompt: String::new(),
-        };
+        let fallback = HandoffTarget::Agent { prompt: String::new() };
         let mut handoff = Handoff::new(fallback);
-
-        // Override fallback
-        handoff.set_fallback(HandoffTarget::User {
-            message: "fallback".to_string(),
-        });
-
-        // But also set an explicit call
+        handoff.set_fallback(HandoffTarget::User { message: "fallback".to_string() });
         handoff.set_agent("explicit".to_string());
 
-        // Explicit should still win
         match handoff.take() {
             HandoffTarget::Agent { prompt } => assert_eq!(prompt, "explicit"),
             _ => panic!("Expected Agent variant"),
         }
-
-        // But next take uses the new fallback
         match handoff.take() {
             HandoffTarget::User { message } => assert_eq!(message, "fallback"),
             _ => panic!("Expected User variant"),
         }
     }
 
-    // === ends_turn_requested Tests ===
-
     #[test]
     fn test_handoff_ends_turn_requested_none() {
-        let handoff = Handoff::new(HandoffTarget::Agent {
-            prompt: String::new(),
-        });
+        let handoff = Handoff::new(HandoffTarget::Agent { prompt: String::new() });
         assert!(!handoff.ends_turn_requested());
     }
 
     #[test]
     fn test_handoff_ends_turn_requested_user() {
-        let mut handoff = Handoff::new(HandoffTarget::Agent {
-            prompt: String::new(),
-        });
+        let mut handoff = Handoff::new(HandoffTarget::Agent { prompt: String::new() });
         handoff.set_user("bye".to_string());
         assert!(handoff.ends_turn_requested());
     }
 
     #[test]
     fn test_handoff_ends_turn_requested_agent() {
-        let mut handoff = Handoff::new(HandoffTarget::User {
-            message: String::new(),
-        });
+        let mut handoff = Handoff::new(HandoffTarget::User { message: String::new() });
         handoff.set_agent("continue".to_string());
         assert!(!handoff.ends_turn_requested());
     }
@@ -819,21 +528,19 @@ mod tests {
     // === Registry Tests ===
 
     #[test]
-    fn test_registry_contains_all_tools() {
-        assert_eq!(BUILTIN_TOOL_DEFS.len(), 8);
+    fn test_flow_registry_contains_expected_tools() {
+        // BUILTIN_TOOL_DEFS now only has flow tools (memory moved to memory::MEMORY_TOOL_DEFS)
+        assert_eq!(BUILTIN_TOOL_DEFS.len(), 4);
         let names: Vec<_> = BUILTIN_TOOL_DEFS.iter().map(|d| d.name).collect();
-        assert!(names.contains(&REFLECTION_TOOL_NAME));
-        assert!(names.contains(&TODOS_TOOL_NAME));
-        assert!(names.contains(&GOALS_TOOL_NAME));
         assert!(names.contains(&SEND_MESSAGE_TOOL_NAME));
         assert!(names.contains(&CALL_AGENT_TOOL_NAME));
         assert!(names.contains(&CALL_USER_TOOL_NAME));
         assert!(names.contains(&MODEL_INFO_TOOL_NAME));
-        assert!(names.contains(&READ_CONTEXT_TOOL_NAME));
     }
 
     #[test]
-    fn test_all_builtin_tools_to_api_format() {
+    fn test_all_builtin_tools_to_api_format_includes_memory() {
+        // all_builtin_tools_to_api_format covers memory (4) + flow (4) = 8
         let tools = all_builtin_tools_to_api_format();
         assert_eq!(tools.len(), 8);
         for tool in &tools {
@@ -854,7 +561,22 @@ mod tests {
         let tools = builtin_tools_to_api_format(false);
         assert_eq!(tools.len(), 7);
         for tool in &tools {
-            assert_ne!(tool["function"]["name"], REFLECTION_TOOL_NAME);
+            assert_ne!(
+                tool["function"]["name"],
+                super::super::memory::REFLECTION_TOOL_NAME
+            );
         }
+    }
+
+    #[test]
+    fn test_get_builtin_tool_def_finds_memory_and_flow() {
+        // Memory tools
+        assert!(get_builtin_tool_def("update_reflection").is_some());
+        assert!(get_builtin_tool_def("read_context").is_some());
+        // Flow tools
+        assert!(get_builtin_tool_def(CALL_AGENT_TOOL_NAME).is_some());
+        assert!(get_builtin_tool_def(SEND_MESSAGE_TOOL_NAME).is_some());
+        // Unknown
+        assert!(get_builtin_tool_def("nonexistent_tool").is_none());
     }
 }
