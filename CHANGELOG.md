@@ -3,13 +3,19 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.9.1] - 2026-02-24
+## [0.9.2] - 2026-02-25
 
 ### Bug Fixes
 
 - **docs:** Resolve all rustdoc link and HTML tag warnings ([`b1a96d2`](https://github.com/emesal/chibi/commit/b1a96d2f092b3d454547abe6325ca26f476c596a))
 
 - Unified path resolver for all file-accessing builtin tools, #192 ([`942f95d`](https://github.com/emesal/chibi/commit/942f95dece4785c4a8f23efad008ae8896ab2b53))
+
+- Use floor_char_boundary to prevent UTF-8 panics on string truncation ([`e55ca93`](https://github.com/emesal/chibi/commit/e55ca93afbcf21e1376a77f64da77fd9cf0023a2))
+
+- Resolve 12 important issues from codebase review ([`2045797`](https://github.com/emesal/chibi/commit/2045797294492e58b6aed721efac6baa528b69e2))
+
+- Resolve 14 suggestions from codebase review ([`dbeb0a2`](https://github.com/emesal/chibi/commit/dbeb0a24c5d5df1c04416a1d2414f049c5c9ea79))
 
 
 ### Chores
@@ -23,12 +29,18 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Update CHANGELOG for v0.9.0 ([`a491623`](https://github.com/emesal/chibi/commit/a491623aa2d7227680e4b9b201a1c97739972e88))
 
+- Update CHANGELOG for v0.9.1 ([`ab7b1f5`](https://github.com/emesal/chibi/commit/ab7b1f57378f9776d814722b7d49c8460290d988))
+
+- Codebase review findings (2026-02-25) ([`95abf09`](https://github.com/emesal/chibi/commit/95abf09d43f93164bbc32592f990a99f69322107))
+
 
 ### Refactoring
 
 - **config:** Fold models.toml into config.toml and local.toml ([`64de559`](https://github.com/emesal/chibi/commit/64de559f3caffa7567d2bca34bcc328fcda12c7e))
 
 - Extract apply_pre_tool_results and apply_pre_tool_output_results from execute_tool_pure ([`e633dfe`](https://github.com/emesal/chibi/commit/e633dfef6bdf4bc6aaf7e0291f3e1511422e3b58))
+
+- Unify dual request-building paths (#4) ([`ef8b26b`](https://github.com/emesal/chibi/commit/ef8b26bdf9f80efd7a71664bbf1ebb342dac2a97))
 
 
 ### Tests
