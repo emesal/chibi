@@ -16,6 +16,7 @@ pub mod coding_tools;
 pub mod file_tools;
 mod flow;
 mod fs_read;
+mod fs_write;
 mod hooks;
 mod memory;
 pub mod mcp;
@@ -92,7 +93,7 @@ pub use coding_tools::{
     CODING_TOOL_DEFS, all_coding_tools_to_api_format, execute_coding_tool, is_coding_tool,
 };
 pub use coding_tools::{
-    FETCH_URL_TOOL_NAME, FILE_EDIT_TOOL_NAME, INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME,
+    FETCH_URL_TOOL_NAME, INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME,
     INDEX_UPDATE_TOOL_NAME, SHELL_EXEC_TOOL_NAME,
 };
 
@@ -109,11 +110,14 @@ pub use fs_read::{
     all_fs_read_tools_to_api_format, execute_fs_read_tool, is_fs_read_tool,
 };
 
+// Re-export fs_write tool registry functions and execution
+pub use fs_write::{
+    FS_WRITE_TOOL_DEFS, FILE_EDIT_TOOL_NAME, WRITE_FILE_TOOL_NAME,
+    all_fs_write_tools_to_api_format, execute_fs_write_tool, execute_write_file, is_fs_write_tool,
+};
+
 // Re-export VFS tool registry functions and execution
 pub use vfs_tools::{all_vfs_tools_to_api_format, execute_vfs_tool, is_vfs_tool};
-
-// Re-export file write tool names for permission gating
-pub use file_tools::WRITE_FILE_TOOL_NAME;
 
 // Re-export agent tool registry functions (still used transitionally; will be removed in task 8)
 pub use agent_tools::{all_agent_tools_to_api_format, execute_agent_tool, get_agent_tool_def, is_agent_tool};
@@ -173,21 +177,18 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
     memory::MEMORY_TOOL_DEFS
         .iter()
         .chain(flow::FLOW_TOOL_DEFS.iter())
-        // fs_read replaces file_tools read tools + coding_tools dir/glob/grep
+        // fs_read: file_head/tail/lines/grep, dir_list, glob_files, grep_files
         .chain(fs_read::FS_READ_TOOL_DEFS.iter())
-        // file_tools: only write_file remains (read tools now in fs_read)
-        .chain(
-            file_tools::FILE_TOOL_DEFS
-                .iter()
-                .filter(|d| d.name == file_tools::WRITE_FILE_TOOL_NAME),
-        )
-        // coding_tools: exclude dir_list/glob_files/grep_files (now in fs_read)
+        // fs_write: write_file, file_edit
+        .chain(fs_write::FS_WRITE_TOOL_DEFS.iter())
+        // coding_tools: shell_exec, index_*, fetch_url (read/write tools now in fs_*)
         .chain(coding_tools::CODING_TOOL_DEFS.iter().filter(|d| {
             !matches!(
                 d.name,
                 coding_tools::DIR_LIST_TOOL_NAME
                     | coding_tools::GLOB_FILES_TOOL_NAME
                     | coding_tools::GREP_FILES_TOOL_NAME
+                    | coding_tools::FILE_EDIT_TOOL_NAME
             )
         }))
         .chain(vfs_tools::VFS_TOOL_DEFS.iter())
@@ -464,12 +465,12 @@ mod tests {
         assert!(names.contains(&"file_edit")); // coding tool
         assert!(names.contains(&"vfs_list")); // vfs tool
 
-        // Should be: memory + flow + fs_read + write_file + (coding minus dir/glob/grep) + vfs
+        // Should be: memory + flow + fs_read + fs_write + (coding minus dir/glob/grep/file_edit) + vfs
         let expected_count = memory::MEMORY_TOOL_DEFS.len()
             + flow::FLOW_TOOL_DEFS.len()
             + fs_read::FS_READ_TOOL_DEFS.len()
-            + 1 // write_file (remaining from file_tools)
-            + coding_tools::CODING_TOOL_DEFS.len() - 3 // minus dir_list/glob_files/grep_files
+            + fs_write::FS_WRITE_TOOL_DEFS.len()
+            + coding_tools::CODING_TOOL_DEFS.len() - 4 // minus dir_list/glob_files/grep_files/file_edit
             + vfs_tools::VFS_TOOL_DEFS.len();
         assert_eq!(names.len(), expected_count);
     }
