@@ -16,7 +16,9 @@ use std::cell::RefCell;
 use std::io;
 
 use super::backend::VfsBackend;
-use super::flock::{FlockEntry, FlockRegistry, resolve_flock_vfs_root, validate_flock_name};
+use super::flock::{
+    FlockEntry, FlockRegistry, resolve_flock_vfs_root, site_flock_name, validate_flock_name,
+};
 use super::path::VfsPath;
 use super::permissions;
 use super::types::{VfsEntry, VfsMetadata};
@@ -35,6 +37,9 @@ pub struct Vfs {
     /// Used for flock permission checks and registry membership.
     site_id: String,
     /// Cached flock registry. Loaded lazily and invalidated on registry writes.
+    // NOTE: RefCell is !Sync. Safe here because borrows never span .await points
+    // in load_registry(). If adding new async methods that touch this cache,
+    // ensure the RefCell borrow is dropped before any .await.
     registry_cache: RefCell<Option<FlockRegistry>>,
 }
 
@@ -86,7 +91,13 @@ impl Vfs {
 
     /// Load the registry for use in a permission check, returning `None` on error.
     async fn flock_ctx_for_check(&self) -> Option<FlockRegistry> {
-        self.load_registry().await.ok()
+        match self.load_registry().await {
+            Ok(reg) => Some(reg),
+            Err(e) => {
+                eprintln!("[vfs] warning: failed to load flock registry for permission check: {e}");
+                None
+            }
+        }
     }
 
     // -- read operations (always allowed) --
@@ -177,10 +188,8 @@ impl Vfs {
         dst: &VfsPath,
     ) -> io::Result<()> {
         let registry = self.flock_ctx_for_check().await;
-        // Clone site_id to avoid double-borrow with two check_write calls.
-        let site_id = self.site_id.clone();
-        let flock_ctx_src = registry.as_ref().map(|r| (r, site_id.as_str()));
-        let flock_ctx_dst = registry.as_ref().map(|r| (r, site_id.as_str()));
+        let flock_ctx_src = registry.as_ref().map(|r| (r, self.site_id.as_str()));
+        let flock_ctx_dst = registry.as_ref().map(|r| (r, self.site_id.as_str()));
         permissions::check_write(caller, src, flock_ctx_src)?;
         permissions::check_write(caller, dst, flock_ctx_dst)?;
         self.backend.rename(src, dst).await
@@ -195,7 +204,7 @@ impl Vfs {
     pub async fn flock_join(&self, flock: &str, context: &str) -> io::Result<()> {
         validate_flock_name(flock)?;
         let mut reg = self.load_registry().await.unwrap_or_default();
-        reg.add_member(flock, context, &format!("site:{}", self.site_id));
+        reg.add_member(flock, context, &site_flock_name(&self.site_id));
         self.save_registry(&reg).await?;
         // Ensure the flock directory exists.
         let dir = resolve_flock_vfs_root(flock, &self.site_id)?;
@@ -212,7 +221,7 @@ impl Vfs {
             ));
         }
         let mut reg = self.load_registry().await.unwrap_or_default();
-        reg.remove_member(flock, context, &format!("site:{}", self.site_id));
+        reg.remove_member(flock, context, &site_flock_name(&self.site_id));
         self.save_registry(&reg).await
     }
 
@@ -227,7 +236,7 @@ impl Vfs {
     /// List all explicit flocks a context belongs to (site flock not included).
     pub async fn flock_list_for(&self, context: &str) -> io::Result<Vec<String>> {
         let reg = self.load_registry().await.unwrap_or_default();
-        Ok(reg.flocks_for(context, &format!("site:{}", self.site_id)))
+        Ok(reg.flocks_for(context, &site_flock_name(&self.site_id)))
     }
 
     /// List all flocks in the registry.
@@ -236,14 +245,12 @@ impl Vfs {
         Ok(reg.flocks)
     }
 
-    /// Write the flock registry to the backend using `System` authority.
+    /// Write the flock registry to the backend via the permission-checked write path.
     async fn save_registry(&self, reg: &FlockRegistry) -> io::Result<()> {
         let path = VfsPath::new(REGISTRY_PATH)?;
         let data = serde_json::to_string_pretty(reg)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        self.backend.write(&path, data.as_bytes()).await?;
-        self.invalidate_registry_cache();
-        Ok(())
+        self.write(VfsCaller::System, &path, data.as_bytes()).await
     }
 }
 

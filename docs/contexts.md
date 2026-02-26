@@ -285,10 +285,10 @@ chibi -g -5  # First 5 entries
 │   ├── site/                    # Site-wide flock data
 │   │   ├── goals.md
 │   │   └── prompt.md
+│   ├── flocks/registry.json     # Centralised flock membership (SYSTEM only)
 │   └── flocks/<name>/           # Named flock data
 │       ├── goals.md
-│       ├── prompt.md
-│       └── members.json
+│       └── prompt.md
 └── contexts/<name>/
     ├── transcript/              # Authoritative conversation log (partitioned)
     │   ├── manifest.json        # Partition metadata

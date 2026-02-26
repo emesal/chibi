@@ -65,12 +65,16 @@ pub fn validate_flock_name(name: &str) -> io::Result<()> {
 ///
 /// The `site_id` parameter is only used to compare against `flock_name`.
 pub fn resolve_flock_vfs_root(flock_name: &str, site_id: &str) -> io::Result<VfsPath> {
-    let site_flock = format!("site:{}", site_id);
-    if flock_name == site_flock || flock_name == "site" {
+    if flock_name == site_flock_name(site_id) || flock_name == "site" {
         VfsPath::new("/site")
     } else {
         VfsPath::new(&format!("/flocks/{}", flock_name))
     }
+}
+
+/// Format the site flock name for a given site ID (`site:<site_id>`).
+pub fn site_flock_name(site_id: &str) -> String {
+    format!("site:{}", site_id)
 }
 
 impl FlockRegistry {

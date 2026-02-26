@@ -176,16 +176,6 @@ impl AppState {
         self.load_todos(context_name)
     }
 
-    /// Load goals for a specific context.
-    ///
-    /// **Deprecated** — goals are now flock-scoped. Use `state::flocks::load_flock_contexts`
-    /// to load flock goals for a context.
-    #[deprecated(note = "goals are now flock-scoped; use load_flock_contexts instead")]
-    pub fn load_goals_for(&self, context_name: &str) -> io::Result<String> {
-        let _ = context_name;
-        Ok(String::new())
-    }
-
     /// Load the reflection prompt from ~/.chibi/prompts/reflection.md
     /// Returns empty string if the file doesn't exist
     pub fn load_reflection_prompt(&self) -> io::Result<String> {

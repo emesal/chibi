@@ -9,8 +9,8 @@ sandboxed, shared file space for contexts. contexts can read and write without e
 /home/<context>/                  owner: read + write; others: read only
 /sys/                             read only (SYSTEM-populated)
 /sys/tool_cache/<context>/        cached tool outputs (SYSTEM-written, world-readable)
-/site/                            site-wide flock data (SYSTEM-populated)
-/flocks/<name>/                   per-flock data (SYSTEM-populated)
+/site/                            site-wide flock data (world-writable)
+/flocks/<name>/                   per-flock data (members only)
 ```
 
 ## permission model
@@ -18,8 +18,8 @@ sandboxed, shared file space for contexts. contexts can read and write without e
 zone-based. path *is* policy:
 
 - **read** — always allowed for all zones
-- **write** — allowed in `/shared/` and `/home/<own_name>/`; denied elsewhere
-- **SYSTEM** — reserved caller with unrestricted write access (including `/sys/`, `/site/`, `/flocks/`). context names reject "system" (case-insensitive) to prevent impersonation
+- **write** — allowed in `/shared/`, `/home/<own_name>/`, and `/site/`; `/flocks/<name>/` for members only; denied elsewhere
+- **SYSTEM** — reserved caller with unrestricted write access (including `/sys/`, `/flocks/registry.json`). context names reject "system" (case-insensitive) to prevent impersonation
 
 no chmod, no ACLs, no ownership metadata.
 
@@ -43,10 +43,10 @@ flocks are named groups of contexts that share goals and prompts. membership and
 /flocks/<name>/           named flock
   goals.md                flock goals
   prompt.md               flock injected prompt (optional)
-  members.json            ["ctx1", "ctx2", ...] — membership list
+/flocks/registry.json     centralised membership registry (SYSTEM only)
 ```
 
-the site flock is identified as `site:<site_id>`. `/site/` and `/flocks/` directories are bootstrapped on startup.
+membership is stored centrally in `/flocks/registry.json`, not per-flock. the site flock is identified as `site:<site_id>`. `/site/` and `/flocks/` directories are bootstrapped on startup.
 
 ## using the VFS
 
@@ -156,10 +156,10 @@ maps `VfsPath("/shared/foo.txt")` → `<chibi_home>/vfs/shared/foo.txt`. uses `s
 │   │   ├── goals.md
 │   │   └── prompt.md
 │   └── flocks/             # named flock data
+│       ├── registry.json    # centralised flock membership (SYSTEM only)
 │       └── <name>/
 │           ├── goals.md
-│           ├── prompt.md
-│           └── members.json
+│           └── prompt.md
 ├── config.toml
 └── contexts/
 ```

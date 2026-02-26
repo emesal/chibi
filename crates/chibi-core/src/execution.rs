@@ -15,6 +15,7 @@ use crate::context;
 use crate::input::{Command, ExecutionFlags, Inspectable};
 use crate::output::{CommandEvent, OutputSink};
 use crate::state::{StatePaths, format_flock_sections, load_flock_contexts};
+use crate::vfs::flock::site_flock_name;
 
 /// Side effects of command execution that binaries may need to act on.
 ///
@@ -182,7 +183,7 @@ async fn dispatch_command<S: ResponseSink>(
                 ));
             }
             // Show flock memberships (site flock + explicit)
-            let site_flock = format!("site:{}", chibi.app.vfs.site_id());
+            let site_flock = site_flock_name(chibi.app.vfs.site_id());
             let explicit_flocks = chibi
                 .app
                 .vfs

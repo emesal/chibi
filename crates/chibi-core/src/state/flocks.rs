@@ -7,7 +7,10 @@
 use std::io;
 
 use crate::tools::vfs_block_on;
-use crate::vfs::{Vfs, VfsCaller, VfsPath, flock::resolve_flock_vfs_root};
+use crate::vfs::{
+    Vfs, VfsCaller, VfsPath,
+    flock::{resolve_flock_vfs_root, site_flock_name},
+};
 
 /// A single flock's prompt and goals, loaded from the VFS.
 pub struct FlockContext {
@@ -18,7 +21,7 @@ pub struct FlockContext {
 
 /// Load all flock contexts for a given context (site flock first, then explicit).
 pub fn load_flock_contexts(vfs: &Vfs, context_name: &str) -> io::Result<Vec<FlockContext>> {
-    let site_flock_name = format!("site:{}", vfs.site_id());
+    let site_flock_name = site_flock_name(vfs.site_id());
     let explicit = vfs_block_on(vfs.flock_list_for(context_name))?;
 
     let mut result = Vec::with_capacity(1 + explicit.len());

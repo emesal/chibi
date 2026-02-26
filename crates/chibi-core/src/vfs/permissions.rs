@@ -12,7 +12,7 @@
 use std::io::{self, ErrorKind};
 
 use super::caller::VfsCaller;
-use super::flock::FlockRegistry;
+use super::flock::{FlockRegistry, site_flock_name};
 use super::path::VfsPath;
 
 /// Check whether a caller name is reserved and cannot be used as a context name.
@@ -86,7 +86,7 @@ pub fn check_write(
         let flock_name = rest.split('/').next().unwrap_or("");
         if !flock_name.is_empty() {
             if let Some((registry, site_id)) = flock_ctx
-                && registry.is_member(flock_name, name, &format!("site:{}", site_id))
+                && registry.is_member(flock_name, name, &site_flock_name(site_id))
             {
                 return Ok(());
             }

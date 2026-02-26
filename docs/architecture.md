@@ -96,7 +96,8 @@ MCP tools use virtual `mcp://server/tool` paths and appear as regular `Tool` str
 │   │   └── todos.md           # Context todos (VFS-managed)
 │   ├── sys/                   # System-only zone (tool cache, etc.)
 │   ├── site/                  # Site-wide flock (goals.md, prompt.md)
-│   └── flocks/<name>/         # Named flock (goals.md, prompt.md, members.json)
+│   ├── flocks/registry.json    # Centralised flock membership (SYSTEM only)
+│   └── flocks/<name>/         # Named flock (goals.md, prompt.md)
 └── contexts/<name>/
     ├── context.jsonl          # LLM window (compaction-bounded)
     ├── transcript/            # Authoritative log (partitioned)
