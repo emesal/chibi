@@ -930,16 +930,17 @@ pub fn parse() -> io::Result<ChibiInput> {
         } else if let Ok(val) = std::env::var("CHIBI_HOME") {
             Some(std::path::PathBuf::from(val))
         } else {
-            std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".chibi"))
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".chibi"))
         };
-        if let Some(dir) = chibi_dir {
-            if let Ok(site) = chibi_core::site::load_or_create(&dir, None) {
+        if let Some(dir) = chibi_dir
+            && let Ok(site) = chibi_core::site::load_or_create(&dir, None) {
                 println!(
                     "site flock {}",
                     chibi_core::vfs::flock::site_flock_name(&site.site_id)
                 );
             }
-        }
         std::process::exit(0);
     }
 
