@@ -181,9 +181,14 @@ When a hook fires, registered plugins are called with:
   "context_name": "default",
   "summary": "conversation summary...",
   "todos": "current todos...",
-  "goals": "current goals..."
+  "flock_goals": [
+    {"flock": "site:<site_id>", "goals": "site-wide goals..."},
+    {"flock": "myteam", "goals": "team goals..."}
+  ]
 }
 ```
+
+> **Breaking change:** the `goals` field was replaced by `flock_goals` (array) in the flocks migration. each entry is `{"flock": "<name>", "goals": "<content>"}`. the array is empty if no flocks have goals set.
 
 **Can return:**
 ```json

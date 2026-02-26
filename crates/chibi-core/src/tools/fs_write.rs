@@ -10,7 +10,7 @@ use super::fs_read::vfs_block_on;
 use super::paths::{ResolvedPath, resolve_tool_path};
 use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::config::ResolvedConfig;
-use crate::vfs::{Vfs, VfsPath};
+use crate::vfs::{Vfs, VfsCaller, VfsPath};
 
 // === Tool Name Constants ===
 
@@ -120,7 +120,7 @@ pub fn execute_fs_write_tool(
     project_root: &Path,
     config: &ResolvedConfig,
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
 ) -> Option<io::Result<String>> {
     match tool_name {
         WRITE_FILE_TOOL_NAME => {
@@ -147,7 +147,7 @@ pub fn execute_fs_write_tool(
 pub fn execute_write_file(
     path: &str,
     content: &str,
-    vfs: Option<(&Vfs, &str)>,
+    vfs: Option<(&Vfs, VfsCaller<'_>)>,
 ) -> io::Result<String> {
     if VfsPath::is_vfs_uri(path) {
         let vfs_path = VfsPath::from_uri(path)?;
@@ -215,7 +215,7 @@ pub fn execute_file_edit(
     project_root: &Path,
     config: &ResolvedConfig,
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
 ) -> io::Result<String> {
     let path_str = require_str_param(args, "path")?;
     let operation_str = require_str_param(args, "operation")?;
@@ -251,7 +251,7 @@ fn execute_file_edit_os(file_path: &Path, op: EditOperation) -> io::Result<Strin
 /// is intentional and documented in `docs/vfs.md`.
 fn execute_file_edit_vfs(
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
     vfs_path: &VfsPath,
     op: EditOperation,
 ) -> io::Result<String> {
@@ -472,7 +472,7 @@ mod tests {
 
     fn make_test_vfs(dir: &TempDir) -> Vfs {
         let backend = LocalBackend::new(dir.path().to_path_buf());
-        Vfs::new(Box::new(backend))
+        Vfs::new(Box::new(backend), "test-site-0000")
     }
 
     // === Registry tests ===
@@ -546,12 +546,19 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let vfs = make_test_vfs(&home);
 
-        let result = execute_write_file("vfs:///shared/doc.txt", "hello vfs", Some((&vfs, "ctx")));
+        let result = execute_write_file(
+            "vfs:///shared/doc.txt",
+            "hello vfs",
+            Some((&vfs, VfsCaller::Context("ctx"))),
+        );
         assert!(result.is_ok());
         assert!(result.unwrap().contains("written successfully"));
 
         let vfs_path = VfsPath::new("/shared/doc.txt").unwrap();
-        let data = vfs.read("ctx", &vfs_path).await.unwrap();
+        let data = vfs
+            .read(VfsCaller::Context("ctx"), &vfs_path)
+            .await
+            .unwrap();
         assert_eq!(data, b"hello vfs");
     }
 
@@ -560,7 +567,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let vfs = make_test_vfs(&home);
 
-        let result = execute_write_file("vfs:///sys/config.txt", "forbidden", Some((&vfs, "ctx")));
+        let result = execute_write_file(
+            "vfs:///sys/config.txt",
+            "forbidden",
+            Some((&vfs, VfsCaller::Context("ctx"))),
+        );
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
     }
@@ -584,7 +595,7 @@ mod tests {
             dir.path(),
             &make_config_for(&dir),
             &make_test_vfs(&dir),
-            "test",
+            VfsCaller::Context("test"),
         )
         .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -607,7 +618,7 @@ mod tests {
             dir.path(),
             &make_config_for(&dir),
             &make_test_vfs(&dir),
-            "test",
+            VfsCaller::Context("test"),
         )
         .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -630,7 +641,7 @@ mod tests {
             dir.path(),
             &make_config_for(&dir),
             &make_test_vfs(&dir),
-            "test",
+            VfsCaller::Context("test"),
         )
         .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -653,7 +664,7 @@ mod tests {
             dir.path(),
             &make_config_for(&dir),
             &make_test_vfs(&dir),
-            "test",
+            VfsCaller::Context("test"),
         )
         .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -676,7 +687,7 @@ mod tests {
             dir.path(),
             &make_config_for(&dir),
             &make_test_vfs(&dir),
-            "test",
+            VfsCaller::Context("test"),
         )
         .unwrap();
         let content = fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -700,7 +711,7 @@ mod tests {
             dir.path(),
             &make_config_for(&dir),
             &make_test_vfs(&dir),
-            "test",
+            VfsCaller::Context("test"),
         );
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
@@ -720,7 +731,7 @@ mod tests {
             dir.path(),
             &make_config_for(&dir),
             &make_test_vfs(&dir),
-            "test",
+            VfsCaller::Context("test"),
         );
         assert!(result.is_err());
     }
@@ -732,7 +743,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vfs = make_test_vfs(&dir);
         let path = VfsPath::new("/shared/f.txt").unwrap();
-        vfs.write("ctx", &path, b"aaa\nbbb\nccc\n").await.unwrap();
+        vfs.write(VfsCaller::Context("ctx"), &path, b"aaa\nbbb\nccc\n")
+            .await
+            .unwrap();
 
         let a = args(&[
             ("path", serde_json::json!("vfs:///shared/f.txt")),
@@ -741,8 +754,15 @@ mod tests {
             ("line_end", serde_json::json!(2)),
             ("content", serde_json::json!("BBB")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_config_for(&dir), &vfs, "ctx").unwrap();
-        let data = vfs.read("ctx", &path).await.unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &vfs,
+            VfsCaller::Context("ctx"),
+        )
+        .unwrap();
+        let data = vfs.read(VfsCaller::Context("ctx"), &path).await.unwrap();
         assert_eq!(String::from_utf8_lossy(&data), "aaa\nBBB\nccc\n");
     }
 
@@ -751,9 +771,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vfs = make_test_vfs(&dir);
         let path = VfsPath::new("/shared/f.txt").unwrap();
-        vfs.write("ctx", &path, b"hello world\nhello again\n")
-            .await
-            .unwrap();
+        vfs.write(
+            VfsCaller::Context("ctx"),
+            &path,
+            b"hello world\nhello again\n",
+        )
+        .await
+        .unwrap();
 
         let a = args(&[
             ("path", serde_json::json!("vfs:///shared/f.txt")),
@@ -761,8 +785,15 @@ mod tests {
             ("find", serde_json::json!("hello")),
             ("replace", serde_json::json!("goodbye")),
         ]);
-        execute_file_edit(&a, dir.path(), &make_config_for(&dir), &vfs, "ctx").unwrap();
-        let data = vfs.read("ctx", &path).await.unwrap();
+        execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &vfs,
+            VfsCaller::Context("ctx"),
+        )
+        .unwrap();
+        let data = vfs.read(VfsCaller::Context("ctx"), &path).await.unwrap();
         assert_eq!(
             String::from_utf8_lossy(&data),
             "goodbye world\nhello again\n"
@@ -774,7 +805,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vfs = make_test_vfs(&dir);
         let path = VfsPath::new("/home/coder/f.txt").unwrap();
-        vfs.write("coder", &path, b"data\n").await.unwrap();
+        vfs.write(VfsCaller::Context("coder"), &path, b"data\n")
+            .await
+            .unwrap();
 
         let a = args(&[
             ("path", serde_json::json!("vfs:///home/coder/f.txt")),
@@ -783,7 +816,13 @@ mod tests {
             ("line_end", serde_json::json!(1)),
             ("content", serde_json::json!("hacked")),
         ]);
-        let result = execute_file_edit(&a, dir.path(), &make_config_for(&dir), &vfs, "planner");
+        let result = execute_file_edit(
+            &a,
+            dir.path(),
+            &make_config_for(&dir),
+            &vfs,
+            VfsCaller::Context("planner"),
+        );
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
     }

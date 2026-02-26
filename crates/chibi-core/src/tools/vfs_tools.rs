@@ -5,7 +5,7 @@
 //! appropriate `Vfs` method, returning human-readable result strings.
 
 use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
-use crate::vfs::{Vfs, VfsEntryKind, VfsPath};
+use crate::vfs::{Vfs, VfsCaller, VfsEntryKind, VfsPath};
 use std::io;
 
 // === Tool Name Constants ===
@@ -124,7 +124,7 @@ fn require_vfs_path(args: &serde_json::Value, name: &str) -> io::Result<VfsPath>
 /// List entries in a VFS directory.
 pub async fn execute_vfs_list(
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
     args: &serde_json::Value,
 ) -> io::Result<String> {
     let path = require_vfs_path(args, "path")?;
@@ -148,7 +148,7 @@ pub async fn execute_vfs_list(
 /// Get metadata for a VFS path.
 pub async fn execute_vfs_info(
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
     args: &serde_json::Value,
 ) -> io::Result<String> {
     let path = require_vfs_path(args, "path")?;
@@ -173,7 +173,7 @@ pub async fn execute_vfs_info(
 /// Create a directory in the VFS.
 pub async fn execute_vfs_mkdir(
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
     args: &serde_json::Value,
 ) -> io::Result<String> {
     let path = require_vfs_path(args, "path")?;
@@ -184,7 +184,7 @@ pub async fn execute_vfs_mkdir(
 /// Delete a file or directory from the VFS.
 pub async fn execute_vfs_delete(
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
     args: &serde_json::Value,
 ) -> io::Result<String> {
     let path = require_vfs_path(args, "path")?;
@@ -195,7 +195,7 @@ pub async fn execute_vfs_delete(
 /// Copy a file within the VFS.
 pub async fn execute_vfs_copy(
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
     args: &serde_json::Value,
 ) -> io::Result<String> {
     let src = require_vfs_path(args, "src")?;
@@ -207,7 +207,7 @@ pub async fn execute_vfs_copy(
 /// Move (rename) a file within the VFS.
 pub async fn execute_vfs_move(
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
     args: &serde_json::Value,
 ) -> io::Result<String> {
     let src = require_vfs_path(args, "src")?;
@@ -245,7 +245,7 @@ pub fn is_vfs_tool(name: &str) -> bool {
 /// chain with other tool dispatchers.
 pub async fn execute_vfs_tool(
     vfs: &Vfs,
-    caller: &str,
+    caller: VfsCaller<'_>,
     tool_name: &str,
     args: &serde_json::Value,
 ) -> Option<io::Result<String>> {
@@ -263,23 +263,29 @@ pub async fn execute_vfs_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::{LocalBackend, Vfs, VfsPath};
+    use crate::vfs::{LocalBackend, Vfs, VfsCaller, VfsPath};
     use tempfile::TempDir;
 
     fn setup_vfs() -> (TempDir, Vfs) {
         let dir = TempDir::new().unwrap();
         let backend = LocalBackend::new(dir.path().to_path_buf());
-        (dir, Vfs::new(Box::new(backend)))
+        (dir, Vfs::new(Box::new(backend), "test-site-0000"))
     }
 
     #[tokio::test]
     async fn test_execute_vfs_list() {
         let (_dir, vfs) = setup_vfs();
-        vfs.write("ctx", &VfsPath::new("/shared/a.txt").unwrap(), b"a")
+        vfs.write(
+            VfsCaller::Context("ctx"),
+            &VfsPath::new("/shared/a.txt").unwrap(),
+            b"a",
+        )
+        .await
+        .unwrap();
+        let args = serde_json::json!({"path": "vfs:///shared"});
+        let result = execute_vfs_list(&vfs, VfsCaller::Context("ctx"), &args)
             .await
             .unwrap();
-        let args = serde_json::json!({"path": "vfs:///shared"});
-        let result = execute_vfs_list(&vfs, "ctx", &args).await.unwrap();
         assert!(result.contains("a.txt"));
     }
 
@@ -287,7 +293,9 @@ mod tests {
     async fn test_execute_vfs_list_nonexistent() {
         let (_dir, vfs) = setup_vfs();
         let args = serde_json::json!({"path": "vfs:///shared/nope"});
-        let result = execute_vfs_list(&vfs, "ctx", &args).await.unwrap();
+        let result = execute_vfs_list(&vfs, VfsCaller::Context("ctx"), &args)
+            .await
+            .unwrap();
         assert!(
             result.contains("empty")
                 || result.contains("no entries")
@@ -299,11 +307,17 @@ mod tests {
     #[tokio::test]
     async fn test_execute_vfs_info() {
         let (_dir, vfs) = setup_vfs();
-        vfs.write("ctx", &VfsPath::new("/shared/f.txt").unwrap(), b"hello")
+        vfs.write(
+            VfsCaller::Context("ctx"),
+            &VfsPath::new("/shared/f.txt").unwrap(),
+            b"hello",
+        )
+        .await
+        .unwrap();
+        let args = serde_json::json!({"path": "vfs:///shared/f.txt"});
+        let result = execute_vfs_info(&vfs, VfsCaller::Context("ctx"), &args)
             .await
             .unwrap();
-        let args = serde_json::json!({"path": "vfs:///shared/f.txt"});
-        let result = execute_vfs_info(&vfs, "ctx", &args).await.unwrap();
         assert!(result.contains("5")); // 5 bytes
         assert!(result.contains("file"));
     }
@@ -312,46 +326,66 @@ mod tests {
     async fn test_execute_vfs_mkdir() {
         let (_dir, vfs) = setup_vfs();
         let args = serde_json::json!({"path": "vfs:///shared/newdir"});
-        let result = execute_vfs_mkdir(&vfs, "ctx", &args).await.unwrap();
+        let result = execute_vfs_mkdir(&vfs, VfsCaller::Context("ctx"), &args)
+            .await
+            .unwrap();
         assert!(result.contains("Created"));
     }
 
     #[tokio::test]
     async fn test_execute_vfs_delete() {
         let (_dir, vfs) = setup_vfs();
-        vfs.write("ctx", &VfsPath::new("/shared/del.txt").unwrap(), b"x")
+        vfs.write(
+            VfsCaller::Context("ctx"),
+            &VfsPath::new("/shared/del.txt").unwrap(),
+            b"x",
+        )
+        .await
+        .unwrap();
+        let args = serde_json::json!({"path": "vfs:///shared/del.txt"});
+        let result = execute_vfs_delete(&vfs, VfsCaller::Context("ctx"), &args)
             .await
             .unwrap();
-        let args = serde_json::json!({"path": "vfs:///shared/del.txt"});
-        let result = execute_vfs_delete(&vfs, "ctx", &args).await.unwrap();
         assert!(result.contains("Deleted"));
     }
 
     #[tokio::test]
     async fn test_execute_vfs_copy() {
         let (_dir, vfs) = setup_vfs();
-        vfs.write("ctx", &VfsPath::new("/shared/src.txt").unwrap(), b"data")
-            .await
-            .unwrap();
+        vfs.write(
+            VfsCaller::Context("ctx"),
+            &VfsPath::new("/shared/src.txt").unwrap(),
+            b"data",
+        )
+        .await
+        .unwrap();
         let args = serde_json::json!({
             "src": "vfs:///shared/src.txt",
             "dst": "vfs:///shared/dst.txt"
         });
-        let result = execute_vfs_copy(&vfs, "ctx", &args).await.unwrap();
+        let result = execute_vfs_copy(&vfs, VfsCaller::Context("ctx"), &args)
+            .await
+            .unwrap();
         assert!(result.contains("Copied"));
     }
 
     #[tokio::test]
     async fn test_execute_vfs_move() {
         let (_dir, vfs) = setup_vfs();
-        vfs.write("ctx", &VfsPath::new("/shared/old.txt").unwrap(), b"data")
-            .await
-            .unwrap();
+        vfs.write(
+            VfsCaller::Context("ctx"),
+            &VfsPath::new("/shared/old.txt").unwrap(),
+            b"data",
+        )
+        .await
+        .unwrap();
         let args = serde_json::json!({
             "src": "vfs:///shared/old.txt",
             "dst": "vfs:///shared/new.txt"
         });
-        let result = execute_vfs_move(&vfs, "ctx", &args).await.unwrap();
+        let result = execute_vfs_move(&vfs, VfsCaller::Context("ctx"), &args)
+            .await
+            .unwrap();
         assert!(result.contains("Moved"));
     }
 
@@ -359,7 +393,7 @@ mod tests {
     async fn test_vfs_tool_permission_denied() {
         let (_dir, vfs) = setup_vfs();
         let args = serde_json::json!({"path": "vfs:///sys/forbidden"});
-        let result = execute_vfs_mkdir(&vfs, "ctx", &args).await;
+        let result = execute_vfs_mkdir(&vfs, VfsCaller::Context("ctx"), &args).await;
         assert!(result.is_err());
     }
 

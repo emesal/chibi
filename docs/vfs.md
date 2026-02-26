@@ -9,6 +9,8 @@ sandboxed, shared file space for contexts. contexts can read and write without e
 /home/<context>/                  owner: read + write; others: read only
 /sys/                             read only (SYSTEM-populated)
 /sys/tool_cache/<context>/        cached tool outputs (SYSTEM-written, world-readable)
+/site/                            site-wide flock data (world-writable)
+/flocks/<name>/                   per-flock data (members only)
 ```
 
 ## permission model
@@ -16,10 +18,35 @@ sandboxed, shared file space for contexts. contexts can read and write without e
 zone-based. path *is* policy:
 
 - **read** — always allowed for all zones
-- **write** — allowed in `/shared/` and `/home/<own_name>/`; denied elsewhere
-- **SYSTEM** — reserved caller with unrestricted write access (including `/sys/`). context names reject "system" (case-insensitive) to prevent impersonation
+- **write** — allowed in `/shared/`, `/home/<own_name>/`, and `/site/`; `/flocks/<name>/` for members only; denied elsewhere
+- **SYSTEM** — reserved caller with unrestricted write access (including `/sys/`, `/flocks/registry.json`). context names reject "system" (case-insensitive) to prevent impersonation
 
 no chmod, no ACLs, no ownership metadata.
+
+### VfsCaller enum
+
+all VFS operations are attributed to a typed `VfsCaller`:
+
+| Variant | Access | Usage |
+|---------|--------|-------|
+| `VfsCaller::System` | unrestricted write to all zones | startup bootstrap, flock management, goal writes |
+| `VfsCaller::Context(&str)` | zone-restricted (own `/home/` + `/shared/` only) | context tool calls |
+
+## flock registry
+
+flocks are named groups of contexts that share goals and prompts. membership and goals live entirely in the VFS:
+
+```
+/site/                    site-wide flock (implicit, all contexts belong)
+  goals.md                site-wide goals
+  prompt.md               site-wide injected prompt (optional)
+/flocks/<name>/           named flock
+  goals.md                flock goals
+  prompt.md               flock injected prompt (optional)
+/flocks/registry.json     centralised membership registry (SYSTEM only)
+```
+
+membership is stored centrally in `/flocks/registry.json`, not per-flock. the site flock is identified as `site:<site_id>`. `/site/` and `/flocks/` directories are bootstrapped on startup.
 
 ## using the VFS
 
@@ -122,8 +149,17 @@ maps `VfsPath("/shared/foo.txt")` → `<chibi_home>/vfs/shared/foo.txt`. uses `s
 │   ├── shared/
 │   ├── home/
 │   │   ├── planner/
+│   │   │   └── todos.md    # context todos (VFS-managed)
 │   │   └── coder/
-│   └── sys/
+│   ├── sys/
+│   ├── site/               # site flock data
+│   │   ├── goals.md
+│   │   └── prompt.md
+│   └── flocks/             # named flock data
+│       ├── registry.json    # centralised flock membership (SYSTEM only)
+│       └── <name>/
+│           ├── goals.md
+│           └── prompt.md
 ├── config.toml
 └── contexts/
 ```

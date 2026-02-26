@@ -176,11 +176,6 @@ impl AppState {
         self.load_todos(context_name)
     }
 
-    /// Load goals for a specific context (alias for load_goals)
-    pub fn load_goals_for(&self, context_name: &str) -> io::Result<String> {
-        self.load_goals(context_name)
-    }
-
     /// Load the reflection prompt from ~/.chibi/prompts/reflection.md
     /// Returns empty string if the file doesn't exist
     pub fn load_reflection_prompt(&self) -> io::Result<String> {
@@ -192,42 +187,34 @@ impl AppState {
         }
     }
 
-    // --- Todos and Goals file helpers ---
+    // --- Todos (VFS-backed) ---
 
-    /// Load todos for a context (returns empty string if file doesn't exist)
+    /// Load todos for a context from the VFS (`/home/<ctx>/todos.md`).
+    ///
+    /// Returns empty string if the file doesn't exist yet.
     pub fn load_todos(&self, context_name: &str) -> io::Result<String> {
-        let path = self.todos_file(context_name);
-        if path.exists() {
-            fs::read_to_string(&path)
-        } else {
-            Ok(String::new())
+        use crate::tools::vfs_block_on;
+        use crate::vfs::{VfsCaller, VfsPath};
+        let path = VfsPath::new(&format!("/home/{}/todos.md", context_name))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        match vfs_block_on(self.vfs.read(VfsCaller::System, &path)) {
+            Ok(data) => Ok(String::from_utf8_lossy(&data).into_owned()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(e),
         }
     }
 
-    /// Load goals for a context (returns empty string if file doesn't exist)
-    pub fn load_goals(&self, context_name: &str) -> io::Result<String> {
-        let path = self.goals_file(context_name);
-        if path.exists() {
-            fs::read_to_string(&path)
-        } else {
-            Ok(String::new())
-        }
-    }
-
-    /// Save todos for a context (atomic write)
+    /// Save todos for a context to the VFS (`/home/<ctx>/todos.md`).
     pub fn save_todos(&self, context_name: &str, content: &str) -> io::Result<()> {
-        self.ensure_context_dir(context_name)?;
-        crate::safe_io::atomic_write_text(&self.todos_file(context_name), content)
+        use crate::tools::vfs_block_on;
+        use crate::vfs::{VfsCaller, VfsPath};
+        let path = VfsPath::new(&format!("/home/{}/todos.md", context_name))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        vfs_block_on(self.vfs.write(VfsCaller::System, &path, content.as_bytes()))
     }
 
-    /// Save goals for a context (atomic write)
-    pub fn save_goals(&self, context_name: &str, content: &str) -> io::Result<()> {
-        self.ensure_context_dir(context_name)?;
-        crate::safe_io::atomic_write_text(&self.goals_file(context_name), content)
-    }
-
-    // NOTE: load_current_todos, load_current_goals, save_current_todos, save_current_goals
-    // were removed in the stateless-core refactor. Use the parameterized versions:
-    // - load_todos(context_name) / save_todos(context_name, content)
-    // - load_goals(context_name) / save_goals(context_name, content)
+    // NOTE: load_current_todos, save_current_todos were removed in the stateless-core refactor.
+    // Use load_todos(context_name) / save_todos(context_name, content) instead.
+    //
+    // Goals are now flock-scoped. See `state::flocks::load_flock_contexts` (task 9).
 }

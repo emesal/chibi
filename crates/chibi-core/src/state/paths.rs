@@ -1,7 +1,10 @@
 //! Path computation methods for AppState.
 //!
-//! All path methods are pure computations with no I/O - they just construct
-//! PathBuf values based on the context name and chibi directory structure.
+//! All path methods are pure computations with no I/O — they just construct
+//! `PathBuf` values based on the context name and chibi directory structure.
+//!
+//! Note: todos and goals are no longer stored as files on disk; they are
+//! VFS-backed (`/home/<ctx>/todos.md`) and flock-scoped respectively.
 
 use std::path::PathBuf;
 
@@ -55,16 +58,6 @@ pub trait StatePaths {
     /// Get the path to a context's system prompt file
     fn context_prompt_file(&self, context_name: &str) -> PathBuf {
         self.context_dir(context_name).join("system_prompt.md")
-    }
-
-    /// Get the path to a context's todos file
-    fn todos_file(&self, context_name: &str) -> PathBuf {
-        self.context_dir(context_name).join("todos.md")
-    }
-
-    /// Get the path to a context's goals file
-    fn goals_file(&self, context_name: &str) -> PathBuf {
-        self.context_dir(context_name).join("goals.md")
     }
 
     /// Get the path to a context's local config file

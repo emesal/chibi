@@ -11,6 +11,7 @@ use super::{BuiltinToolDef, ToolPropertyDef, require_str_param};
 use crate::config::ResolvedConfig;
 use crate::json_ext::JsonExt;
 use crate::state::AppState;
+use crate::vfs::VfsCaller;
 
 // === Tool Name Constants ===
 
@@ -281,20 +282,31 @@ pub fn execute_fs_read_tool(
 }
 
 // === VFS bridge ===
-
 /// Bridge an async VFS future into synchronous tool dispatch.
 ///
-/// Uses `block_in_place` + `block_on` so that it works both from pure sync
-/// callers (where the current thread is free) and from sync code inside a
-/// tokio runtime (e.g. tool dispatch in `execute_tool_pure`). The
+/// Uses `block_in_place` + `block_on` so that it works from sync code inside a
+/// tokio multi-thread runtime (e.g. tool dispatch in `execute_tool_pure`). The
 /// `block_in_place` call tells the runtime scheduler to move other tasks off
 /// this thread while we block.
 ///
 /// **Runtime requirement:** `block_in_place` panics on `current_thread`
 /// runtimes. Any test that calls VFS tools must use:
 /// `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`
+///
+/// If called outside of any tokio runtime (e.g. plain `#[test]`), spins up a
+/// temporary current-thread runtime.
 pub(crate) fn vfs_block_on<F: std::future::Future>(f: F) -> F::Output {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(f)),
+        Err(_) => {
+            // No runtime active — spin up a temporary one.
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build temporary tokio runtime")
+                .block_on(f)
+        }
+    }
 }
 
 // === file_head / file_tail ===
@@ -336,7 +348,7 @@ fn execute_file_head_or_tail(
             }
         },
         ResolvedPath::Vfs(vfs_path) => {
-            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let data = vfs_block_on(app.vfs.read(VfsCaller::Context(context_name), &vfs_path))?;
             let content = String::from_utf8_lossy(&data);
             let all_lines: Vec<&str> = content.lines().collect();
             let selected = match direction {
@@ -440,7 +452,7 @@ pub fn execute_file_lines(
             Ok(lines.join("\n"))
         }
         ResolvedPath::Vfs(vfs_path) => {
-            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let data = vfs_block_on(app.vfs.read(VfsCaller::Context(context_name), &vfs_path))?;
             let content = String::from_utf8_lossy(&data);
             let lines: Vec<&str> = content
                 .lines()
@@ -477,7 +489,7 @@ pub fn execute_file_grep(
             grep_in_memory(&content, &pattern, context_before, context_after)?
         }
         ResolvedPath::Vfs(vfs_path) => {
-            let data = vfs_block_on(app.vfs.read(context_name, &vfs_path))?;
+            let data = vfs_block_on(app.vfs.read(VfsCaller::Context(context_name), &vfs_path))?;
             let content = String::from_utf8_lossy(&data).into_owned();
             grep_in_memory(&content, &pattern, context_before, context_after)?
         }
@@ -872,7 +884,7 @@ mod tests {
     fn make_vfs_app(home: &TempDir, vfs_dir: &TempDir) -> AppState {
         let mut app = AppState::load(Some(home.path().to_path_buf())).unwrap();
         let backend = LocalBackend::new(vfs_dir.path().to_path_buf());
-        app.vfs = Vfs::new(Box::new(backend));
+        app.vfs = Vfs::new(Box::new(backend), "test-site-0000");
         app
     }
 
@@ -1174,7 +1186,11 @@ mod tests {
 
         let vfs_path = VfsPath::new("/shared/data.txt").unwrap();
         app.vfs
-            .write("ctx", &vfs_path, b"line1\nline2\nline3\nline4\nline5")
+            .write(
+                VfsCaller::Context("ctx"),
+                &vfs_path,
+                b"line1\nline2\nline3\nline4\nline5",
+            )
             .await
             .unwrap();
 
@@ -1199,7 +1215,11 @@ mod tests {
 
         let vfs_path = VfsPath::new("/shared/data.txt").unwrap();
         app.vfs
-            .write("ctx", &vfs_path, b"line1\nline2\nline3\nline4\nline5")
+            .write(
+                VfsCaller::Context("ctx"),
+                &vfs_path,
+                b"line1\nline2\nline3\nline4\nline5",
+            )
             .await
             .unwrap();
 
@@ -1224,7 +1244,11 @@ mod tests {
 
         let vfs_path = VfsPath::new("/shared/data.txt").unwrap();
         app.vfs
-            .write("ctx", &vfs_path, b"line1\nline2\nline3\nline4\nline5")
+            .write(
+                VfsCaller::Context("ctx"),
+                &vfs_path,
+                b"line1\nline2\nline3\nline4\nline5",
+            )
             .await
             .unwrap();
 
@@ -1253,7 +1277,7 @@ mod tests {
         let vfs_path = VfsPath::new("/shared/code.rs").unwrap();
         app.vfs
             .write(
-                "ctx",
+                VfsCaller::Context("ctx"),
                 &vfs_path,
                 b"fn hello() {\n    println!(\"world\");\n}\n",
             )

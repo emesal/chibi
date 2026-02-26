@@ -8,6 +8,7 @@
 mod config_resolution;
 mod context_ops;
 mod entries;
+pub mod flocks;
 mod paths;
 mod prompts;
 
@@ -17,6 +18,7 @@ pub use entries::{
     create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
 };
+pub use flocks::{FlockContext, format_flock_sections, load_flock_contexts};
 pub use paths::StatePaths;
 
 use crate::jsonl::read_jsonl_file;
@@ -58,6 +60,8 @@ pub struct AppState {
     pub prompts_dir: PathBuf,
     /// Directory containing plugin directories (`~/.chibi/plugins/`).
     pub plugins_dir: PathBuf,
+    /// Site identity for this chibi installation.
+    pub site_id: String,
     /// Shared virtual file system.
     pub vfs: crate::vfs::Vfs,
     /// Cache of active partition state per context, avoiding repeated file scans.
@@ -101,18 +105,24 @@ impl AppState {
             ));
         }
         fs::create_dir_all(&vfs_root)?;
+        // Bootstrap /site/ VFS directory (sync, directly on filesystem).
+        let _ = fs::create_dir_all(vfs_root.join("site"));
         let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
-        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
+
+        let hostname_override = config.site.as_ref().and_then(|s| s.hostname.as_deref());
+        let site = crate::site::load_or_create(&chibi_dir, hostname_override)?;
+
+        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend), &site.site_id);
 
         Ok(AppState {
             config,
-
             state,
             chibi_dir,
             state_path,
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            site_id: site.site_id,
             vfs,
             active_state_cache: RefCell::new(HashMap::new()),
         })
@@ -194,8 +204,13 @@ impl AppState {
             ));
         }
         fs::create_dir_all(&vfs_root)?;
-        let vfs_backend = crate::vfs::LocalBackend::new(vfs_root);
-        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend));
+        // Bootstrap /site/ VFS directory (sync, directly on filesystem).
+        let _ = fs::create_dir_all(vfs_root.join("site"));
+        let vfs_backend = crate::vfs::LocalBackend::new(vfs_root.clone());
+
+        let hostname_override = config.site.as_ref().and_then(|s| s.hostname.as_deref());
+        let site = crate::site::load_or_create(&chibi_dir, hostname_override)?;
+        let vfs = crate::vfs::Vfs::new(Box::new(vfs_backend), &site.site_id);
 
         let mut app = AppState {
             config,
@@ -205,6 +220,7 @@ impl AppState {
             contexts_dir,
             prompts_dir,
             plugins_dir,
+            site_id: site.site_id,
             vfs,
             active_state_cache: RefCell::new(HashMap::new()),
         };
@@ -336,7 +352,7 @@ impl AppState {
         let dir_str = format!("/sys/tool_cache/{}", name);
         let dir = crate::vfs::VfsPath::new(&dir_str)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-        match self.vfs.delete(crate::vfs::SYSTEM_CALLER, &dir).await {
+        match self.vfs.delete(crate::vfs::VfsCaller::System, &dir).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
@@ -358,7 +374,7 @@ impl AppState {
             Err(_) => return Ok(0),
         };
 
-        let entries = match self.vfs.list(crate::vfs::SYSTEM_CALLER, &dir).await {
+        let entries = match self.vfs.list(crate::vfs::VfsCaller::System, &dir).await {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
             Err(e) => return Err(e),
@@ -376,7 +392,7 @@ impl AppState {
             };
             let meta = match self
                 .vfs
-                .metadata(crate::vfs::SYSTEM_CALLER, &file_path)
+                .metadata(crate::vfs::VfsCaller::System, &file_path)
                 .await
             {
                 Ok(m) => m,
@@ -385,7 +401,10 @@ impl AppState {
             if let Some(modified) = meta.modified
                 && is_cache_entry_expired(modified, max_age_days)
             {
-                let _ = self.vfs.delete(crate::vfs::SYSTEM_CALLER, &file_path).await;
+                let _ = self
+                    .vfs
+                    .delete(crate::vfs::VfsCaller::System, &file_path)
+                    .await;
                 removed += 1;
             }
         }
@@ -399,7 +418,7 @@ impl AppState {
         let root = crate::vfs::VfsPath::new("/sys/tool_cache")
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
 
-        let ctx_dirs = match self.vfs.list(crate::vfs::SYSTEM_CALLER, &root).await {
+        let ctx_dirs = match self.vfs.list(crate::vfs::VfsCaller::System, &root).await {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
             Err(e) => return Err(e),

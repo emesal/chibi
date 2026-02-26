@@ -386,7 +386,7 @@ impl Chibi {
                 &self.project_root,
                 &config,
                 &self.app.vfs,
-                context_name,
+                crate::vfs::VfsCaller::Context(context_name),
             ) {
                 return result;
             }
@@ -790,7 +790,7 @@ mod tests {
         assert!(err.to_string().contains("nonexistent_tool"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_execute_tool_builtin() {
         let (chibi, _tmp) = create_test_chibi();
         let result = chibi

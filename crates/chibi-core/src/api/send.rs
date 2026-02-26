@@ -19,7 +19,7 @@ use crate::output::NoopSink;
 use crate::state::{
     AppState, create_assistant_message_entry, create_flow_control_call_entry,
     create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
-    create_user_message_entry,
+    create_user_message_entry, format_flock_sections, load_flock_contexts,
 };
 use crate::tools::{self, Tool};
 use crate::vfs::path::VfsPath;
@@ -475,14 +475,19 @@ fn build_full_system_prompt<S: ResponseSink>(
 
     // Load context-specific state
     let todos = app.load_todos(context_name)?;
-    let goals = app.load_goals(context_name)?;
+    let flock_contexts = load_flock_contexts(&app.vfs, context_name)?;
 
     // Execute pre_system_prompt hook - can inject content before system prompt sections
     let pre_sys_hook_data = serde_json::json!({
         "context_name": context_name,
         "summary": summary,
         "todos": todos,
-        "goals": goals,
+        "flock_goals": flock_contexts.iter()
+            .filter_map(|fc| fc.goals.as_ref().map(|g| serde_json::json!({
+                "flock": fc.flock_name,
+                "goals": g,
+            })))
+            .collect::<Vec<_>>(),
     });
     let pre_sys_hook_results =
         tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data)?;
@@ -535,10 +540,10 @@ fn build_full_system_prompt<S: ResponseSink>(
         full_system_prompt.push_str(summary);
     }
 
-    // Add goals if present
-    if !goals.is_empty() {
-        full_system_prompt.push_str("\n\n--- CURRENT GOALS ---\n");
-        full_system_prompt.push_str(&goals);
+    // Add flock goals/prompts if present
+    let flock_sections = format_flock_sections(&flock_contexts);
+    if !flock_sections.is_empty() {
+        full_system_prompt.push_str(&flock_sections);
     }
 
     // Add todos if present
@@ -563,7 +568,12 @@ fn build_full_system_prompt<S: ResponseSink>(
         "context_name": context_name,
         "summary": summary,
         "todos": todos,
-        "goals": goals,
+        "flock_goals": flock_contexts.iter()
+            .filter_map(|fc| fc.goals.as_ref().map(|g| serde_json::json!({
+                "flock": fc.flock_name,
+                "goals": g,
+            })))
+            .collect::<Vec<_>>(),
     });
     let post_sys_hook_results = tools::execute_hook(
         tools,
@@ -993,7 +1003,7 @@ async fn execute_tool_pure(
                     project_root,
                     resolved_config,
                     &app.vfs,
-                    context_name,
+                    crate::vfs::VfsCaller::Context(context_name),
                 ),
                 &tool_call.name,
             )
@@ -1025,7 +1035,7 @@ async fn execute_tool_pure(
                         project_root,
                         resolved_config,
                         &app.vfs,
-                        context_name,
+                        crate::vfs::VfsCaller::Context(context_name),
                     ),
                     &tool_call.name,
                 ),
@@ -1036,7 +1046,13 @@ async fn execute_tool_pure(
         // VFS tools enforce their own zone-based permission model.
         // No PreFileRead/PreFileWrite hooks needed.
         unwrap_tool_dispatch(
-            tools::execute_vfs_tool(&app.vfs, context_name, &tool_call.name, &args).await,
+            tools::execute_vfs_tool(
+                &app.vfs,
+                crate::vfs::VfsCaller::Context(context_name),
+                &tool_call.name,
+                &args,
+            )
+            .await,
             &tool_call.name,
         )
     } else if tools::is_shell_tool(&tool_call.name) {
@@ -1223,7 +1239,11 @@ async fn execute_tool_pure(
 
             match app
                 .vfs
-                .write(crate::vfs::SYSTEM_CALLER, &vfs_path, tool_result.as_bytes())
+                .write(
+                    crate::vfs::VfsCaller::System,
+                    &vfs_path,
+                    tool_result.as_bytes(),
+                )
                 .await
             {
                 Ok(()) => {
@@ -2634,7 +2654,11 @@ mod tests {
         // Seed content directly through the VFS (use /shared/ — writable by any non-system context)
         let vfs_path = crate::vfs::VfsPath::new("/shared/hello.txt").unwrap();
         app.vfs
-            .write("default", &vfs_path, b"line1\nline2\nline3")
+            .write(
+                crate::vfs::VfsCaller::Context("default"),
+                &vfs_path,
+                b"line1\nline2\nline3",
+            )
             .await
             .unwrap();
 
@@ -2743,7 +2767,7 @@ mod tests {
 
         // Write the cache entry
         app.vfs
-            .write(crate::vfs::SYSTEM_CALLER, &vfs_path, large.as_bytes())
+            .write(crate::vfs::VfsCaller::System, &vfs_path, large.as_bytes())
             .await
             .unwrap();
 
@@ -2753,7 +2777,11 @@ mod tests {
         assert!(stub.contains("test_tool"));
 
         // LLM can read content via vfs:/// path
-        let content = app.vfs.read(ctx_name, &vfs_path).await.unwrap();
+        let content = app
+            .vfs
+            .read(crate::vfs::VfsCaller::System, &vfs_path)
+            .await
+            .unwrap();
         assert_eq!(content, large.as_bytes());
 
         // Fresh entry is NOT removed by cleanup (max_age_days=0 → delete after >1 day)
@@ -2764,7 +2792,7 @@ mod tests {
         app.clear_tool_cache(ctx_name).await.unwrap();
         let exists = app
             .vfs
-            .exists(crate::vfs::SYSTEM_CALLER, &vfs_path)
+            .exists(crate::vfs::VfsCaller::System, &vfs_path)
             .await
             .unwrap();
         assert!(!exists, "cache entry should be gone after clear");
