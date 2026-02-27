@@ -935,12 +935,13 @@ pub fn parse() -> io::Result<ChibiInput> {
                 .map(|h| std::path::PathBuf::from(h).join(".chibi"))
         };
         if let Some(dir) = chibi_dir
-            && let Ok(site) = chibi_core::site::load_or_create(&dir, None) {
-                println!(
-                    "site flock {}",
-                    chibi_core::vfs::flock::site_flock_name(&site.site_id)
-                );
-            }
+            && let Ok(site) = chibi_core::site::load_or_create(&dir, None)
+        {
+            println!(
+                "site flock {}",
+                chibi_core::vfs::flock::site_flock_name(&site.site_id)
+            );
+        }
         std::process::exit(0);
     }
 
