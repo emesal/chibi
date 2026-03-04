@@ -778,9 +778,7 @@ impl LoopDetector {
     /// Record a tool call result. Returns `true` if this is a duplicate (loop detected).
     /// Resets the counter whenever the (tool, args, result) triple changes.
     fn check_and_update(&mut self, tool_name: &str, args: &str, result: &str) -> bool {
-        if tool_name == self.last_tool_name
-            && args == self.last_args
-            && result == self.last_result
+        if tool_name == self.last_tool_name && args == self.last_args && result == self.last_result
         {
             self.consecutive_count += 1;
             true
@@ -1733,11 +1731,7 @@ async fn process_tool_calls<S: ResponseSink>(
         }
 
         // Loop detection: warn and charge fuel if same (tool, args, result) repeats.
-        let is_loop = loop_detector.check_and_update(
-            &tc.name,
-            &tc.arguments,
-            &result.final_result,
-        );
+        let is_loop = loop_detector.check_and_update(&tc.name, &tc.arguments, &result.final_result);
 
         messages.push(serde_json::json!({
             "role": "tool",
@@ -1763,9 +1757,7 @@ async fn process_tool_calls<S: ResponseSink>(
                 "[Loop detected] You have called {}({}) {} time(s) in a row and received the same result. \
                  This is not making progress. Try a different approach, use a different tool, \
                  or ask the user for help.",
-                tc.name,
-                tc.arguments,
-                loop_detector.consecutive_count,
+                tc.name, tc.arguments, loop_detector.consecutive_count,
             );
             messages.push(serde_json::json!({
                 "role": "tool",
