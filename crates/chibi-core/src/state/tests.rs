@@ -2035,3 +2035,45 @@ fn test_rebuild_context_includes_flow_control_entries() {
         "flow_control_result must appear in context.jsonl"
     );
 }
+
+#[test]
+fn test_resolve_uses_context_cwd_when_set() {
+    // When file_tools_allowed_paths is empty in config, and context has a stored cwd,
+    // resolve_config should use the stored cwd rather than live current_dir.
+    let (mut app, _dir) = create_test_app();
+
+    // Register a context with a specific stored cwd
+    let mut entry = crate::context::ContextEntry::with_created_at("myctx", 1234567890);
+    entry.cwd = Some("/stored/project/path".to_string());
+    app.state.contexts.push(entry);
+
+    let config = app.resolve_config("myctx", None).unwrap();
+    assert!(
+        config
+            .file_tools_allowed_paths
+            .contains(&"/stored/project/path".to_string()),
+        "expected stored cwd in file_tools_allowed_paths, got: {:?}",
+        config.file_tools_allowed_paths
+    );
+}
+
+#[test]
+fn test_resolve_falls_back_to_current_dir_when_no_context_cwd() {
+    // When context has no stored cwd, resolve_config should fall back to live current_dir.
+    let (mut app, _dir) = create_test_app();
+
+    let mut entry = crate::context::ContextEntry::with_created_at("myctx", 1234567890);
+    entry.cwd = None; // simulate old context
+    app.state.contexts.push(entry);
+
+    let config = app.resolve_config("myctx", None).unwrap();
+    let live_cwd = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    assert!(
+        config.file_tools_allowed_paths.contains(&live_cwd),
+        "expected live cwd in file_tools_allowed_paths, got: {:?}",
+        config.file_tools_allowed_paths
+    );
+}
