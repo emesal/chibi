@@ -754,6 +754,99 @@ struct PreToolResult {
     diagnostics: Vec<String>,
 }
 
+/// Detects when the same tool call produces the same result consecutively.
+/// Used to inject a warning and charge fuel to break infinite loops.
+#[allow(dead_code)]
+struct LoopDetector {
+    last_tool_name: String,
+    last_args: String,
+    last_result: String,
+    /// How many times this exact (tool, args, result) triple has appeared in a row.
+    /// Starts at 0 (no previous call). Becomes 1 on first call, 2 on first repeat, etc.
+    pub consecutive_count: u32,
+}
+
+#[allow(dead_code)]
+impl LoopDetector {
+    fn new() -> Self {
+        Self {
+            last_tool_name: String::new(),
+            last_args: String::new(),
+            last_result: String::new(),
+            consecutive_count: 0,
+        }
+    }
+
+    /// Record a tool call result. Returns `true` if this is a duplicate (loop detected).
+    /// Resets the counter whenever the (tool, args, result) triple changes.
+    fn check_and_update(&mut self, tool_name: &str, args: &str, result: &str) -> bool {
+        if tool_name == self.last_tool_name
+            && args == self.last_args
+            && result == self.last_result
+        {
+            self.consecutive_count += 1;
+            true
+        } else {
+            self.last_tool_name = tool_name.to_string();
+            self.last_args = args.to_string();
+            self.last_result = result.to_string();
+            self.consecutive_count = 1;
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod loop_detector_tests {
+    use super::*;
+
+    #[test]
+    fn test_no_loop_on_first_call() {
+        let mut d = LoopDetector::new();
+        assert!(!d.check_and_update("grep", r#"{"path":"x"}"#, "result"));
+    }
+
+    #[test]
+    fn test_no_loop_on_different_args() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result");
+        assert!(!d.check_and_update("grep", r#"{"path":"b"}"#, "result"));
+    }
+
+    #[test]
+    fn test_no_loop_on_different_result() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result1");
+        assert!(!d.check_and_update("grep", r#"{"path":"a"}"#, "result2"));
+    }
+
+    #[test]
+    fn test_loop_detected_on_second_identical_call() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result");
+        assert!(d.check_and_update("grep", r#"{"path":"a"}"#, "result"));
+    }
+
+    #[test]
+    fn test_loop_count_increments() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", "args", "res");
+        d.check_and_update("grep", "args", "res"); // count=2, loop
+        d.check_and_update("grep", "args", "res"); // count=3, loop
+        assert_eq!(d.consecutive_count, 3);
+    }
+
+    #[test]
+    fn test_loop_resets_on_different_call() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", "args", "res");
+        d.check_and_update("grep", "args", "res"); // loop detected
+        d.check_and_update("ls", "{}", "files"); // resets
+        assert_eq!(d.consecutive_count, 1);
+        assert!(!d.check_and_update("ls", "{}", "files2")); // different result → no loop
+    }
+}
+
 /// Process PreTool hook results: check for block signals and argument modifications.
 fn apply_pre_tool_results(
     hook_results: Vec<(String, serde_json::Value)>,
