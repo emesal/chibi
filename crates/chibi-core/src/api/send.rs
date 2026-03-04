@@ -756,7 +756,6 @@ struct PreToolResult {
 
 /// Detects when the same tool call produces the same result consecutively.
 /// Used to inject a warning and charge fuel to break infinite loops.
-#[allow(dead_code)]
 struct LoopDetector {
     last_tool_name: String,
     last_args: String,
@@ -766,7 +765,6 @@ struct LoopDetector {
     pub consecutive_count: u32,
 }
 
-#[allow(dead_code)]
 impl LoopDetector {
     fn new() -> Self {
         Self {
@@ -1548,6 +1546,7 @@ async fn process_tool_calls<S: ResponseSink>(
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
     project_root: &Path,
+    loop_detector: &mut LoopDetector,
 ) -> io::Result<()> {
     // Convert tool calls to JSON format for the assistant message
     let tool_calls_json: Vec<serde_json::Value> = tool_calls
@@ -1733,11 +1732,47 @@ async fn process_tool_calls<S: ResponseSink>(
             }
         }
 
+        // Loop detection: warn and charge fuel if same (tool, args, result) repeats.
+        let is_loop = loop_detector.check_and_update(
+            &tc.name,
+            &tc.arguments,
+            &result.final_result,
+        );
+
         messages.push(serde_json::json!({
             "role": "tool",
             "tool_call_id": tc.id,
             "content": result.final_result,
         }));
+
+        if is_loop {
+            if !fuel_unlimited {
+                *fuel_remaining =
+                    fuel_remaining.saturating_sub(resolved_config.fuel_empty_response_cost);
+                sink.handle(ResponseEvent::FuelStatus {
+                    event: crate::api::sink::FuelEvent::EmptyResponse,
+                    remaining: *fuel_remaining,
+                    total: fuel_total,
+                })?;
+                if *fuel_remaining == 0 {
+                    sink.handle(ResponseEvent::FuelExhausted { total: fuel_total })?;
+                    return Ok(());
+                }
+            }
+            let warning = format!(
+                "[Loop detected] You have called {}({}) {} time(s) in a row and received the same result. \
+                 This is not making progress. Try a different approach, use a different tool, \
+                 or ask the user for help.",
+                tc.name,
+                tc.arguments,
+                loop_detector.consecutive_count,
+            );
+            messages.push(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": warning,
+            }));
+        }
     }
 
     // Execute post_tool_batch hook — allows plugins to override fallback after seeing tool results
@@ -2108,6 +2143,9 @@ pub async fn send_prompt<S: ResponseSink>(
             sink,
         )?;
 
+        // Loop detector resets per user-message turn (each outer loop iteration).
+        let mut loop_detector = LoopDetector::new();
+
         // === Inner Loop: stream responses and process tool calls ===
         loop {
             sink.handle(ResponseEvent::StartResponse)?;
@@ -2147,6 +2185,7 @@ pub async fn send_prompt<S: ResponseSink>(
                     sink,
                     permission_handler,
                     project_root,
+                    &mut loop_detector,
                 )
                 .await?;
 
