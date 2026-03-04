@@ -450,6 +450,36 @@ chibi --clear-cache-for other # Clear specific context's cache
 chibi --cleanup-cache         # Remove old entries across all contexts
 ```
 
+## Loop Prevention
+
+Chibi detects when an LLM agent is stuck calling the same tool with the same arguments and getting the same result, and breaks the loop automatically.
+
+### How It Works
+
+A `LoopDetector` tracks the last `(tool_name, arguments, result)` triple across all tool calls in a single user-message turn. When the same triple repeats:
+
+1. **Fuel penalty** — `fuel_empty_response_cost` is deducted (same cost as an empty response). If fuel reaches zero, the turn ends immediately.
+2. **Warning injection** — a synthetic tool result is appended to the conversation, telling the LLM how many times it has repeated itself and instructing it to try a different approach.
+
+The detector resets at the start of each new user-message turn, so legitimate repeated tool calls across separate turns are unaffected. It only fires when the *result* is also identical — a different result means the tool is making progress and no penalty is applied.
+
+### Example Warning
+
+```
+[Loop detected] You have called grep_files({"pattern":"TODO","path":"."}) 3 time(s) in a row
+and received the same result. This is not making progress. Try a different approach, use a
+different tool, or ask the user for help.
+```
+
+### Fuel Configuration
+
+```toml
+# Cost charged per repeated identical tool call (defaults to fuel_empty_response_cost)
+fuel_empty_response_cost = 15
+```
+
+See [configuration.md](configuration.md) for full fuel settings.
+
 ## Best Practices
 
 1. **Clear Goals** - Help the LLM stay focused by encouraging goal-setting

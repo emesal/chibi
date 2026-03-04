@@ -66,11 +66,13 @@ pub fn truncated_message(
     format!(
         "[Output cached: {vfs_uri}]\n\
          Tool: {tool_name} | Size: {char_count} chars, ~{token_estimate} tokens | Lines: {line_count}\n\
-         Preview:\n\
+         Search complete. Full result stored — do NOT re-run this search.\n\
+         To read the result: use file_lines, file_head, file_tail, or file_grep with path=\"{vfs_uri}\"\n\
+         Preview (first {} lines):\n\
          ---\n\
          {preview}\n\
-         ---\n\
-         Use file_head, file_tail, file_lines, file_grep with path=\"{vfs_uri}\" to examine."
+         ---",
+        preview.lines().count()
     )
 }
 
@@ -116,7 +118,9 @@ mod tests {
         let msg = truncated_message(uri, "web_fetch", "line1\nline2\nline3", 200);
         assert!(msg.contains(uri));
         assert!(msg.contains("web_fetch"));
-        assert!(msg.contains("file_head"));
+        assert!(msg.contains("Search complete"));
+        assert!(msg.contains("do NOT re-run"));
+        assert!(msg.contains("file_lines"));
     }
 
     #[test]

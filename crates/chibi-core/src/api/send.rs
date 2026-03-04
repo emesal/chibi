@@ -754,6 +754,95 @@ struct PreToolResult {
     diagnostics: Vec<String>,
 }
 
+/// Detects when the same tool call produces the same result consecutively.
+/// Used to inject a warning and charge fuel to break infinite loops.
+struct LoopDetector {
+    last_tool_name: String,
+    last_args: String,
+    last_result: String,
+    /// How many times this exact (tool, args, result) triple has appeared in a row.
+    /// Starts at 0 (no previous call). Becomes 1 on first call, 2 on first repeat, etc.
+    pub consecutive_count: u32,
+}
+
+impl LoopDetector {
+    fn new() -> Self {
+        Self {
+            last_tool_name: String::new(),
+            last_args: String::new(),
+            last_result: String::new(),
+            consecutive_count: 0,
+        }
+    }
+
+    /// Record a tool call result. Returns `true` if this is a duplicate (loop detected).
+    /// Resets the counter whenever the (tool, args, result) triple changes.
+    fn check_and_update(&mut self, tool_name: &str, args: &str, result: &str) -> bool {
+        if tool_name == self.last_tool_name && args == self.last_args && result == self.last_result
+        {
+            self.consecutive_count += 1;
+            true
+        } else {
+            self.last_tool_name = tool_name.to_string();
+            self.last_args = args.to_string();
+            self.last_result = result.to_string();
+            self.consecutive_count = 1;
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod loop_detector_tests {
+    use super::*;
+
+    #[test]
+    fn test_no_loop_on_first_call() {
+        let mut d = LoopDetector::new();
+        assert!(!d.check_and_update("grep", r#"{"path":"x"}"#, "result"));
+    }
+
+    #[test]
+    fn test_no_loop_on_different_args() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result");
+        assert!(!d.check_and_update("grep", r#"{"path":"b"}"#, "result"));
+    }
+
+    #[test]
+    fn test_no_loop_on_different_result() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result1");
+        assert!(!d.check_and_update("grep", r#"{"path":"a"}"#, "result2"));
+    }
+
+    #[test]
+    fn test_loop_detected_on_second_identical_call() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result");
+        assert!(d.check_and_update("grep", r#"{"path":"a"}"#, "result"));
+    }
+
+    #[test]
+    fn test_loop_count_increments() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", "args", "res");
+        d.check_and_update("grep", "args", "res"); // count=2, loop
+        d.check_and_update("grep", "args", "res"); // count=3, loop
+        assert_eq!(d.consecutive_count, 3);
+    }
+
+    #[test]
+    fn test_loop_resets_on_different_call() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", "args", "res");
+        d.check_and_update("grep", "args", "res"); // loop detected
+        d.check_and_update("ls", "{}", "files"); // resets
+        assert_eq!(d.consecutive_count, 1);
+        assert!(!d.check_and_update("ls", "{}", "files2")); // different result → no loop
+    }
+}
+
 /// Process PreTool hook results: check for block signals and argument modifications.
 fn apply_pre_tool_results(
     hook_results: Vec<(String, serde_json::Value)>,
@@ -1455,6 +1544,7 @@ async fn process_tool_calls<S: ResponseSink>(
     sink: &mut S,
     permission_handler: Option<&PermissionHandler>,
     project_root: &Path,
+    loop_detector: &mut LoopDetector,
 ) -> io::Result<()> {
     // Convert tool calls to JSON format for the assistant message
     let tool_calls_json: Vec<serde_json::Value> = tool_calls
@@ -1640,11 +1730,41 @@ async fn process_tool_calls<S: ResponseSink>(
             }
         }
 
+        // Loop detection: warn and charge fuel if same (tool, args, result) repeats.
+        let is_loop = loop_detector.check_and_update(&tc.name, &tc.arguments, &result.final_result);
+
         messages.push(serde_json::json!({
             "role": "tool",
             "tool_call_id": tc.id,
             "content": result.final_result,
         }));
+
+        if is_loop {
+            if !fuel_unlimited {
+                *fuel_remaining =
+                    fuel_remaining.saturating_sub(resolved_config.fuel_empty_response_cost);
+                sink.handle(ResponseEvent::FuelStatus {
+                    event: crate::api::sink::FuelEvent::EmptyResponse,
+                    remaining: *fuel_remaining,
+                    total: fuel_total,
+                })?;
+                if *fuel_remaining == 0 {
+                    sink.handle(ResponseEvent::FuelExhausted { total: fuel_total })?;
+                    return Ok(());
+                }
+            }
+            let warning = format!(
+                "[Loop detected] You have called {}({}) {} time(s) in a row and received the same result. \
+                 This is not making progress. Try a different approach, use a different tool, \
+                 or ask the user for help.",
+                tc.name, tc.arguments, loop_detector.consecutive_count,
+            );
+            messages.push(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": warning,
+            }));
+        }
     }
 
     // Execute post_tool_batch hook — allows plugins to override fallback after seeing tool results
@@ -2015,6 +2135,9 @@ pub async fn send_prompt<S: ResponseSink>(
             sink,
         )?;
 
+        // Loop detector resets per user-message turn (each outer loop iteration).
+        let mut loop_detector = LoopDetector::new();
+
         // === Inner Loop: stream responses and process tool calls ===
         loop {
             sink.handle(ResponseEvent::StartResponse)?;
@@ -2054,6 +2177,7 @@ pub async fn send_prompt<S: ResponseSink>(
                     sink,
                     permission_handler,
                     project_root,
+                    &mut loop_detector,
                 )
                 .await?;
 

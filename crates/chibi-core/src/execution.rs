@@ -664,6 +664,7 @@ mod tests {
             last_activity_at: now_timestamp() - 3600,
             destroy_after_seconds_inactive: 0,
             destroy_at: now_timestamp() - 1800,
+            cwd: None,
         };
         chibi.app.state.contexts.push(entry);
         chibi.save().unwrap();

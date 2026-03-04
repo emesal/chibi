@@ -68,6 +68,11 @@ pub struct ContextEntry {
     /// Auto-destroy at this timestamp (0 = disabled)
     #[serde(default)]
     pub destroy_at: u64,
+    /// Working directory at context creation time. Used to resolve relative file
+    /// paths consistently across sessions. None for contexts created before this
+    /// field was added (falls back to std::env::current_dir()).
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 impl ContextEntry {
@@ -78,6 +83,9 @@ impl ContextEntry {
             last_activity_at: 0,
             destroy_after_seconds_inactive: 0,
             destroy_at: 0,
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned()),
         }
     }
 
@@ -754,5 +762,20 @@ mod tests {
         let content = std::fs::read_to_string(&*state_path).unwrap();
         let parsed: ContextState = serde_json::from_str(&content).unwrap();
         assert!(parsed.contexts[0].name.starts_with("ctx-"));
+    }
+
+    #[test]
+    fn test_context_entry_cwd_persisted() {
+        let entry = ContextEntry::with_created_at("test", 1234567890);
+        // new entries should have Some(cwd)
+        assert!(entry.cwd.is_some());
+    }
+
+    #[test]
+    fn test_context_entry_cwd_migration() {
+        // Old JSON without cwd field should deserialise fine (cwd = None)
+        let json = r#"{"name":"old","created_at":1234567890}"#;
+        let entry: ContextEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.cwd.is_none());
     }
 }
