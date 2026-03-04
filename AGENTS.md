@@ -54,5 +54,4 @@ LLM communication is delegated to ratatoskr; `gateway.rs` bridges chibi's types 
 
 ## Quirks / Gotchas
 
-- `LoopDetector` in `send.rs` resets per user-message turn (not per tool batch). It charges `fuel_empty_response_cost` and injects a synthetic warning tool result on each repeated identical `(tool, args, result)` triple after the first.
 - `ContextEntry.cwd` is `None` for contexts created before this field was added; `config_resolution` falls back to `std::env::current_dir()` in that case.
