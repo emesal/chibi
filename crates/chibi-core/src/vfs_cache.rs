@@ -45,6 +45,43 @@ pub fn should_cache(content: &str, threshold: usize) -> bool {
     content.len() > threshold
 }
 
+/// Extract human-readable preview content from tool output.
+///
+/// When the output is a single JSON line with `stdout` and/or `stderr` fields
+/// (common for `shell_exec`), extracts those fields into a labelled preview.
+/// Falls back to returning the raw content unchanged.
+pub fn extract_preview_content(content: &str) -> String {
+    // Only attempt JSON extraction for single-line content
+    if content.lines().count() != 1 {
+        return content.to_string();
+    }
+
+    let Ok(obj) = serde_json::from_str::<serde_json::Value>(content) else {
+        return content.to_string();
+    };
+
+    let obj = match obj.as_object() {
+        Some(o) => o,
+        None => return content.to_string(),
+    };
+
+    let stdout = obj.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stderr = obj.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+
+    if stdout.is_empty() && stderr.is_empty() {
+        return content.to_string();
+    }
+
+    let mut parts = Vec::new();
+    if !stdout.is_empty() {
+        parts.push(format!("[stdout]\n{stdout}"));
+    }
+    if !stderr.is_empty() {
+        parts.push(format!("[stderr]\n{stderr}"));
+    }
+    parts.join("\n\n")
+}
+
 /// Generate the truncated stub message shown to the LLM instead of the full output.
 pub fn truncated_message(
     vfs_uri: &str,
@@ -56,7 +93,8 @@ pub fn truncated_message(
     let token_estimate = char_count / 4;
     let line_count = content.lines().count();
 
-    let preview: String = content.chars().take(preview_chars).collect();
+    let extracted = extract_preview_content(content);
+    let preview: String = extracted.chars().take(preview_chars).collect();
     let preview = if let Some(pos) = preview.rfind('\n') {
         &preview[..pos]
     } else {
@@ -130,5 +168,39 @@ mod tests {
         let msg = truncated_message(uri, "t", "abc\ndef\nghi", 6);
         assert!(msg.contains("abc"));
         assert!(!msg.contains("def"));
+    }
+
+    #[test]
+    fn test_extract_preview_content_plain_text() {
+        let content = "line1\nline2\nline3";
+        assert_eq!(extract_preview_content(content), content);
+    }
+
+    #[test]
+    fn test_extract_preview_content_json_with_stdout() {
+        let content = r#"{"stdout":"hello world\nline2","stderr":"","exit_code":0}"#;
+        let preview = extract_preview_content(content);
+        assert!(preview.contains("hello world"));
+        assert!(preview.contains("[stdout]"));
+    }
+
+    #[test]
+    fn test_extract_preview_content_json_with_stderr() {
+        let content = r#"{"stdout":"","stderr":"error: something failed\ndetails","exit_code":1}"#;
+        let preview = extract_preview_content(content);
+        assert!(preview.contains("error: something failed"));
+        assert!(preview.contains("[stderr]"));
+    }
+
+    #[test]
+    fn test_extract_preview_content_json_without_stdout_stderr() {
+        let content = r#"{"result":"some data","count":42}"#;
+        assert_eq!(extract_preview_content(content), content);
+    }
+
+    #[test]
+    fn test_extract_preview_content_multiline_not_json() {
+        let content = "line1\nline2";
+        assert_eq!(extract_preview_content(content), content);
     }
 }
