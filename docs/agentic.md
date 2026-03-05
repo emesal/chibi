@@ -410,7 +410,9 @@ The LLM uses built-in file tools with the `vfs:///` URI:
 ```
 [Output cached: vfs:///sys/tool_cache/default/fetch_url_abc123_def456]
 Tool: fetch_url | Size: 50000 chars, ~12500 tokens | Lines: 1200
-Preview:
+Output too large. Full output stored — do NOT re-run this tool.
+Use file_head, file_tail, file_lines, or file_grep with path="vfs:///sys/tool_cache/..." to examine.
+Preview (first 5 lines):
 ---
 <!DOCTYPE html>
 <html>
@@ -418,7 +420,6 @@ Preview:
   <title>Example Page</title>
 ...
 ---
-Use file_head, file_tail, file_lines, file_grep with path="vfs:///sys/tool_cache/..." to examine.
 ```
 
 The LLM can then:
