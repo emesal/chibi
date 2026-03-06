@@ -29,7 +29,7 @@ The active LLM context window. Derived from transcript starting at the last anch
 
 Structure:
 1. **Entry 0**: Anchor entry (`context_created`, `compaction`, or `archival`)
-2. **Remaining**: Conversation entries (messages, tool calls, tool results, flow control)
+2. **Remaining**: Conversation entries (messages, tool calls, tool results, control transfers)
 
 > **Note:** The system prompt is **not** stored in `context.jsonl`. It lives in `system_prompt.md` (source of truth) and is tracked via `context_meta.json`.
 
@@ -59,7 +59,9 @@ All JSONL entries share this structure:
 | `content` | Message content, tool arguments, or tool results |
 | `entry_type` | Type of entry (see below) |
 | `metadata` | Optional object with additional data (summary, etc.) |
-| `tool_call_id` | Optional; present on `tool_call`, `tool_result`, `flow_control_call`, and `flow_control_result` entries to correlate pairs |
+| `tool_call_id` | Optional; present on `tool_call` and `tool_result` entries to correlate pairs |
+| `role` | Optional; API role for `entries_to_messages()`: `"user"`, `"agent"`, or `"system"`. Absent on old entries (backwards-compat fallback applies) and non-message types. |
+| `flow_control` | Optional boolean; semantic marker for flow control events (user prompts, `call_user` messages, `control_transfer`). Omitted when `false`. |
 
 ### Entry Types
 
@@ -73,12 +75,24 @@ All JSONL entries share this structure:
 
 #### Flow Control Types
 
-Flow control entries are written for special tools (e.g. `call_user`) that manage turn boundaries. They appear in both transcript and context.jsonl.
+Flow control entries record turn boundaries and handoffs. They appear in both transcript and context.jsonl.
 
-| Type | Description | `from` | `to` |
-|------|-------------|--------|------|
-| `flow_control_call` | LLM invoking a flow-control tool | context | tool name |
-| `flow_control_result` | Flow-control tool returning | tool name | context |
+| Type | Description | `from` | `to` | `flow_control` |
+|------|-------------|--------|------|----------------|
+| `control_transfer` | Control passes between parties (no content) | sender | receiver | `true` |
+
+`control_transfer` entries carry no content and are skipped by `entries_to_messages()`. They are purely informational — recording who handed off to whom.
+
+**Directions:**
+
+| Event | `from` | `to` |
+|-------|--------|------|
+| User sends a prompt | username | context |
+| Agent invokes `call_user` | context | username |
+
+`call_user` also produces a regular `message` entry (with `role: "agent"`, `flow_control: true`) for the message content. That entry is included in API messages as `role: "assistant"`.
+
+> **Note:** `call_agent` is not exposed to the LLM as a callable tool. Its infrastructure (`CALL_AGENT_TOOL_NAME`, `HandoffTarget::Agent`) is retained for the fallback tool mechanism and future inter-agent control transfer.
 
 #### Anchor Types (context.jsonl[0])
 
@@ -116,9 +130,10 @@ Flow control entries are written for special tools (e.g. `call_user`) that manag
   "id": "550e8400-e29b-41d4-a716-446655440001",
   "timestamp": 1705123460,
   "from": "default",
-  "to": "user",
+  "to": "alice",
   "content": "Rust is a systems programming language...",
-  "entry_type": "message"
+  "entry_type": "message",
+  "role": "agent"
 }
 ```
 
@@ -150,33 +165,31 @@ Flow control entries are written for special tools (e.g. `call_user`) that manag
 }
 ```
 
-### Flow Control Call
+### User Prompt (with control transfer)
 
 ```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440008",
-  "timestamp": 1705123470,
-  "from": "default",
-  "to": "call_user",
-  "content": "{\"message\": \"Task complete.\"}",
-  "entry_type": "flow_control_call",
-  "tool_call_id": "fc_def456"
-}
+{"id": "...", "timestamp": 1705123456, "from": "alice", "to": "default",
+ "content": "[20260306-1234+0000] What is Rust?", "entry_type": "message",
+ "role": "user", "flow_control": true}
+
+{"id": "...", "timestamp": 1705123456, "from": "alice", "to": "default",
+ "content": "", "entry_type": "control_transfer", "flow_control": true}
 ```
 
-### Flow Control Result
+### Call User (agent → user handoff)
+
+When the LLM invokes `call_user`, two entries are written:
 
 ```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440009",
-  "timestamp": 1705123471,
-  "from": "call_user",
-  "to": "default",
-  "content": "Returning to user",
-  "entry_type": "flow_control_result",
-  "tool_call_id": "fc_def456"
-}
+{"id": "...", "timestamp": 1705123470, "from": "default", "to": "alice",
+ "content": "Task complete.", "entry_type": "message",
+ "role": "agent", "flow_control": true}
+
+{"id": "...", "timestamp": 1705123470, "from": "default", "to": "alice",
+ "content": "", "entry_type": "control_transfer", "flow_control": true}
 ```
+
+The `message` entry is included in API history as `role: "assistant"`. The `control_transfer` entry is skipped.
 
 ### Context Created Anchor
 
