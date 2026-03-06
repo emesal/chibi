@@ -78,6 +78,8 @@ impl AppState {
                 entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
                 metadata: None,
                 tool_call_id: None,
+                role: None,
+                flow_control: false,
             };
             self.append_to_transcript(context_name, &entry)?;
 
@@ -140,6 +142,8 @@ impl AppState {
                     entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
                     metadata: None,
                     tool_call_id: None,
+                    role: None,
+                    flow_control: false,
                 };
                 self.append_to_transcript(context_name, &entry)?;
             }

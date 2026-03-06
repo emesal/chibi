@@ -1006,6 +1006,8 @@ mod tests {
             entry_type: "message".to_string(),
             metadata: None,
             tool_call_id: None,
+            role: None,
+            flow_control: false,
         }
     }
 
@@ -1019,6 +1021,8 @@ mod tests {
             entry_type: "message".to_string(),
             metadata: None,
             tool_call_id: None,
+            role: None,
+            flow_control: false,
         }
     }
 

@@ -1920,6 +1920,98 @@ async fn test_cleanup_mixed_fresh_and_expired() {
     );
 }
 
+// === TranscriptEntry schema: role and flow_control fields ===
+
+#[test]
+fn test_transcript_entry_role_default_none() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    assert!(entry.role.is_none());
+}
+
+#[test]
+fn test_transcript_entry_role_set() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("fey")
+        .content("hello")
+        .role("agent")
+        .build();
+    assert_eq!(entry.role.as_deref(), Some("agent"));
+}
+
+#[test]
+fn test_transcript_entry_flow_control_default_false() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    assert!(!entry.flow_control);
+}
+
+#[test]
+fn test_transcript_entry_flow_control_true() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("fey")
+        .content("hello")
+        .flow_control(true)
+        .build();
+    assert!(entry.flow_control);
+}
+
+#[test]
+fn test_transcript_entry_serde_role_omitted_when_none() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(!json.contains("\"role\""), "role:None should be omitted from JSON");
+}
+
+#[test]
+fn test_transcript_entry_serde_flow_control_omitted_when_false() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(!json.contains("flow_control"), "flow_control:false should be omitted from JSON");
+}
+
+#[test]
+fn test_transcript_entry_serde_roundtrip_role_and_flow_control() {
+    let entry = TranscriptEntry::builder()
+        .from("norse")
+        .to("fey")
+        .content("done")
+        .role("agent")
+        .flow_control(true)
+        .build();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains("\"role\":\"agent\""));
+    assert!(json.contains("\"flow_control\":true"));
+    let deser: TranscriptEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(deser.role.as_deref(), Some("agent"));
+    assert!(deser.flow_control);
+}
+
+#[test]
+fn test_transcript_entry_deserialize_missing_new_fields() {
+    // Old entries without role/flow_control should deserialize cleanly
+    let json = r#"{"id":"test","timestamp":0,"from":"a","to":"b","content":"c","entry_type":"message"}"#;
+    let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+    assert!(entry.role.is_none());
+    assert!(!entry.flow_control);
+}
+
 // === Flow-control entry tests ===
 
 #[test]
@@ -1989,6 +2081,8 @@ fn test_is_context_entry_filters_system_prompt_changed() {
         entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
         metadata: None,
         tool_call_id: None,
+        role: None,
+        flow_control: false,
     };
     assert!(!is_context_entry(&entry));
 }

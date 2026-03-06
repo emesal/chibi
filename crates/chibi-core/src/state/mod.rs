@@ -576,6 +576,8 @@ impl AppState {
                     entry_type: ENTRY_TYPE_CONTEXT_CREATED.to_string(),
                     metadata: None,
                     tool_call_id: None,
+                    role: None,
+                    flow_control: false,
                 };
                 // Include all transcript entries that belong in context
                 let entries: Vec<_> = transcript_entries
