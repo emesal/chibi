@@ -50,18 +50,14 @@ pub static FLOW_TOOL_DEFS: &[BuiltinToolDef] = &[
         required: &["to", "content"],
         summary_params: &["to"],
     },
-    BuiltinToolDef {
-        name: CALL_AGENT_TOOL_NAME,
-        description: "Continue in a new turn before returning to the user. Use when you have more steps to complete.",
-        properties: &[ToolPropertyDef {
-            name: "prompt",
-            prop_type: "string",
-            description: "Focus for the next turn",
-            default: None,
-        }],
-        required: &["prompt"],
-        summary_params: &["prompt"],
-    },
+    // NOTE: call_agent is intentionally excluded from the tool registry.
+    // It is not exposed to the LLM as a callable tool.
+    // The CALL_AGENT_TOOL_NAME constant and HandoffTarget::Agent infrastructure
+    // are retained for:
+    //   1. The fallback tool mechanism (config.fallback_tool can be "call_agent")
+    //   2. Hook overrides (hooks can set fallback to call_agent)
+    //   3. Future inter-agent control transfer (call_agent will be repurposed
+    //      to transfer control to another agent context)
     BuiltinToolDef {
         name: CALL_USER_TOOL_NAME,
         description: "End your turn immediately and return control to the user.",
@@ -436,6 +432,8 @@ pub fn is_flow_tool(name: &str) -> bool {
 /// Get metadata for flow tools.
 pub fn flow_tool_metadata(name: &str) -> ToolMetadata {
     match name {
+        // call_agent: disabled as LLM tool but metadata retained for fallback mechanism
+        // and hook overrides. See FLOW_TOOL_DEFS comment for full rationale.
         CALL_AGENT_TOOL_NAME => ToolMetadata {
             parallel: false,
             flow_control: true,
@@ -539,10 +537,14 @@ mod tests {
 
     #[test]
     fn test_flow_registry_contains_all_tools() {
-        assert_eq!(FLOW_TOOL_DEFS.len(), 6);
+        // call_agent excluded (disabled as LLM tool — see FLOW_TOOL_DEFS comment)
+        assert_eq!(FLOW_TOOL_DEFS.len(), 5);
         let names: Vec<_> = FLOW_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&SEND_MESSAGE_TOOL_NAME));
-        assert!(names.contains(&CALL_AGENT_TOOL_NAME));
+        assert!(
+            !names.contains(&CALL_AGENT_TOOL_NAME),
+            "call_agent must not be in registry"
+        );
         assert!(names.contains(&CALL_USER_TOOL_NAME));
         assert!(names.contains(&MODEL_INFO_TOOL_NAME));
         assert!(names.contains(&SPAWN_AGENT_TOOL_NAME));
@@ -562,7 +564,11 @@ mod tests {
     #[test]
     fn test_is_flow_tool() {
         assert!(is_flow_tool(SEND_MESSAGE_TOOL_NAME));
-        assert!(is_flow_tool(CALL_AGENT_TOOL_NAME));
+        // call_agent: not in FLOW_TOOL_DEFS (disabled as LLM tool)
+        assert!(
+            !is_flow_tool(CALL_AGENT_TOOL_NAME),
+            "call_agent must not be in flow tool registry"
+        );
         assert!(is_flow_tool(CALL_USER_TOOL_NAME));
         assert!(is_flow_tool(MODEL_INFO_TOOL_NAME));
         assert!(is_flow_tool(SPAWN_AGENT_TOOL_NAME));
@@ -674,15 +680,21 @@ mod tests {
     }
 
     #[test]
-    fn test_call_agent_tool_api_format() {
-        let tool = get_tool_api(CALL_AGENT_TOOL_NAME);
-        assert_eq!(tool["type"], "function");
+    fn test_call_agent_not_in_registry_but_metadata_works() {
+        // call_agent is disabled as an LLM tool — must not appear in FLOW_TOOL_DEFS
         assert!(
-            tool["function"]["parameters"]["required"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("prompt"))
+            FLOW_TOOL_DEFS
+                .iter()
+                .all(|d| d.name != CALL_AGENT_TOOL_NAME),
+            "call_agent must not be in tool registry"
         );
+        // But its metadata must still work for the fallback mechanism
+        let meta = flow_tool_metadata(CALL_AGENT_TOOL_NAME);
+        assert!(
+            meta.flow_control,
+            "call_agent metadata must have flow_control=true"
+        );
+        assert!(!meta.ends_turn, "call_agent must not end the turn");
     }
 
     #[test]

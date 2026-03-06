@@ -824,10 +824,10 @@ fn test_create_user_message_entry() {
 #[test]
 fn test_create_assistant_message_entry() {
     let (_app, _temp) = create_test_app();
-    let entry = create_assistant_message_entry("default", "Hi there!");
+    let entry = create_assistant_message_entry("default", "Hi there!", "fey");
 
     assert_eq!(entry.from, "default");
-    assert_eq!(entry.to, "user");
+    assert_eq!(entry.to, "fey");
     assert_eq!(entry.content, "Hi there!");
     assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
 }
@@ -1361,7 +1361,7 @@ fn test_entries_to_messages_includes_tool_calls() {
         create_user_message_entry("ctx", "do something", "testuser"),
         create_tool_call_entry("ctx", "web_search", r#"{"query":"rust"}"#, "tc_1"),
         create_tool_result_entry("ctx", "web_search", "search results here", "tc_1"),
-        create_assistant_message_entry("ctx", "here are the results"),
+        create_assistant_message_entry("ctx", "here are the results", "testuser"),
     ];
 
     let messages = app.entries_to_messages(&entries);
@@ -1427,7 +1427,7 @@ fn test_entries_to_messages_sequential_tool_calls_are_separate_turns() {
         create_tool_result_entry("ctx", "tool_b", "result_b", "tc_b"),
         create_tool_call_entry("ctx", "tool_c", r#"{"c":3}"#, "tc_c"),
         create_tool_result_entry("ctx", "tool_c", "result_c", "tc_c"),
-        create_assistant_message_entry("ctx", "all done"),
+        create_assistant_message_entry("ctx", "all done", "testuser"),
     ];
 
     let messages = app.entries_to_messages(&entries);
@@ -1530,6 +1530,91 @@ fn test_entries_to_messages_backward_compat_no_tool_call_id() {
     assert!(synthetic_id.starts_with("synth_"));
     // Tool result should use the same synthetic ID
     assert_eq!(messages[1]["tool_call_id"].as_str().unwrap(), synthetic_id);
+}
+
+// === entries_to_messages with role field ===
+
+#[test]
+fn test_entries_to_messages_uses_role_field() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "hello", "fey"),
+        create_assistant_message_entry("ctx", "hi there", "fey"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_entries_to_messages_backwards_compat_no_role() {
+    let (app, _temp) = create_test_app();
+
+    // Old-style entries without role field
+    let old_user = TranscriptEntry::builder()
+        .from("fey")
+        .to("ctx")
+        .content("hello")
+        .entry_type(crate::context::ENTRY_TYPE_MESSAGE)
+        .build();
+    let old_assistant = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hi")
+        .entry_type(crate::context::ENTRY_TYPE_MESSAGE)
+        .build();
+
+    let messages = app.entries_to_messages(&[old_user, old_assistant]);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_entries_to_messages_skips_control_transfer() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "hello", "fey"),
+        create_control_transfer_entry("fey", "ctx"),
+        create_assistant_message_entry("ctx", "hi", "fey"),
+        create_control_transfer_entry("ctx", "fey"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+    // Only the two messages, control_transfer entries skipped
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_entries_to_messages_includes_flow_control_message() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "hello", "fey"),
+        create_tool_call_entry("ctx", "web_search", r#"{"q":"test"}"#, "tc_1"),
+        create_tool_result_entry("ctx", "web_search", "results", "tc_1"),
+        // call_user message — should be included in API messages
+        create_flow_control_message_entry("ctx", "fey", "here are the results", "agent"),
+        create_control_transfer_entry("ctx", "fey"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+    // user + assistant(tool_calls) + tool_result + assistant(call_user message) = 4
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(messages[2]["role"].as_str().unwrap(), "tool");
+    assert_eq!(messages[3]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(
+        messages[3]["content"].as_str().unwrap(),
+        "here are the results"
+    );
 }
 
 #[test]
@@ -1920,60 +2005,171 @@ async fn test_cleanup_mixed_fresh_and_expired() {
     );
 }
 
-// === Flow-control entry tests ===
+// === TranscriptEntry schema: role and flow_control fields ===
 
 #[test]
-fn test_create_flow_control_call_entry() {
-    let entry =
-        create_flow_control_call_entry("default", "call_user", r#"{"message": "hi"}"#, "fc_1");
-
-    assert_eq!(entry.from, "default");
-    assert_eq!(entry.to, "call_user");
-    assert_eq!(entry.content, r#"{"message": "hi"}"#);
-    assert_eq!(
-        entry.entry_type,
-        crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL
-    );
-    assert_eq!(entry.tool_call_id, Some("fc_1".to_string()));
+fn test_transcript_entry_role_default_none() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    assert!(entry.role.is_none());
 }
 
 #[test]
-fn test_create_flow_control_result_entry() {
-    let entry =
-        create_flow_control_result_entry("default", "call_user", "Returning to user", "fc_1");
-
-    assert_eq!(entry.from, "call_user");
-    assert_eq!(entry.to, "default");
-    assert_eq!(entry.content, "Returning to user");
-    assert_eq!(
-        entry.entry_type,
-        crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT
-    );
-    assert_eq!(entry.tool_call_id, Some("fc_1".to_string()));
+fn test_transcript_entry_role_set() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("fey")
+        .content("hello")
+        .role("agent")
+        .build();
+    assert_eq!(entry.role.as_deref(), Some("agent"));
 }
 
 #[test]
-fn test_is_context_entry_includes_flow_control() {
-    let fc_call = create_flow_control_call_entry("ctx", "call_user", "{}", "id1");
-    let fc_result = create_flow_control_result_entry("ctx", "call_user", "ack", "id1");
-    let normal_call = create_tool_call_entry("ctx", "web_search", "{}", "id2");
-    let normal_result = create_tool_result_entry("ctx", "web_search", "results", "id2");
+fn test_transcript_entry_flow_control_default_false() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    assert!(!entry.flow_control);
+}
+
+#[test]
+fn test_transcript_entry_flow_control_true() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("fey")
+        .content("hello")
+        .flow_control(true)
+        .build();
+    assert!(entry.flow_control);
+}
+
+#[test]
+fn test_transcript_entry_serde_role_omitted_when_none() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(
+        !json.contains("\"role\""),
+        "role:None should be omitted from JSON"
+    );
+}
+
+#[test]
+fn test_transcript_entry_serde_flow_control_omitted_when_false() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(
+        !json.contains("flow_control"),
+        "flow_control:false should be omitted from JSON"
+    );
+}
+
+#[test]
+fn test_transcript_entry_serde_roundtrip_role_and_flow_control() {
+    let entry = TranscriptEntry::builder()
+        .from("norse")
+        .to("fey")
+        .content("done")
+        .role("agent")
+        .flow_control(true)
+        .build();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains("\"role\":\"agent\""));
+    assert!(json.contains("\"flow_control\":true"));
+    let deser: TranscriptEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(deser.role.as_deref(), Some("agent"));
+    assert!(deser.flow_control);
+}
+
+#[test]
+fn test_transcript_entry_deserialize_missing_new_fields() {
+    // Old entries without role/flow_control should deserialize cleanly
+    let json =
+        r#"{"id":"test","timestamp":0,"from":"a","to":"b","content":"c","entry_type":"message"}"#;
+    let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+    assert!(entry.role.is_none());
+    assert!(!entry.flow_control);
+}
+
+// === Updated entry helpers ===
+
+#[test]
+fn test_create_user_message_entry_has_role_and_flow_control() {
+    let entry = create_user_message_entry("norse", "hello", "fey");
+    assert_eq!(entry.role.as_deref(), Some("user"));
+    assert!(entry.flow_control);
+    assert_eq!(entry.from, "fey");
+    assert_eq!(entry.to, "norse");
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
+}
+
+#[test]
+fn test_create_assistant_message_entry_has_role_and_username() {
+    let entry = create_assistant_message_entry("norse", "hello", "fey");
+    assert_eq!(entry.role.as_deref(), Some("agent"));
+    assert_eq!(entry.from, "norse");
+    assert_eq!(entry.to, "fey");
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
+    assert!(!entry.flow_control);
+}
+
+#[test]
+fn test_create_control_transfer_entry() {
+    let entry = create_control_transfer_entry("fey", "norse");
+    assert_eq!(entry.from, "fey");
+    assert_eq!(entry.to, "norse");
+    assert_eq!(
+        entry.entry_type,
+        crate::context::ENTRY_TYPE_CONTROL_TRANSFER
+    );
+    assert!(entry.flow_control);
+    assert!(entry.content.is_empty());
+    assert!(entry.role.is_none());
+}
+
+#[test]
+fn test_create_flow_control_message_entry() {
+    let entry = create_flow_control_message_entry("norse", "fey", "done", "agent");
+    assert_eq!(entry.from, "norse");
+    assert_eq!(entry.to, "fey");
+    assert_eq!(entry.content, "done");
+    assert_eq!(entry.role.as_deref(), Some("agent"));
+    assert!(entry.flow_control);
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
+}
+
+// === Flow-control entry tests (new unified format) ===
+
+#[test]
+fn test_is_context_entry_includes_control_transfer_and_flow_messages() {
+    let ct = create_control_transfer_entry("fey", "norse");
+    let fc_msg = create_flow_control_message_entry("norse", "fey", "done", "agent");
+    let normal = create_assistant_message_entry("norse", "hello", "fey");
 
     assert!(
-        is_context_entry(&fc_call),
-        "flow_control_call must be a context entry"
+        is_context_entry(&ct),
+        "control_transfer must be a context entry"
     );
     assert!(
-        is_context_entry(&fc_result),
-        "flow_control_result must be a context entry"
+        is_context_entry(&fc_msg),
+        "flow control messages must be context entries"
     );
     assert!(
-        is_context_entry(&normal_call),
-        "tool_call must be a context entry"
-    );
-    assert!(
-        is_context_entry(&normal_result),
-        "tool_result must be a context entry"
+        is_context_entry(&normal),
+        "regular messages must be context entries"
     );
 }
 
@@ -1989,25 +2185,28 @@ fn test_is_context_entry_filters_system_prompt_changed() {
         entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
         metadata: None,
         tool_call_id: None,
+        role: None,
+        flow_control: false,
     };
     assert!(!is_context_entry(&entry));
 }
 
 #[test]
-fn test_rebuild_context_includes_flow_control_entries() {
+fn test_rebuild_context_includes_unified_flow_control_entries() {
     let (app, _temp) = create_test_app();
     let ctx = "test-rebuild-fc";
     app.ensure_context_dir(ctx).unwrap();
 
-    // Build a transcript with: user msg, call_user exchange, assistant msg
+    // Build a transcript with: anchor, user prompt + control_transfer, call_user
+    // message + control_transfer, assistant response
     let anchor = create_context_created_anchor(ctx);
     let user_msg = create_user_message_entry(ctx, "hello", "testuser");
-    let fc_call =
-        create_flow_control_call_entry(ctx, "call_user", r#"{"message": "done"}"#, "fc_1");
-    let fc_result = create_flow_control_result_entry(ctx, "call_user", "Returning to user", "fc_1");
-    let assistant_msg = create_assistant_message_entry(ctx, "done");
+    let ct_in = create_control_transfer_entry("testuser", ctx);
+    let fc_msg = create_flow_control_message_entry(ctx, "testuser", "done", "agent");
+    let ct_out = create_control_transfer_entry(ctx, "testuser");
+    let assistant_msg = create_assistant_message_entry(ctx, "done", "testuser");
 
-    for entry in &[&anchor, &user_msg, &fc_call, &fc_result, &assistant_msg] {
+    for entry in &[&anchor, &user_msg, &ct_in, &fc_msg, &ct_out, &assistant_msg] {
         app.append_to_transcript(ctx, entry).unwrap();
     }
 
@@ -2015,24 +2214,24 @@ fn test_rebuild_context_includes_flow_control_entries() {
 
     let context_entries = app.read_context_entries(ctx).unwrap();
 
-    // context.jsonl should have: anchor + user_msg + fc_call + fc_result + assistant_msg
+    // context.jsonl should have all 6 entries (control_transfer entries are context entries)
     assert_eq!(
         context_entries.len(),
-        5,
-        "expected anchor + user_msg + fc_call + fc_result + assistant_msg, got {}",
+        6,
+        "expected anchor + user_msg + ct_in + fc_msg + ct_out + assistant_msg, got {}",
         context_entries.len()
     );
     assert!(
         context_entries
             .iter()
-            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL),
-        "flow_control_call must appear in context.jsonl"
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_CONTROL_TRANSFER),
+        "control_transfer must appear in context.jsonl"
     );
     assert!(
         context_entries
             .iter()
-            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT),
-        "flow_control_result must appear in context.jsonl"
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_MESSAGE && e.flow_control),
+        "flow control message must appear in context.jsonl"
     );
 }
 

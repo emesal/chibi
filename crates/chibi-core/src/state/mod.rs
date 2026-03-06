@@ -14,8 +14,8 @@ mod prompts;
 
 pub use entries::{
     create_archival_anchor, create_assistant_message_entry, create_compaction_anchor,
-    create_context_created_anchor, create_flow_control_call_entry,
-    create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
+    create_context_created_anchor, create_control_transfer_entry,
+    create_flow_control_message_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
 };
 pub use flocks::{FlockContext, format_flock_sections, load_flock_contexts};
@@ -576,6 +576,8 @@ impl AppState {
                     entry_type: ENTRY_TYPE_CONTEXT_CREATED.to_string(),
                     metadata: None,
                     tool_call_id: None,
+                    role: None,
+                    flow_control: false,
                 };
                 // Include all transcript entries that belong in context
                 let entries: Vec<_> = transcript_entries
@@ -768,10 +770,20 @@ impl AppState {
 
             match entry.entry_type.as_str() {
                 crate::context::ENTRY_TYPE_MESSAGE => {
-                    let role = if entry.to == "user" {
-                        "assistant"
-                    } else {
-                        "user"
+                    // Use explicit role field when present; fall back to old heuristic
+                    // for backwards compat with entries created before the role field existed.
+                    let role = match entry.role.as_deref() {
+                        Some("user") => "user",
+                        Some("agent") => "assistant",
+                        Some("system") => "system",
+                        _ => {
+                            // Backwards compat: old entries use to="user" for assistant messages
+                            if entry.to == "user" {
+                                "assistant"
+                            } else {
+                                "user"
+                            }
+                        }
                     };
                     messages.push(serde_json::json!({
                         "_id": entry.id,

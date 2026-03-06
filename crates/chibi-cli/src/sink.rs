@@ -224,6 +224,8 @@ mod tests {
             entry_type: "message".to_string(),
             metadata: None,
             tool_call_id: None,
+            role: None,
+            flow_control: false,
         };
 
         // TranscriptEntry is a no-op in CLI sink (content displayed via streaming events)
