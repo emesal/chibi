@@ -44,6 +44,7 @@ pub mod model_info;
 pub mod output;
 pub mod partition;
 pub mod safe_io;
+pub mod site;
 pub mod state;
 pub mod tools;
 pub mod vcs;
@@ -114,6 +115,7 @@ pub(crate) mod test_support {
             url_policy: None,
             subagent_cost_tier: "free".to_string(),
             models: Default::default(),
+            site: None,
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         let root = temp_dir.path().to_path_buf();

@@ -38,6 +38,7 @@ fn create_test_app() -> (AppState, TempDir) {
         url_policy: None,
         subagent_cost_tier: "free".to_string(),
         models: Default::default(),
+        site: None,
     };
     let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
     (app, temp_dir)
@@ -59,19 +60,8 @@ fn test_context_file() {
     assert!(file.ends_with("contexts/mycontext/context.jsonl"));
 }
 
-#[test]
-fn test_todos_file() {
-    let (app, _temp) = create_test_app();
-    let file = app.todos_file("mycontext");
-    assert!(file.ends_with("contexts/mycontext/todos.md"));
-}
-
-#[test]
-fn test_goals_file() {
-    let (app, _temp) = create_test_app();
-    let file = app.goals_file("mycontext");
-    assert!(file.ends_with("contexts/mycontext/goals.md"));
-}
+// todos_file and goals_file removed in task 7: todos are VFS-backed,
+// goals are flock-scoped.
 
 #[test]
 fn test_inbox_file() {
@@ -312,15 +302,8 @@ fn test_todos_empty_returns_empty_string() {
     assert_eq!(loaded, "");
 }
 
-#[test]
-fn test_goals_save_and_load() {
-    let (app, _temp) = create_test_app();
-
-    app.save_goals("default", "Build something awesome")
-        .unwrap();
-    let loaded = app.load_goals("default").unwrap();
-    assert_eq!(loaded, "Build something awesome");
-}
+// Goals are now flock-scoped (removed save_goals/load_goals in task 7).
+// Flock goal tests are in state/flocks.rs (task 9).
 
 // === Local config tests ===
 
@@ -565,6 +548,7 @@ fn test_resolve_config_model_level_api_params() {
         url_policy: None,
         subagent_cost_tier: "free".to_string(),
         models: Default::default(),
+        site: None,
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -627,6 +611,7 @@ fn test_resolve_config_hierarchy_context_over_model() {
         url_policy: None,
         subagent_cost_tier: "free".to_string(),
         models: Default::default(),
+        site: None,
     };
 
     let mut app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
@@ -839,10 +824,10 @@ fn test_create_user_message_entry() {
 #[test]
 fn test_create_assistant_message_entry() {
     let (_app, _temp) = create_test_app();
-    let entry = create_assistant_message_entry("default", "Hi there!");
+    let entry = create_assistant_message_entry("default", "Hi there!", "fey");
 
     assert_eq!(entry.from, "default");
-    assert_eq!(entry.to, "user");
+    assert_eq!(entry.to, "fey");
     assert_eq!(entry.content, "Hi there!");
     assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
 }
@@ -1376,7 +1361,7 @@ fn test_entries_to_messages_includes_tool_calls() {
         create_user_message_entry("ctx", "do something", "testuser"),
         create_tool_call_entry("ctx", "web_search", r#"{"query":"rust"}"#, "tc_1"),
         create_tool_result_entry("ctx", "web_search", "search results here", "tc_1"),
-        create_assistant_message_entry("ctx", "here are the results"),
+        create_assistant_message_entry("ctx", "here are the results", "testuser"),
     ];
 
     let messages = app.entries_to_messages(&entries);
@@ -1442,7 +1427,7 @@ fn test_entries_to_messages_sequential_tool_calls_are_separate_turns() {
         create_tool_result_entry("ctx", "tool_b", "result_b", "tc_b"),
         create_tool_call_entry("ctx", "tool_c", r#"{"c":3}"#, "tc_c"),
         create_tool_result_entry("ctx", "tool_c", "result_c", "tc_c"),
-        create_assistant_message_entry("ctx", "all done"),
+        create_assistant_message_entry("ctx", "all done", "testuser"),
     ];
 
     let messages = app.entries_to_messages(&entries);
@@ -1545,6 +1530,91 @@ fn test_entries_to_messages_backward_compat_no_tool_call_id() {
     assert!(synthetic_id.starts_with("synth_"));
     // Tool result should use the same synthetic ID
     assert_eq!(messages[1]["tool_call_id"].as_str().unwrap(), synthetic_id);
+}
+
+// === entries_to_messages with role field ===
+
+#[test]
+fn test_entries_to_messages_uses_role_field() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "hello", "fey"),
+        create_assistant_message_entry("ctx", "hi there", "fey"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_entries_to_messages_backwards_compat_no_role() {
+    let (app, _temp) = create_test_app();
+
+    // Old-style entries without role field
+    let old_user = TranscriptEntry::builder()
+        .from("fey")
+        .to("ctx")
+        .content("hello")
+        .entry_type(crate::context::ENTRY_TYPE_MESSAGE)
+        .build();
+    let old_assistant = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hi")
+        .entry_type(crate::context::ENTRY_TYPE_MESSAGE)
+        .build();
+
+    let messages = app.entries_to_messages(&[old_user, old_assistant]);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_entries_to_messages_skips_control_transfer() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "hello", "fey"),
+        create_control_transfer_entry("fey", "ctx"),
+        create_assistant_message_entry("ctx", "hi", "fey"),
+        create_control_transfer_entry("ctx", "fey"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+    // Only the two messages, control_transfer entries skipped
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_entries_to_messages_includes_flow_control_message() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "hello", "fey"),
+        create_tool_call_entry("ctx", "web_search", r#"{"q":"test"}"#, "tc_1"),
+        create_tool_result_entry("ctx", "web_search", "results", "tc_1"),
+        // call_user message — should be included in API messages
+        create_flow_control_message_entry("ctx", "fey", "here are the results", "agent"),
+        create_control_transfer_entry("ctx", "fey"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+    // user + assistant(tool_calls) + tool_result + assistant(call_user message) = 4
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(messages[2]["role"].as_str().unwrap(), "tool");
+    assert_eq!(messages[3]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(
+        messages[3]["content"].as_str().unwrap(),
+        "here are the results"
+    );
 }
 
 #[test]
@@ -1673,7 +1743,7 @@ async fn test_clear_tool_cache_via_vfs() {
 
     let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{}/entry1", ctx)).unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"data")
+        .write(crate::vfs::VfsCaller::System, &path, b"data")
         .await
         .unwrap();
 
@@ -1681,7 +1751,7 @@ async fn test_clear_tool_cache_via_vfs() {
 
     let exists = app
         .vfs
-        .exists(crate::vfs::SYSTEM_CALLER, &path)
+        .exists(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap();
     assert!(!exists, "cache entry should be deleted after clear");
@@ -1694,7 +1764,7 @@ async fn test_cleanup_old_tool_caches_removes_expired() {
 
     let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{}/entry1", ctx)).unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"old data")
+        .write(crate::vfs::VfsCaller::System, &path, b"old data")
         .await
         .unwrap();
 
@@ -1741,13 +1811,13 @@ async fn test_cache_write_then_read_hit() {
     let path = crate::vfs::VfsPath::new("/sys/tool_cache/ctx/entry1").unwrap();
 
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"cached output")
+        .write(crate::vfs::VfsCaller::System, &path, b"cached output")
         .await
         .unwrap();
 
     let data = app
         .vfs
-        .read(crate::vfs::SYSTEM_CALLER, &path)
+        .read(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap();
     assert_eq!(data, b"cached output");
@@ -1760,7 +1830,7 @@ async fn test_cache_read_miss() {
 
     let err = app
         .vfs
-        .read(crate::vfs::SYSTEM_CALLER, &path)
+        .read(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
@@ -1772,12 +1842,12 @@ async fn test_cache_per_context_isolation() {
 
     let path_a = crate::vfs::VfsPath::new("/sys/tool_cache/ctx-a/entry1").unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path_a, b"data-a")
+        .write(crate::vfs::VfsCaller::System, &path_a, b"data-a")
         .await
         .unwrap();
 
     let dir_b = crate::vfs::VfsPath::new("/sys/tool_cache/ctx-b").unwrap();
-    let result = app.vfs.list(crate::vfs::SYSTEM_CALLER, &dir_b).await;
+    let result = app.vfs.list(crate::vfs::VfsCaller::System, &dir_b).await;
     match result {
         Ok(entries) => assert!(entries.is_empty(), "ctx-b should have no entries"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // also fine
@@ -1793,7 +1863,7 @@ async fn test_clear_tool_cache_removes_all_entries() {
     for name in ["e1", "e2", "e3"] {
         let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
         app.vfs
-            .write(crate::vfs::SYSTEM_CALLER, &path, b"data")
+            .write(crate::vfs::VfsCaller::System, &path, b"data")
             .await
             .unwrap();
     }
@@ -1804,7 +1874,7 @@ async fn test_clear_tool_cache_removes_all_entries() {
         let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/{name}")).unwrap();
         let exists = app
             .vfs
-            .exists(crate::vfs::SYSTEM_CALLER, &path)
+            .exists(crate::vfs::VfsCaller::System, &path)
             .await
             .unwrap();
         assert!(!exists, "entry {name} should be gone after clear");
@@ -1818,7 +1888,7 @@ async fn test_cleanup_tool_cache_fresh_entries_survive() {
 
     let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"fresh")
+        .write(crate::vfs::VfsCaller::System, &path, b"fresh")
         .await
         .unwrap();
 
@@ -1827,7 +1897,7 @@ async fn test_cleanup_tool_cache_fresh_entries_survive() {
 
     let exists = app
         .vfs
-        .exists(crate::vfs::SYSTEM_CALLER, &path)
+        .exists(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap();
     assert!(exists, "fresh entry should still exist");
@@ -1840,7 +1910,7 @@ async fn test_cleanup_all_tool_caches_fresh_entries_survive() {
     for ctx in ["ctx-x", "ctx-y"] {
         let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
         app.vfs
-            .write(crate::vfs::SYSTEM_CALLER, &path, b"fresh")
+            .write(crate::vfs::VfsCaller::System, &path, b"fresh")
             .await
             .unwrap();
     }
@@ -1871,7 +1941,7 @@ async fn test_cleanup_removes_expired_entry() {
 
     let path = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/entry1")).unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &path, b"old data")
+        .write(crate::vfs::VfsCaller::System, &path, b"old data")
         .await
         .unwrap();
 
@@ -1887,7 +1957,7 @@ async fn test_cleanup_removes_expired_entry() {
 
     let exists = app
         .vfs
-        .exists(crate::vfs::SYSTEM_CALLER, &path)
+        .exists(crate::vfs::VfsCaller::System, &path)
         .await
         .unwrap();
     assert!(!exists, "expired entry should be gone from VFS");
@@ -1902,11 +1972,11 @@ async fn test_cleanup_mixed_fresh_and_expired() {
     let stale = crate::vfs::VfsPath::new(&format!("/sys/tool_cache/{ctx}/stale")).unwrap();
 
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &fresh, b"new")
+        .write(crate::vfs::VfsCaller::System, &fresh, b"new")
         .await
         .unwrap();
     app.vfs
-        .write(crate::vfs::SYSTEM_CALLER, &stale, b"old")
+        .write(crate::vfs::VfsCaller::System, &stale, b"old")
         .await
         .unwrap();
 
@@ -1921,74 +1991,185 @@ async fn test_cleanup_mixed_fresh_and_expired() {
 
     assert!(
         app.vfs
-            .exists(crate::vfs::SYSTEM_CALLER, &fresh)
+            .exists(crate::vfs::VfsCaller::System, &fresh)
             .await
             .unwrap(),
         "fresh entry should survive"
     );
     assert!(
         !app.vfs
-            .exists(crate::vfs::SYSTEM_CALLER, &stale)
+            .exists(crate::vfs::VfsCaller::System, &stale)
             .await
             .unwrap(),
         "stale entry should be gone"
     );
 }
 
-// === Flow-control entry tests ===
+// === TranscriptEntry schema: role and flow_control fields ===
 
 #[test]
-fn test_create_flow_control_call_entry() {
-    let entry =
-        create_flow_control_call_entry("default", "call_user", r#"{"message": "hi"}"#, "fc_1");
-
-    assert_eq!(entry.from, "default");
-    assert_eq!(entry.to, "call_user");
-    assert_eq!(entry.content, r#"{"message": "hi"}"#);
-    assert_eq!(
-        entry.entry_type,
-        crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL
-    );
-    assert_eq!(entry.tool_call_id, Some("fc_1".to_string()));
+fn test_transcript_entry_role_default_none() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    assert!(entry.role.is_none());
 }
 
 #[test]
-fn test_create_flow_control_result_entry() {
-    let entry =
-        create_flow_control_result_entry("default", "call_user", "Returning to user", "fc_1");
-
-    assert_eq!(entry.from, "call_user");
-    assert_eq!(entry.to, "default");
-    assert_eq!(entry.content, "Returning to user");
-    assert_eq!(
-        entry.entry_type,
-        crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT
-    );
-    assert_eq!(entry.tool_call_id, Some("fc_1".to_string()));
+fn test_transcript_entry_role_set() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("fey")
+        .content("hello")
+        .role("agent")
+        .build();
+    assert_eq!(entry.role.as_deref(), Some("agent"));
 }
 
 #[test]
-fn test_is_context_entry_includes_flow_control() {
-    let fc_call = create_flow_control_call_entry("ctx", "call_user", "{}", "id1");
-    let fc_result = create_flow_control_result_entry("ctx", "call_user", "ack", "id1");
-    let normal_call = create_tool_call_entry("ctx", "web_search", "{}", "id2");
-    let normal_result = create_tool_result_entry("ctx", "web_search", "results", "id2");
+fn test_transcript_entry_flow_control_default_false() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    assert!(!entry.flow_control);
+}
+
+#[test]
+fn test_transcript_entry_flow_control_true() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("fey")
+        .content("hello")
+        .flow_control(true)
+        .build();
+    assert!(entry.flow_control);
+}
+
+#[test]
+fn test_transcript_entry_serde_role_omitted_when_none() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(
+        !json.contains("\"role\""),
+        "role:None should be omitted from JSON"
+    );
+}
+
+#[test]
+fn test_transcript_entry_serde_flow_control_omitted_when_false() {
+    let entry = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hello")
+        .build();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(
+        !json.contains("flow_control"),
+        "flow_control:false should be omitted from JSON"
+    );
+}
+
+#[test]
+fn test_transcript_entry_serde_roundtrip_role_and_flow_control() {
+    let entry = TranscriptEntry::builder()
+        .from("norse")
+        .to("fey")
+        .content("done")
+        .role("agent")
+        .flow_control(true)
+        .build();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains("\"role\":\"agent\""));
+    assert!(json.contains("\"flow_control\":true"));
+    let deser: TranscriptEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(deser.role.as_deref(), Some("agent"));
+    assert!(deser.flow_control);
+}
+
+#[test]
+fn test_transcript_entry_deserialize_missing_new_fields() {
+    // Old entries without role/flow_control should deserialize cleanly
+    let json =
+        r#"{"id":"test","timestamp":0,"from":"a","to":"b","content":"c","entry_type":"message"}"#;
+    let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+    assert!(entry.role.is_none());
+    assert!(!entry.flow_control);
+}
+
+// === Updated entry helpers ===
+
+#[test]
+fn test_create_user_message_entry_has_role_and_flow_control() {
+    let entry = create_user_message_entry("norse", "hello", "fey");
+    assert_eq!(entry.role.as_deref(), Some("user"));
+    assert!(entry.flow_control);
+    assert_eq!(entry.from, "fey");
+    assert_eq!(entry.to, "norse");
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
+}
+
+#[test]
+fn test_create_assistant_message_entry_has_role_and_username() {
+    let entry = create_assistant_message_entry("norse", "hello", "fey");
+    assert_eq!(entry.role.as_deref(), Some("agent"));
+    assert_eq!(entry.from, "norse");
+    assert_eq!(entry.to, "fey");
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
+    assert!(!entry.flow_control);
+}
+
+#[test]
+fn test_create_control_transfer_entry() {
+    let entry = create_control_transfer_entry("fey", "norse");
+    assert_eq!(entry.from, "fey");
+    assert_eq!(entry.to, "norse");
+    assert_eq!(
+        entry.entry_type,
+        crate::context::ENTRY_TYPE_CONTROL_TRANSFER
+    );
+    assert!(entry.flow_control);
+    assert!(entry.content.is_empty());
+    assert!(entry.role.is_none());
+}
+
+#[test]
+fn test_create_flow_control_message_entry() {
+    let entry = create_flow_control_message_entry("norse", "fey", "done", "agent");
+    assert_eq!(entry.from, "norse");
+    assert_eq!(entry.to, "fey");
+    assert_eq!(entry.content, "done");
+    assert_eq!(entry.role.as_deref(), Some("agent"));
+    assert!(entry.flow_control);
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
+}
+
+// === Flow-control entry tests (new unified format) ===
+
+#[test]
+fn test_is_context_entry_includes_control_transfer_and_flow_messages() {
+    let ct = create_control_transfer_entry("fey", "norse");
+    let fc_msg = create_flow_control_message_entry("norse", "fey", "done", "agent");
+    let normal = create_assistant_message_entry("norse", "hello", "fey");
 
     assert!(
-        is_context_entry(&fc_call),
-        "flow_control_call must be a context entry"
+        is_context_entry(&ct),
+        "control_transfer must be a context entry"
     );
     assert!(
-        is_context_entry(&fc_result),
-        "flow_control_result must be a context entry"
+        is_context_entry(&fc_msg),
+        "flow control messages must be context entries"
     );
     assert!(
-        is_context_entry(&normal_call),
-        "tool_call must be a context entry"
-    );
-    assert!(
-        is_context_entry(&normal_result),
-        "tool_result must be a context entry"
+        is_context_entry(&normal),
+        "regular messages must be context entries"
     );
 }
 
@@ -2004,25 +2185,28 @@ fn test_is_context_entry_filters_system_prompt_changed() {
         entry_type: ENTRY_TYPE_SYSTEM_PROMPT_CHANGED.to_string(),
         metadata: None,
         tool_call_id: None,
+        role: None,
+        flow_control: false,
     };
     assert!(!is_context_entry(&entry));
 }
 
 #[test]
-fn test_rebuild_context_includes_flow_control_entries() {
+fn test_rebuild_context_includes_unified_flow_control_entries() {
     let (app, _temp) = create_test_app();
     let ctx = "test-rebuild-fc";
     app.ensure_context_dir(ctx).unwrap();
 
-    // Build a transcript with: user msg, call_user exchange, assistant msg
+    // Build a transcript with: anchor, user prompt + control_transfer, call_user
+    // message + control_transfer, assistant response
     let anchor = create_context_created_anchor(ctx);
     let user_msg = create_user_message_entry(ctx, "hello", "testuser");
-    let fc_call =
-        create_flow_control_call_entry(ctx, "call_user", r#"{"message": "done"}"#, "fc_1");
-    let fc_result = create_flow_control_result_entry(ctx, "call_user", "Returning to user", "fc_1");
-    let assistant_msg = create_assistant_message_entry(ctx, "done");
+    let ct_in = create_control_transfer_entry("testuser", ctx);
+    let fc_msg = create_flow_control_message_entry(ctx, "testuser", "done", "agent");
+    let ct_out = create_control_transfer_entry(ctx, "testuser");
+    let assistant_msg = create_assistant_message_entry(ctx, "done", "testuser");
 
-    for entry in &[&anchor, &user_msg, &fc_call, &fc_result, &assistant_msg] {
+    for entry in &[&anchor, &user_msg, &ct_in, &fc_msg, &ct_out, &assistant_msg] {
         app.append_to_transcript(ctx, entry).unwrap();
     }
 
@@ -2030,23 +2214,65 @@ fn test_rebuild_context_includes_flow_control_entries() {
 
     let context_entries = app.read_context_entries(ctx).unwrap();
 
-    // context.jsonl should have: anchor + user_msg + fc_call + fc_result + assistant_msg
+    // context.jsonl should have all 6 entries (control_transfer entries are context entries)
     assert_eq!(
         context_entries.len(),
-        5,
-        "expected anchor + user_msg + fc_call + fc_result + assistant_msg, got {}",
+        6,
+        "expected anchor + user_msg + ct_in + fc_msg + ct_out + assistant_msg, got {}",
         context_entries.len()
     );
     assert!(
         context_entries
             .iter()
-            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL),
-        "flow_control_call must appear in context.jsonl"
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_CONTROL_TRANSFER),
+        "control_transfer must appear in context.jsonl"
     );
     assert!(
         context_entries
             .iter()
-            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT),
-        "flow_control_result must appear in context.jsonl"
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_MESSAGE && e.flow_control),
+        "flow control message must appear in context.jsonl"
+    );
+}
+
+#[test]
+fn test_resolve_uses_context_cwd_when_set() {
+    // When file_tools_allowed_paths is empty in config, and context has a stored cwd,
+    // resolve_config should use the stored cwd rather than live current_dir.
+    let (mut app, _dir) = create_test_app();
+
+    // Register a context with a specific stored cwd
+    let mut entry = crate::context::ContextEntry::with_created_at("myctx", 1234567890);
+    entry.cwd = Some("/stored/project/path".to_string());
+    app.state.contexts.push(entry);
+
+    let config = app.resolve_config("myctx", None).unwrap();
+    assert!(
+        config
+            .file_tools_allowed_paths
+            .contains(&"/stored/project/path".to_string()),
+        "expected stored cwd in file_tools_allowed_paths, got: {:?}",
+        config.file_tools_allowed_paths
+    );
+}
+
+#[test]
+fn test_resolve_falls_back_to_current_dir_when_no_context_cwd() {
+    // When context has no stored cwd, resolve_config should fall back to live current_dir.
+    let (mut app, _dir) = create_test_app();
+
+    let mut entry = crate::context::ContextEntry::with_created_at("myctx", 1234567890);
+    entry.cwd = None; // simulate old context
+    app.state.contexts.push(entry);
+
+    let config = app.resolve_config("myctx", None).unwrap();
+    let live_cwd = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    assert!(
+        config.file_tools_allowed_paths.contains(&live_cwd),
+        "expected live cwd in file_tools_allowed_paths, got: {:?}",
+        config.file_tools_allowed_paths
     );
 }

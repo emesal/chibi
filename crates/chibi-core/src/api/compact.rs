@@ -9,7 +9,7 @@ use crate::config::ResolvedConfig;
 use crate::context::{Context, now_timestamp};
 use crate::gateway;
 use crate::output::{CommandEvent, OutputSink};
-use crate::state::AppState;
+use crate::state::{AppState, format_flock_sections, load_flock_contexts};
 use crate::tools;
 use serde_json::json;
 use std::io;
@@ -110,9 +110,10 @@ pub async fn rolling_compact(
     });
     let _ = tools::execute_hook(&tools, tools::HookPoint::PreRollingCompact, &hook_data);
 
-    // Load goals and todos to guide compaction decisions
-    let goals = app.load_goals(context_name)?;
+    // Load todos and flock goals to guide compaction decisions.
     let todos = app.load_todos(context_name)?;
+    let flock_contexts = load_flock_contexts(&app.vfs, context_name).unwrap_or_default();
+    let goals = format_flock_sections(&flock_contexts);
 
     // Build message list in transcript format for LLM to analyze.
     // For tool messages, include a summary representation.
@@ -162,7 +163,7 @@ pub async fn rolling_compact(
             &if goals.is_empty() {
                 String::new()
             } else {
-                format!("CURRENT GOALS:\n{}\n\n", goals)
+                format!("{}\n\n", goals)
             },
         )
         .replace(
@@ -288,7 +289,7 @@ pub async fn rolling_compact(
             &if goals.is_empty() {
                 String::new()
             } else {
-                format!("\nCURRENT GOALS:\n{}\n", goals)
+                format!("\n{}\n", goals)
             },
         )
         .replace(
@@ -629,6 +630,7 @@ mod tests {
             url_policy: None,
             subagent_cost_tier: "free".to_string(),
             models: Default::default(),
+            site: None,
         };
         let app = AppState::from_dir(temp_dir.path().to_path_buf(), config).unwrap();
         (app, temp_dir)
@@ -902,7 +904,7 @@ mod tests {
         cfg
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rolling_compact_with_stub_llm_reduces_message_count() {
         // Note: save_context regenerates _ids via messages_to_entries, so the
         // stub's returned ids won't match the stored context — the fallback path
@@ -948,7 +950,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rolling_compact_fallback_drops_oldest_n_on_empty_llm_response() {
         let (app, _tmp) = create_test_app();
         let ctx_name = "test-fallback-path";

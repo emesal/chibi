@@ -68,6 +68,11 @@ pub struct ContextEntry {
     /// Auto-destroy at this timestamp (0 = disabled)
     #[serde(default)]
     pub destroy_at: u64,
+    /// Working directory at context creation time. Used to resolve relative file
+    /// paths consistently across sessions. None for contexts created before this
+    /// field was added (falls back to std::env::current_dir()).
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 impl ContextEntry {
@@ -78,6 +83,9 @@ impl ContextEntry {
             last_activity_at: 0,
             destroy_after_seconds_inactive: 0,
             destroy_at: 0,
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned()),
         }
     }
 
@@ -175,12 +183,10 @@ pub const ENTRY_TYPE_ARCHIVAL: &str = "archival";
 // Change event (transcript only) - logs full raw prompt content
 pub const ENTRY_TYPE_SYSTEM_PROMPT_CHANGED: &str = "system_prompt_changed";
 
-// Flow-control tool events — stored in both transcript and context.jsonl for
-// record-keeping, but excluded from API messages by entries_to_messages().
-// These record call_user/call_agent exchanges, which are chibi plumbing and
-// must not appear in the LLM message history.
-pub const ENTRY_TYPE_FLOW_CONTROL_CALL: &str = "flow_control_call";
-pub const ENTRY_TYPE_FLOW_CONTROL_RESULT: &str = "flow_control_result";
+// Control transfer events — mark when control passes between parties.
+// Stored in both transcript and context.jsonl but skipped by entries_to_messages()
+// (not a message/tool_call/tool_result type, caught by the _ => catch-all).
+pub const ENTRY_TYPE_CONTROL_TRANSFER: &str = "control_transfer";
 
 /// Entry for JSONL transcript file (now also context.jsonl)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +204,15 @@ pub struct TranscriptEntry {
     /// Present on tool_call and tool_result entry types; absent on messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Role for API message mapping: "user", "agent", or "system".
+    /// Used by entries_to_messages() instead of inferring from from/to.
+    /// None for old entries and non-message types (tool_call, tool_result, anchors).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Semantic marker for flow control events (user prompts, call_user, control_transfer).
+    /// NOT used as a filter criterion — purely informational.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flow_control: bool,
 }
 
 impl TranscriptEntry {
@@ -218,6 +233,8 @@ pub struct TranscriptEntryBuilder {
     entry_type: Option<String>,
     metadata: Option<EntryMetadata>,
     tool_call_id: Option<String>,
+    role: Option<String>,
+    flow_control: bool,
 }
 
 impl TranscriptEntryBuilder {
@@ -257,6 +274,18 @@ impl TranscriptEntryBuilder {
         self
     }
 
+    /// Set the role for API message mapping ("user", "agent", or "system")
+    pub fn role(mut self, role: impl Into<String>) -> Self {
+        self.role = Some(role.into());
+        self
+    }
+
+    /// Mark this entry as a flow control event
+    pub fn flow_control(mut self, flow_control: bool) -> Self {
+        self.flow_control = flow_control;
+        self
+    }
+
     /// Build the TranscriptEntry with auto-generated ID and current timestamp
     pub fn build(self) -> TranscriptEntry {
         TranscriptEntry {
@@ -270,6 +299,8 @@ impl TranscriptEntryBuilder {
                 .unwrap_or_else(|| ENTRY_TYPE_MESSAGE.to_string()),
             metadata: self.metadata,
             tool_call_id: self.tool_call_id,
+            role: self.role,
+            flow_control: self.flow_control,
         }
     }
 }
@@ -754,5 +785,20 @@ mod tests {
         let content = std::fs::read_to_string(&*state_path).unwrap();
         let parsed: ContextState = serde_json::from_str(&content).unwrap();
         assert!(parsed.contexts[0].name.starts_with("ctx-"));
+    }
+
+    #[test]
+    fn test_context_entry_cwd_persisted() {
+        let entry = ContextEntry::with_created_at("test", 1234567890);
+        // new entries should have Some(cwd)
+        assert!(entry.cwd.is_some());
+    }
+
+    #[test]
+    fn test_context_entry_cwd_migration() {
+        // Old JSON without cwd field should deserialise fine (cwd = None)
+        let json = r#"{"name":"old","created_at":1234567890}"#;
+        let entry: ContextEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.cwd.is_none());
     }
 }

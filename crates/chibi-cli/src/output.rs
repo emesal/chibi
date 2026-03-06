@@ -245,6 +245,8 @@ mod tests {
             entry_type: "message".to_string(),
             metadata: None,
             tool_call_id: None,
+            role: None,
+            flow_control: false,
         };
         // Should not panic — formats as human-readable text
         handler.emit_entry(&entry).unwrap();
@@ -262,6 +264,8 @@ mod tests {
             entry_type: "tool_call".to_string(),
             metadata: None,
             tool_call_id: None,
+            role: None,
+            flow_control: false,
         };
         // Compact mode: shows tool name + truncated args
         handler.emit_entry(&entry).unwrap();
@@ -279,6 +283,8 @@ mod tests {
             entry_type: "tool_call".to_string(),
             metadata: None,
             tool_call_id: None,
+            role: None,
+            flow_control: false,
         };
         // Verbose mode: shows full content
         handler.emit_entry(&entry).unwrap();
@@ -296,6 +302,8 @@ mod tests {
             entry_type: "tool_result".to_string(),
             metadata: None,
             tool_call_id: None,
+            role: None,
+            flow_control: false,
         };
         // Compact mode: shows size only
         handler.emit_entry(&entry).unwrap();
@@ -313,6 +321,8 @@ mod tests {
             entry_type: "compaction".to_string(),
             metadata: None,
             tool_call_id: None,
+            role: None,
+            flow_control: false,
         };
         // Non-verbose: compaction entries are silently skipped
         handler.emit_entry(&entry).unwrap();

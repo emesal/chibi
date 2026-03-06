@@ -153,6 +153,27 @@ pub struct Cli {
     )]
     pub check_inbox_for: Option<String>,
 
+    // === Flock management ===
+    /// Create a new flock and join current context to it
+    #[arg(long = "flock-create", value_name = "NAME", allow_hyphen_values = true)]
+    pub flock_create: Option<String>,
+
+    /// Delete a flock entirely (removes all members from registry)
+    #[arg(long = "flock-delete", value_name = "NAME", allow_hyphen_values = true)]
+    pub flock_delete: Option<String>,
+
+    /// Join a flock (CTX FLOCK)
+    #[arg(long = "flock-join", value_names = ["CTX", "FLOCK"], num_args = 2, allow_hyphen_values = true)]
+    pub flock_join: Option<Vec<String>>,
+
+    /// Leave a flock (CTX FLOCK)
+    #[arg(long = "flock-leave", value_names = ["CTX", "FLOCK"], num_args = 2, allow_hyphen_values = true)]
+    pub flock_leave: Option<Vec<String>>,
+
+    /// List all flocks
+    #[arg(long = "flock-list")]
+    pub flock_list: bool,
+
     /// Compact current context (summarize and clear)
     #[arg(short = 'z', long = "compact-current-context")]
     pub compact_current_context: bool,
@@ -537,10 +558,27 @@ impl Cli {
         let debug_implies_force_call_user = md_file.is_some();
 
         // Compute implied force_call_user based on flags
+        // Parse flock pair args
+        let flock_join = self
+            .flock_join
+            .as_ref()
+            .filter(|v| v.len() >= 2)
+            .map(|v| (v[0].clone(), v[1].clone()));
+        let flock_leave = self
+            .flock_leave
+            .as_ref()
+            .filter(|v| v.len() >= 2)
+            .map(|v| (v[0].clone(), v[1].clone()));
+
         let implies_force_call_user = self.list_current_context
             || self.list_contexts
             || self.destroy_current_context
             || self.destroy_context.is_some()
+            || self.flock_create.is_some()
+            || self.flock_delete.is_some()
+            || flock_join.is_some()
+            || flock_leave.is_some()
+            || self.flock_list
             || self.archive_history.is_some()
             || self.compact_context.is_some()
             || rename_context.is_some()
@@ -699,6 +737,22 @@ impl Cli {
             Command::CheckInbox {
                 context: ctx.clone(),
             }
+        } else if let Some(ref name) = self.flock_create {
+            Command::FlockCreate { name: name.clone() }
+        } else if let Some(ref name) = self.flock_delete {
+            Command::FlockDelete { name: name.clone() }
+        } else if let Some((ref ctx, ref flock)) = flock_join {
+            Command::FlockJoin {
+                flock: flock.clone(),
+                context: ctx.clone(),
+            }
+        } else if let Some((ref ctx, ref flock)) = flock_leave {
+            Command::FlockLeave {
+                flock: flock.clone(),
+                context: ctx.clone(),
+            }
+        } else if self.flock_list {
+            Command::FlockList
         } else {
             Command::NoOp
         };
@@ -870,6 +924,24 @@ pub fn parse() -> io::Result<ChibiInput> {
             );
         }
         println!("ratatoskr {}", chibi_core::ratatoskr_version());
+        // Resolve chibi home dir (same precedence: --home flag → CHIBI_HOME env → ~/.chibi)
+        let chibi_dir: Option<std::path::PathBuf> = if let Some(path) = &cli.home {
+            Some(std::path::PathBuf::from(path))
+        } else if let Ok(val) = std::env::var("CHIBI_HOME") {
+            Some(std::path::PathBuf::from(val))
+        } else {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".chibi"))
+        };
+        if let Some(dir) = chibi_dir
+            && let Ok(site) = chibi_core::site::load_or_create(&dir, None)
+        {
+            println!(
+                "site flock {}",
+                chibi_core::vfs::flock::site_flock_name(&site.site_id)
+            );
+        }
         std::process::exit(0);
     }
 

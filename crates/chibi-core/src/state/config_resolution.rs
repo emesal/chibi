@@ -119,11 +119,19 @@ impl AppState {
         }
 
         // Default file_tools_allowed_paths to cwd when empty (after all overrides).
-        // This ensures project files are readable without explicit config.
-        if resolved.file_tools_allowed_paths.is_empty()
-            && let Ok(cwd) = std::env::current_dir()
-        {
-            resolved.file_tools_allowed_paths = vec![cwd.to_string_lossy().to_string()];
+        // Prefer the context's stored cwd (captured at creation) over live current_dir,
+        // so sessions resumed from a different directory still resolve paths correctly.
+        if resolved.file_tools_allowed_paths.is_empty() {
+            let context_cwd = self
+                .state
+                .contexts
+                .iter()
+                .find(|e| e.name == context_name)
+                .and_then(|e| e.cwd.as_deref().map(std::path::PathBuf::from));
+            let cwd = context_cwd.or_else(|| std::env::current_dir().ok());
+            if let Some(cwd) = cwd {
+                resolved.file_tools_allowed_paths = vec![cwd.to_string_lossy().to_string()];
+            }
         }
 
         // Apply per-model API param overrides (global config.models, then local.models on top)
@@ -161,7 +169,10 @@ impl AppState {
         // Get metadata (checks plugins then builtins)
         let meta = crate::tools::get_tool_metadata(tools, fallback);
 
-        // Verify tool exists: must be in plugins OR be a known builtin
+        // Verify tool exists: must be in plugins OR be a known builtin.
+        // call_agent: not in FLOW_TOOL_DEFS (disabled as LLM tool) but still a valid
+        // fallback_tool value. Retained for the continuation mechanism and future
+        // inter-agent control transfer.
         let is_builtin = matches!(
             fallback.as_str(),
             crate::tools::CALL_AGENT_TOOL_NAME | crate::tools::CALL_USER_TOOL_NAME

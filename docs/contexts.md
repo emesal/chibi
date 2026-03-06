@@ -3,9 +3,11 @@
 Contexts are separate conversations. Each context maintains its own:
 - Message history
 - Summary (from compaction)
-- Todos and goals
+- Todos (stored in VFS at `/home/<name>/todos.md`)
 - System prompt (optional override)
 - Configuration (optional override via `local.toml`)
+
+Goals are **flock-scoped** — shared across all contexts in a flock, not per-context. See [Flock Management](#flock-management) below.
 
 ## Switching Contexts
 
@@ -249,8 +251,7 @@ Each context can override global settings. See [configuration.md](configuration.
 # Inspect current context
 chibi -n system_prompt   # View system prompt
 chibi -n reflection      # View reflection (global)
-chibi -n todos           # View todos
-chibi -n goals           # View goals
+chibi -n todos           # View todos (VFS-backed)
 chibi -n home            # View chibi home directory
 chibi -n list            # List what can be inspected
 
@@ -278,6 +279,16 @@ chibi -g -5  # First 5 entries
 ~/.chibi/
 ├── state.json                   # Context registry (names, created_at, auto-destroy settings)
 ├── session.json                 # CLI session state (implied_context, previous_context)
+├── vfs/
+│   ├── home/<name>/
+│   │   └── todos.md             # Context todos (VFS-managed)
+│   ├── site/                    # Site-wide flock data
+│   │   ├── goals.md
+│   │   └── prompt.md
+│   ├── flocks/registry.json     # Centralised flock membership (SYSTEM only)
+│   └── flocks/<name>/           # Named flock data
+│       ├── goals.md
+│       └── prompt.md
 └── contexts/<name>/
     ├── transcript/              # Authoritative conversation log (partitioned)
     │   ├── manifest.json        # Partition metadata
@@ -287,8 +298,6 @@ chibi -g -5  # First 5 entries
     ├── context_meta.json        # Internal cache metadata (system prompt mtime, last combined prompt)
     ├── local.toml               # Per-context config overrides (optional)
     ├── summary.md               # Conversation summary (from compaction)
-    ├── todos.md                 # Current todos
-    ├── goals.md                 # Current goals
     ├── inbox.jsonl              # Messages from other contexts
     ├── system_prompt.md         # Custom system prompt (optional)
     ├── .lock                    # Lock file (when active)
@@ -296,5 +305,30 @@ chibi -g -5  # First 5 entries
 ```
 
 Tool cache is stored in the VFS at `/sys/tool_cache/<context>/` (not in the context directory on disk).
+
+## Flock Management
+
+Flocks are named groups of contexts that share goals and prompts. Every context implicitly belongs to the site flock (`site:<site_id>`). Contexts can join additional named flocks.
+
+```bash
+# Join a flock (creates it if it doesn't exist)
+chibi --flock-join myteam
+
+# Leave a flock
+chibi --flock-leave myteam
+
+# List flocks for current context
+chibi --flock-list
+
+# Set goals for a flock (from the CLI)
+chibi --flock-goals myteam "Focus on shipping feature X"
+
+# Set goals for the site flock
+chibi --flock-goals site "Maintain quality and test coverage"
+```
+
+Within a conversation, contexts can manage their own flock membership using the `flock_join` and `flock_leave` tools, and update goals using the `update_goals` tool.
+
+Goals from all flocks a context belongs to are injected into the system prompt as attributed sections (`--- GOALS [flock-name] ---`). Prompts from `/site/prompt.md` and `/flocks/<name>/prompt.md` are similarly injected.
 
 See [transcript-format.md](transcript-format.md) for details on the JSONL file formats.
