@@ -778,7 +778,11 @@ impl AppState {
                         Some("system") => "system",
                         _ => {
                             // Backwards compat: old entries use to="user" for assistant messages
-                            if entry.to == "user" { "assistant" } else { "user" }
+                            if entry.to == "user" {
+                                "assistant"
+                            } else {
+                                "user"
+                            }
                         }
                     };
                     messages.push(serde_json::json!({

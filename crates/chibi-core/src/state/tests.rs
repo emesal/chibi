@@ -1611,7 +1611,10 @@ fn test_entries_to_messages_includes_flow_control_message() {
     assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
     assert_eq!(messages[2]["role"].as_str().unwrap(), "tool");
     assert_eq!(messages[3]["role"].as_str().unwrap(), "assistant");
-    assert_eq!(messages[3]["content"].as_str().unwrap(), "here are the results");
+    assert_eq!(
+        messages[3]["content"].as_str().unwrap(),
+        "here are the results"
+    );
 }
 
 #[test]
@@ -2054,7 +2057,10 @@ fn test_transcript_entry_serde_role_omitted_when_none() {
         .content("hello")
         .build();
     let json = serde_json::to_string(&entry).unwrap();
-    assert!(!json.contains("\"role\""), "role:None should be omitted from JSON");
+    assert!(
+        !json.contains("\"role\""),
+        "role:None should be omitted from JSON"
+    );
 }
 
 #[test]
@@ -2065,7 +2071,10 @@ fn test_transcript_entry_serde_flow_control_omitted_when_false() {
         .content("hello")
         .build();
     let json = serde_json::to_string(&entry).unwrap();
-    assert!(!json.contains("flow_control"), "flow_control:false should be omitted from JSON");
+    assert!(
+        !json.contains("flow_control"),
+        "flow_control:false should be omitted from JSON"
+    );
 }
 
 #[test]
@@ -2088,7 +2097,8 @@ fn test_transcript_entry_serde_roundtrip_role_and_flow_control() {
 #[test]
 fn test_transcript_entry_deserialize_missing_new_fields() {
     // Old entries without role/flow_control should deserialize cleanly
-    let json = r#"{"id":"test","timestamp":0,"from":"a","to":"b","content":"c","entry_type":"message"}"#;
+    let json =
+        r#"{"id":"test","timestamp":0,"from":"a","to":"b","content":"c","entry_type":"message"}"#;
     let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
     assert!(entry.role.is_none());
     assert!(!entry.flow_control);
@@ -2121,7 +2131,10 @@ fn test_create_control_transfer_entry() {
     let entry = create_control_transfer_entry("fey", "norse");
     assert_eq!(entry.from, "fey");
     assert_eq!(entry.to, "norse");
-    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_CONTROL_TRANSFER);
+    assert_eq!(
+        entry.entry_type,
+        crate::context::ENTRY_TYPE_CONTROL_TRANSFER
+    );
     assert!(entry.flow_control);
     assert!(entry.content.is_empty());
     assert!(entry.role.is_none());
@@ -2146,9 +2159,18 @@ fn test_is_context_entry_includes_control_transfer_and_flow_messages() {
     let fc_msg = create_flow_control_message_entry("norse", "fey", "done", "agent");
     let normal = create_assistant_message_entry("norse", "hello", "fey");
 
-    assert!(is_context_entry(&ct), "control_transfer must be a context entry");
-    assert!(is_context_entry(&fc_msg), "flow control messages must be context entries");
-    assert!(is_context_entry(&normal), "regular messages must be context entries");
+    assert!(
+        is_context_entry(&ct),
+        "control_transfer must be a context entry"
+    );
+    assert!(
+        is_context_entry(&fc_msg),
+        "flow control messages must be context entries"
+    );
+    assert!(
+        is_context_entry(&normal),
+        "regular messages must be context entries"
+    );
 }
 
 #[test]

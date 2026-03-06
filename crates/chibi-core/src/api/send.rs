@@ -1691,8 +1691,12 @@ async fn process_tool_calls<S: ResponseSink>(
                 let message = args.get_str_or("message", "").to_string();
 
                 if !message.is_empty() {
-                    let msg_entry =
-                        create_flow_control_message_entry(context_name, username, &message, "agent");
+                    let msg_entry = create_flow_control_message_entry(
+                        context_name,
+                        username,
+                        &message,
+                        "agent",
+                    );
                     app.append_to_transcript_and_context(context_name, &msg_entry)?;
                     sink.handle(ResponseEvent::TranscriptEntry(msg_entry))?;
                 }
@@ -2006,8 +2010,7 @@ pub async fn send_prompt<S: ResponseSink>(
         sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
 
         // Mark control transfer from user to agent
-        let ct_entry =
-            create_control_transfer_entry(&resolved_config.username, context_name);
+        let ct_entry = create_control_transfer_entry(&resolved_config.username, context_name);
         app.append_to_transcript_and_context(context_name, &ct_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(ct_entry))?;
 

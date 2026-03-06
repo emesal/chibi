@@ -541,7 +541,10 @@ mod tests {
         assert_eq!(FLOW_TOOL_DEFS.len(), 5);
         let names: Vec<_> = FLOW_TOOL_DEFS.iter().map(|d| d.name).collect();
         assert!(names.contains(&SEND_MESSAGE_TOOL_NAME));
-        assert!(!names.contains(&CALL_AGENT_TOOL_NAME), "call_agent must not be in registry");
+        assert!(
+            !names.contains(&CALL_AGENT_TOOL_NAME),
+            "call_agent must not be in registry"
+        );
         assert!(names.contains(&CALL_USER_TOOL_NAME));
         assert!(names.contains(&MODEL_INFO_TOOL_NAME));
         assert!(names.contains(&SPAWN_AGENT_TOOL_NAME));
@@ -562,7 +565,10 @@ mod tests {
     fn test_is_flow_tool() {
         assert!(is_flow_tool(SEND_MESSAGE_TOOL_NAME));
         // call_agent: not in FLOW_TOOL_DEFS (disabled as LLM tool)
-        assert!(!is_flow_tool(CALL_AGENT_TOOL_NAME), "call_agent must not be in flow tool registry");
+        assert!(
+            !is_flow_tool(CALL_AGENT_TOOL_NAME),
+            "call_agent must not be in flow tool registry"
+        );
         assert!(is_flow_tool(CALL_USER_TOOL_NAME));
         assert!(is_flow_tool(MODEL_INFO_TOOL_NAME));
         assert!(is_flow_tool(SPAWN_AGENT_TOOL_NAME));
@@ -677,12 +683,17 @@ mod tests {
     fn test_call_agent_not_in_registry_but_metadata_works() {
         // call_agent is disabled as an LLM tool — must not appear in FLOW_TOOL_DEFS
         assert!(
-            FLOW_TOOL_DEFS.iter().all(|d| d.name != CALL_AGENT_TOOL_NAME),
+            FLOW_TOOL_DEFS
+                .iter()
+                .all(|d| d.name != CALL_AGENT_TOOL_NAME),
             "call_agent must not be in tool registry"
         );
         // But its metadata must still work for the fallback mechanism
         let meta = flow_tool_metadata(CALL_AGENT_TOOL_NAME);
-        assert!(meta.flow_control, "call_agent metadata must have flow_control=true");
+        assert!(
+            meta.flow_control,
+            "call_agent metadata must have flow_control=true"
+        );
         assert!(!meta.ends_turn, "call_agent must not end the turn");
     }
 
