@@ -18,8 +18,7 @@ use crate::json_ext::JsonExt;
 use crate::output::NoopSink;
 use crate::state::{
     AppState, create_assistant_message_entry, create_control_transfer_entry,
-    create_flow_control_call_entry, create_flow_control_message_entry,
-    create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
+    create_flow_control_message_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry, format_flock_sections, load_flock_contexts,
 };
 use crate::tools::{self, Tool};

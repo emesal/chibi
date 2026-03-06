@@ -5,9 +5,8 @@
 
 use crate::context::{
     ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION, ENTRY_TYPE_CONTEXT_CREATED,
-    ENTRY_TYPE_CONTROL_TRANSFER, ENTRY_TYPE_FLOW_CONTROL_CALL, ENTRY_TYPE_FLOW_CONTROL_RESULT,
-    ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT, EntryMetadata,
-    TranscriptEntry,
+    ENTRY_TYPE_CONTROL_TRANSFER, ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT,
+    EntryMetadata, TranscriptEntry,
 };
 
 /// Create a transcript entry for a user message (flow control: user → agent)
@@ -99,38 +98,6 @@ pub fn create_flow_control_message_entry(
         .entry_type(ENTRY_TYPE_MESSAGE)
         .role(role)
         .flow_control(true)
-        .build()
-}
-
-/// Create a transcript entry for a flow-control tool call (transcript-only, never written to context)
-pub fn create_flow_control_call_entry(
-    context_name: &str,
-    tool_name: &str,
-    arguments: &str,
-    tool_call_id: &str,
-) -> TranscriptEntry {
-    TranscriptEntry::builder()
-        .from(context_name)
-        .to(tool_name)
-        .content(arguments)
-        .entry_type(ENTRY_TYPE_FLOW_CONTROL_CALL)
-        .tool_call_id(tool_call_id)
-        .build()
-}
-
-/// Create a transcript entry for a flow-control tool result (transcript-only, never written to context)
-pub fn create_flow_control_result_entry(
-    context_name: &str,
-    tool_name: &str,
-    result: &str,
-    tool_call_id: &str,
-) -> TranscriptEntry {
-    TranscriptEntry::builder()
-        .from(tool_name)
-        .to(context_name)
-        .content(result)
-        .entry_type(ENTRY_TYPE_FLOW_CONTROL_RESULT)
-        .tool_call_id(tool_call_id)
         .build()
 }
 

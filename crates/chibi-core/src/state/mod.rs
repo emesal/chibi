@@ -15,8 +15,7 @@ mod prompts;
 pub use entries::{
     create_archival_anchor, create_assistant_message_entry, create_compaction_anchor,
     create_context_created_anchor, create_control_transfer_entry,
-    create_flow_control_call_entry, create_flow_control_message_entry,
-    create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
+    create_flow_control_message_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry,
 };
 pub use flocks::{FlockContext, format_flock_sections, load_flock_contexts};

@@ -2138,61 +2138,17 @@ fn test_create_flow_control_message_entry() {
     assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
 }
 
-// === Flow-control entry tests ===
+// === Flow-control entry tests (new unified format) ===
 
 #[test]
-fn test_create_flow_control_call_entry() {
-    let entry =
-        create_flow_control_call_entry("default", "call_user", r#"{"message": "hi"}"#, "fc_1");
+fn test_is_context_entry_includes_control_transfer_and_flow_messages() {
+    let ct = create_control_transfer_entry("fey", "norse");
+    let fc_msg = create_flow_control_message_entry("norse", "fey", "done", "agent");
+    let normal = create_assistant_message_entry("norse", "hello", "fey");
 
-    assert_eq!(entry.from, "default");
-    assert_eq!(entry.to, "call_user");
-    assert_eq!(entry.content, r#"{"message": "hi"}"#);
-    assert_eq!(
-        entry.entry_type,
-        crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL
-    );
-    assert_eq!(entry.tool_call_id, Some("fc_1".to_string()));
-}
-
-#[test]
-fn test_create_flow_control_result_entry() {
-    let entry =
-        create_flow_control_result_entry("default", "call_user", "Returning to user", "fc_1");
-
-    assert_eq!(entry.from, "call_user");
-    assert_eq!(entry.to, "default");
-    assert_eq!(entry.content, "Returning to user");
-    assert_eq!(
-        entry.entry_type,
-        crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT
-    );
-    assert_eq!(entry.tool_call_id, Some("fc_1".to_string()));
-}
-
-#[test]
-fn test_is_context_entry_includes_flow_control() {
-    let fc_call = create_flow_control_call_entry("ctx", "call_user", "{}", "id1");
-    let fc_result = create_flow_control_result_entry("ctx", "call_user", "ack", "id1");
-    let normal_call = create_tool_call_entry("ctx", "web_search", "{}", "id2");
-    let normal_result = create_tool_result_entry("ctx", "web_search", "results", "id2");
-
-    assert!(
-        is_context_entry(&fc_call),
-        "flow_control_call must be a context entry"
-    );
-    assert!(
-        is_context_entry(&fc_result),
-        "flow_control_result must be a context entry"
-    );
-    assert!(
-        is_context_entry(&normal_call),
-        "tool_call must be a context entry"
-    );
-    assert!(
-        is_context_entry(&normal_result),
-        "tool_result must be a context entry"
-    );
+    assert!(is_context_entry(&ct), "control_transfer must be a context entry");
+    assert!(is_context_entry(&fc_msg), "flow control messages must be context entries");
+    assert!(is_context_entry(&normal), "regular messages must be context entries");
 }
 
 #[test]
@@ -2214,20 +2170,21 @@ fn test_is_context_entry_filters_system_prompt_changed() {
 }
 
 #[test]
-fn test_rebuild_context_includes_flow_control_entries() {
+fn test_rebuild_context_includes_unified_flow_control_entries() {
     let (app, _temp) = create_test_app();
     let ctx = "test-rebuild-fc";
     app.ensure_context_dir(ctx).unwrap();
 
-    // Build a transcript with: user msg, call_user exchange, assistant msg
+    // Build a transcript with: anchor, user prompt + control_transfer, call_user
+    // message + control_transfer, assistant response
     let anchor = create_context_created_anchor(ctx);
     let user_msg = create_user_message_entry(ctx, "hello", "testuser");
-    let fc_call =
-        create_flow_control_call_entry(ctx, "call_user", r#"{"message": "done"}"#, "fc_1");
-    let fc_result = create_flow_control_result_entry(ctx, "call_user", "Returning to user", "fc_1");
+    let ct_in = create_control_transfer_entry("testuser", ctx);
+    let fc_msg = create_flow_control_message_entry(ctx, "testuser", "done", "agent");
+    let ct_out = create_control_transfer_entry(ctx, "testuser");
     let assistant_msg = create_assistant_message_entry(ctx, "done", "testuser");
 
-    for entry in &[&anchor, &user_msg, &fc_call, &fc_result, &assistant_msg] {
+    for entry in &[&anchor, &user_msg, &ct_in, &fc_msg, &ct_out, &assistant_msg] {
         app.append_to_transcript(ctx, entry).unwrap();
     }
 
@@ -2235,24 +2192,24 @@ fn test_rebuild_context_includes_flow_control_entries() {
 
     let context_entries = app.read_context_entries(ctx).unwrap();
 
-    // context.jsonl should have: anchor + user_msg + fc_call + fc_result + assistant_msg
+    // context.jsonl should have all 6 entries (control_transfer entries are context entries)
     assert_eq!(
         context_entries.len(),
-        5,
-        "expected anchor + user_msg + fc_call + fc_result + assistant_msg, got {}",
+        6,
+        "expected anchor + user_msg + ct_in + fc_msg + ct_out + assistant_msg, got {}",
         context_entries.len()
     );
     assert!(
         context_entries
             .iter()
-            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_CALL),
-        "flow_control_call must appear in context.jsonl"
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_CONTROL_TRANSFER),
+        "control_transfer must appear in context.jsonl"
     );
     assert!(
         context_entries
             .iter()
-            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_FLOW_CONTROL_RESULT),
-        "flow_control_result must appear in context.jsonl"
+            .any(|e| e.entry_type == crate::context::ENTRY_TYPE_MESSAGE && e.flow_control),
+        "flow control message must appear in context.jsonl"
     );
 }
 
