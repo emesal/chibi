@@ -169,7 +169,10 @@ impl AppState {
         // Get metadata (checks plugins then builtins)
         let meta = crate::tools::get_tool_metadata(tools, fallback);
 
-        // Verify tool exists: must be in plugins OR be a known builtin
+        // Verify tool exists: must be in plugins OR be a known builtin.
+        // call_agent: not in FLOW_TOOL_DEFS (disabled as LLM tool) but still a valid
+        // fallback_tool value. Retained for the continuation mechanism and future
+        // inter-agent control transfer.
         let is_builtin = matches!(
             fallback.as_str(),
             crate::tools::CALL_AGENT_TOOL_NAME | crate::tools::CALL_USER_TOOL_NAME

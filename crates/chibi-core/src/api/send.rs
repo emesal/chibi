@@ -2404,9 +2404,9 @@ mod tests {
 
     #[test]
     fn test_classify_tool_type_flow() {
+        // call_agent excluded from FLOW_TOOL_DEFS (disabled as LLM tool)
         for name in [
             "send_message",
-            "call_agent",
             "call_user",
             "model_info",
             "spawn_agent",
@@ -2414,6 +2414,8 @@ mod tests {
         ] {
             assert_eq!(classify_tool_type(name, &[]), ToolType::Flow, "{name}");
         }
+        // call_agent no longer classifies as Flow (not in registry)
+        assert_ne!(classify_tool_type("call_agent", &[]), ToolType::Flow);
     }
 
     #[test]
