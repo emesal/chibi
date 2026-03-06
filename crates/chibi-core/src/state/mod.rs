@@ -771,10 +771,16 @@ impl AppState {
 
             match entry.entry_type.as_str() {
                 crate::context::ENTRY_TYPE_MESSAGE => {
-                    let role = if entry.to == "user" {
-                        "assistant"
-                    } else {
-                        "user"
+                    // Use explicit role field when present; fall back to old heuristic
+                    // for backwards compat with entries created before the role field existed.
+                    let role = match entry.role.as_deref() {
+                        Some("user") => "user",
+                        Some("agent") => "assistant",
+                        Some("system") => "system",
+                        _ => {
+                            // Backwards compat: old entries use to="user" for assistant messages
+                            if entry.to == "user" { "assistant" } else { "user" }
+                        }
                     };
                     messages.push(serde_json::json!({
                         "_id": entry.id,

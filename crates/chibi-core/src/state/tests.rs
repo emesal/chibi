@@ -1532,6 +1532,88 @@ fn test_entries_to_messages_backward_compat_no_tool_call_id() {
     assert_eq!(messages[1]["tool_call_id"].as_str().unwrap(), synthetic_id);
 }
 
+// === entries_to_messages with role field ===
+
+#[test]
+fn test_entries_to_messages_uses_role_field() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "hello", "fey"),
+        create_assistant_message_entry("ctx", "hi there", "fey"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_entries_to_messages_backwards_compat_no_role() {
+    let (app, _temp) = create_test_app();
+
+    // Old-style entries without role field
+    let old_user = TranscriptEntry::builder()
+        .from("fey")
+        .to("ctx")
+        .content("hello")
+        .entry_type(crate::context::ENTRY_TYPE_MESSAGE)
+        .build();
+    let old_assistant = TranscriptEntry::builder()
+        .from("ctx")
+        .to("user")
+        .content("hi")
+        .entry_type(crate::context::ENTRY_TYPE_MESSAGE)
+        .build();
+
+    let messages = app.entries_to_messages(&[old_user, old_assistant]);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_entries_to_messages_skips_control_transfer() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "hello", "fey"),
+        create_control_transfer_entry("fey", "ctx"),
+        create_assistant_message_entry("ctx", "hi", "fey"),
+        create_control_transfer_entry("ctx", "fey"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+    // Only the two messages, control_transfer entries skipped
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+}
+
+#[test]
+fn test_entries_to_messages_includes_flow_control_message() {
+    let (app, _temp) = create_test_app();
+
+    let entries = vec![
+        create_user_message_entry("ctx", "hello", "fey"),
+        create_tool_call_entry("ctx", "web_search", r#"{"q":"test"}"#, "tc_1"),
+        create_tool_result_entry("ctx", "web_search", "results", "tc_1"),
+        // call_user message — should be included in API messages
+        create_flow_control_message_entry("ctx", "fey", "here are the results", "agent"),
+        create_control_transfer_entry("ctx", "fey"),
+    ];
+
+    let messages = app.entries_to_messages(&entries);
+    // user + assistant(tool_calls) + tool_result + assistant(call_user message) = 4
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(messages[2]["role"].as_str().unwrap(), "tool");
+    assert_eq!(messages[3]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(messages[3]["content"].as_str().unwrap(), "here are the results");
+}
+
 #[test]
 fn test_json_messages_to_entries_round_trip() {
     let (app, _temp) = create_test_app();
