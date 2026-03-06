@@ -1533,6 +1533,7 @@ fn execute_send_message_pure(
 async fn process_tool_calls<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
+    username: &str,
     tool_calls: &[ratatoskr::ToolCall],
     messages: &mut Vec<serde_json::Value>,
     tools: &[Tool],
@@ -1634,16 +1635,19 @@ async fn process_tool_calls<S: ResponseSink>(
     }
 
     // Write all tool_call entries to transcript first (matches API message order:
-    // one assistant message with tool_calls[], then individual tool result messages)
+    // one assistant message with tool_calls[], then individual tool result messages).
+    // Flow control tools produce message + control_transfer entries instead.
     for (i, tc) in tool_calls.iter().enumerate() {
         let metadata = tools::get_tool_metadata(tools, &tc.name);
-        let tool_call_entry = if metadata.flow_control {
-            create_flow_control_call_entry(context_name, &tc.name, &tc.arguments, &tc.id)
+        if metadata.flow_control {
+            // Flow control tools produce message + control_transfer entries later (in the
+            // results loop). No tool_call entry written for them.
         } else {
-            create_tool_call_entry(context_name, &tc.name, &tc.arguments, &tc.id)
-        };
-        app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
-        sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
+            let tool_call_entry =
+                create_tool_call_entry(context_name, &tc.name, &tc.arguments, &tc.id);
+            app.append_to_transcript_and_context(context_name, &tool_call_entry)?;
+            sink.handle(ResponseEvent::TranscriptEntry(tool_call_entry))?;
+        }
 
         // Pre-log diagnostics for parallel-executed tools only.
         // Sequential tools have already emitted their diagnostics in execute_single_tool.
@@ -1676,18 +1680,54 @@ async fn process_tool_calls<S: ResponseSink>(
             summary,
         })?;
 
-        // Log tool result to transcript (flow-control tools: transcript-only, never context)
+        // Log tool result to transcript.
+        // Flow control tools produce message + control_transfer entries instead of tool_call/result.
         let metadata = tools::get_tool_metadata(tools, &tc.name);
+
+        if metadata.flow_control {
+            // call_user: write the message entry + control_transfer entry
+            if metadata.ends_turn {
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
+                let message = args.get_str_or("message", "").to_string();
+
+                if !message.is_empty() {
+                    let msg_entry =
+                        create_flow_control_message_entry(context_name, username, &message, "agent");
+                    app.append_to_transcript_and_context(context_name, &msg_entry)?;
+                    sink.handle(ResponseEvent::TranscriptEntry(msg_entry))?;
+                }
+
+                // Write control_transfer entry
+                let ct_entry = create_control_transfer_entry(context_name, username);
+                app.append_to_transcript_and_context(context_name, &ct_entry)?;
+                sink.handle(ResponseEvent::TranscriptEntry(ct_entry))?;
+
+                // Display the message to the user
+                if !message.is_empty() {
+                    sink.handle(ResponseEvent::StartResponse)?;
+                    sink.handle(ResponseEvent::TextChunk(&message))?;
+                    sink.handle(ResponseEvent::Newline)?;
+                    sink.handle(ResponseEvent::Finished)?;
+                }
+            }
+            // Note: call_agent is disabled as an LLM tool (not in FLOW_TOOL_DEFS).
+            // If it somehow appears (e.g., from hooks/fallback), the existing Handoff
+            // mechanism handles continuation — no transcript entries needed here.
+            // call_agent will be repurposed for future inter-agent control transfer.
+
+            // Don't push tool result to messages for flow control tools.
+            // call_user exits immediately; the Handoff mechanism handles call_agent.
+            continue;
+        }
+
         let logged_result = if result.was_cached {
             &result.final_result
         } else {
             &result.original_result
         };
-        let tool_result_entry = if metadata.flow_control {
-            create_flow_control_result_entry(context_name, &tc.name, logged_result, &tc.id)
-        } else {
-            create_tool_result_entry(context_name, &tc.name, logged_result, &tc.id)
-        };
+        let tool_result_entry =
+            create_tool_result_entry(context_name, &tc.name, logged_result, &tc.id);
         app.append_to_transcript_and_context(context_name, &tool_result_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(tool_result_entry))?;
 
@@ -1851,13 +1891,13 @@ fn handle_final_response<S: ResponseSink>(
     // Determine next action based on handoff.
     // Fuel exhaustion is the caller's responsibility — we just report the action.
     match handoff.take() {
-        tools::HandoffTarget::User { message } => {
-            if !message.is_empty() {
-                sink.handle(ResponseEvent::TextChunk(&message))?;
-                sink.handle(ResponseEvent::Newline)?;
-            }
+        tools::HandoffTarget::User { .. } => {
+            // call_user message already displayed and logged in process_tool_calls.
             Ok(FinalResponseAction::ReturnToUser)
         }
+        // call_agent disabled as LLM tool. HandoffTarget::Agent retained for the
+        // fallback tool mechanism and hook overrides. Will be repurposed for
+        // inter-agent control transfer.
         tools::HandoffTarget::Agent { prompt } => {
             Ok(FinalResponseAction::ContinueWithPrompt(prompt))
         }
@@ -1965,6 +2005,12 @@ pub async fn send_prompt<S: ResponseSink>(
             create_user_message_entry(context_name, &prefixed_prompt, &resolved_config.username);
         app.append_to_transcript_and_context(context_name, &user_entry)?;
         sink.handle(ResponseEvent::TranscriptEntry(user_entry))?;
+
+        // Mark control transfer from user to agent
+        let ct_entry =
+            create_control_transfer_entry(&resolved_config.username, context_name);
+        app.append_to_transcript_and_context(context_name, &ct_entry)?;
+        sink.handle(ResponseEvent::TranscriptEntry(ct_entry))?;
 
         // Context window warning
         if app.should_warn(&context.messages) {
@@ -2167,6 +2213,7 @@ pub async fn send_prompt<S: ResponseSink>(
                 process_tool_calls(
                     app,
                     context_name,
+                    &resolved_config.username,
                     &response.tool_calls,
                     &mut messages,
                     tools,
@@ -2187,26 +2234,9 @@ pub async fn send_prompt<S: ResponseSink>(
                 request_body["messages"] = serde_json::json!(messages);
 
                 // If call_user was invoked, end the turn immediately — no follow-up API call.
-                // The message from call_user (if any) is delivered via handle_final_response.
+                // The message and control_transfer were already written in process_tool_calls.
                 if handoff.ends_turn_requested() {
-                    let final_text = response.full_response.clone();
-                    match handle_final_response(
-                        app,
-                        context_name,
-                        &final_text,
-                        &final_prompt,
-                        handoff,
-                        tools,
-                        &resolved_config,
-                        sink,
-                    )? {
-                        FinalResponseAction::ReturnToUser => return Ok(()),
-                        FinalResponseAction::ContinueWithPrompt(_) => {
-                            // call_user was set; handle_final_response sees User handoff,
-                            // so ContinueWithPrompt should never occur. Defensive: return.
-                            return Ok(());
-                        }
-                    }
+                    return Ok(());
                 }
 
                 // Tool call round costs 1 fuel
