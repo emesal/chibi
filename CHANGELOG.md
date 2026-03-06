@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.9.2] - 2026-02-25
+## [0.10.0] - 2026-03-06
 
 ### Bug Fixes
 
@@ -17,10 +17,28 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Resolve 14 suggestions from codebase review ([`dbeb0a2`](https://github.com/emesal/chibi/commit/dbeb0a24c5d5df1c04416a1d2414f049c5c9ea79))
 
+- Post-review cleanup — DRY site_flock_name, doc accuracy, dead code removal ([`5f04f7b`](https://github.com/emesal/chibi/commit/5f04f7bca0832a2f7471b38c8cf1116ede5e7af6))
+
+- Clarify VFS cache stub to prevent LLM retry loops ([`f34faf1`](https://github.com/emesal/chibi/commit/f34faf1b5fdbbaa679fcfe1ab57c2d66559f9211))
+
+- Prefer stored context cwd over live current_dir for path resolution ([`78f508e`](https://github.com/emesal/chibi/commit/78f508e443c36e1c9e76813b9a34c88eb92fb7e9))
+
+- Replace search-centric cache stub with generic tool wording ([`2587959`](https://github.com/emesal/chibi/commit/25879591fd56f74078e872b4f074c2d23d6da8e5))
+
+- Update TranscriptEntry struct literals in chibi-cli tests ([`b188412`](https://github.com/emesal/chibi/commit/b18841274e10a22b13ac87c5bb32a6f04caaff99))
+
 
 ### Chores
 
 - Add git-cliff changelog generation, bump to v0.9.0 ([`3335a74`](https://github.com/emesal/chibi/commit/3335a7446765a00cd68f7e98756e0549f4ef5367))
+
+- Set ISC licence and publish = false on all crates ([`fde1897`](https://github.com/emesal/chibi/commit/fde1897560f4e72fb18707859540f5c864fb3ad7))
+
+- Notes for loop detection and cwd persistence ([`65c659a`](https://github.com/emesal/chibi/commit/65c659a01eadfa20057c126d8507290d9230b380))
+
+- Disable call_agent as LLM tool ([`172975a`](https://github.com/emesal/chibi/commit/172975a5fc14b13900ae9e0da5c4f3665e6eb64d))
+
+- Apply fmt from just lint ([`fe0994d`](https://github.com/emesal/chibi/commit/fe0994d7d3b25b0cc70fb783837bc361df496d58))
 
 
 ### Documentation
@@ -33,6 +51,53 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Codebase review findings (2026-02-25) ([`95abf09`](https://github.com/emesal/chibi/commit/95abf09d43f93164bbc32592f990a99f69322107))
 
+- Update CHANGELOG for v0.9.2 ([`a0c97f1`](https://github.com/emesal/chibi/commit/a0c97f1b95398694d2c07ba0ef636377839edb6a))
+
+- **tools:** Update mod.rs doc comments to reflect new group structure ([`b2dc2dd`](https://github.com/emesal/chibi/commit/b2dc2ddd7b9fc901732c47860438a070fe0de5d9))
+
+- Update architecture.md for tool group refactor ([`3e7546a`](https://github.com/emesal/chibi/commit/3e7546a2b644556fe586c9aeef0c6d020050e348))
+
+- Add loop prevention section to agentic.md ([`33be520`](https://github.com/emesal/chibi/commit/33be520f9c27f133541000833f0eb7a8efbbdda0))
+
+- Update cache stub example in agentic.md ([`2518c86`](https://github.com/emesal/chibi/commit/2518c86037b4a52efd379aadf5de4cb32126536c))
+
+- Update transcript format for unified flow control messages ([`898672f`](https://github.com/emesal/chibi/commit/898672f8dbb68b19d884427e8f4fc1af188a305f))
+
+- Add call_agent and TranscriptEntry quirks to AGENTS.md ([`45269b6`](https://github.com/emesal/chibi/commit/45269b6952571e71e68c2b41bb2d485a0d7821fd))
+
+
+### Features
+
+- **vfs:** Introduce VfsCaller enum replacing &str caller ([`200cb2d`](https://github.com/emesal/chibi/commit/200cb2df272f060ad439384e75ba6d4d328ba879))
+
+- Site identity, Vfs site_id, and flock registry types ([`6b90ac7`](https://github.com/emesal/chibi/commit/6b90ac78ff12395bf6c74aae8c6729c0c42b2068))
+
+- VFS zones, flock ops, todos migration, /site/ bootstrap (tasks 6-8, 12) ([`78e4742`](https://github.com/emesal/chibi/commit/78e4742a0e30aba333de43348ba25129847aa636))
+
+- Flock goals, LLM tools, and CLI flock management (tasks 9-11) ([`8b0925f`](https://github.com/emesal/chibi/commit/8b0925f7297ff9496adb2392bc62dec1b55c41f5))
+
+- Complete flocks migration — hook payloads, read_context, compaction, and docs (tasks 13-16) ([`b33302f`](https://github.com/emesal/chibi/commit/b33302f109e92d6f71bdf3a3be9c0f0b79f35d05))
+
+- Print site flock name in --version output ([`cdb2ef7`](https://github.com/emesal/chibi/commit/cdb2ef77e8dddf38cb99e4234cb27c709e5359c4))
+
+- Persist cwd in ContextEntry for cross-session path stability ([`ec0f1f7`](https://github.com/emesal/chibi/commit/ec0f1f797c728e049f4b6fb544d6f8cbd11f36a0))
+
+- Add LoopDetector for consecutive identical tool call detection ([`a59aa84`](https://github.com/emesal/chibi/commit/a59aa849d4f94b1279cc0f1f716d3f7a95d1e953))
+
+- Wire LoopDetector into process_tool_calls with fuel penalty and warning injection ([`644769a`](https://github.com/emesal/chibi/commit/644769a3eca3f0aa5f3ff2572d9ad7d668181348))
+
+- Extract stdout/stderr from JSON outputs for cache preview ([`84b9dc7`](https://github.com/emesal/chibi/commit/84b9dc78958d239af79321aafeeb52f158a411e7))
+
+- Add role and flow_control fields to TranscriptEntry ([`77e2306`](https://github.com/emesal/chibi/commit/77e23062cc9d576376c788d1e57df4af562c90b9))
+
+- Entry helpers with role, flow_control, and control_transfer ([`b4dcc9e`](https://github.com/emesal/chibi/commit/b4dcc9eaec747eeaa81e288828f7dd42fed0dd43))
+
+- Entries_to_messages uses role field with backwards-compat fallback ([`2eb9f33`](https://github.com/emesal/chibi/commit/2eb9f33610398c7aa1cfaffd1702ed8099946324))
+
+- Call_user produces message + control_transfer entries ([`32f8019`](https://github.com/emesal/chibi/commit/32f80197ea3c481ad67cb69808758dad87b85f92))
+
+- Unified flow control messages (#211) ([`2dc235e`](https://github.com/emesal/chibi/commit/2dc235e6d36435ab5beab72b412f845ad65ec6d7))
+
 
 ### Refactoring
 
@@ -41,6 +106,26 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Extract apply_pre_tool_results and apply_pre_tool_output_results from execute_tool_pure ([`e633dfe`](https://github.com/emesal/chibi/commit/e633dfef6bdf4bc6aaf7e0291f3e1511422e3b58))
 
 - Unify dual request-building paths (#4) ([`ef8b26b`](https://github.com/emesal/chibi/commit/ef8b26bdf9f80efd7a71664bbf1ebb342dac2a97))
+
+- **tools:** Move shared BuiltinToolDef/require_str_param to mod.rs ([`ebd7fde`](https://github.com/emesal/chibi/commit/ebd7fdee63ea73c479723904e08934071c1b38a2))
+
+- **tools:** Extract memory tool group (reflection, todos, goals, read_context) ([`812aadd`](https://github.com/emesal/chibi/commit/812aaddac85a65421f68e6495002be0d7b4dc00c))
+
+- **tools:** Extract flow tool group (call_agent, call_user, send_message, model_info, spawn_agent, summarize_content) ([`99607ec`](https://github.com/emesal/chibi/commit/99607ecff1620d8276e83d4c7d294ebf6cece50e))
+
+- **tools:** Extract fs_read tool group (file_head/tail/lines/grep, dir_list, glob_files, grep_files) ([`50d6f1f`](https://github.com/emesal/chibi/commit/50d6f1f13072505692120a8fcfaf741b18684ad4))
+
+- **tools:** Extract fs_write tool group (write_file, file_edit) ([`0859266`](https://github.com/emesal/chibi/commit/08592663112e56ec544a69aff857b4ded90d5abf))
+
+- **tools:** Extract shell, network, index tool groups ([`43a0cc5`](https://github.com/emesal/chibi/commit/43a0cc52c5d7a2e1fe9313569cf030f388424a25))
+
+- **tools:** Update dispatchers to use per-group predicates ([`21092d7`](https://github.com/emesal/chibi/commit/21092d79c202e7891e1e7932eae9111b383c30d8))
+
+- **tools:** Delete legacy builtin/file_tools/coding_tools/agent_tools modules ([`242a841`](https://github.com/emesal/chibi/commit/242a84142f0299b1c6a7b4912352e04f04674ec3))
+
+- **vfs:** Migrate all call sites to VfsCaller enum ([`3f05bfb`](https://github.com/emesal/chibi/commit/3f05bfbdd5e471089ca48ac963d6a6211c1fb81d))
+
+- Remove flow_control_call/result entry types ([`a1962e0`](https://github.com/emesal/chibi/commit/a1962e0d4601bdf11d7e926c43488cf628b11441))
 
 
 ### Tests
