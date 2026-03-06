@@ -5,11 +5,12 @@
 
 use crate::context::{
     ENTRY_TYPE_ARCHIVAL, ENTRY_TYPE_COMPACTION, ENTRY_TYPE_CONTEXT_CREATED,
-    ENTRY_TYPE_FLOW_CONTROL_CALL, ENTRY_TYPE_FLOW_CONTROL_RESULT, ENTRY_TYPE_MESSAGE,
-    ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT, EntryMetadata, TranscriptEntry,
+    ENTRY_TYPE_CONTROL_TRANSFER, ENTRY_TYPE_FLOW_CONTROL_CALL, ENTRY_TYPE_FLOW_CONTROL_RESULT,
+    ENTRY_TYPE_MESSAGE, ENTRY_TYPE_TOOL_CALL, ENTRY_TYPE_TOOL_RESULT, EntryMetadata,
+    TranscriptEntry,
 };
 
-/// Create a transcript entry for a user message
+/// Create a transcript entry for a user message (flow control: user → agent)
 pub fn create_user_message_entry(
     context_name: &str,
     content: &str,
@@ -20,16 +21,23 @@ pub fn create_user_message_entry(
         .to(context_name)
         .content(content)
         .entry_type(ENTRY_TYPE_MESSAGE)
+        .role("user")
+        .flow_control(true)
         .build()
 }
 
 /// Create a transcript entry for an assistant message
-pub fn create_assistant_message_entry(context_name: &str, content: &str) -> TranscriptEntry {
+pub fn create_assistant_message_entry(
+    context_name: &str,
+    content: &str,
+    username: &str,
+) -> TranscriptEntry {
     TranscriptEntry::builder()
         .from(context_name)
-        .to("user")
+        .to(username)
         .content(content)
         .entry_type(ENTRY_TYPE_MESSAGE)
+        .role("agent")
         .build()
 }
 
@@ -62,6 +70,35 @@ pub fn create_tool_result_entry(
         .content(result)
         .entry_type(ENTRY_TYPE_TOOL_RESULT)
         .tool_call_id(tool_call_id)
+        .build()
+}
+
+/// Create a control_transfer entry marking when control passes between parties.
+/// Pure signal — no content. Skipped by entries_to_messages (not a message type).
+pub fn create_control_transfer_entry(from: &str, to: &str) -> TranscriptEntry {
+    TranscriptEntry::builder()
+        .from(from)
+        .to(to)
+        .entry_type(ENTRY_TYPE_CONTROL_TRANSFER)
+        .flow_control(true)
+        .build()
+}
+
+/// Create a message entry for a flow control event (call_user).
+/// These are real messages with content, included in API history via entries_to_messages.
+pub fn create_flow_control_message_entry(
+    from: &str,
+    to: &str,
+    content: &str,
+    role: &str,
+) -> TranscriptEntry {
+    TranscriptEntry::builder()
+        .from(from)
+        .to(to)
+        .content(content)
+        .entry_type(ENTRY_TYPE_MESSAGE)
+        .role(role)
+        .flow_control(true)
         .build()
 }
 

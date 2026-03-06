@@ -17,7 +17,8 @@ use crate::input::DebugKey;
 use crate::json_ext::JsonExt;
 use crate::output::NoopSink;
 use crate::state::{
-    AppState, create_assistant_message_entry, create_flow_control_call_entry,
+    AppState, create_assistant_message_entry, create_control_transfer_entry,
+    create_flow_control_call_entry, create_flow_control_message_entry,
     create_flow_control_result_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry, format_flock_sections, load_flock_contexts,
 };
@@ -1812,7 +1813,7 @@ fn handle_final_response<S: ResponseSink>(
     final_prompt: &str,
     mut handoff: tools::Handoff,
     tools: &[Tool],
-    _resolved_config: &ResolvedConfig,
+    resolved_config: &ResolvedConfig,
     sink: &mut S,
 ) -> io::Result<FinalResponseAction> {
     // Get or create context to add the message
@@ -1825,7 +1826,8 @@ fn handle_final_response<S: ResponseSink>(
         full_response.to_string(),
     );
 
-    let assistant_entry = create_assistant_message_entry(context_name, full_response);
+    let assistant_entry =
+        create_assistant_message_entry(context_name, full_response, &resolved_config.username);
     app.append_to_transcript_and_context(context_name, &assistant_entry)?;
     sink.handle(ResponseEvent::TranscriptEntry(assistant_entry))?;
 

@@ -824,10 +824,10 @@ fn test_create_user_message_entry() {
 #[test]
 fn test_create_assistant_message_entry() {
     let (_app, _temp) = create_test_app();
-    let entry = create_assistant_message_entry("default", "Hi there!");
+    let entry = create_assistant_message_entry("default", "Hi there!", "fey");
 
     assert_eq!(entry.from, "default");
-    assert_eq!(entry.to, "user");
+    assert_eq!(entry.to, "fey");
     assert_eq!(entry.content, "Hi there!");
     assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
 }
@@ -1361,7 +1361,7 @@ fn test_entries_to_messages_includes_tool_calls() {
         create_user_message_entry("ctx", "do something", "testuser"),
         create_tool_call_entry("ctx", "web_search", r#"{"query":"rust"}"#, "tc_1"),
         create_tool_result_entry("ctx", "web_search", "search results here", "tc_1"),
-        create_assistant_message_entry("ctx", "here are the results"),
+        create_assistant_message_entry("ctx", "here are the results", "testuser"),
     ];
 
     let messages = app.entries_to_messages(&entries);
@@ -1427,7 +1427,7 @@ fn test_entries_to_messages_sequential_tool_calls_are_separate_turns() {
         create_tool_result_entry("ctx", "tool_b", "result_b", "tc_b"),
         create_tool_call_entry("ctx", "tool_c", r#"{"c":3}"#, "tc_c"),
         create_tool_result_entry("ctx", "tool_c", "result_c", "tc_c"),
-        create_assistant_message_entry("ctx", "all done"),
+        create_assistant_message_entry("ctx", "all done", "testuser"),
     ];
 
     let messages = app.entries_to_messages(&entries);
@@ -2012,6 +2012,50 @@ fn test_transcript_entry_deserialize_missing_new_fields() {
     assert!(!entry.flow_control);
 }
 
+// === Updated entry helpers ===
+
+#[test]
+fn test_create_user_message_entry_has_role_and_flow_control() {
+    let entry = create_user_message_entry("norse", "hello", "fey");
+    assert_eq!(entry.role.as_deref(), Some("user"));
+    assert!(entry.flow_control);
+    assert_eq!(entry.from, "fey");
+    assert_eq!(entry.to, "norse");
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
+}
+
+#[test]
+fn test_create_assistant_message_entry_has_role_and_username() {
+    let entry = create_assistant_message_entry("norse", "hello", "fey");
+    assert_eq!(entry.role.as_deref(), Some("agent"));
+    assert_eq!(entry.from, "norse");
+    assert_eq!(entry.to, "fey");
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
+    assert!(!entry.flow_control);
+}
+
+#[test]
+fn test_create_control_transfer_entry() {
+    let entry = create_control_transfer_entry("fey", "norse");
+    assert_eq!(entry.from, "fey");
+    assert_eq!(entry.to, "norse");
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_CONTROL_TRANSFER);
+    assert!(entry.flow_control);
+    assert!(entry.content.is_empty());
+    assert!(entry.role.is_none());
+}
+
+#[test]
+fn test_create_flow_control_message_entry() {
+    let entry = create_flow_control_message_entry("norse", "fey", "done", "agent");
+    assert_eq!(entry.from, "norse");
+    assert_eq!(entry.to, "fey");
+    assert_eq!(entry.content, "done");
+    assert_eq!(entry.role.as_deref(), Some("agent"));
+    assert!(entry.flow_control);
+    assert_eq!(entry.entry_type, crate::context::ENTRY_TYPE_MESSAGE);
+}
+
 // === Flow-control entry tests ===
 
 #[test]
@@ -2099,7 +2143,7 @@ fn test_rebuild_context_includes_flow_control_entries() {
     let fc_call =
         create_flow_control_call_entry(ctx, "call_user", r#"{"message": "done"}"#, "fc_1");
     let fc_result = create_flow_control_result_entry(ctx, "call_user", "Returning to user", "fc_1");
-    let assistant_msg = create_assistant_message_entry(ctx, "done");
+    let assistant_msg = create_assistant_message_entry(ctx, "done", "testuser");
 
     for entry in &[&anchor, &user_msg, &fc_call, &fc_result, &assistant_msg] {
         app.append_to_transcript(ctx, entry).unwrap();
