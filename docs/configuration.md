@@ -139,11 +139,11 @@ reflection_character_limit = 10000
 # Fuel Budget (Agentic Loop Limits)
 # =============================================================================
 
-# Total fuel budget for autonomous tool loops (default: 30)
+# Total fuel budget for autonomous tool loops (default: 0 = unlimited)
 # Each tool-call round and agent continuation costs 1 fuel. First turn is free.
-# Set to 0 to disable fuel tracking entirely (unlimited mode — no budget enforced,
-# no fuel info injected into prompts or hook payloads).
-fuel = 30
+# Set to a positive number to enable fuel tracking (budget enforced,
+# fuel info injected into prompts and hook payloads).
+fuel = 0
 
 # Fuel cost of an empty LLM response (default: 15)
 # When the LLM returns an empty response (no text, no tool calls), this much

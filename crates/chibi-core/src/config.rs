@@ -527,7 +527,7 @@ impl ConfigDefaults {
     /// Sentinel: 0 = fetch from ratatoskr at runtime
     pub const CONTEXT_WINDOW_LIMIT: usize = 0;
     pub const REFLECTION_CHARACTER_LIMIT: usize = 10_000;
-    pub const FUEL: usize = 30;
+    pub const FUEL: usize = 0;
     pub const FUEL_EMPTY_RESPONSE_COST: usize = 15;
     pub const LOCK_HEARTBEAT_SECONDS: u64 = 30;
     pub const ROLLING_COMPACT_DROP_PERCENTAGE: f32 = 50.0;
