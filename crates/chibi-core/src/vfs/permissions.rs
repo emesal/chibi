@@ -7,6 +7,10 @@
 //! - `/site/` — all contexts can read and write
 //! - `/flocks/registry.json` — SYSTEM only
 //! - `/flocks/<name>/*` — flock members + SYSTEM
+//! - `/tools/sys/` — read-only, never writable (virtual; even SYSTEM cannot write)
+//! - `/tools/shared/` — world-writable
+//! - `/tools/home/<context>/` — owner-writable
+//! - `/tools/flocks/<name>/` — flock members only
 //! - everything else at root level — read-only (only SYSTEM can write)
 
 use std::io::{self, ErrorKind};
@@ -42,6 +46,17 @@ pub fn check_write(
     path: &VfsPath,
     flock_ctx: Option<(&FlockRegistry, &str)>,
 ) -> io::Result<()> {
+    let p = path.as_str();
+
+    // /tools/sys/ — never writable; not backed by real storage, even SYSTEM cannot write.
+    // This check must precede the System early-return below.
+    if p == "/tools/sys" || p.starts_with("/tools/sys/") {
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            format!("'{}' is read-only (virtual tool registry)", path),
+        ));
+    }
+
     if caller == VfsCaller::System {
         return Ok(());
     }
@@ -49,8 +64,6 @@ pub fn check_write(
     let VfsCaller::Context(name) = caller else {
         unreachable!()
     };
-
-    let p = path.as_str();
 
     // /shared/ — world-writable
     if p == "/shared" || p.starts_with("/shared/") {
@@ -100,11 +113,50 @@ pub fn check_write(
         }
     }
 
+    // /tools/shared/ — world-writable (synthesised tools shared across all contexts)
+    if p == "/tools/shared" || p.starts_with("/tools/shared/") {
+        return Ok(());
+    }
+
+    // /tools/home/<ctx>/ — owner-writable
+    if let Some(rest) = p.strip_prefix("/tools/home/") {
+        let owner = rest.split('/').next().unwrap_or("");
+        if owner == name {
+            return Ok(());
+        }
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            format!(
+                "context '{}' cannot write to /tools/home/{}/",
+                name, owner
+            ),
+        ));
+    }
+
+    // /tools/flocks/<name>/ — flock members only
+    if let Some(rest) = p.strip_prefix("/tools/flocks/") {
+        let flock_name = rest.split('/').next().unwrap_or("");
+        if !flock_name.is_empty() {
+            if let Some((registry, site_id)) = flock_ctx
+                && registry.is_member(flock_name, name, &site_flock_name(site_id))
+            {
+                return Ok(());
+            }
+            return Err(io::Error::new(
+                ErrorKind::PermissionDenied,
+                format!(
+                    "context '{}' is not a member of flock '{}'",
+                    name, flock_name
+                ),
+            ));
+        }
+    }
+
     Err(io::Error::new(
         ErrorKind::PermissionDenied,
         format!(
-            "context '{}' cannot write to '{}' (writable zones: /shared/, /home/{}/, /site/, /flocks/<joined-flock>/)",
-            name, path, name
+            "context '{}' cannot write to '{}' (writable zones: /shared/, /home/{}/, /site/, /flocks/<joined-flock>/, /tools/shared/, /tools/home/{}/, /tools/flocks/<joined-flock>/)",
+            name, path, name, name
         ),
     ))
 }
@@ -221,5 +273,71 @@ mod tests {
         let path = VfsPath::new("/flocks/frontend/goals.md").unwrap();
         // No registry provided → denied
         assert!(check_write(VfsCaller::Context("ui-dev"), &path, None).is_err());
+    }
+
+    // --- /tools/ zones ---
+
+    #[test]
+    fn test_tools_sys_read_allowed() {
+        let path = VfsPath::new("/tools/sys/shell_exec").unwrap();
+        assert!(check_read(VfsCaller::Context("any"), &path).is_ok());
+    }
+
+    #[test]
+    fn test_tools_sys_write_denied_for_context() {
+        let path = VfsPath::new("/tools/sys/shell_exec").unwrap();
+        assert!(check_write(VfsCaller::Context("any"), &path, None).is_err());
+    }
+
+    #[test]
+    fn test_tools_sys_write_denied_for_system() {
+        // /tools/sys/ is virtual — even SYSTEM cannot write
+        let path = VfsPath::new("/tools/sys/anything").unwrap();
+        assert!(check_write(VfsCaller::System, &path, None).is_err());
+    }
+
+    #[test]
+    fn test_tools_sys_root_write_denied_for_system() {
+        let path = VfsPath::new("/tools/sys").unwrap();
+        assert!(check_write(VfsCaller::System, &path, None).is_err());
+    }
+
+    #[test]
+    fn test_tools_shared_writable_by_context() {
+        let path = VfsPath::new("/tools/shared/my_tool.scm").unwrap();
+        assert!(check_write(VfsCaller::Context("any"), &path, None).is_ok());
+    }
+
+    #[test]
+    fn test_tools_shared_root_writable() {
+        let path = VfsPath::new("/tools/shared").unwrap();
+        assert!(check_write(VfsCaller::Context("any"), &path, None).is_ok());
+    }
+
+    #[test]
+    fn test_tools_home_owner_writable() {
+        let path = VfsPath::new("/tools/home/alice/my_tool.scm").unwrap();
+        assert!(check_write(VfsCaller::Context("alice"), &path, None).is_ok());
+    }
+
+    #[test]
+    fn test_tools_home_non_owner_denied() {
+        let path = VfsPath::new("/tools/home/alice/my_tool.scm").unwrap();
+        assert!(check_write(VfsCaller::Context("bob"), &path, None).is_err());
+    }
+
+    #[test]
+    fn test_tools_flocks_member_writable() {
+        let mut reg = FlockRegistry::default();
+        reg.add_member("devteam", "alice", "site:abc");
+        let path = VfsPath::new("/tools/flocks/devteam/shared_tool.scm").unwrap();
+        assert!(check_write(VfsCaller::Context("alice"), &path, Some((&reg, "abc"))).is_ok());
+    }
+
+    #[test]
+    fn test_tools_flocks_non_member_denied() {
+        let reg = FlockRegistry::default();
+        let path = VfsPath::new("/tools/flocks/devteam/shared_tool.scm").unwrap();
+        assert!(check_write(VfsCaller::Context("bob"), &path, Some((&reg, "abc"))).is_err());
     }
 }
