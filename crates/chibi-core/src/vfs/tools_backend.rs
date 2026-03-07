@@ -77,7 +77,10 @@ impl VfsBackend for ToolsBackend {
             let reg = self.registry.read().map_err(|_| Self::lock_err())?;
             Ok(reg
                 .all()
-                .map(|t| VfsEntry { name: t.name.clone(), kind: VfsEntryKind::File })
+                .map(|t| VfsEntry {
+                    name: t.name.clone(),
+                    kind: VfsEntryKind::File,
+                })
                 .collect())
         })
     }
@@ -106,26 +109,26 @@ impl VfsBackend for ToolsBackend {
             }
             let reg = self.registry.read().map_err(|_| Self::lock_err())?;
             if reg.get(name).is_some() {
-                Ok(VfsMetadata { size: 0, created: None, modified: None, kind: VfsEntryKind::File })
+                Ok(VfsMetadata {
+                    size: 0,
+                    created: None,
+                    modified: None,
+                    kind: VfsEntryKind::File,
+                })
             } else {
-                Err(io::Error::new(io::ErrorKind::NotFound, format!("no tool: {name}")))
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no tool: {name}"),
+                ))
             }
         })
     }
 
-    fn write<'a>(
-        &'a self,
-        path: &'a VfsPath,
-        _data: &'a [u8],
-    ) -> BoxFuture<'a, io::Result<()>> {
+    fn write<'a>(&'a self, path: &'a VfsPath, _data: &'a [u8]) -> BoxFuture<'a, io::Result<()>> {
         Box::pin(async move { Err(Self::write_denied(path)) })
     }
 
-    fn append<'a>(
-        &'a self,
-        path: &'a VfsPath,
-        _data: &'a [u8],
-    ) -> BoxFuture<'a, io::Result<()>> {
+    fn append<'a>(&'a self, path: &'a VfsPath, _data: &'a [u8]) -> BoxFuture<'a, io::Result<()>> {
         Box::pin(async move { Err(Self::write_denied(path)) })
     }
 
@@ -137,19 +140,11 @@ impl VfsBackend for ToolsBackend {
         Box::pin(async move { Err(Self::write_denied(path)) })
     }
 
-    fn copy<'a>(
-        &'a self,
-        path: &'a VfsPath,
-        _dst: &'a VfsPath,
-    ) -> BoxFuture<'a, io::Result<()>> {
+    fn copy<'a>(&'a self, path: &'a VfsPath, _dst: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
         Box::pin(async move { Err(Self::write_denied(path)) })
     }
 
-    fn rename<'a>(
-        &'a self,
-        path: &'a VfsPath,
-        _dst: &'a VfsPath,
-    ) -> BoxFuture<'a, io::Result<()>> {
+    fn rename<'a>(&'a self, path: &'a VfsPath, _dst: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
         Box::pin(async move { Err(Self::write_denied(path)) })
     }
 }
@@ -223,8 +218,18 @@ mod tests {
     async fn test_tools_backend_exists() {
         let registry = make_registry_with("fetch_url", ToolCategory::Network);
         let backend = ToolsBackend::new(registry);
-        assert!(backend.exists(&VfsPath::new("/fetch_url").unwrap()).await.unwrap());
-        assert!(!backend.exists(&VfsPath::new("/nope").unwrap()).await.unwrap());
+        assert!(
+            backend
+                .exists(&VfsPath::new("/fetch_url").unwrap())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !backend
+                .exists(&VfsPath::new("/nope").unwrap())
+                .await
+                .unwrap()
+        );
         assert!(backend.exists(&VfsPath::new("/").unwrap()).await.unwrap()); // root exists
     }
 

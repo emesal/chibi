@@ -126,10 +126,7 @@ pub fn check_write(
         }
         return Err(io::Error::new(
             ErrorKind::PermissionDenied,
-            format!(
-                "context '{}' cannot write to /tools/home/{}/",
-                name, owner
-            ),
+            format!("context '{}' cannot write to /tools/home/{}/", name, owner),
         ));
     }
 
