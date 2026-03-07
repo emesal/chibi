@@ -99,6 +99,7 @@
 - Flow tools added separately after registry iteration (spawn_agent needs dynamic preset_capabilities injected).
 
 ### Phase 3 — COMPLETE (Tasks 11–14)
+### Phase 4 — IN PROGRESS (Tasks 15–19)
 
 **What was done:**
 - Task 11: Added `/tools/sys/`, `/tools/shared/`, `/tools/home/<ctx>/`, `/tools/flocks/<name>/` zone rules to `permissions.rs`. `/tools/sys/` deny precedes System early-return — even SYSTEM cannot write. 25 permission tests pass.
@@ -112,6 +113,34 @@
 - `ToolsBackend` receives the stripped path (without `/tools/sys` prefix): `/shell_exec` for `/tools/sys/shell_exec`.
 - `app.vfs` is replaced after `AppState::load()` in `load_with_options` — `app` must be `mut`.
 - `for_test()` in `chibi.rs` still uses `AppState::for_test()` which has its own VFS — does not mount `ToolsBackend` (test registry is separate from VFS).
+
+#### Tasks 15–17 — COMPLETE (commit `70486dfc`, dep update `770f9cfa`)
+
+**What was done:**
+- Task 15: Added `synthesised-tools` feature (on by default) gating optional `tein` dep. tein v0.2.1 on `main` branch (includes `json_value_to_value` from PR #140). `features = ["json"]` required.
+- Task 16: `ToolImpl::Synthesised { vfs_path: VfsPath, context: Arc<ThreadLocalContext> }` behind `#[cfg(feature = "synthesised-tools")]`. Manual `Clone` arm. Both `dispatch_impl` and `dispatch_with_context` wired to `synthesised::execute_synthesised`.
+- Task 17: `crates/chibi-core/src/tools/synthesised.rs` — `load_tool_from_source`, `execute_synthesised`, `params_alist_to_json_schema`, `json_args_to_scheme_alist` (via `tein::json_value_to_value`). 8 tests pass. 786 total tests pass, `just lint` clean.
+
+**Implementation notes (critical for tasks 18–19):**
+- **Sandboxed tein context = null env.** Only `import` is available without explicit import. Tool source MUST start with `(import (scheme base))` for `assoc`, `cons`, `car`, `cdr`, `number->string`, etc. Add `(scheme list)`, `(scheme write)` etc. as needed.
+- **step_limit must be 10_000_000+** to accommodate `(import (scheme base))` cost. 100_000 is far too low.
+- **tein flattens `(name . proper-list)` into `List([name, ...])`.** So `'((text . ((type . "string") ...)))` becomes `List([List([Symbol("text"), Pair(Symbol("type"), String("string")), ...])])` — each entry is a list, not a pair. `params_alist_to_json_schema` handles this.
+- **`json_value_to_value` (from tein) converts JSON object → scheme alist with `Value::String` keys** (not symbols). `assoc` with string key works in scheme via `equal?`.
+- **`tein::json_value_to_value`** is now public in tein v0.2.1. Used directly in `json_args_to_scheme_alist`.
+- **`pub mod synthesised` added to `tools/mod.rs`** — registry.rs dispatches via `super::synthesised::execute_synthesised`.
+- The no-feature stub `execute_synthesised(_: &(), _: &ToolCall)` exists so `synthesised.rs` compiles without the feature — it's `unreachable!()` at runtime since `ToolImpl::Synthesised` is also cfg-gated.
+
+#### Tasks 18–19 — COMPLETE
+
+**What was done:**
+- Task 18: Added `scan_and_register(vfs, registry)` to `synthesised.rs` — scans `/tools/shared` for `.scm` files at startup and registers them. Called from `load_with_options` via `Handle::current().block_on(...)` (sync context). 4 new scan tests.
+- Task 19: Added `ScmChangeKind`, `ScmChangeCallback` type alias, `on_scm_change: Option<ScmChangeCallback>` field to `Vfs`. `is_scm_tool_path` helper. Callback fires after successful write/delete on `/tools/{shared,home,flocks}/**/*.scm`. Added `set_scm_change_callback` setter. Added `find_by_vfs_path` to `ToolRegistry`. Added `reload_tool_from_content` and `unregister_tool_at_path` to `synthesised.rs`. Wired in `load_with_options`. 7 new hot-reload tests. 797 total tests pass, `just lint` clean.
+
+**Implementation notes:**
+- `ScmChangeCallback` passes `Option<&[u8]>` (the written bytes) to avoid re-reading from VFS in the callback — no unsafe, no `Handle::block_on` needed in the callback itself.
+- `Vfs` is `!Sync` (RefCell), so the callback cannot capture `&Vfs`. The content-passing design sidesteps this cleanly.
+- `on_scm_change` is `pub` — set directly; `set_scm_change_callback` is the setter.
+- `find_by_vfs_path` iterates the IndexMap values — O(n) but tool counts are small.
 
 ---
 
@@ -1740,6 +1769,9 @@ vfs:///tools/sys/. registry shared via Arc<RwLock<>>.
 
 ## Phase 4: Synthesised Tools (tein integration)
 
+> Tasks 15–17 complete. See progress summary above (after Phase 3 notes).
+> Next: Task 18 (VFS scan on startup), Task 19 (hot-reload on write).
+
 ### tein API verification — DONE
 
 All assumed types/methods confirmed present in `~/projects/tein/tein/src/`:
@@ -2079,41 +2111,37 @@ convention-based: homoiconic schema as scheme data.
 ### Task 18: Scan writable VFS zones on startup
 
 **Files:**
-- Modify: `crates/chibi-core/src/chibi.rs` (init)
-- Modify: `crates/chibi-core/src/tools/synthesised.rs`
+- Modify: `crates/chibi-core/src/tools/synthesised.rs` — add `scan_and_register`
+- Modify: `crates/chibi-core/src/chibi.rs` — call after registry + VFS are constructed
 
-**Step 1: Implement scan function**
+**Before starting:** check `Vfs` API for `list` / `exists` / `read` call signatures in `crates/chibi-core/src/vfs/vfs.rs`. The VfsCaller for system-initiated scans is `VfsCaller::System`. Check whether `vfs.list` returns `io::Result<Vec<VfsEntry>>` and what `VfsEntry` looks like.
+
+**Step 1: Implement scan function in `synthesised.rs`**
 
 ```rust
-/// Scan VFS zones for .scm files and register synthesised tools.
-pub async fn scan_and_register(
-    vfs: &Vfs,
-    registry: &mut ToolRegistry,
-) -> io::Result<()> {
+#[cfg(feature = "synthesised-tools")]
+pub async fn scan_and_register(vfs: &Vfs, registry: &mut ToolRegistry) -> io::Result<()> {
     let zones = ["/tools/shared"];
-    // also scan /tools/home/*/ and /tools/flocks/*/
     for zone in &zones {
-        let zone_path = VfsPath::new(zone)?;
+        let Ok(zone_path) = VfsPath::new(zone) else { continue };
         if !vfs.exists(VfsCaller::System, &zone_path).await.unwrap_or(false) {
             continue;
         }
-        let entries = vfs.list(VfsCaller::System, &zone_path).await?;
+        let entries = match vfs.list(VfsCaller::System, &zone_path).await {
+            Ok(e) => e,
+            Err(_) => continue,  // zone unreadable — skip silently
+        };
         for entry in entries {
-            if entry.name.ends_with(".scm") {
-                let file_path = VfsPath::new(&format!("{}/{}", zone, entry.name))?;
-                let source = vfs.read(VfsCaller::System, &file_path).await?;
-                let source_str = String::from_utf8(source).map_err(|e| {
-                    io::Error::new(io::ErrorKind::InvalidData, e)
-                })?;
-                match load_tool_from_source(&source_str, &file_path) {
-                    Ok(tool) => {
-                        log::info!("registered synthesised tool: {}", tool.name);
-                        registry.register(tool);
-                    }
-                    Err(e) => {
-                        log::warn!("failed to load {}: {}", file_path, e);
-                    }
-                }
+            if !entry.name.ends_with(".scm") { continue; }
+            let Ok(file_path) = VfsPath::new(&format!("{zone}/{}", entry.name)) else { continue };
+            let source = match vfs.read(VfsCaller::System, &file_path).await {
+                Ok(b) => b,
+                Err(e) => { log::warn!("synthesised: read {file_path}: {e}"); continue; }
+            };
+            let Ok(source_str) = String::from_utf8(source) else { continue; };
+            match load_tool_from_source(&source_str, &file_path) {
+                Ok(tool) => { log::info!("synthesised: registered {}", tool.name); registry.register(tool); }
+                Err(e)   => { log::warn!("synthesised: load {file_path}: {e}"); }
             }
         }
     }
@@ -2121,16 +2149,32 @@ pub async fn scan_and_register(
 }
 ```
 
-**Step 2: Call from Chibi init after registry and VFS are constructed**
+Note: `load_tool_from_source` is synchronous (spawns a tein managed thread) but is fast enough to call inline. If startup latency becomes a concern, parallelize with `join_all` in a later pass.
 
-**Step 3: Write integration test**
+**Step 2: Call from `load_with_options` in `chibi.rs`**
 
-Write a `.scm` file to the VFS shared zone, then verify the tool appears in the registry and can be dispatched.
+After the existing VFS rebuild (the `app.vfs = Vfs::builder()...` block), add:
+
+```rust
+#[cfg(feature = "synthesised-tools")]
+{
+    let mut reg = self.registry.write().unwrap();
+    crate::tools::synthesised::scan_and_register(&app.vfs, &mut reg).await?;
+}
+```
+
+`self.registry` is an `Arc<RwLock<ToolRegistry>>`. Lock, scan, drop before any `.await` on other things.
+
+**Step 3: Integration test**
+
+In `chibi.rs` tests or a separate test file: create a `Chibi` via `Chibi::for_test()`, write a minimal `.scm` tool to the VFS shared zone, call `scan_and_register` manually, assert the tool appears in the registry.
+
+Note: `for_test()` uses `AppState::for_test()` which may not have `/tools/shared/` writable. Check VFS permissions in test context — may need to write directly via `app.vfs.write(VfsCaller::System, ...)`.
 
 **Step 4: Run tests**
 
 Run: `cargo test -p chibi-core`
-Expected: PASS
+Expected: 786+ tests pass
 
 **Step 5: Commit**
 
@@ -2143,47 +2187,82 @@ feat: scan VFS zones for synthesised tools on startup (#190)
 ### Task 19: Hot-reload on VFS writes
 
 **Files:**
-- Modify: `crates/chibi-core/src/vfs/vfs.rs` (post-write callback)
-- Modify: `crates/chibi-core/src/tools/synthesised.rs`
+- Modify: `crates/chibi-core/src/vfs/vfs.rs` — post-write/delete callback
+- Modify: `crates/chibi-core/src/tools/synthesised.rs` — reload/unregister logic
+- Modify: `crates/chibi-core/src/chibi.rs` — wire callback at init
 
-**Step 1: Add a post-write hook mechanism to Vfs**
+**Before starting:** look at `Vfs::write` and `Vfs::delete` signatures and how they're called. The callback needs to fire after a successful write/delete to a `/tools/` path ending in `.scm`.
 
-When a write completes to `/tools/shared/`, `/tools/home/*/`, or `/tools/flocks/*/` and the file ends in `.scm`, trigger a reload callback.
+**Step 1: Add post-write/delete callback to Vfs**
 
-Options:
-- A closure stored on Vfs: `on_tool_write: Option<Box<dyn Fn(&VfsPath) + Send + Sync>>`
-- A channel-based notification
+Add to `Vfs`:
+```rust
+pub on_scm_write: Option<Arc<dyn Fn(&VfsPath) + Send + Sync>>,
+pub on_scm_delete: Option<Arc<dyn Fn(&VfsPath) + Send + Sync>>,
+```
 
-Use the closure approach for simplicity. The closure calls into the synthesised module to reload the tool.
+Or a single `on_scm_change: Option<Arc<dyn Fn(&VfsPath, ScmChangeKind) + Send + Sync>>` where `ScmChangeKind` is `Write | Delete`.
 
-**Step 2: Implement reload logic**
+After a successful `vfs.write(...)` on a path matching `/tools/{shared,home/**,flocks/**}/*.scm`, invoke the callback. Similarly for `delete`.
+
+Check whether `Vfs` is `Clone` or shared as `Arc` — the callback must be set before any concurrent access.
+
+**Step 2: Implement reload/unregister in `synthesised.rs`**
 
 ```rust
-pub fn reload_tool(
-    vfs: &Vfs,
-    registry: &Arc<RwLock<ToolRegistry>>,
-    path: &VfsPath,
-) {
-    // read source, load tool, register (replacing old if exists)
+#[cfg(feature = "synthesised-tools")]
+pub fn reload_tool_sync(vfs: &Vfs, registry: &Arc<RwLock<ToolRegistry>>, path: &VfsPath) {
+    // NOTE: this runs in a sync callback — use blocking read, not .await
+    // Check Vfs for a sync read method or use tokio::runtime::Handle::current().block_on(...)
+    // Read source, load_tool_from_source, registry.write().unwrap().register(tool)
+}
+
+#[cfg(feature = "synthesised-tools")]
+pub fn unregister_tool_at_path(registry: &Arc<RwLock<ToolRegistry>>, path: &VfsPath) {
+    // Find tool(s) whose ToolImpl::Synthesised { vfs_path } == path, unregister by name.
+    // ToolRegistry needs a method to iterate and find by vfs_path, or add
+    // ToolRegistry::unregister_by_vfs_path(path) that checks ToolImpl.
 }
 ```
 
-**Step 3: Handle deletion**
+**Important:** `ToolRegistry::unregister` takes a name. To find the name by vfs_path, either:
+- Add `ToolRegistry::find_by_vfs_path(&VfsPath) -> Option<&Tool>` that iterates and matches `ToolImpl::Synthesised { vfs_path, .. }`
+- Or keep a `vfs_path → name` side-map in the registry
 
-When a `.scm` file is deleted, unregister the tool. This requires either:
-- Tracking vfs_path → tool_name mapping
-- Or deriving tool name from the path (filename minus `.scm`)
+The iterate-and-match approach is simpler and avoids extra state.
 
-Use the convention: filename (minus `.scm`) is checked against registered tools' `vfs_path`.
+**Step 3: Wire at init in `chibi.rs`**
+
+After `scan_and_register`, set the callback on `app.vfs`:
+
+```rust
+#[cfg(feature = "synthesised-tools")]
+{
+    let reg = Arc::clone(&self.registry);
+    // need a way to read vfs synchronously from a non-async callback
+    app.vfs.on_scm_write = Some(Arc::new(move |path| {
+        synthesised::reload_tool_sync(&vfs_clone, &reg, path);
+    }));
+}
+```
+
+**Note:** the callback is sync but `Vfs::read` is async. Either:
+- Add `Vfs::read_sync` that uses `Handle::current().block_on`
+- Or make the callback itself async (if `Vfs` supports that)
+
+Check how other post-write hooks are handled in chibi (e.g. plugin hooks) for the established pattern.
 
 **Step 4: Write tests**
 
-Test: write a .scm → tool appears. Overwrite → tool updated. Delete → tool gone.
+Test (using `AppState::for_test()` or a temp VFS):
+1. Write a `.scm` tool → callback fires → tool appears in registry
+2. Overwrite with different description → tool updated in registry
+3. Delete → tool removed from registry
 
 **Step 5: Run tests**
 
 Run: `cargo test -p chibi-core`
-Expected: PASS
+Expected: 786+ tests pass
 
 **Step 6: Commit**
 

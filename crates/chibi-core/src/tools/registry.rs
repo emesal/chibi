@@ -158,6 +158,17 @@ impl ToolRegistry {
         self.tools.shift_remove(name)
     }
 
+    /// Find the first synthesised tool whose VFS path matches `path`.
+    ///
+    /// Used by the hot-reload callback to resolve a path to a tool name before
+    /// re-registering or unregistering.
+    #[cfg(feature = "synthesised-tools")]
+    pub fn find_by_vfs_path(&self, path: &crate::vfs::VfsPath) -> Option<&Tool> {
+        self.tools.values().find(
+            |t| matches!(&t.r#impl, ToolImpl::Synthesised { vfs_path, .. } if vfs_path == path),
+        )
+    }
+
     /// Look up by name. O(1).
     pub fn get(&self, name: &str) -> Option<&Tool> {
         self.tools.get(name)

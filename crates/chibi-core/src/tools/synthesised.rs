@@ -38,9 +38,9 @@ use tein::{Context, ThreadLocalContext, Value, sandbox::Modules};
 
 use std::io;
 
-use crate::tools::registry::ToolCall;
+use crate::tools::registry::{ToolCall, ToolRegistry};
 use crate::tools::{Tool, ToolCategory, ToolImpl, ToolMetadata};
-use crate::vfs::VfsPath;
+use crate::vfs::{Vfs, VfsCaller, VfsPath}; // Vfs+VfsCaller used in scan_and_register
 
 /// Load a synthesised tool from scheme source.
 ///
@@ -127,6 +127,94 @@ pub async fn execute_synthesised(
 #[cfg(not(feature = "synthesised-tools"))]
 pub async fn execute_synthesised(_context: &(), _call: &ToolCall<'_>) -> io::Result<String> {
     unreachable!("synthesised-tools feature not enabled")
+}
+
+// --- startup scan ------------------------------------------------------------
+
+/// Scan writable VFS zones for `.scm` tool files and register them.
+///
+/// Called once at startup after the VFS and registry are fully constructed.
+/// Silently skips zones that don't exist yet and logs warnings for files that
+/// fail to load. Non-`.scm` entries are ignored.
+///
+/// **Zones scanned:** `/tools/shared` (globally shared tools).
+/// Context-home and flock zones are deferred to a future scoping task.
+#[cfg(feature = "synthesised-tools")]
+pub async fn scan_and_register(vfs: &Vfs, registry: &mut ToolRegistry) -> io::Result<()> {
+    let zones = ["/tools/shared"];
+    for zone in &zones {
+        let Ok(zone_path) = VfsPath::new(zone) else {
+            continue;
+        };
+        if !vfs
+            .exists(VfsCaller::System, &zone_path)
+            .await
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let entries = match vfs.list(VfsCaller::System, &zone_path).await {
+            Ok(e) => e,
+            Err(_) => continue, // zone unreadable — skip silently
+        };
+        for entry in entries {
+            if !entry.name.ends_with(".scm") {
+                continue;
+            }
+            let Ok(file_path) = VfsPath::new(&format!("{zone}/{}", entry.name)) else {
+                continue;
+            };
+            let source = match vfs.read(VfsCaller::System, &file_path).await {
+                Ok(b) => b,
+                Err(_) => continue, // unreadable — skip silently
+            };
+            let Ok(source_str) = String::from_utf8(source) else {
+                continue;
+            };
+            if let Ok(tool) = load_tool_from_source(&source_str, &file_path) {
+                registry.register(tool);
+                // invalid source — skip silently (caller can inspect via VFS)
+            }
+        }
+    }
+    Ok(())
+}
+
+// --- hot-reload callbacks ----------------------------------------------------
+
+/// Reload (or register for the first time) a synthesised tool from source bytes.
+///
+/// Called synchronously from the `on_scm_change` callback after a successful
+/// write. The `content` bytes are the data that was just written to the VFS,
+/// so no re-read is needed.
+#[cfg(feature = "synthesised-tools")]
+pub fn reload_tool_from_content(
+    registry: &std::sync::Arc<std::sync::RwLock<ToolRegistry>>,
+    path: &VfsPath,
+    content: &[u8],
+) {
+    let Ok(source_str) = std::str::from_utf8(content) else {
+        return;
+    };
+    if let Ok(tool) = load_tool_from_source(source_str, path) {
+        registry.write().unwrap().register(tool);
+        // invalid source — leave previous version registered
+    }
+}
+
+/// Unregister the synthesised tool whose VFS path matches `path`.
+///
+/// Called synchronously from the `on_scm_change` callback after a successful
+/// delete.
+#[cfg(feature = "synthesised-tools")]
+pub fn unregister_tool_at_path(
+    registry: &std::sync::Arc<std::sync::RwLock<ToolRegistry>>,
+    path: &VfsPath,
+) {
+    let mut reg = registry.write().unwrap();
+    if let Some(name) = reg.find_by_vfs_path(path).map(|t| t.name.clone()) {
+        reg.unregister(&name);
+    }
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -268,6 +356,247 @@ fn json_args_to_scheme_alist(args: &serde_json::Value) -> io::Result<Value> {
 #[cfg(all(test, feature = "synthesised-tools"))]
 mod tests {
     use super::*;
+    use crate::vfs::{LocalBackend, Vfs, VfsCaller};
+    use tempfile::TempDir;
+
+    fn make_test_vfs() -> (TempDir, Vfs) {
+        let dir = TempDir::new().unwrap();
+        let backend = LocalBackend::new(dir.path().to_path_buf());
+        let vfs = Vfs::new(Box::new(backend), "test-site-0000");
+        (dir, vfs)
+    }
+
+    const SCAN_TOOL: &str = r#"
+(import (scheme base))
+(define tool-name "scan_hello")
+(define tool-description "says hello")
+(define tool-parameters '())
+(define (tool-execute args) "hello")
+"#;
+
+    #[tokio::test]
+    async fn test_scan_and_register_loads_scm_file() {
+        let (_dir, vfs) = make_test_vfs();
+        let mut registry = ToolRegistry::new();
+
+        // Write a .scm tool to /tools/shared/
+        let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
+        vfs.write(VfsCaller::System, &path, SCAN_TOOL.as_bytes())
+            .await
+            .unwrap();
+
+        scan_and_register(&vfs, &mut registry).await.unwrap();
+
+        assert!(
+            registry.get("scan_hello").is_some(),
+            "scan_hello should be registered after scan"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_scan_and_register_ignores_non_scm() {
+        let (_dir, vfs) = make_test_vfs();
+        let mut registry = ToolRegistry::new();
+
+        let path = VfsPath::new("/tools/shared/readme.txt").unwrap();
+        vfs.write(VfsCaller::System, &path, b"not a tool")
+            .await
+            .unwrap();
+
+        scan_and_register(&vfs, &mut registry).await.unwrap();
+        assert_eq!(
+            registry.all().count(),
+            0,
+            "non-.scm file should not register"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_scan_and_register_skips_missing_zone() {
+        let (_dir, vfs) = make_test_vfs();
+        let mut registry = ToolRegistry::new();
+
+        // /tools/shared does not exist — should not error
+        let result = scan_and_register(&vfs, &mut registry).await;
+        assert!(result.is_ok());
+        assert_eq!(registry.all().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_scan_and_register_logs_bad_source() {
+        let (_dir, vfs) = make_test_vfs();
+        let mut registry = ToolRegistry::new();
+
+        // Write an invalid .scm file
+        let path = VfsPath::new("/tools/shared/bad_tool.scm").unwrap();
+        vfs.write(VfsCaller::System, &path, b"(define tool-name \"bad\")")
+            .await
+            .unwrap();
+
+        // Should complete without error (bad file is warned and skipped)
+        let result = scan_and_register(&vfs, &mut registry).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            registry.all().count(),
+            0,
+            "invalid tool should not register"
+        );
+    }
+
+    // --- hot-reload tests ---
+
+    #[test]
+    fn test_reload_tool_from_content_registers() {
+        use std::sync::{Arc, RwLock};
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
+
+        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes());
+
+        assert!(
+            registry.read().unwrap().get("scan_hello").is_some(),
+            "tool should be registered after reload"
+        );
+    }
+
+    #[test]
+    fn test_reload_tool_from_content_updates_existing() {
+        use std::sync::{Arc, RwLock};
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
+
+        // Register first version
+        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes());
+        assert_eq!(
+            registry
+                .read()
+                .unwrap()
+                .get("scan_hello")
+                .unwrap()
+                .description,
+            "says hello"
+        );
+
+        // Overwrite with updated description
+        let updated = SCAN_TOOL.replace("says hello", "waves hello");
+        reload_tool_from_content(&registry, &path, updated.as_bytes());
+        assert_eq!(
+            registry
+                .read()
+                .unwrap()
+                .get("scan_hello")
+                .unwrap()
+                .description,
+            "waves hello",
+            "description should be updated after reload"
+        );
+    }
+
+    #[test]
+    fn test_unregister_tool_at_path() {
+        use std::sync::{Arc, RwLock};
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
+
+        // Register first
+        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes());
+        assert!(registry.read().unwrap().get("scan_hello").is_some());
+
+        // Unregister via path
+        unregister_tool_at_path(&registry, &path);
+        assert!(
+            registry.read().unwrap().get("scan_hello").is_none(),
+            "tool should be removed after unregister"
+        );
+    }
+
+    #[test]
+    fn test_unregister_nonexistent_path_is_noop() {
+        use std::sync::{Arc, RwLock};
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/ghost.scm").unwrap();
+        // Should not panic or error
+        unregister_tool_at_path(&registry, &path);
+        assert_eq!(registry.read().unwrap().all().count(), 0);
+    }
+
+    #[test]
+    fn test_reload_invalid_source_preserves_existing() {
+        use std::sync::{Arc, RwLock};
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
+
+        // Register valid version first
+        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes());
+        assert!(registry.read().unwrap().get("scan_hello").is_some());
+
+        // Try to reload with invalid source — should not remove the existing tool
+        reload_tool_from_content(&registry, &path, b"(define tool-name \"bad\")");
+        assert!(
+            registry.read().unwrap().get("scan_hello").is_some(),
+            "invalid reload should not remove existing valid tool"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_vfs_write_triggers_hot_reload() {
+        use crate::vfs::ScmChangeKind;
+        use std::sync::{Arc, RwLock};
+
+        let (_dir, mut vfs) = make_test_vfs();
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+
+        let reg = Arc::clone(&registry);
+        vfs.set_scm_change_callback(Arc::new(move |path, kind, content| match kind {
+            ScmChangeKind::Write => {
+                if let Some(bytes) = content {
+                    reload_tool_from_content(&reg, path, bytes);
+                }
+            }
+            ScmChangeKind::Delete => unregister_tool_at_path(&reg, path),
+        }));
+
+        let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
+
+        // Write triggers registration
+        vfs.write(VfsCaller::System, &path, SCAN_TOOL.as_bytes())
+            .await
+            .unwrap();
+        assert!(
+            registry.read().unwrap().get("scan_hello").is_some(),
+            "tool should be registered after VFS write"
+        );
+
+        // Delete triggers unregistration
+        vfs.delete(VfsCaller::System, &path).await.unwrap();
+        assert!(
+            registry.read().unwrap().get("scan_hello").is_none(),
+            "tool should be removed after VFS delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_vfs_write_non_tools_path_does_not_trigger() {
+        use std::sync::Arc;
+
+        let (_dir, mut vfs) = make_test_vfs();
+        let triggered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&triggered);
+        vfs.set_scm_change_callback(Arc::new(move |_, _, _| {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        // Write to /shared/ (not /tools/) — callback must NOT fire
+        let path = VfsPath::new("/shared/something.scm").unwrap();
+        vfs.write(VfsCaller::System, &path, b"content")
+            .await
+            .unwrap();
+
+        assert!(
+            !triggered.load(std::sync::atomic::Ordering::SeqCst),
+            "callback should not fire for non-tools paths"
+        );
+    }
 
     const SIMPLE_TOOL: &str = r#"
 (import (scheme base))

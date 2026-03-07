@@ -39,7 +39,7 @@ pub use path::VfsPath;
 pub use permissions::{check_read, check_write, is_reserved_caller_name};
 pub use tools_backend::ToolsBackend;
 pub use types::{VfsEntry, VfsEntryKind, VfsMetadata};
-pub use vfs::{Vfs, VfsBuilder};
+pub use vfs::{ScmChangeCallback, ScmChangeKind, Vfs, VfsBuilder};
 
 #[cfg(test)]
 mod integration_tests {

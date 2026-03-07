@@ -237,6 +237,30 @@ impl Chibi {
             .mount("/tools/sys", Box::new(tools_backend))
             .build();
 
+        #[cfg(feature = "synthesised-tools")]
+        {
+            let mut reg = registry.write().unwrap();
+            tokio::runtime::Handle::current().block_on(
+                crate::tools::synthesised::scan_and_register(&app.vfs, &mut reg),
+            )?;
+        }
+
+        #[cfg(feature = "synthesised-tools")]
+        {
+            let reg = Arc::clone(&registry);
+            app.vfs
+                .set_scm_change_callback(Arc::new(move |path, kind, content| match kind {
+                    crate::vfs::ScmChangeKind::Write => {
+                        if let Some(bytes) = content {
+                            crate::tools::synthesised::reload_tool_from_content(&reg, path, bytes);
+                        }
+                    }
+                    crate::vfs::ScmChangeKind::Delete => {
+                        crate::tools::synthesised::unregister_tool_at_path(&reg, path);
+                    }
+                }));
+        }
+
         Ok(Self {
             app,
             registry,

@@ -20,6 +20,7 @@
 
 use std::cell::RefCell;
 use std::io;
+use std::sync::Arc;
 
 use super::backend::VfsBackend;
 use super::flock::{
@@ -32,6 +33,22 @@ use crate::vfs::caller::VfsCaller;
 
 /// Path to the flock registry file within the VFS.
 const REGISTRY_PATH: &str = "/flocks/registry.json";
+
+/// The kind of change that triggered a scheme-tool change callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScmChangeKind {
+    /// A `.scm` file was written (created or overwritten).
+    Write,
+    /// A `.scm` file was deleted.
+    Delete,
+}
+
+/// Callback type for `.scm` file changes under `/tools/`.
+///
+/// Fired after a successful write or delete on any path matching
+/// `/tools/{shared,home/**,flocks/**}/*.scm`. On write, `content` contains
+/// the bytes that were written; on delete, `content` is `None`.
+pub type ScmChangeCallback = Arc<dyn Fn(&VfsPath, ScmChangeKind, Option<&[u8]>) + Send + Sync>;
 
 /// Core VFS router and permission enforcer.
 ///
@@ -53,6 +70,12 @@ pub struct Vfs {
     // in load_registry(). If adding new async methods that touch this cache,
     // ensure the RefCell borrow is dropped before any .await.
     registry_cache: RefCell<Option<FlockRegistry>>,
+    /// Optional callback fired after a successful write or delete on any path
+    /// matching `/tools/{shared,home/**,flocks/**}/*.scm`.
+    ///
+    /// Set via `Vfs::set_scm_change_callback`. The callback is synchronous
+    /// and must not block; use `Handle::current().block_on(...)` for async work.
+    pub on_scm_change: Option<ScmChangeCallback>,
 }
 
 /// Builder for `Vfs` with multiple backend mounts.
@@ -63,7 +86,10 @@ pub struct VfsBuilder {
 
 impl VfsBuilder {
     fn new(site_id: impl Into<String>) -> Self {
-        Self { mounts: Vec::new(), site_id: site_id.into() }
+        Self {
+            mounts: Vec::new(),
+            site_id: site_id.into(),
+        }
     }
 
     /// Mount a backend at the given path prefix (e.g. `"/"`, `"/tools/sys"`).
@@ -76,7 +102,12 @@ impl VfsBuilder {
     /// the most-specific prefix wins at dispatch time.
     pub fn build(mut self) -> Vfs {
         self.mounts.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-        Vfs { mounts: self.mounts, site_id: self.site_id, registry_cache: RefCell::new(None) }
+        Vfs {
+            mounts: self.mounts,
+            site_id: self.site_id,
+            registry_cache: RefCell::new(None),
+            on_scm_change: None,
+        }
     }
 }
 
@@ -96,6 +127,25 @@ impl Vfs {
         VfsBuilder::new(site_id)
     }
 
+    /// Set a callback to fire whenever a `.scm` file under `/tools/` is
+    /// written or deleted.
+    ///
+    /// The callback receives the full VFS path, a `ScmChangeKind`, and
+    /// (on write) the bytes that were written. On delete, the content is `None`.
+    /// The callback is called synchronously after the backend operation succeeds.
+    pub fn set_scm_change_callback(&mut self, cb: ScmChangeCallback) {
+        self.on_scm_change = Some(cb);
+    }
+
+    /// Returns `true` if `path` is a `.scm` file in a writable tools zone.
+    fn is_scm_tool_path(path: &VfsPath) -> bool {
+        let s = path.as_str();
+        s.ends_with(".scm")
+            && (s.starts_with("/tools/shared/")
+                || s.starts_with("/tools/home/")
+                || s.starts_with("/tools/flocks/"))
+    }
+
     /// Resolve the backend and stripped path for the given VFS path.
     ///
     /// Selects the backend whose mount prefix is the longest prefix of `path`.
@@ -112,15 +162,22 @@ impl Vfs {
                     p.to_string()
                 } else {
                     let rest = &p[prefix.len()..];
-                    if rest.is_empty() { "/".to_string() } else { rest.to_string() }
+                    if rest.is_empty() {
+                        "/".to_string()
+                    } else {
+                        rest.to_string()
+                    }
                 };
                 // stripped is guaranteed valid: starts with '/' or is "/"
-                let stripped_path = VfsPath::new(&stripped)
-                    .expect("stripped VFS path must be valid");
+                let stripped_path =
+                    VfsPath::new(&stripped).expect("stripped VFS path must be valid");
                 return (backend.as_ref(), stripped_path);
             }
         }
-        panic!("no VFS backend matched path '{}' — ensure a root '/' mount exists", p);
+        panic!(
+            "no VFS backend matched path '{}' — ensure a root '/' mount exists",
+            p
+        );
     }
 
     /// Return the site identifier for this installation.
@@ -210,6 +267,11 @@ impl Vfs {
         if path.as_str() == REGISTRY_PATH {
             self.invalidate_registry_cache();
         }
+        if Self::is_scm_tool_path(path)
+            && let Some(cb) = &self.on_scm_change
+        {
+            cb(path, ScmChangeKind::Write, Some(data));
+        }
         Ok(())
     }
 
@@ -231,7 +293,13 @@ impl Vfs {
         let flock_ctx = registry.as_ref().map(|r| (r, self.site_id.as_str()));
         permissions::check_write(caller, path, flock_ctx)?;
         let (backend, stripped) = self.resolve_backend(path);
-        backend.delete(&stripped).await
+        backend.delete(&stripped).await?;
+        if Self::is_scm_tool_path(path)
+            && let Some(cb) = &self.on_scm_change
+        {
+            cb(path, ScmChangeKind::Delete, None);
+        }
+        Ok(())
     }
 
     pub async fn mkdir(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<()> {
@@ -381,16 +449,27 @@ mod tests {
 
         // write to /tools/shared/ goes to backend2 (dir2)
         let path1 = VfsPath::new("/tools/shared/test.txt").unwrap();
-        vfs.write(VfsCaller::System, &path1, b"hello").await.unwrap();
+        vfs.write(VfsCaller::System, &path1, b"hello")
+            .await
+            .unwrap();
         assert_eq!(vfs.read(VfsCaller::System, &path1).await.unwrap(), b"hello");
 
         // verify the file landed in dir2, not dir1
         assert!(dir2.path().join("test.txt").exists());
-        assert!(!dir1.path().join("tools").join("shared").join("test.txt").exists());
+        assert!(
+            !dir1
+                .path()
+                .join("tools")
+                .join("shared")
+                .join("test.txt")
+                .exists()
+        );
 
         // write to /shared/ goes to backend1 (dir1, root mount)
         let path2 = VfsPath::new("/shared/other.txt").unwrap();
-        vfs.write(VfsCaller::System, &path2, b"world").await.unwrap();
+        vfs.write(VfsCaller::System, &path2, b"world")
+            .await
+            .unwrap();
         assert_eq!(vfs.read(VfsCaller::System, &path2).await.unwrap(), b"world");
         assert!(dir1.path().join("shared").join("other.txt").exists());
     }
@@ -409,7 +488,9 @@ mod tests {
 
         // write a file to the backend2 mount
         let path = VfsPath::new("/tools/shared/mytool.scm").unwrap();
-        vfs.write(VfsCaller::System, &path, b"(define x 1)").await.unwrap();
+        vfs.write(VfsCaller::System, &path, b"(define x 1)")
+            .await
+            .unwrap();
 
         // listing /tools/shared should go to backend2 and see the file
         let mount_root = VfsPath::new("/tools/shared").unwrap();
