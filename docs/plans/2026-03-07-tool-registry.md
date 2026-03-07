@@ -76,9 +76,27 @@
 - `execute_tool` in chibi.rs replaced with `dispatch_with_context`
 - Builds `ToolCallContext` from runtime values, calls `ensure_project_root_allowed` first
 
-### Next session starts at: Task 9
+#### Task 9 — COMPLETE (commit TBD)
 
-**Chosen approach: Option A — `send_prompt` accepts `Arc<RwLock<ToolRegistry>>`**
+**What was done:**
+- Step 1: Updated `send_prompt_streaming` call site in `chibi.rs` — passes `Arc::clone(&self.registry)` directly
+- Step 2: Added `ToolCategory::as_str()` to `registry.rs` (all 11 variants)
+- Step 3: Changed `send_prompt` signature to accept `registry: Arc<RwLock<ToolRegistry>>` instead of `tools: &[Tool]`
+- Step 4: Extracted `plugin_tools: Vec<Tool>` from registry at top of `send_prompt`; all hook calls use `&plugin_tools`
+- Step 5: Updated `execute_tool_pure`, `execute_single_tool`, `process_tool_calls`, `handle_final_response` signatures — all use `plugin_tools: &[Tool]` + `registry: &Arc<RwLock<ToolRegistry>>`
+- Step 6: Updated `get_tool_metadata` and `tool_call_summary` in `tools/mod.rs` to take `&ToolRegistry`; updated all call sites including `config_resolution.rs::validate_config`
+- Step 7: Replaced the if/else dispatch chain in `execute_tool_pure` with category-based permission middleware + `registry.dispatch_with_context`. Removed `unwrap_tool_dispatch`. Preserved VFS bypass, SEND_MESSAGE, MODEL_INFO, flow_control, and URL policy gating.
+- Step 8: Removed `ToolType` enum, `classify_tool_type()`, all their tests. Updated `build_tool_info_list` and `filter_tools_by_config` to use `&Arc<RwLock<ToolRegistry>>`. Tests updated to use `make_test_registry()`.
+- Step 9: Added `Tool::to_api_format()`. Replaced per-category `all_*_to_api_format()` calls with single registry iteration (Flow tools still added separately for dynamic preset_capabilities). Added `ToolRegistry::dispatch_impl(tool_impl, ...)` as a lock-free dispatch entry point.
+- Step 10: All 772 tests pass, `just lint` clean.
+
+**Implementation notes:**
+- `plugin_tools` vec is extracted once per `send_prompt` call (filter by `ToolCategory::Plugin`). All hooks use this slice.
+- `tool_category` and `tool_metadata` are both looked up from registry in one lock acquisition at top of `execute_tool_pure` (lock dropped before any `.await`)
+- `dispatch_impl` is the preferred dispatch path when the caller holds an `Arc<RwLock<ToolRegistry>>` — clone `ToolImpl` while locked, drop guard, then call `dispatch_impl`. `dispatch_with_context` remains available for callers that own the registry directly.
+- VFS bypass tests (`test_vfs_*_bypasses_*`) require `make_test_registry()` — the bypass fires permission gating but still routes through the registry for actual execution.
+- `ToolMetadata` moved to `#[cfg(test)]` import in `registry.rs` (only used in tests).
+- Flow tools added separately after registry iteration (spawn_agent needs dynamic preset_capabilities injected).
 
 ---
 

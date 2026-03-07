@@ -97,9 +97,9 @@ pub static FS_WRITE_TOOL_DEFS: &[BuiltinToolDef] = &[
 
 /// Register all fs_write tools into the registry.
 pub fn register_fs_write_tools(registry: &mut super::registry::ToolRegistry) {
-    use std::sync::Arc;
-    use super::registry::{ToolCategory, ToolHandler};
     use super::Tool;
+    use super::registry::{ToolCategory, ToolHandler};
+    use std::sync::Arc;
 
     let handler: ToolHandler = Arc::new(|call| {
         // execute_fs_write_tool is sync — extract result before the async block so
@@ -111,7 +111,7 @@ pub fn register_fs_write_tools(registry: &mut super::registry::ToolRegistry) {
             ctx.project_root,
             ctx.config,
             ctx.vfs,
-            ctx.vfs_caller.clone(),
+            ctx.vfs_caller,
         )
         .unwrap_or_else(|| {
             Err(io::Error::new(
@@ -123,7 +123,11 @@ pub fn register_fs_write_tools(registry: &mut super::registry::ToolRegistry) {
     });
 
     for def in FS_WRITE_TOOL_DEFS {
-        registry.register(Tool::from_builtin_def(def, handler.clone(), ToolCategory::FsWrite));
+        registry.register(Tool::from_builtin_def(
+            def,
+            handler.clone(),
+            ToolCategory::FsWrite,
+        ));
     }
 }
 

@@ -499,9 +499,9 @@ pub async fn execute_flow_tool(
 /// handler returns an error if directly dispatched — `send.rs` must intercept
 /// them before calling `registry.dispatch_with_context`.
 pub fn register_flow_tools(registry: &mut super::registry::ToolRegistry) {
-    use std::sync::Arc;
-    use super::registry::{ToolCategory, ToolHandler};
     use super::Tool;
+    use super::registry::{ToolCategory, ToolHandler};
+    use std::sync::Arc;
 
     for def in FLOW_TOOL_DEFS {
         let name = def.name;
@@ -519,13 +519,10 @@ pub fn register_flow_tools(registry: &mut super::registry::ToolRegistry) {
                     // io::Result<Option<String>> -> io::Result<String>
                     .and_then(|opt| {
                         opt.ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                format!(
-                                    "flow tool '{tool_name}' is handled by send.rs middleware \
-                                     and must not be dispatched through the registry directly"
-                                ),
-                            )
+                            io::Error::other(format!(
+                                "flow tool '{tool_name}' is handled by send.rs middleware \
+                                 and must not be dispatched through the registry directly"
+                            ))
                         })
                     })
             })

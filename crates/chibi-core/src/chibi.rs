@@ -365,15 +365,11 @@ impl Chibi {
         options: &PromptOptions<'_>,
         sink: &mut S,
     ) -> io::Result<()> {
-        // Collect a snapshot for send_prompt; Task 9 will change the signature
-        // to accept Arc<RwLock<ToolRegistry>> directly.
-        let tools_snap: Vec<Tool> =
-            self.registry.read().unwrap().all().cloned().collect();
         send_prompt(
             &self.app,
             context_name,
             prompt.to_string(),
-            &tools_snap,
+            Arc::clone(&self.registry),
             config,
             options,
             sink,
@@ -421,11 +417,21 @@ impl Chibi {
             vfs: &self.app.vfs,
             vfs_caller: VfsCaller::Context(context_name),
         };
-        self.registry
+        // Clone ToolImpl while holding the lock, then drop the guard before
+        // .await so no RwLockReadGuard is held across an async suspension.
+        let tool_impl = self
+            .registry
             .read()
             .unwrap()
-            .dispatch_with_context(name, &args, &call_ctx)
-            .await
+            .get(name)
+            .map(|t| t.r#impl.clone());
+        let Some(tool_impl) = tool_impl else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("unknown tool: {name}"),
+            ));
+        };
+        tools::ToolRegistry::dispatch_impl(tool_impl, name, &args, &call_ctx).await
     }
 
     // NOTE: The following methods were removed in the stateless-core refactor:

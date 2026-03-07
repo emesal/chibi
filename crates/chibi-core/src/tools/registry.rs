@@ -14,10 +14,12 @@ use serde_json::Value;
 
 use crate::config::ResolvedConfig;
 use crate::state::AppState;
-use crate::vfs::caller::VfsCaller;
 use crate::vfs::Vfs;
+use crate::vfs::caller::VfsCaller;
 
-use super::{Tool, ToolMetadata};
+use super::Tool;
+#[cfg(test)]
+use super::ToolMetadata;
 
 /// Async future type for tool handlers.
 ///
@@ -32,8 +34,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 /// `Send + Sync` on the closure itself allows the `Arc<ToolHandler>` to be
 /// shared across threads (e.g. during registry reads). The *future* returned
 /// is intentionally `!Send` — see `BoxFuture`.
-pub type ToolHandler =
-    Arc<dyn Fn(ToolCall<'_>) -> BoxFuture<'_, io::Result<String>> + Send + Sync>;
+pub type ToolHandler = Arc<dyn Fn(ToolCall<'_>) -> BoxFuture<'_, io::Result<String>> + Send + Sync>;
 
 /// Runtime context passed per-call. Carries values not known at registration time.
 pub struct ToolCallContext<'a> {
@@ -106,6 +107,25 @@ pub enum ToolCategory {
     Synthesised,
 }
 
+impl ToolCategory {
+    /// String key used in hook payloads and config `exclude_categories`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToolCategory::Memory => "memory",
+            ToolCategory::FsRead => "fs_read",
+            ToolCategory::FsWrite => "fs_write",
+            ToolCategory::Shell => "shell",
+            ToolCategory::Network => "network",
+            ToolCategory::Index => "index",
+            ToolCategory::Flow => "flow",
+            ToolCategory::Vfs => "vfs",
+            ToolCategory::Plugin => "plugin",
+            ToolCategory::Mcp => "mcp",
+            ToolCategory::Synthesised => "synthesised",
+        }
+    }
+}
+
 /// Single source of truth for all tools at runtime.
 ///
 /// - `IndexMap` — O(1) lookup, preserves insertion order for deterministic
@@ -118,7 +138,9 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self { tools: IndexMap::new() }
+        Self {
+            tools: IndexMap::new(),
+        }
     }
 
     /// Register a tool. Replaces any existing tool with the same name (hot-reload).
@@ -148,32 +170,68 @@ impl ToolRegistry {
         self.tools.values().filter(|t| pred(t)).collect()
     }
 
+    /// Dispatch an already-cloned `ToolImpl` without holding `&self`.
+    ///
+    /// Use this when the caller needs to release an `RwLockReadGuard` before
+    /// the `.await` — clone the `ToolImpl` while holding the lock, drop the
+    /// guard, then call `dispatch_impl`.
+    pub async fn dispatch_impl(
+        tool_impl: ToolImpl,
+        name: &str,
+        args: &Value,
+        ctx: &ToolCallContext<'_>,
+    ) -> io::Result<String> {
+        let call = ToolCall {
+            name,
+            args,
+            context: ctx,
+        };
+        match tool_impl {
+            ToolImpl::Builtin(handler) => handler(call).await,
+            ToolImpl::Plugin(path) => super::plugins::execute_tool_by_path(&path, name, args),
+            ToolImpl::Mcp { server, tool_name } => {
+                let home = ctx.app.chibi_dir.clone();
+                super::mcp::execute_mcp_call(&server, &tool_name, args, &home)
+            }
+        }
+    }
+
     /// Dispatch a tool call with runtime context. Pure dispatch — no hooks,
     /// no permissions. Policy stays in `send.rs` as middleware.
+    ///
+    /// Clones `ToolImpl` before any `.await` so no borrow of `self` crosses
+    /// an async suspension point. Callers holding an `RwLockReadGuard` can
+    /// drop it before calling this method.
     pub async fn dispatch_with_context(
         &self,
         name: &str,
         args: &Value,
         ctx: &ToolCallContext<'_>,
     ) -> io::Result<String> {
-        let tool = self.get(name).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, format!("unknown tool: {name}"))
-        })?;
-        let call = ToolCall { name, args, context: ctx };
-        match &tool.r#impl {
+        // Clone ToolImpl so no borrow on `self` crosses an await point.
+        let tool_impl = self
+            .get(name)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, format!("unknown tool: {name}"))
+            })?
+            .r#impl
+            .clone();
+        let call = ToolCall {
+            name,
+            args,
+            context: ctx,
+        };
+        match tool_impl {
             ToolImpl::Builtin(handler) => handler(call).await,
             ToolImpl::Plugin(path) => {
                 // Plugin dispatch: spawn the executable with args via stdin.
-                // Sync call — extract result before async block so the PathBuf
-                // borrow doesn't need to cross .await.
-                let result = super::plugins::execute_tool_by_path(path, name, args);
-                result
+                // Sync call — no .await needed.
+                super::plugins::execute_tool_by_path(&path, name, args)
             }
             ToolImpl::Mcp { server, tool_name } => {
-                // MCP dispatch: forward to bridge daemon via TCP.
-                // Needs chibi_dir from AppState. Sync call.
+                // MCP dispatch: forward to bridge daemon via TCP. Sync call.
                 let home = ctx.app.chibi_dir.clone();
-                super::mcp::execute_mcp_call(server, tool_name, args, &home)
+                super::mcp::execute_mcp_call(&server, &tool_name, args, &home)
             }
         }
     }
@@ -237,7 +295,11 @@ mod tests {
     async fn test_registry_register_and_get() {
         let mut reg = ToolRegistry::new();
         let handler: ToolHandler = Arc::new(|_| Box::pin(async { Ok("result".into()) }));
-        reg.register(make_test_tool("my_tool", ToolCategory::Shell, ToolImpl::Builtin(handler)));
+        reg.register(make_test_tool(
+            "my_tool",
+            ToolCategory::Shell,
+            ToolImpl::Builtin(handler),
+        ));
         assert!(reg.get("my_tool").is_some());
         assert!(reg.get("nonexistent").is_none());
     }
@@ -249,7 +311,11 @@ mod tests {
             let name = call.name.to_string();
             Box::pin(async move { Ok(format!("called {name}")) })
         });
-        reg.register(make_test_tool("echo", ToolCategory::Shell, ToolImpl::Builtin(handler)));
+        reg.register(make_test_tool(
+            "echo",
+            ToolCategory::Shell,
+            ToolImpl::Builtin(handler),
+        ));
         // dispatch_with_context needs a ToolCallContext — tested via integration tests.
         // here we verify registration and lookup only.
         assert_eq!(reg.get("echo").unwrap().name, "echo");
@@ -259,7 +325,11 @@ mod tests {
     fn test_registry_unregister() {
         let mut reg = ToolRegistry::new();
         let handler: ToolHandler = Arc::new(|_| Box::pin(async { Ok("ok".into()) }));
-        reg.register(make_test_tool("rm_me", ToolCategory::Plugin, ToolImpl::Builtin(handler)));
+        reg.register(make_test_tool(
+            "rm_me",
+            ToolCategory::Plugin,
+            ToolImpl::Builtin(handler),
+        ));
         assert!(reg.get("rm_me").is_some());
         let removed = reg.unregister("rm_me");
         assert!(removed.is_some());
@@ -271,7 +341,11 @@ mod tests {
         let mut reg = ToolRegistry::new();
         let handler: ToolHandler = Arc::new(|_| Box::pin(async { Ok("ok".into()) }));
         for name in ["charlie", "alice", "bob"] {
-            reg.register(make_test_tool(name, ToolCategory::Plugin, ToolImpl::Builtin(handler.clone())));
+            reg.register(make_test_tool(
+                name,
+                ToolCategory::Plugin,
+                ToolImpl::Builtin(handler.clone()),
+            ));
         }
         let names: Vec<&str> = reg.all().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["charlie", "alice", "bob"]);
@@ -283,7 +357,11 @@ mod tests {
         let mut reg = ToolRegistry::new();
         let handler: ToolHandler = Arc::new(|_| Box::pin(async { Ok("ok".into()) }));
         for name in ["a", "b", "c", "d"] {
-            reg.register(make_test_tool(name, ToolCategory::Plugin, ToolImpl::Builtin(handler.clone())));
+            reg.register(make_test_tool(
+                name,
+                ToolCategory::Plugin,
+                ToolImpl::Builtin(handler.clone()),
+            ));
         }
         reg.unregister("b");
         let names: Vec<&str> = reg.all().map(|t| t.name.as_str()).collect();
@@ -294,9 +372,21 @@ mod tests {
     fn test_registry_filter() {
         let mut reg = ToolRegistry::new();
         let handler: ToolHandler = Arc::new(|_| Box::pin(async { Ok("ok".into()) }));
-        reg.register(make_test_tool("read1", ToolCategory::FsRead, ToolImpl::Builtin(handler.clone())));
-        reg.register(make_test_tool("write1", ToolCategory::FsWrite, ToolImpl::Builtin(handler.clone())));
-        reg.register(make_test_tool("read2", ToolCategory::FsRead, ToolImpl::Builtin(handler)));
+        reg.register(make_test_tool(
+            "read1",
+            ToolCategory::FsRead,
+            ToolImpl::Builtin(handler.clone()),
+        ));
+        reg.register(make_test_tool(
+            "write1",
+            ToolCategory::FsWrite,
+            ToolImpl::Builtin(handler.clone()),
+        ));
+        reg.register(make_test_tool(
+            "read2",
+            ToolCategory::FsRead,
+            ToolImpl::Builtin(handler),
+        ));
         let reads: Vec<&str> = reg
             .filter(|t| t.category == ToolCategory::FsRead)
             .iter()
@@ -308,9 +398,9 @@ mod tests {
     #[test]
     fn test_register_all_builtins() {
         use super::super::{
-            register_memory_tools, register_fs_read_tools, register_fs_write_tools,
-            register_shell_tools, register_network_tools, register_index_tools,
-            register_flow_tools, register_vfs_tools,
+            register_flow_tools, register_fs_read_tools, register_fs_write_tools,
+            register_index_tools, register_memory_tools, register_network_tools,
+            register_shell_tools, register_vfs_tools,
         };
 
         let mut reg = ToolRegistry::new();
@@ -329,9 +419,15 @@ mod tests {
         // spot-check categories
         assert_eq!(reg.get("file_head").unwrap().category, ToolCategory::FsRead);
         assert_eq!(reg.get("shell_exec").unwrap().category, ToolCategory::Shell);
-        assert_eq!(reg.get("fetch_url").unwrap().category, ToolCategory::Network);
+        assert_eq!(
+            reg.get("fetch_url").unwrap().category,
+            ToolCategory::Network
+        );
         assert_eq!(reg.get("vfs_list").unwrap().category, ToolCategory::Vfs);
         assert_eq!(reg.get("spawn_agent").unwrap().category, ToolCategory::Flow);
-        assert_eq!(reg.get("update_reflection").unwrap().category, ToolCategory::Memory);
+        assert_eq!(
+            reg.get("update_reflection").unwrap().category,
+            ToolCategory::Memory
+        );
     }
 }

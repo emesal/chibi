@@ -177,7 +177,9 @@ pub use index::{
 };
 
 // Re-export VFS tool registry functions and execution
-pub use vfs_tools::{all_vfs_tools_to_api_format, execute_vfs_tool, is_vfs_tool, register_vfs_tools};
+pub use vfs_tools::{
+    all_vfs_tools_to_api_format, execute_vfs_tool, is_vfs_tool, register_vfs_tools,
+};
 
 // Re-export security utilities
 pub use security::{
@@ -246,6 +248,21 @@ impl std::fmt::Debug for Tool {
 }
 
 impl Tool {
+    /// Serialise to OpenAI-style function definition for the LLM API.
+    ///
+    /// Single source of truth — replaces the per-module `*_to_api_format()` helpers
+    /// once the send.rs tool-building loop is migrated to iterate over the registry.
+    pub fn to_api_format(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            }
+        })
+    }
+
     /// Construct a Tool from a `BuiltinToolDef`, a shared handler, and a category.
     ///
     /// Reduces boilerplate in the `register_*_tools()` functions across all modules.
@@ -286,11 +303,13 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         .collect()
 }
 
-/// Get metadata for any tool (plugin or builtin).
+/// Get metadata for any tool (builtin, plugin, or MCP).
 ///
-/// Checks plugins first, then delegates to flow_tool_metadata for known flow tools.
-pub fn get_tool_metadata(tools: &[Tool], name: &str) -> ToolMetadata {
-    if let Some(tool) = tools.iter().find(|t| t.name == name) {
+/// Looks up by name in the registry; falls back to `flow_tool_metadata` for
+/// unregistered flow tools (e.g. call_agent, which is retained for the fallback
+/// mechanism but not registered as a callable tool).
+pub fn get_tool_metadata(registry: &ToolRegistry, name: &str) -> ToolMetadata {
+    if let Some(tool) = registry.get(name) {
         return tool.metadata.clone();
     }
     flow_tool_metadata(name)
@@ -316,14 +335,15 @@ fn builtin_summary_params(name: &str) -> &'static [&'static str] {
 
 /// Build a concise summary string from a tool's declared summary_params and actual arguments.
 ///
-/// Checks plugins first, then falls back to builtin_summary_params. Extracts
-/// string values for each declared param from the JSON args and joins them
-/// with spaces. Returns None if no params are declared or no values found.
-pub fn tool_call_summary(tools: &[Tool], name: &str, args_json: &str) -> Option<String> {
+/// Looks up summary_params from the registry; falls back to builtin_summary_params for
+/// tools not yet in the registry. Extracts string values for each declared param from
+/// the JSON args and joins them with spaces. Returns None if no params are declared or
+/// no values found.
+pub fn tool_call_summary(registry: &ToolRegistry, name: &str, args_json: &str) -> Option<String> {
     let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
 
-    // Check plugins first, then builtins
-    let params: Vec<&str> = if let Some(tool) = tools.iter().find(|t| t.name == name) {
+    // Check registry first, then builtins
+    let params: Vec<&str> = if let Some(tool) = registry.get(name) {
         tool.summary_params.iter().map(|s| s.as_str()).collect()
     } else {
         builtin_summary_params(name).to_vec()
@@ -515,7 +535,8 @@ mod tests {
 
     #[test]
     fn test_get_tool_metadata_from_plugin() {
-        let tools = vec![Tool {
+        let mut reg = ToolRegistry::new();
+        reg.register(Tool {
             name: "custom_flow".to_string(),
             description: "A custom flow control tool".to_string(),
             parameters: serde_json::json!({}),
@@ -529,9 +550,9 @@ mod tests {
             summary_params: vec![],
             r#impl: registry::ToolImpl::placeholder(),
             category: registry::ToolCategory::Plugin,
-        }];
+        });
 
-        let meta = get_tool_metadata(&tools, "custom_flow");
+        let meta = get_tool_metadata(&reg, "custom_flow");
         assert!(!meta.parallel);
         assert!(meta.flow_control);
         assert!(meta.ends_turn);
@@ -539,24 +560,24 @@ mod tests {
 
     #[test]
     fn test_get_tool_metadata_fallback_to_builtin() {
-        let tools: Vec<Tool> = vec![]; // Empty plugin list
+        let reg = ToolRegistry::new(); // Empty registry — falls back to flow_tool_metadata
 
         // Should fall back to builtin metadata
-        let agent_meta = get_tool_metadata(&tools, CALL_AGENT_TOOL_NAME);
+        let agent_meta = get_tool_metadata(&reg, CALL_AGENT_TOOL_NAME);
         assert!(agent_meta.flow_control);
         assert!(!agent_meta.ends_turn);
 
-        let user_meta = get_tool_metadata(&tools, CALL_USER_TOOL_NAME);
+        let user_meta = get_tool_metadata(&reg, CALL_USER_TOOL_NAME);
         assert!(user_meta.flow_control);
         assert!(user_meta.ends_turn);
     }
 
     #[test]
     fn test_get_tool_metadata_unknown_tool() {
-        let tools: Vec<Tool> = vec![];
+        let reg = ToolRegistry::new();
 
         // Unknown tool should get default metadata
-        let meta = get_tool_metadata(&tools, "unknown_tool");
+        let meta = get_tool_metadata(&reg, "unknown_tool");
         assert!(meta.parallel);
         assert!(!meta.flow_control);
         assert!(!meta.ends_turn);
@@ -598,7 +619,8 @@ mod tests {
 
     #[test]
     fn test_tool_call_summary_with_plugin() {
-        let tools = vec![Tool {
+        let mut reg = ToolRegistry::new();
+        reg.register(Tool {
             name: "my_plugin".to_string(),
             description: "test".to_string(),
             parameters: serde_json::json!({}),
@@ -608,10 +630,10 @@ mod tests {
             summary_params: vec!["path".to_string(), "pattern".to_string()],
             r#impl: registry::ToolImpl::placeholder(),
             category: registry::ToolCategory::Plugin,
-        }];
+        });
 
         let summary = tool_call_summary(
-            &tools,
+            &reg,
             "my_plugin",
             r#"{"path": "src/main.rs", "pattern": "TODO"}"#,
         );
@@ -620,20 +642,20 @@ mod tests {
 
     #[test]
     fn test_tool_call_summary_builtin_fallback() {
-        let tools: Vec<Tool> = vec![];
+        let reg = ToolRegistry::new();
 
         // shell_exec has summary_params: &["command"]
-        let summary = tool_call_summary(&tools, "shell_exec", r#"{"command": "cargo test"}"#);
+        let summary = tool_call_summary(&reg, "shell_exec", r#"{"command": "cargo test"}"#);
         assert_eq!(summary, Some("cargo test".to_string()));
     }
 
     #[test]
     fn test_tool_call_summary_no_params() {
-        let tools: Vec<Tool> = vec![];
+        let reg = ToolRegistry::new();
 
         // update_reflection has summary_params: &[]
         let summary = tool_call_summary(
-            &tools,
+            &reg,
             "update_reflection",
             r#"{"content": "some reflection"}"#,
         );
@@ -642,10 +664,10 @@ mod tests {
 
     #[test]
     fn test_tool_call_summary_missing_values() {
-        let tools: Vec<Tool> = vec![];
+        let reg = ToolRegistry::new();
 
         // file_head has summary_params: &["path"], but no path in args
-        let summary = tool_call_summary(&tools, "file_head", r#"{"cache_id": "abc123"}"#);
+        let summary = tool_call_summary(&reg, "file_head", r#"{"cache_id": "abc123"}"#);
         assert_eq!(summary, None);
     }
 }
