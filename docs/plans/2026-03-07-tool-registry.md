@@ -78,103 +78,378 @@
 
 ### Next session starts at: Task 9
 
-**Context for Task 9:**
+**Chosen approach: Option A — `send_prompt` accepts `Arc<RwLock<ToolRegistry>>`**
 
-Task 9 is a big refactor of `send.rs`. The key complexity:
+---
 
-`execute_tool_pure` uses `tools: &[Tool]` for:
-1. Hook execution (plugin tools only)
-2. Tool dispatch (the big if/else chain to replace)
-3. Metadata lookup (`get_tool_metadata`, `tool_call_summary`)
-4. `classify_tool_type` for pre_api_tools hook and config filtering
-
-The plan says to accept `Arc<RwLock<ToolRegistry>>` in `send_prompt` and route dispatch via `tool.category`. The main challenge is:
-- `execute_tool_pure` is `async` — can't hold RwLock read guard across `.await`
-- Flow control, send_message, model_info must still be intercepted BEFORE registry dispatch (their registry handlers return errors if dispatched directly)
-- Permission gating remains in send.rs middleware, routed on `tool.category`
-- `build_tool_info_list` and `filter_tools_by_config` use `classify_tool_type` with `plugin_tools: &[Tool]` — can be replaced with `tool.category.as_str()` from registry lookup
-
-**Approach to execute:**
-1. Change `send_prompt` to accept `Arc<RwLock<ToolRegistry>>` (and update chibi.rs caller)
-2. Extract plugin tools once: `let plugin_tools: Vec<Tool> = reg.filter(Plugin).cloned().collect()`
-3. Pass `plugin_tools: &[Tool]` to all hook functions (replace `tools` where hooks are fired)
-4. In `execute_tool_pure`, replace the if/else dispatch with `match tool.category { ... }` middleware + `dispatch_with_context`
-5. Remove `ToolType`, `classify_tool_type`, use `tool.category.as_str()` (add `as_str()` to `ToolCategory`)
-6. Update `build_tool_info_list` and `filter_tools_by_config` to use registry lookup
-7. `get_tool_metadata` and `tool_call_summary` — update to accept registry
-8. Remove `find_tool` usage from send.rs
-
-**Key note on flow tools intercepted by send.rs:**
-The flow control tools (call_user, call_agent, spawn_agent, summarize_content, model_info, send_message) are NOT dispatched via `dispatch_with_context` in `execute_tool_pure`. They're handled by special cases BEFORE dispatch. This matches the Task 5 note: "flow.rs: tools handled by send.rs middleware have a handler that returns an error if dispatched directly through registry".
+#### Task 9 — detailed execution plan
 
 **Files to modify:**
-- `crates/chibi-core/src/api/send.rs` (major refactor)
-- `crates/chibi-core/src/chibi.rs` (send_prompt call site)
-- `crates/chibi-core/src/tools/registry.rs` (add `ToolCategory::as_str()`)
-- `crates/chibi-core/src/tools/mod.rs` (update `get_tool_metadata`, `tool_call_summary` signatures)
+- `crates/chibi-core/src/api/send.rs` — major refactor (all steps below)
+- `crates/chibi-core/src/chibi.rs` — update call site (step 1)
+- `crates/chibi-core/src/tools/registry.rs` — add `ToolCategory::as_str()` (step 2)
+- `crates/chibi-core/src/tools/mod.rs` — update `get_tool_metadata` + `tool_call_summary` (step 6)
 
-Current struct:
-```rust
-pub struct Chibi {
-    pub app: AppState,
-    pub tools: Vec<Tool>,          // ← replace with registry
-    pub project_root: PathBuf,
-    permission_handler: Option<PermissionHandler>,
-}
-```
+**Step 1: Update `send_prompt_streaming` call site in `chibi.rs`**
 
-Target struct:
-```rust
-pub struct Chibi {
-    pub app: AppState,
-    pub registry: Arc<RwLock<ToolRegistry>>,   // ← new
-    pub project_root: PathBuf,
-    permission_handler: Option<PermissionHandler>,
-}
-```
-
-All `self.tools` references in chibi.rs (lines 242, 244, 255, 257, 272, 279, 326, 413, 437, 448, 503):
-- `self.tools.len()` → `self.registry.read().unwrap().all().count()`
-- `tools::execute_hook(&self.tools, ...)` → collect plugin tools from registry: `let plugin_tools: Vec<_> = self.registry.read().unwrap().filter(|t| t.category == ToolCategory::Plugin).into_iter().cloned().collect(); tools::execute_hook(&plugin_tools, ...)`
-- `&self.tools` passed to `send_prompt(...)` → pass registry: change send_prompt signature too (Task 9) OR collect a `Vec<Tool>` for now
-- `tools::execute_index_tool(..., &self.tools)` → pass `&[]` (same as in register_index_tools, wired later)
-- `tools::execute_flow_tool(&config, name, &args, &self.tools)` → pass `&[]`
-- `tools::find_tool(&self.tools, name)` → `self.registry.read().unwrap().get(name)`
-
-`load_with_options` tool-loading section (lines 162–179) becomes:
-```rust
-let mut reg = ToolRegistry::new();
-tools::register_memory_tools(&mut reg);
-tools::register_fs_read_tools(&mut reg);
-tools::register_fs_write_tools(&mut reg);
-tools::register_shell_tools(&mut reg);
-tools::register_network_tools(&mut reg);
-tools::register_index_tools(&mut reg);
-tools::register_flow_tools(&mut reg);
-tools::register_vfs_tools(&mut reg);
-for tool in tools::load_tools(&app.plugins_dir)? { reg.register(tool); }
-match tools::mcp::load_mcp_tools(&app.chibi_dir) { Ok(mcp_tools) => { ... reg.register(t) } ... }
-let registry = Arc::new(RwLock::new(reg));
-```
-
-`send_prompt` in `api/send.rs` takes `tools: &[Tool]` — keep this signature for now (Task 9 replaces it). For Task 7, collect the tools from the registry as a `Vec<Tool>` and pass them:
+Currently (`chibi.rs` around line 360):
 ```rust
 let tools_snap: Vec<Tool> = self.registry.read().unwrap().all().cloned().collect();
-send_prompt(&self.app, ..., &tools_snap, ...).await
+send_prompt(&self.app, context_name, prompt.to_string(), &tools_snap, config, options, sink, ...)
 ```
 
-`execution.rs:295` — `find_tool(&chibi.tools, name)` → `chibi.registry.read().unwrap().get(name)`. Then pass `tool.path` to `execute_tool(tool, &args_json)` — this still works since `Tool.path` is kept until Task 10.
+Change to:
+```rust
+send_prompt(&self.app, context_name, prompt.to_string(), Arc::clone(&self.registry), config, options, sink, ...)
+```
 
-`tool_count()` → `self.registry.read().unwrap().all().count()`
+Also update import in `chibi.rs` — `use crate::tools::{self, Tool, ToolCategory, ToolRegistry}` — remove `Tool` if no longer needed (or keep if used elsewhere).
 
-`for_test()` → `Self { app, registry: Arc::new(RwLock::new(ToolRegistry::new())), ... }`
+**Step 2: Add `ToolCategory::as_str()` to `registry.rs`**
 
-`LoadSummary` event: `builtin_count` comes from `MEMORY_TOOL_DEFS.len() + FS_READ_TOOL_DEFS.len() + ...` (or just `tools::builtin_tool_names().len()`), `plugin_count` from registry filtered by Plugin category.
+In `crates/chibi-core/src/tools/registry.rs`, after the `ToolCategory` enum:
+```rust
+impl ToolCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToolCategory::Memory => "memory",
+            ToolCategory::FsRead => "fs_read",
+            ToolCategory::FsWrite => "fs_write",
+            ToolCategory::Shell => "shell",
+            ToolCategory::Network => "network",
+            ToolCategory::Index => "index",
+            ToolCategory::Flow => "flow",
+            ToolCategory::Vfs => "vfs",
+            ToolCategory::Plugin => "plugin",
+            ToolCategory::Mcp => "mcp",
+            ToolCategory::Synthesised => "synthesised",
+        }
+    }
+}
+```
 
-Imports needed in chibi.rs:
+**Step 3: Change `send_prompt` signature**
+
+Old (line 1923):
+```rust
+pub async fn send_prompt<S: ResponseSink>(
+    app: &AppState,
+    context_name: &str,
+    initial_prompt: String,
+    tools: &[Tool],
+    resolved_config: &ResolvedConfig,
+    options: &PromptOptions<'_>,
+    sink: &mut S,
+    permission_handler: Option<&PermissionHandler>,
+    home_dir: &Path,
+    project_root: &Path,
+) -> io::Result<()>
+```
+
+New:
+```rust
+pub async fn send_prompt<S: ResponseSink>(
+    app: &AppState,
+    context_name: &str,
+    initial_prompt: String,
+    registry: Arc<RwLock<ToolRegistry>>,
+    resolved_config: &ResolvedConfig,
+    options: &PromptOptions<'_>,
+    sink: &mut S,
+    permission_handler: Option<&PermissionHandler>,
+    home_dir: &Path,
+    project_root: &Path,
+) -> io::Result<()>
+```
+
+Add imports at top of send.rs:
 ```rust
 use std::sync::{Arc, RwLock};
-use crate::tools::{ToolRegistry, ToolCategory};
+use crate::tools::{ToolCategory, ToolRegistry};
+```
+Remove `use crate::tools::{self, Tool};` → `use crate::tools::{self, Tool};` (keep `Tool` for now, remove after functions updated).
+
+**Step 4: Extract plugin tools once at top of `send_prompt`**
+
+Right after the `let mut resolved_config = ...` / `let fuel_total = ...` setup lines:
+```rust
+// Plugin tools: used for hook execution throughout this call.
+// Builtins don't have hooks; only plugin tools register hook scripts.
+let plugin_tools: Vec<Tool> = registry.read().unwrap()
+    .filter(|t| t.category == ToolCategory::Plugin)
+    .into_iter()
+    .cloned()
+    .collect();
+```
+
+Then replace every `tools` reference in `send_prompt`'s body (the outermost `loop`) that is used for hooks with `&plugin_tools`. References used for **dispatch** will be handled in step 7.
+
+Concretely, these hook call sites in the outer loop use `tools` purely for hook execution and should become `&plugin_tools`:
+- `app.validate_config(&resolved_config, tools)?` → `app.validate_config(&resolved_config, &plugin_tools)?`
+- `tools::execute_hook(tools, HookPoint::PreMessage, ...)` → `tools::execute_hook(&plugin_tools, ...)`
+- `tools::execute_hook(tools, HookPoint::PreApiTools, ...)` → `tools::execute_hook(&plugin_tools, ...)`
+- `tools::execute_hook(tools, HookPoint::PreApiRequest, ...)` → `tools::execute_hook(&plugin_tools, ...)`
+- `tools::execute_hook(tools, HookPoint::PreAgenticLoop, ...)` → `tools::execute_hook(&plugin_tools, ...)`
+- in `build_full_system_prompt(...)` call: `tools` arg → `&plugin_tools`
+- `process_tool_calls(... tools, ...)` → see step 5
+
+**Step 5: Update `process_tool_calls`, `execute_single_tool`, `execute_tool_pure` signatures**
+
+These functions all take `tools: &[Tool]`. Change them all to take both:
+- `plugin_tools: &[Tool]` — for hooks
+- `registry: &Arc<RwLock<ToolRegistry>>` — for dispatch and metadata
+
+```rust
+async fn execute_tool_pure(
+    app: &AppState,
+    context_name: &str,
+    tool_call: &ratatoskr::ToolCall,
+    plugin_tools: &[Tool],          // ← was: tools: &[Tool]
+    registry: &Arc<RwLock<ToolRegistry>>,  // ← new
+    use_reflection: bool,
+    resolved_config: &ResolvedConfig,
+    permission_handler: Option<&PermissionHandler>,
+    project_root: &Path,
+) -> io::Result<ToolExecutionResult>
+
+async fn execute_single_tool<S: ResponseSink>(
+    ...same changes...
+)
+
+async fn process_tool_calls<S: ResponseSink>(
+    ...same changes...
+)
+```
+
+Update `handle_final_response` similarly (uses `tools` for `PostMessage` hook only):
+- `tools: &[Tool]` → `plugin_tools: &[Tool]`
+
+**Step 6: Update `get_tool_metadata` and `tool_call_summary` in `tools/mod.rs`**
+
+These currently take `tools: &[Tool]` and check if a tool is in the slice. With the registry they should look up by name:
+
+`get_tool_metadata` (line 292):
+```rust
+pub fn get_tool_metadata(registry: &ToolRegistry, name: &str) -> ToolMetadata {
+    if let Some(tool) = registry.get(name) {
+        return tool.metadata.clone();
+    }
+    flow_tool_metadata(name)  // fallback for unregistered flow tools
+}
+```
+
+`tool_call_summary` (line 322):
+```rust
+pub fn tool_call_summary(registry: &ToolRegistry, name: &str, args_json: &str) -> Option<String> {
+    let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
+    // get summary_params from registry, fall back to builtin lookup
+    let summary_params: Vec<String> = if let Some(tool) = registry.get(name) {
+        tool.summary_params.clone()
+    } else {
+        builtin_summary_params(name).iter().map(|s| s.to_string()).collect()
+    };
+    // ... rest unchanged
+}
+```
+
+All call sites in send.rs: `tools::get_tool_metadata(tools, name)` → `tools::get_tool_metadata(&registry.read().unwrap(), name)` (lock, get, drop — all synchronous, no await).
+
+`tool_call_summary` call sites similarly.
+
+**Step 7: Replace the `execute_tool_pure` dispatch chain with registry dispatch**
+
+The current if/else chain (lines 992–1281) looks like:
+```
+if let Some(memory_result) = execute_memory_tool(...)
+else if tool_call.name == SEND_MESSAGE_TOOL_NAME
+else if tool_call.name == MODEL_INFO_TOOL_NAME
+else if is_fs_read_tool(...)
+else if is_fs_write_tool(...)
+else if is_vfs_tool(...)
+else if is_shell_tool(...)
+else if is_network_tool(...)
+else if is_index_tool(...)
+else if is_flow_tool(...)
+else if let Some(tool) = find_tool(tools, name)  // plugin/mcp
+else { "unknown tool" }
+```
+
+Replace with:
+
+```rust
+// Look up category for middleware routing. Drop lock before any await.
+let (category, tool_metadata) = {
+    let reg = registry.read().unwrap();
+    let tool = reg.get(&tool_call.name);
+    let cat = tool.map(|t| t.category).unwrap_or(ToolCategory::Plugin);
+    let meta = tool.map(|t| t.metadata.clone()).unwrap_or_else(|| tools::flow_tool_metadata(&tool_call.name));
+    (cat, meta)
+};
+
+let tool_result = if tool_metadata.flow_control {
+    // ... same as before (handoff handling, no dispatch needed)
+} else if tool_call.name == tools::SEND_MESSAGE_TOOL_NAME {
+    // ... same as before
+} else if tool_call.name == tools::MODEL_INFO_TOOL_NAME {
+    // ... same as before
+} else {
+    // Permission middleware on category, then dispatch
+    let permission_denied: Option<String> = match category {
+        ToolCategory::FsRead => {
+            // ... same VFS path bypass + classify_file_path logic as before
+        }
+        ToolCategory::FsWrite => {
+            // ... same VFS path bypass + PreFileWrite check as before
+        }
+        ToolCategory::Shell => {
+            // ... same PreShellExec check as before
+        }
+        ToolCategory::Network => {
+            // ... same URL policy + PreFetchUrl check as before
+        }
+        _ => None,
+    };
+
+    if let Some(reason) = permission_denied {
+        format!("Error: {}", reason)
+    } else {
+        // Build ToolCallContext and dispatch
+        let mut config_for_dispatch = resolved_config.clone();
+        tools::ensure_project_root_allowed(&mut config_for_dispatch, project_root);
+        let call_ctx = tools::ToolCallContext {
+            app,
+            context_name,
+            config: &config_for_dispatch,
+            project_root,
+            vfs: &app.vfs,
+            vfs_caller: crate::vfs::VfsCaller::Context(context_name),
+        };
+        match registry.read().unwrap()
+            .dispatch_with_context(&tool_call.name, &args, &call_ctx)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => format!("Error: {}", e),
+        }
+    }
+};
+```
+
+**Important:** the VFS read special-case (bypass OS permission for `vfs://` paths) must be preserved inside the `FsRead` arm. The existing logic at lines 1022–1083 handles this already — keep it, just restructure it as a `match category` arm.
+
+**Step 8: Remove `ToolType`, `classify_tool_type`, update `build_tool_info_list` and `filter_tools_by_config`**
+
+`build_tool_info_list` (line 181): currently uses `classify_tool_type(name, plugin_tools)`. Replace with registry lookup:
+```rust
+fn build_tool_info_list(
+    all_tools: &[serde_json::Value],
+    registry: &Arc<RwLock<ToolRegistry>>,
+) -> Vec<serde_json::Value> {
+    let reg = registry.read().unwrap();
+    all_tools.iter().filter_map(|tool| {
+        let name = tool.get("function")?.get("name")?.as_str()?;
+        let category = reg.get(name)
+            .map(|t| t.category.as_str())
+            .unwrap_or("plugin");  // unknown tools default to plugin
+        Some(json!({ "name": name, "type": category }))
+    }).collect()
+}
+```
+
+`filter_tools_by_config` (line 225): uses `classify_tool_type` only in the `exclude_categories` arm. Replace:
+```rust
+fn filter_tools_by_config(
+    tools: Vec<serde_json::Value>,
+    config: &ToolsConfig,
+    registry: &Arc<RwLock<ToolRegistry>>,
+) -> Vec<serde_json::Value> {
+    // ... include/exclude filters unchanged ...
+    if let Some(ref categories) = config.exclude_categories {
+        let reg = registry.read().unwrap();
+        result.retain(|tool| {
+            tool.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str())
+                .map(|name| {
+                    let cat = reg.get(name).map(|t| t.category.as_str()).unwrap_or("plugin");
+                    !categories.contains(&cat.to_string())
+                })
+                .unwrap_or(true)
+        });
+    }
+    result
+}
+```
+
+Delete the `ToolType` enum (lines 65–93) and `classify_tool_type` function (lines 96–128).
+
+**Step 9: Update tool API format building in `send_prompt`**
+
+The current code (lines 2067–2100) builds `all_tools` from separate per-category functions:
+```rust
+let mut all_tools = tools::tools_to_api_format(tools);      // plugin tools
+all_tools.extend(tools::all_memory_tools_to_api_format());
+all_tools.extend(tools::all_fs_read_tools_to_api_format());
+// ... etc
+```
+
+With the registry, all tools are in one place. The API format is already on each `Tool` via `parameters` field. Replace with:
+```rust
+let reg = registry.read().unwrap();
+let mut all_tools: Vec<serde_json::Value> = reg.all()
+    .filter(|t| {
+        // exclude reflection tool if not enabled
+        t.name != tools::REFLECTION_TOOL_NAME || use_reflection
+    })
+    .map(|t| t.to_api_format())           // ← needs Tool::to_api_format() — see note below
+    .collect();
+drop(reg);
+```
+
+**Note:** `Tool::to_api_format()` doesn't exist yet — add it to the `Tool` impl in `tools/mod.rs`:
+```rust
+impl Tool {
+    pub fn to_api_format(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            }
+        })
+    }
+}
+```
+
+The `all_flow_tools_to_api_format(&preset_cap_refs)` call passes `preset_capabilities` to the spawn_agent tool description — this is dynamic. The spawn_agent tool in the registry has the *base* description without the preset list. For now, keep the flow tools API format call separate:
+```rust
+let reg = registry.read().unwrap();
+let mut all_tools: Vec<serde_json::Value> = reg.all()
+    .filter(|t| t.category != ToolCategory::Flow)  // flow tools added separately below
+    .filter(|t| t.name != tools::REFLECTION_TOOL_NAME || use_reflection)
+    .map(|t| t.to_api_format())
+    .collect();
+drop(reg);
+// Flow tools need dynamic preset_capabilities in spawn_agent description
+all_tools.extend(tools::all_flow_tools_to_api_format(&preset_cap_refs));
+annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
+all_tools = filter_tools_by_config(all_tools, &resolved_config.tools, &registry);
+```
+
+**Step 10: Verify and commit**
+
+Run: `cargo test -p chibi-core`
+Expected: all tests pass.
+
+Run: `just lint`
+Expected: clean (no clippy warnings).
+
+Commit:
+```
+refactor: replace send.rs dispatch chain with registry + middleware (#190)
+
+removes ToolType enum, classify_tool_type(), and the if/else
+dispatch chain. permission gating now routes on tool.category.
+send_prompt accepts Arc<RwLock<ToolRegistry>> directly.
 ```
 
 ---
