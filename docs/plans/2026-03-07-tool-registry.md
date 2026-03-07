@@ -33,27 +33,149 @@
 - After completing each task, update this plan file to reflect progress (mark complete, add notes).
 - Use the task list (TaskCreate/TaskUpdate) to track progress so the user can follow along.
 
-### Next session starts at: Task 5
+### Phase 2 — IN PROGRESS (Tasks 5–10)
 
-**Context for Task 5 (gathered, nothing written yet):**
+#### Task 5 — COMPLETE (commit `cde36bb9`)
 
-Execute function signatures:
-- `execute_memory_tool(app, context_name, name, args, config: Option<&ResolvedConfig>) -> Option<io::Result<String>>` — sync
-- `execute_fs_read_tool(app, context_name, tool_name, args, config: &ResolvedConfig, project_root: &Path) -> Option<io::Result<String>>` — sync
-- `execute_fs_write_tool(tool_name, args, project_root, config, vfs, caller: VfsCaller) -> Option<io::Result<String>>` — sync
-- `execute_shell_tool(tool_name, args, project_root) -> Option<io::Result<String>>` — async
-- `execute_network_tool(tool_name, args) -> Option<io::Result<String>>` — async, no deps to capture
-- `execute_index_tool(tool_name, args, project_root, _config, tools: &[Tool]) -> Option<io::Result<String>>` — sync, pass `&[]` for tools
-- `execute_flow_tool(config, tool_name, args, tools: &[Tool]) -> io::Result<Option<String>>` — async (note different return type!), pass `&[]` for tools; flow tools have non-default metadata via `flow_tool_metadata(name)`
-- `execute_vfs_tool(vfs, caller, tool_name, args) -> Option<io::Result<String>>` — async
+**What was done:**
+- Added `register_*_tools()` to all 8 builtin modules (memory, fs_read, fs_write, shell, network, index, flow, vfs_tools)
+- Added re-exports to `tools/mod.rs`
+- Added `test_register_all_builtins` to `registry.rs` tests — 784 tests pass
 
-Pattern for all handlers: `call.context.app`, `call.context.context_name`, `call.context.config`, `call.context.project_root`, `call.context.vfs`, `call.context.vfs_caller`
+**Implementation notes:**
+- `BoxFuture` is intentionally `!Send` — `AppState` and `Vfs` contain `RefCell` fields that are `!Sync`. Tool dispatch runs on a single tokio task via `join_all` (no `tokio::spawn`), so `Send` is not required. Plan had `+ Send` in `BoxFuture` — removed.
+- Sync handlers (memory, fs_read, fs_write, index) extract `io::Result<String>` before the `Box::pin(async move { result })` to avoid holding `!Sync` refs across `.await` points.
+- Async handlers (vfs_tools, flow) rely on `!Send` future staying on the same thread; bind refs to local vars then move into async block.
+- `flow.rs`: tools handled by send.rs middleware (send_message, call_user, model_info) have a handler that returns an error if dispatched directly through registry — they should be intercepted by send.rs before reaching dispatch.
+- `flow.rs`: per-tool metadata uses manual `Tool { ... }` construction (not `Tool::from_builtin_def`) to override `ToolMetadata`.
+- `index.rs`: `tools: &[]` passed — wired to registry in Task 7+.
 
-flow.rs special case: `execute_flow_tool` returns `io::Result<Option<String>>` (not `Option<io::Result<String>>`), so handle with: `.await?.ok_or_else(|| io::Error::new(NotFound, ...))`
+#### Task 6 — COMPLETE (commit `68d3dca0`)
 
-flow.rs special case: per-tool metadata must be set via `flow_tool_metadata(def.name)` — `from_builtin_def` uses `ToolMetadata::new()` so override `metadata` field after construction, or add a `from_builtin_def_with_metadata` variant.
+**What was done:**
+- Added `execute_tool_by_path(path, name, args)` to `plugins.rs` — standalone, no `&Tool`
+- Added `execute_mcp_call(server, tool_name, args, home)` to `mcp.rs` — standalone, no `&Tool`
+- Wired both into `ToolRegistry::dispatch_with_context` Plugin/Mcp arms (replacing the stub errors)
+- Re-exported `execute_tool_by_path` from `tools/mod.rs`
 
-index.rs: tools slice — pass `&[]` now; wired to registry in Task 7+
+#### Task 7 — COMPLETE (commit `99d56cfe`)
+
+**What was done:**
+- `Chibi.tools: Vec<Tool>` → `registry: Arc<RwLock<ToolRegistry>>`
+- `load_with_options`: builds registry via `register_*_tools()`, loads plugins and MCP tools
+- All `self.tools` refs updated: init/shutdown collect plugin tools, send_prompt_streaming snapshots all tools, execute_tool now uses `dispatch_with_context`
+- `for_test()` registers all builtins (test `test_tool_count_empty` → `test_tool_count_has_builtins`)
+- `execution.rs:295` RunPlugin: registry.get() instead of find_tool()
+
+**Implementation notes:**
+- `for_test()` now registers all builtins so tests via `create_test_chibi` can call any builtin tool
+
+#### Task 8 — COMPLETE (commit `5a05a9e6`)
+
+**What was done:**
+- `execute_tool` in chibi.rs replaced with `dispatch_with_context`
+- Builds `ToolCallContext` from runtime values, calls `ensure_project_root_allowed` first
+
+### Next session starts at: Task 9
+
+**Context for Task 9:**
+
+Task 9 is a big refactor of `send.rs`. The key complexity:
+
+`execute_tool_pure` uses `tools: &[Tool]` for:
+1. Hook execution (plugin tools only)
+2. Tool dispatch (the big if/else chain to replace)
+3. Metadata lookup (`get_tool_metadata`, `tool_call_summary`)
+4. `classify_tool_type` for pre_api_tools hook and config filtering
+
+The plan says to accept `Arc<RwLock<ToolRegistry>>` in `send_prompt` and route dispatch via `tool.category`. The main challenge is:
+- `execute_tool_pure` is `async` — can't hold RwLock read guard across `.await`
+- Flow control, send_message, model_info must still be intercepted BEFORE registry dispatch (their registry handlers return errors if dispatched directly)
+- Permission gating remains in send.rs middleware, routed on `tool.category`
+- `build_tool_info_list` and `filter_tools_by_config` use `classify_tool_type` with `plugin_tools: &[Tool]` — can be replaced with `tool.category.as_str()` from registry lookup
+
+**Approach to execute:**
+1. Change `send_prompt` to accept `Arc<RwLock<ToolRegistry>>` (and update chibi.rs caller)
+2. Extract plugin tools once: `let plugin_tools: Vec<Tool> = reg.filter(Plugin).cloned().collect()`
+3. Pass `plugin_tools: &[Tool]` to all hook functions (replace `tools` where hooks are fired)
+4. In `execute_tool_pure`, replace the if/else dispatch with `match tool.category { ... }` middleware + `dispatch_with_context`
+5. Remove `ToolType`, `classify_tool_type`, use `tool.category.as_str()` (add `as_str()` to `ToolCategory`)
+6. Update `build_tool_info_list` and `filter_tools_by_config` to use registry lookup
+7. `get_tool_metadata` and `tool_call_summary` — update to accept registry
+8. Remove `find_tool` usage from send.rs
+
+**Key note on flow tools intercepted by send.rs:**
+The flow control tools (call_user, call_agent, spawn_agent, summarize_content, model_info, send_message) are NOT dispatched via `dispatch_with_context` in `execute_tool_pure`. They're handled by special cases BEFORE dispatch. This matches the Task 5 note: "flow.rs: tools handled by send.rs middleware have a handler that returns an error if dispatched directly through registry".
+
+**Files to modify:**
+- `crates/chibi-core/src/api/send.rs` (major refactor)
+- `crates/chibi-core/src/chibi.rs` (send_prompt call site)
+- `crates/chibi-core/src/tools/registry.rs` (add `ToolCategory::as_str()`)
+- `crates/chibi-core/src/tools/mod.rs` (update `get_tool_metadata`, `tool_call_summary` signatures)
+
+Current struct:
+```rust
+pub struct Chibi {
+    pub app: AppState,
+    pub tools: Vec<Tool>,          // ← replace with registry
+    pub project_root: PathBuf,
+    permission_handler: Option<PermissionHandler>,
+}
+```
+
+Target struct:
+```rust
+pub struct Chibi {
+    pub app: AppState,
+    pub registry: Arc<RwLock<ToolRegistry>>,   // ← new
+    pub project_root: PathBuf,
+    permission_handler: Option<PermissionHandler>,
+}
+```
+
+All `self.tools` references in chibi.rs (lines 242, 244, 255, 257, 272, 279, 326, 413, 437, 448, 503):
+- `self.tools.len()` → `self.registry.read().unwrap().all().count()`
+- `tools::execute_hook(&self.tools, ...)` → collect plugin tools from registry: `let plugin_tools: Vec<_> = self.registry.read().unwrap().filter(|t| t.category == ToolCategory::Plugin).into_iter().cloned().collect(); tools::execute_hook(&plugin_tools, ...)`
+- `&self.tools` passed to `send_prompt(...)` → pass registry: change send_prompt signature too (Task 9) OR collect a `Vec<Tool>` for now
+- `tools::execute_index_tool(..., &self.tools)` → pass `&[]` (same as in register_index_tools, wired later)
+- `tools::execute_flow_tool(&config, name, &args, &self.tools)` → pass `&[]`
+- `tools::find_tool(&self.tools, name)` → `self.registry.read().unwrap().get(name)`
+
+`load_with_options` tool-loading section (lines 162–179) becomes:
+```rust
+let mut reg = ToolRegistry::new();
+tools::register_memory_tools(&mut reg);
+tools::register_fs_read_tools(&mut reg);
+tools::register_fs_write_tools(&mut reg);
+tools::register_shell_tools(&mut reg);
+tools::register_network_tools(&mut reg);
+tools::register_index_tools(&mut reg);
+tools::register_flow_tools(&mut reg);
+tools::register_vfs_tools(&mut reg);
+for tool in tools::load_tools(&app.plugins_dir)? { reg.register(tool); }
+match tools::mcp::load_mcp_tools(&app.chibi_dir) { Ok(mcp_tools) => { ... reg.register(t) } ... }
+let registry = Arc::new(RwLock::new(reg));
+```
+
+`send_prompt` in `api/send.rs` takes `tools: &[Tool]` — keep this signature for now (Task 9 replaces it). For Task 7, collect the tools from the registry as a `Vec<Tool>` and pass them:
+```rust
+let tools_snap: Vec<Tool> = self.registry.read().unwrap().all().cloned().collect();
+send_prompt(&self.app, ..., &tools_snap, ...).await
+```
+
+`execution.rs:295` — `find_tool(&chibi.tools, name)` → `chibi.registry.read().unwrap().get(name)`. Then pass `tool.path` to `execute_tool(tool, &args_json)` — this still works since `Tool.path` is kept until Task 10.
+
+`tool_count()` → `self.registry.read().unwrap().all().count()`
+
+`for_test()` → `Self { app, registry: Arc::new(RwLock::new(ToolRegistry::new())), ... }`
+
+`LoadSummary` event: `builtin_count` comes from `MEMORY_TOOL_DEFS.len() + FS_READ_TOOL_DEFS.len() + ...` (or just `tools::builtin_tool_names().len()`), `plugin_count` from registry filtered by Plugin category.
+
+Imports needed in chibi.rs:
+```rust
+use std::sync::{Arc, RwLock};
+use crate::tools::{ToolRegistry, ToolCategory};
+```
 
 ---
 
