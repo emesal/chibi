@@ -27,8 +27,13 @@ hostname = "0.4"
 ignore = "0.4"
 indexmap = { version = "2", features = ["serde"] }
 ratatoskr.workspace = true
+tein = { path = "../../../../tein/tein", features = ["json"], optional = true }
 url = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+[features]
+default = ["synthesised-tools"]
+synthesised-tools = ["dep:tein"]
 
 [lints.rust]
 dead_code = "deny"

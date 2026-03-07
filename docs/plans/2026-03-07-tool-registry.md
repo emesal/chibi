@@ -33,7 +33,7 @@
 - After completing each task, update this plan file to reflect progress (mark complete, add notes).
 - Use the task list (TaskCreate/TaskUpdate) to track progress so the user can follow along.
 
-### Phase 2 — IN PROGRESS (Tasks 5–10)
+### Phase 2 — COMPLETE (Tasks 5–10)
 
 #### Task 5 — COMPLETE (commit `cde36bb9`)
 
@@ -97,6 +97,21 @@
 - VFS bypass tests (`test_vfs_*_bypasses_*`) require `make_test_registry()` — the bypass fires permission gating but still routes through the registry for actual execution.
 - `ToolMetadata` moved to `#[cfg(test)]` import in `registry.rs` (only used in tests).
 - Flow tools added separately after registry iteration (spawn_agent needs dynamic preset_capabilities injected).
+
+### Phase 3 — COMPLETE (Tasks 11–14)
+
+**What was done:**
+- Task 11: Added `/tools/sys/`, `/tools/shared/`, `/tools/home/<ctx>/`, `/tools/flocks/<name>/` zone rules to `permissions.rs`. `/tools/sys/` deny precedes System early-return — even SYSTEM cannot write. 25 permission tests pass.
+- Task 12: Replaced `Vfs.backend: Box<dyn VfsBackend>` with `mounts: Vec<(String, Box<dyn VfsBackend>)>` sorted longest-first. Added `VfsBuilder` with `.mount(prefix, backend).build()`. Added `resolve_backend()` for longest-prefix dispatch + prefix stripping. `Vfs::new()` unchanged. Cross-backend copy/rename return `Unsupported`. 24 vfs tests pass.
+- Task 13: Created `crates/chibi-core/src/vfs/tools_backend.rs` — `ToolsBackend` implementing `VfsBackend`. Reads synthesise tool schema JSON from registry. List returns all tools. Writes always rejected. 6 backend tests pass.
+- Task 14: Updated `chibi.rs::load_with_options` to rebuild `app.vfs` after registry construction using `Vfs::builder()` with `LocalBackend` at `/` and `ToolsBackend` at `/tools/sys`. 778 tests pass.
+
+**Implementation notes:**
+- `VfsBuilder::build()` sorts mounts by prefix length descending — longest prefix wins.
+- `resolve_backend()` strips the mount prefix from the path before delegating. Root mount `/` passes path unchanged.
+- `ToolsBackend` receives the stripped path (without `/tools/sys` prefix): `/shell_exec` for `/tools/sys/shell_exec`.
+- `app.vfs` is replaced after `AppState::load()` in `load_with_options` — `app` must be `mut`.
+- `for_test()` in `chibi.rs` still uses `AppState::for_test()` which has its own VFS — does not mount `ToolsBackend` (test registry is separate from VFS).
 
 ---
 
@@ -1725,15 +1740,57 @@ vfs:///tools/sys/. registry shared via Arc<RwLock<>>.
 
 ## Phase 4: Synthesised Tools (tein integration)
 
-> **Before starting Phase 4:** Verify tein's public API matches the assumptions in
-> Tasks 15-17. Run:
-> ```
-> cargo doc --open -p tein
-> ```
-> and confirm these types/methods exist: `Context::builder()`, `Modules::Safe`,
-> `ThreadLocalContext`, `step_limit`, `ctx.call(fn, &[args])`, `Value::as_string()`,
-> `Value::is_procedure()`. If the API differs, update Tasks 16-17 before writing any
-> code. This is the riskiest phase — a mis-assumed API means rewriting handlers.
+### tein API verification — DONE
+
+All assumed types/methods confirmed present in `~/projects/tein/tein/src/`:
+
+| Assumed | Actual | Notes |
+|---------|--------|-------|
+| `Context::builder()` | ✅ `Context::builder() -> ContextBuilder` | |
+| `.standard_env()` | ✅ `ContextBuilder::standard_env()` | |
+| `.sandboxed(Modules::Safe)` | ✅ `ContextBuilder::sandboxed(modules)` | `Modules` is an enum in `tein::sandbox` |
+| `.step_limit(n)` | ✅ `ContextBuilder::step_limit(u64)` | |
+| `.build_managed(init)` | ✅ returns `Result<ThreadLocalContext>` | init is `impl Fn(&Context) -> tein::Result<()>` — NOT `io::Result` |
+| `ThreadLocalContext` | ✅ in `tein::managed` | re-exported at crate root |
+| `ctx.evaluate(code)` | ✅ on both `Context` and `ThreadLocalContext` | |
+| `ctx.call(proc, args)` | ✅ `call(&Value, &[Value]) -> Result<Value>` | |
+| `Value::as_string()` | ✅ returns `Option<&str>` (not `Option<String>`) | `.to_string()` to own |
+| `Value::is_procedure()` | ✅ | |
+
+**Key corrections for Task 17:**
+
+1. **`build_managed` init closure returns `tein::Result<()>`**, not `io::Result<()>`. The closure cannot use `?` with `io::Error`. Pattern: evaluate source in init, map `tein::Error` to `tein::Error` (it already is). The `build_managed` call itself returns `tein::Result<ThreadLocalContext>` — map that to `io::Result` at the call site.
+
+2. **Schema extraction happens on the `ThreadLocalContext`** (after `build_managed` returns), not inside the init closure. The init closure only evaluates the source to define the bindings. Then call `ctx.evaluate("tool-name")` etc. on the returned `ThreadLocalContext`.
+
+3. **`Value::as_string()` returns `Option<&str>`** — need `.map(str::to_string)` or `.map(|s| s.to_string())` to get `String`.
+
+**Corrected `load_tool_from_source` structure:**
+
+```rust
+pub fn load_tool_from_source(source: &str, vfs_path: &VfsPath) -> io::Result<Tool> {
+    let source = source.to_string(); // move into closure
+    let ctx = Context::builder()
+        .standard_env()
+        .sandboxed(Modules::Safe)
+        .step_limit(100_000)
+        .build_managed(move |ctx| {
+            ctx.evaluate(&source)?;  // tein::Result<()>
+            Ok(())
+        })
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("tein init: {e}")))?;
+    // ctx: ThreadLocalContext — extract bindings via ctx.evaluate()
+    let name = extract_string(&ctx, "tool-name")?;
+    let description = extract_string(&ctx, "tool-description")?;
+    // ... etc
+}
+```
+
+4. **`ToolMetadata::new()`** (not `default()`) for regular tools — `default()` gives `parallel: false`.
+
+5. **`Value` conversion helpers** (`params_alist_to_json_schema`, `json_args_to_scheme_alist`) need to use tein's `Value` API. Check `~/projects/tein/tein/src/value.rs` for the full Value enum variants before implementing. The plan left these as `todo!()` — they need real implementation.
+
+6. **`tein` is a git workspace** at `~/projects/tein/` — when adding as dependency, check the correct crate name. The main crate is `tein` (in `tein/tein/`). Cargo.toml path dep for local dev: `tein = { path = "../../tein/tein", optional = true }` or git URL for production.
 
 ### Task 15: Add tein dependency (feature-gated)
 
@@ -1863,27 +1920,31 @@ Expected: FAIL
 
 **Step 3: Implement the loader**
 
+> See "tein API verification" section above for corrections to this code.
+> Key: init closure returns `tein::Result`, extraction happens on `ThreadLocalContext` after `build_managed`.
+> Check `~/projects/tein/tein/src/value.rs` for `Value` enum variants before writing conversion helpers.
+
 ```rust
 #[cfg(feature = "synthesised-tools")]
-use tein::{Context, Value, ThreadLocalContext, sandbox::Modules};
+use tein::{Context, ThreadLocalContext, Value, sandbox::Modules};
 use std::sync::Arc;
 
 /// Load a synthesised tool from scheme source.
 pub fn load_tool_from_source(source: &str, vfs_path: &VfsPath) -> io::Result<Tool> {
-    // create sandboxed tein context
+    let source = source.to_string();
+    // build_managed init: evaluates source to define bindings.
+    // init closure returns tein::Result<()>, NOT io::Result<()>.
     let ctx = Context::builder()
         .standard_env()
         .sandboxed(Modules::Safe)
         .step_limit(100_000)
-        .build_managed(|ctx| {
-            ctx.evaluate(source).map_err(|e| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("scheme eval error: {e}"))
-            })?;
+        .build_managed(move |ctx| {
+            ctx.evaluate(&source)?;
             Ok(())
         })
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("tein init error: {e}")))?;
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("tein init: {e}")))?;
 
-    // extract bindings
+    // extract bindings from the ThreadLocalContext (not inside init closure)
     let name = extract_string(&ctx, "tool-name")?;
     let description = extract_string(&ctx, "tool-description")?;
     let params_val = ctx.evaluate("tool-parameters")
@@ -1900,16 +1961,13 @@ pub fn load_tool_from_source(source: &str, vfs_path: &VfsPath) -> io::Result<Too
     let context = Arc::new(ctx);
 
     Ok(Tool {
-        name: name.clone(),
+        name,
         description,
         parameters,
         hooks: vec![],
-        metadata: ToolMetadata::default(),
+        metadata: ToolMetadata::new(),  // not default() — new() gives parallel: true
         summary_params: vec![],
-        r#impl: ToolImpl::Synthesised {
-            vfs_path: vfs_path.clone(),
-            context,
-        },
+        r#impl: ToolImpl::Synthesised { vfs_path: vfs_path.clone(), context },
         category: ToolCategory::Synthesised,
     })
 }
@@ -1919,37 +1977,85 @@ pub async fn execute_synthesised(
     context: &ThreadLocalContext,
     call: &ToolCall<'_>,
 ) -> io::Result<String> {
-    let args_alist = json_args_to_scheme_alist(call.args);
+    let args_alist = json_args_to_scheme_alist(call.args)?;
     let exec_fn = context.evaluate("tool-execute")
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("resolve tool-execute: {e}")))?;
     let result = context.call(&exec_fn, &[args_alist])
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("tool execution error: {e}")))?;
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("tool execution: {e}")))?;
+    // Value::as_string() returns Option<&str>
     match result.as_string() {
         Some(s) => Ok(s.to_string()),
         None => Ok(result.to_string()),
     }
 }
 
-// helper: extract a string binding from the context
+// helper: extract a string binding from the ThreadLocalContext
 fn extract_string(ctx: &ThreadLocalContext, name: &str) -> io::Result<String> {
     let val = ctx.evaluate(name)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("missing {name}: {e}")))?;
     val.as_string()
-        .map(|s| s.to_string())
+        .map(str::to_string)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("{name} is not a string")))
 }
 
 // helper: convert scheme params alist to JSON schema
+// INPUT: scheme alist ((name . ((type . "string") (description . "..."))) ...)
+// OUTPUT: JSON Schema object {"type":"object","properties":{...},"required":[...]}
+//
+// tein::Value variants (from value.rs):
+//   List(Vec<Value>)          — proper list: (a b c)
+//   Pair(Box<Value>, Box<Value>) — improper pair: (a . b)
+//   String(String)            — scheme strings
+//   Symbol(String)            — scheme symbols
+//   Boolean(bool), Integer(i64), Float(f64), Nil, etc.
+//
+// The params alist `((text . ((type . "string") (description . "..."))) ...)` is:
+//   List([
+//     Pair(Symbol("text"), List([
+//       Pair(Symbol("type"), String("string")),
+//       Pair(Symbol("description"), String("count words in text")),
+//     ])),
+//   ])
+//
+// Walk List items as Pairs; inner list is also Pairs for each property attr.
 fn params_alist_to_json_schema(val: &Value) -> io::Result<serde_json::Value> {
-    // convert ((name . ((type . "string") ...)) ...) to JSON schema
-    // implementation details depend on tein's Value layout
-    todo!("implement alist → JSON schema conversion")
+    todo!("implement using Value::List/Pair variants — see comment above")
 }
 
-// helper: convert JSON args to scheme alist
-fn json_args_to_scheme_alist(args: &serde_json::Value) -> Value {
-    // convert {"key": "value", ...} to ((key . value) ...)
-    todo!("implement JSON → scheme alist conversion")
+// helper: convert JSON args object to a scheme value for tool-execute
+// INPUT: serde_json::Value object {"key": "val", ...}
+// OUTPUT: tein::Value (a scheme association list or object representation)
+//
+// tein::json is a private module (not pub) — json_parse is NOT part of the public API.
+// Two options:
+//
+// OPTION A (recommended): pass JSON string to scheme, let the scheme tool import
+// (tein json) and call json-parse itself. The tool convention becomes:
+//
+//   (import (tein json))
+//   (define (tool-execute args-json-string)
+//     (let ((args (json-parse args-json-string)))
+//       ...))
+//
+// Rust side: just pass (serde_json::to_string(args)?) as a tein Value::String.
+// This is the cleanest approach — no Rust alist construction needed.
+//
+// OPTION B (manual alist): construct Value::List of Value::Pair manually from
+// serde_json::Map entries:
+//
+//   Value::List(map.iter().map(|(k, v)| {
+//       Value::Pair(Box::new(Value::String(k.clone())), Box::new(json_serde_to_tein(v)))
+//   }).collect())
+//
+// where json_serde_to_tein recursively converts serde_json::Value → tein::Value.
+// This preserves the alist convention the tests assume ((assoc "key" args)).
+//
+// DECISION NEEDED: pick option A or B before writing tests. Option A changes
+// the scheme tool convention (args is parsed in scheme). Option B keeps the
+// alist convention but needs a recursive converter. Recommend Option A for
+// simplicity and to leverage tein's json module from scheme.
+fn json_args_to_scheme_value(args: &serde_json::Value) -> io::Result<Value> {
+    todo!("decide: Option A (pass JSON string) or Option B (manual alist) — see comment")
 }
 ```
 

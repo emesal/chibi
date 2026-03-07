@@ -64,7 +64,13 @@ pub enum ToolImpl {
     Plugin(PathBuf),
     /// MCP bridge tool (JSON-over-TCP to mcp-bridge daemon).
     Mcp { server: String, tool_name: String },
-    // Synthesised variant added in Phase 4 (tein integration).
+    /// Scheme tool loaded from VFS source via tein. Context is per-tool (one
+    /// sandboxed tein context per synthesised tool, shared via Arc).
+    #[cfg(feature = "synthesised-tools")]
+    Synthesised {
+        vfs_path: crate::vfs::VfsPath,
+        context: std::sync::Arc<tein::ThreadLocalContext>,
+    },
 }
 
 impl Clone for ToolImpl {
@@ -75,6 +81,11 @@ impl Clone for ToolImpl {
             ToolImpl::Mcp { server, tool_name } => ToolImpl::Mcp {
                 server: server.clone(),
                 tool_name: tool_name.clone(),
+            },
+            #[cfg(feature = "synthesised-tools")]
+            ToolImpl::Synthesised { vfs_path, context } => ToolImpl::Synthesised {
+                vfs_path: vfs_path.clone(),
+                context: context.clone(),
             },
         }
     }
@@ -185,6 +196,10 @@ impl ToolRegistry {
                 let home = ctx.app.chibi_dir.clone();
                 super::mcp::execute_mcp_call(&server, &tool_name, args, &home)
             }
+            #[cfg(feature = "synthesised-tools")]
+            ToolImpl::Synthesised { context, .. } => {
+                super::synthesised::execute_synthesised(&context, &call).await
+            }
         }
     }
 
@@ -224,6 +239,10 @@ impl ToolRegistry {
                 // MCP dispatch: forward to bridge daemon via TCP. Sync call.
                 let home = ctx.app.chibi_dir.clone();
                 super::mcp::execute_mcp_call(&server, &tool_name, args, &home)
+            }
+            #[cfg(feature = "synthesised-tools")]
+            ToolImpl::Synthesised { context, .. } => {
+                super::synthesised::execute_synthesised(&context, &call).await
             }
         }
     }

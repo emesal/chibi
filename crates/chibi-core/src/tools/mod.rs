@@ -28,6 +28,7 @@ mod plugins;
 pub mod registry;
 pub mod security;
 mod shell;
+pub mod synthesised;
 pub mod vfs_tools;
 
 use std::io::{self, ErrorKind};
