@@ -162,7 +162,7 @@ impl Chibi {
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn load_with_options(options: LoadOptions, output: &dyn OutputSink) -> io::Result<Self> {
-        let app = AppState::load(options.home)?;
+        let mut app = AppState::load(options.home)?;
 
         // Build the registry — register builtins first, then plugins, then MCP tools.
         let mut reg = ToolRegistry::new();
@@ -224,6 +224,19 @@ impl Chibi {
         });
 
         let registry = Arc::new(RwLock::new(reg));
+
+        // Mount /tools/sys/ as a virtual read-only backend backed by the registry.
+        // The local backend (already constructed in AppState) stays at root.
+        // We rebuild the VFS using the builder, transferring the existing local backend.
+        let site_id = app.vfs.site_id().to_string();
+        let vfs_root = app.chibi_dir.join("vfs");
+        let local_backend = crate::vfs::LocalBackend::new(vfs_root);
+        let tools_backend = crate::vfs::ToolsBackend::new(Arc::clone(&registry));
+        app.vfs = crate::vfs::Vfs::builder(site_id)
+            .mount("/", Box::new(local_backend))
+            .mount("/tools/sys", Box::new(tools_backend))
+            .build();
+
         Ok(Self {
             app,
             registry,
