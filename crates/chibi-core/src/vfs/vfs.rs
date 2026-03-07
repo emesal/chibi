@@ -2,15 +2,21 @@
 //!
 //! This is the single entry point for all VFS operations. It validates
 //! permissions based on caller identity and path zone, then delegates
-//! to the underlying `VfsBackend`.
+//! to the appropriate backend via longest-prefix mount matching.
 //!
-//! # Future evolution
+//! # Multi-backend mounting
 //!
-//! Currently wraps a single backend. Designed to evolve toward:
-//! - **Multi-backend mounting**: A `Vec<(VfsPath, Box<dyn VfsBackend>)>` with
-//!   longest-prefix match to select the backend and strip the mount prefix.
-//! - **Middleware layers**: Composable tower-style layers wrapping the backend
-//!   (approach C). The public API on `Vfs` stays unchanged.
+//! Use `Vfs::builder(site_id)` to mount different backends at different
+//! path prefixes. The backend with the longest matching prefix handles the
+//! operation; the mount prefix is stripped from the path before delegation.
+//!
+//! `Vfs::new(backend, site_id)` mounts a single backend at `/` (convenience
+//! for the common single-backend case).
+//!
+//! # Middleware layers
+//!
+//! Future evolution: composable tower-style layers wrapping the backend
+//! (approach C). The public API on `Vfs` stays unchanged.
 
 use std::cell::RefCell;
 use std::io;
@@ -31,8 +37,14 @@ const REGISTRY_PATH: &str = "/flocks/registry.json";
 ///
 /// All public methods take a `caller` (`VfsCaller`) and enforce zone-based
 /// permissions before delegating to the backend.
+///
+/// Backends are sorted by mount-prefix length (longest first) so that the
+/// most-specific prefix wins. The prefix is stripped from the path before
+/// delegation: `/tools/sys/shell_exec` on a `/tools/sys` mount becomes
+/// `/shell_exec` in the backend.
 pub struct Vfs {
-    backend: Box<dyn VfsBackend>,
+    /// Backends sorted by prefix length descending (longest first).
+    mounts: Vec<(String, Box<dyn VfsBackend>)>,
     /// Site identifier for this installation (e.g. `"myhost-a1b2c3d4"`).
     /// Used for flock permission checks and registry membership.
     site_id: String,
@@ -43,17 +55,72 @@ pub struct Vfs {
     registry_cache: RefCell<Option<FlockRegistry>>,
 }
 
+/// Builder for `Vfs` with multiple backend mounts.
+pub struct VfsBuilder {
+    mounts: Vec<(String, Box<dyn VfsBackend>)>,
+    site_id: String,
+}
+
+impl VfsBuilder {
+    fn new(site_id: impl Into<String>) -> Self {
+        Self { mounts: Vec::new(), site_id: site_id.into() }
+    }
+
+    /// Mount a backend at the given path prefix (e.g. `"/"`, `"/tools/sys"`).
+    pub fn mount(mut self, prefix: &str, backend: Box<dyn VfsBackend>) -> Self {
+        self.mounts.push((prefix.to_string(), backend));
+        self
+    }
+
+    /// Build the `Vfs`. Mounts are sorted by prefix length descending so
+    /// the most-specific prefix wins at dispatch time.
+    pub fn build(mut self) -> Vfs {
+        self.mounts.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        Vfs { mounts: self.mounts, site_id: self.site_id, registry_cache: RefCell::new(None) }
+    }
+}
+
 impl Vfs {
-    /// Create a new VFS wrapping the given backend.
+    /// Create a new VFS wrapping the given backend at the root `/` mount.
     ///
     /// `site_id` is the stable site identifier used for flock permission checks.
     /// Pass `"test-site-0000"` in tests.
     pub fn new(backend: Box<dyn VfsBackend>, site_id: impl Into<String>) -> Self {
-        Self {
-            backend,
-            site_id: site_id.into(),
-            registry_cache: RefCell::new(None),
+        Vfs::builder(site_id).mount("/", backend).build()
+    }
+
+    /// Start a builder for a multi-backend VFS.
+    ///
+    /// Call `.mount(prefix, backend)` for each backend, then `.build()`.
+    pub fn builder(site_id: impl Into<String>) -> VfsBuilder {
+        VfsBuilder::new(site_id)
+    }
+
+    /// Resolve the backend and stripped path for the given VFS path.
+    ///
+    /// Selects the backend whose mount prefix is the longest prefix of `path`.
+    /// The prefix is stripped from the path before returning: a path
+    /// `/tools/sys/foo` on mount `/tools/sys` returns `/foo`; the root `/`
+    /// mount returns the path unchanged.
+    ///
+    /// Panics if no backend matches (always has a root mount in practice).
+    fn resolve_backend(&self, path: &VfsPath) -> (&dyn VfsBackend, VfsPath) {
+        let p = path.as_str();
+        for (prefix, backend) in &self.mounts {
+            if prefix == "/" || p == prefix || p.starts_with(&format!("{}/", prefix)) {
+                let stripped = if prefix == "/" {
+                    p.to_string()
+                } else {
+                    let rest = &p[prefix.len()..];
+                    if rest.is_empty() { "/".to_string() } else { rest.to_string() }
+                };
+                // stripped is guaranteed valid: starts with '/' or is "/"
+                let stripped_path = VfsPath::new(&stripped)
+                    .expect("stripped VFS path must be valid");
+                return (backend.as_ref(), stripped_path);
+            }
         }
+        panic!("no VFS backend matched path '{}' — ensure a root '/' mount exists", p);
     }
 
     /// Return the site identifier for this installation.
@@ -69,7 +136,8 @@ impl Vfs {
             return Ok(cached.clone());
         }
         let path = VfsPath::new(REGISTRY_PATH)?;
-        let registry = match self.backend.read(&path).await {
+        let (backend, stripped) = self.resolve_backend(&path);
+        let registry = match backend.read(&stripped).await {
             Ok(data) => serde_json::from_slice(&data)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => FlockRegistry::default(),
@@ -104,22 +172,26 @@ impl Vfs {
 
     pub async fn read(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<Vec<u8>> {
         permissions::check_read(caller, path)?;
-        self.backend.read(path).await
+        let (backend, stripped) = self.resolve_backend(path);
+        backend.read(&stripped).await
     }
 
     pub async fn list(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<Vec<VfsEntry>> {
         permissions::check_read(caller, path)?;
-        self.backend.list(path).await
+        let (backend, stripped) = self.resolve_backend(path);
+        backend.list(&stripped).await
     }
 
     pub async fn exists(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<bool> {
         permissions::check_read(caller, path)?;
-        self.backend.exists(path).await
+        let (backend, stripped) = self.resolve_backend(path);
+        backend.exists(&stripped).await
     }
 
     pub async fn metadata(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<VfsMetadata> {
         permissions::check_read(caller, path)?;
-        self.backend.metadata(path).await
+        let (backend, stripped) = self.resolve_backend(path);
+        backend.metadata(&stripped).await
     }
 
     // -- write operations (permission-checked) --
@@ -133,7 +205,8 @@ impl Vfs {
         let registry = self.flock_ctx_for_check().await;
         let flock_ctx = registry.as_ref().map(|r| (r, self.site_id.as_str()));
         permissions::check_write(caller, path, flock_ctx)?;
-        self.backend.write(path, data).await?;
+        let (backend, stripped) = self.resolve_backend(path);
+        backend.write(&stripped, data).await?;
         if path.as_str() == REGISTRY_PATH {
             self.invalidate_registry_cache();
         }
@@ -149,24 +222,30 @@ impl Vfs {
         let registry = self.flock_ctx_for_check().await;
         let flock_ctx = registry.as_ref().map(|r| (r, self.site_id.as_str()));
         permissions::check_write(caller, path, flock_ctx)?;
-        self.backend.append(path, data).await
+        let (backend, stripped) = self.resolve_backend(path);
+        backend.append(&stripped, data).await
     }
 
     pub async fn delete(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<()> {
         let registry = self.flock_ctx_for_check().await;
         let flock_ctx = registry.as_ref().map(|r| (r, self.site_id.as_str()));
         permissions::check_write(caller, path, flock_ctx)?;
-        self.backend.delete(path).await
+        let (backend, stripped) = self.resolve_backend(path);
+        backend.delete(&stripped).await
     }
 
     pub async fn mkdir(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<()> {
         let registry = self.flock_ctx_for_check().await;
         let flock_ctx = registry.as_ref().map(|r| (r, self.site_id.as_str()));
         permissions::check_write(caller, path, flock_ctx)?;
-        self.backend.mkdir(path).await
+        let (backend, stripped) = self.resolve_backend(path);
+        backend.mkdir(&stripped).await
     }
 
     /// Copy a file. Caller must have read on src and write on dst.
+    ///
+    /// Both src and dst must resolve to the same backend. Cross-backend copies
+    /// are not supported (use read + write instead).
     pub async fn copy(
         &self,
         caller: VfsCaller<'_>,
@@ -177,10 +256,22 @@ impl Vfs {
         let registry = self.flock_ctx_for_check().await;
         let flock_ctx = registry.as_ref().map(|r| (r, self.site_id.as_str()));
         permissions::check_write(caller, dst, flock_ctx)?;
-        self.backend.copy(src, dst).await
+        let (src_backend, src_stripped) = self.resolve_backend(src);
+        let (dst_backend, dst_stripped) = self.resolve_backend(dst);
+        // Backends are trait objects; compare via raw pointer identity.
+        if !std::ptr::eq(src_backend, dst_backend) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "cross-backend copy not supported; use read + write",
+            ));
+        }
+        src_backend.copy(&src_stripped, &dst_stripped).await
     }
 
     /// Rename (move) a file. Caller must have write on both src and dst.
+    ///
+    /// Both src and dst must resolve to the same backend. Cross-backend renames
+    /// are not supported (use read + write + delete instead).
     pub async fn rename(
         &self,
         caller: VfsCaller<'_>,
@@ -192,7 +283,15 @@ impl Vfs {
         let flock_ctx_dst = registry.as_ref().map(|r| (r, self.site_id.as_str()));
         permissions::check_write(caller, src, flock_ctx_src)?;
         permissions::check_write(caller, dst, flock_ctx_dst)?;
-        self.backend.rename(src, dst).await
+        let (src_backend, src_stripped) = self.resolve_backend(src);
+        let (dst_backend, dst_stripped) = self.resolve_backend(dst);
+        if !std::ptr::eq(src_backend, dst_backend) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "cross-backend rename not supported; use read + write + delete",
+            ));
+        }
+        src_backend.rename(&src_stripped, &dst_stripped).await
     }
 
     // -- flock management --
@@ -208,7 +307,8 @@ impl Vfs {
         self.save_registry(&reg).await?;
         // Ensure the flock directory exists.
         let dir = resolve_flock_vfs_root(flock, &self.site_id)?;
-        let _ = self.backend.mkdir(&dir).await; // ignore already-exists
+        let (backend, stripped) = self.resolve_backend(&dir);
+        let _ = backend.mkdir(&stripped).await; // ignore already-exists
         Ok(())
     }
 
@@ -265,6 +365,57 @@ mod tests {
         let backend = LocalBackend::new(dir.path().to_path_buf());
         let vfs = Vfs::new(Box::new(backend), "test-site-0000");
         (dir, vfs)
+    }
+
+    #[tokio::test]
+    async fn test_multi_backend_routing() {
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+        let backend1 = LocalBackend::new(dir1.path().to_path_buf());
+        let backend2 = LocalBackend::new(dir2.path().to_path_buf());
+
+        let vfs = Vfs::builder("test-site-0000")
+            .mount("/", Box::new(backend1))
+            .mount("/tools/shared", Box::new(backend2))
+            .build();
+
+        // write to /tools/shared/ goes to backend2 (dir2)
+        let path1 = VfsPath::new("/tools/shared/test.txt").unwrap();
+        vfs.write(VfsCaller::System, &path1, b"hello").await.unwrap();
+        assert_eq!(vfs.read(VfsCaller::System, &path1).await.unwrap(), b"hello");
+
+        // verify the file landed in dir2, not dir1
+        assert!(dir2.path().join("test.txt").exists());
+        assert!(!dir1.path().join("tools").join("shared").join("test.txt").exists());
+
+        // write to /shared/ goes to backend1 (dir1, root mount)
+        let path2 = VfsPath::new("/shared/other.txt").unwrap();
+        vfs.write(VfsCaller::System, &path2, b"world").await.unwrap();
+        assert_eq!(vfs.read(VfsCaller::System, &path2).await.unwrap(), b"world");
+        assert!(dir1.path().join("shared").join("other.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn test_multi_backend_list_mount_root() {
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+        let backend1 = LocalBackend::new(dir1.path().to_path_buf());
+        let backend2 = LocalBackend::new(dir2.path().to_path_buf());
+
+        let vfs = Vfs::builder("test-site-0000")
+            .mount("/", Box::new(backend1))
+            .mount("/tools/shared", Box::new(backend2))
+            .build();
+
+        // write a file to the backend2 mount
+        let path = VfsPath::new("/tools/shared/mytool.scm").unwrap();
+        vfs.write(VfsCaller::System, &path, b"(define x 1)").await.unwrap();
+
+        // listing /tools/shared should go to backend2 and see the file
+        let mount_root = VfsPath::new("/tools/shared").unwrap();
+        let entries = vfs.list(VfsCaller::System, &mount_root).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "mytool.scm");
     }
 
     #[tokio::test]
