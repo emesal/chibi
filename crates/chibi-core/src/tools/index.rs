@@ -80,6 +80,34 @@ pub static INDEX_TOOL_DEFS: &[BuiltinToolDef] = &[
 
 // === Registry Helpers ===
 
+/// Register all index tools into the registry.
+///
+/// Note: the `tools` slice passed to `execute_index_tool` is `&[]` here.
+/// Full registry wiring (for language plugin dispatch) happens in Task 7+.
+pub fn register_index_tools(registry: &mut super::registry::ToolRegistry) {
+    use std::sync::Arc;
+    use super::registry::{ToolCategory, ToolHandler};
+    use super::Tool;
+
+    let handler: ToolHandler = Arc::new(|call| {
+        // execute_index_tool is sync — extract result before the async block so
+        // no !Sync references cross an .await point.
+        let ctx = call.context;
+        let result = execute_index_tool(call.name, call.args, ctx.project_root, ctx.config, &[])
+            .unwrap_or_else(|| {
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("unknown index tool: {}", call.name),
+                ))
+            });
+        Box::pin(async move { result })
+    });
+
+    for def in INDEX_TOOL_DEFS {
+        registry.register(Tool::from_builtin_def(def, handler.clone(), ToolCategory::Index));
+    }
+}
+
 /// Convert all index tools to API format
 pub fn all_index_tools_to_api_format() -> Vec<serde_json::Value> {
     INDEX_TOOL_DEFS

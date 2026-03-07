@@ -20,10 +20,18 @@ use crate::vfs::Vfs;
 use super::{Tool, ToolMetadata};
 
 /// Async future type for tool handlers.
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+///
+/// Not `Send` — tool dispatch runs on a single tokio task via `join_all` (see
+/// `send.rs`), so futures never cross thread boundaries. `AppState` and `Vfs`
+/// contain `RefCell` fields that are `!Sync`, which would prevent `Send` anyway.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 /// Uniform async handler. Captures its own state at registration time.
 /// All runtime values come through `ToolCall.context`.
+///
+/// `Send + Sync` on the closure itself allows the `Arc<ToolHandler>` to be
+/// shared across threads (e.g. during registry reads). The *future* returned
+/// is intentionally `!Send` — see `BoxFuture`.
 pub type ToolHandler =
     Arc<dyn Fn(ToolCall<'_>) -> BoxFuture<'_, io::Result<String>> + Send + Sync>;
 
@@ -290,5 +298,35 @@ mod tests {
             .map(|t| t.name.as_str())
             .collect();
         assert_eq!(reads, vec!["read1", "read2"]);
+    }
+
+    #[test]
+    fn test_register_all_builtins() {
+        use super::super::{
+            register_memory_tools, register_fs_read_tools, register_fs_write_tools,
+            register_shell_tools, register_network_tools, register_index_tools,
+            register_flow_tools, register_vfs_tools,
+        };
+
+        let mut reg = ToolRegistry::new();
+        register_memory_tools(&mut reg);
+        register_fs_read_tools(&mut reg);
+        register_fs_write_tools(&mut reg);
+        register_shell_tools(&mut reg);
+        register_network_tools(&mut reg);
+        register_index_tools(&mut reg);
+        register_flow_tools(&mut reg);
+        register_vfs_tools(&mut reg);
+
+        let total = reg.all().count();
+        assert!(total > 20, "expected 20+ builtin tools, got {total}");
+
+        // spot-check categories
+        assert_eq!(reg.get("file_head").unwrap().category, ToolCategory::FsRead);
+        assert_eq!(reg.get("shell_exec").unwrap().category, ToolCategory::Shell);
+        assert_eq!(reg.get("fetch_url").unwrap().category, ToolCategory::Network);
+        assert_eq!(reg.get("vfs_list").unwrap().category, ToolCategory::Vfs);
+        assert_eq!(reg.get("spawn_agent").unwrap().category, ToolCategory::Flow);
+        assert_eq!(reg.get("update_reflection").unwrap().category, ToolCategory::Memory);
     }
 }

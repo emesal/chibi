@@ -95,6 +95,38 @@ pub static FS_WRITE_TOOL_DEFS: &[BuiltinToolDef] = &[
 
 // === Registry Helpers ===
 
+/// Register all fs_write tools into the registry.
+pub fn register_fs_write_tools(registry: &mut super::registry::ToolRegistry) {
+    use std::sync::Arc;
+    use super::registry::{ToolCategory, ToolHandler};
+    use super::Tool;
+
+    let handler: ToolHandler = Arc::new(|call| {
+        // execute_fs_write_tool is sync — extract result before the async block so
+        // no !Sync references (&Vfs) cross an .await point.
+        let ctx = call.context;
+        let result = execute_fs_write_tool(
+            call.name,
+            call.args,
+            ctx.project_root,
+            ctx.config,
+            ctx.vfs,
+            ctx.vfs_caller.clone(),
+        )
+        .unwrap_or_else(|| {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("unknown fs_write tool: {}", call.name),
+            ))
+        });
+        Box::pin(async move { result })
+    });
+
+    for def in FS_WRITE_TOOL_DEFS {
+        registry.register(Tool::from_builtin_def(def, handler.clone(), ToolCategory::FsWrite));
+    }
+}
+
 /// Convert all fs_write tools to API format
 pub fn all_fs_write_tools_to_api_format() -> Vec<serde_json::Value> {
     FS_WRITE_TOOL_DEFS

@@ -38,6 +38,30 @@ pub static SHELL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
 
 // === Registry Helpers ===
 
+/// Register all shell tools into the registry.
+pub fn register_shell_tools(registry: &mut super::registry::ToolRegistry) {
+    use std::sync::Arc;
+    use super::registry::{ToolCategory, ToolHandler};
+    use super::Tool;
+
+    let handler: ToolHandler = Arc::new(|call| {
+        Box::pin(async move {
+            execute_shell_tool(call.name, call.args, call.context.project_root)
+                .await
+                .unwrap_or_else(|| {
+                    Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("unknown shell tool: {}", call.name),
+                    ))
+                })
+        })
+    });
+
+    for def in SHELL_TOOL_DEFS {
+        registry.register(Tool::from_builtin_def(def, handler.clone(), ToolCategory::Shell));
+    }
+}
+
 /// Convert all shell tools to API format
 pub fn all_shell_tools_to_api_format() -> Vec<serde_json::Value> {
     SHELL_TOOL_DEFS

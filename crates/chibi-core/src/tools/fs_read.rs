@@ -219,6 +219,38 @@ pub static FS_READ_TOOL_DEFS: &[BuiltinToolDef] = &[
 
 // === Registry Helpers ===
 
+/// Register all fs_read tools into the registry.
+pub fn register_fs_read_tools(registry: &mut super::registry::ToolRegistry) {
+    use std::sync::Arc;
+    use super::registry::{ToolCategory, ToolHandler};
+    use super::Tool;
+
+    let handler: ToolHandler = Arc::new(|call| {
+        // execute_fs_read_tool is sync — extract result before the async block so
+        // no !Sync references (&AppState, &Vfs) cross an .await point.
+        let ctx = call.context;
+        let result = execute_fs_read_tool(
+            ctx.app,
+            ctx.context_name,
+            call.name,
+            call.args,
+            ctx.config,
+            ctx.project_root,
+        )
+        .unwrap_or_else(|| {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("unknown fs_read tool: {}", call.name),
+            ))
+        });
+        Box::pin(async move { result })
+    });
+
+    for def in FS_READ_TOOL_DEFS {
+        registry.register(Tool::from_builtin_def(def, handler.clone(), ToolCategory::FsRead));
+    }
+}
+
 /// Convert all fs_read tools to API format
 pub fn all_fs_read_tools_to_api_format() -> Vec<serde_json::Value> {
     FS_READ_TOOL_DEFS

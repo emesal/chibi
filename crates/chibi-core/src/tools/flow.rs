@@ -492,6 +492,61 @@ pub async fn execute_flow_tool(
     }
 }
 
+/// Register all flow tools into the registry with per-tool metadata overrides.
+///
+/// Flow tools that are intercepted by `send.rs` middleware (send_message,
+/// call_user, model_info) are registered for metadata/lookup purposes but their
+/// handler returns an error if directly dispatched — `send.rs` must intercept
+/// them before calling `registry.dispatch_with_context`.
+pub fn register_flow_tools(registry: &mut super::registry::ToolRegistry) {
+    use std::sync::Arc;
+    use super::registry::{ToolCategory, ToolHandler};
+    use super::Tool;
+
+    for def in FLOW_TOOL_DEFS {
+        let name = def.name;
+        // Per-tool metadata: flow tools have non-default ToolMetadata values.
+        let metadata = flow_tool_metadata(name);
+
+        let handler: ToolHandler = Arc::new(move |call| {
+            let ctx = call.context;
+            let config = ctx.config;
+            let tool_name = call.name;
+            let args = call.args;
+            Box::pin(async move {
+                execute_flow_tool(config, tool_name, args, &[])
+                    .await
+                    // io::Result<Option<String>> -> io::Result<String>
+                    .and_then(|opt| {
+                        opt.ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                format!(
+                                    "flow tool '{tool_name}' is handled by send.rs middleware \
+                                     and must not be dispatched through the registry directly"
+                                ),
+                            )
+                        })
+                    })
+            })
+        });
+
+        // Construct with per-tool metadata override (from_builtin_def uses ToolMetadata::new()).
+        let tool = Tool {
+            name: def.name.to_string(),
+            description: def.description.to_string(),
+            parameters: def.to_json_schema(),
+            path: std::path::PathBuf::new(),
+            hooks: vec![],
+            metadata,
+            summary_params: def.summary_params.iter().map(|s| s.to_string()).collect(),
+            r#impl: super::registry::ToolImpl::Builtin(handler),
+            category: ToolCategory::Flow,
+        };
+        registry.register(tool);
+    }
+}
+
 /// Convert all flow tools to API format.
 ///
 /// `preset_capabilities`: capability names available via the configured cost tier.

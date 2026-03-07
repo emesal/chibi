@@ -130,6 +130,7 @@ pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
 pub use memory::{
     GOALS_TOOL_NAME, MEMORY_TOOL_DEFS, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME,
     TODOS_TOOL_NAME, all_memory_tools_to_api_format, execute_memory_tool, is_memory_tool,
+    register_memory_tools,
 };
 
 // Re-export flow tool constants, types and functions
@@ -137,14 +138,14 @@ pub use flow::{
     CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME, FLOW_TOOL_DEFS, Handoff, HandoffTarget,
     MODEL_INFO_TOOL_NAME, SEND_MESSAGE_TOOL_NAME, SPAWN_AGENT_TOOL_NAME,
     SUMMARIZE_CONTENT_TOOL_NAME, SpawnOptions, all_flow_tools_to_api_format, execute_flow_tool,
-    flow_tool_metadata, is_flow_tool, is_url, spawn_agent,
+    flow_tool_metadata, is_flow_tool, is_url, register_flow_tools, spawn_agent,
 };
 
 // Re-export fs_read tool registry functions and execution
 pub use fs_read::{
     DIR_LIST_TOOL_NAME, FILE_GREP_TOOL_NAME, FILE_HEAD_TOOL_NAME, FILE_LINES_TOOL_NAME,
     FILE_TAIL_TOOL_NAME, FS_READ_TOOL_DEFS, GLOB_FILES_TOOL_NAME, GREP_FILES_TOOL_NAME,
-    all_fs_read_tools_to_api_format, execute_fs_read_tool, is_fs_read_tool,
+    all_fs_read_tools_to_api_format, execute_fs_read_tool, is_fs_read_tool, register_fs_read_tools,
 };
 
 // Bridge for blocking async VFS calls from synchronous contexts.
@@ -154,28 +155,29 @@ pub(crate) use fs_read::vfs_block_on;
 pub use fs_write::{
     FILE_EDIT_TOOL_NAME, FS_WRITE_TOOL_DEFS, WRITE_FILE_TOOL_NAME,
     all_fs_write_tools_to_api_format, execute_fs_write_tool, execute_write_file, is_fs_write_tool,
+    register_fs_write_tools,
 };
 
 // Re-export shell tool registry functions and execution
 pub use shell::{
     SHELL_EXEC_TOOL_NAME, SHELL_TOOL_DEFS, all_shell_tools_to_api_format, execute_shell_tool,
-    is_shell_tool,
+    is_shell_tool, register_shell_tools,
 };
 
 // Re-export network tool registry functions and execution
 pub use network::{
     FETCH_URL_TOOL_NAME, NETWORK_TOOL_DEFS, all_network_tools_to_api_format, execute_network_tool,
-    is_network_tool,
+    is_network_tool, register_network_tools,
 };
 
 // Re-export index tool registry functions and execution
 pub use index::{
     INDEX_QUERY_TOOL_NAME, INDEX_STATUS_TOOL_NAME, INDEX_TOOL_DEFS, INDEX_UPDATE_TOOL_NAME,
-    all_index_tools_to_api_format, execute_index_tool, is_index_tool,
+    all_index_tools_to_api_format, execute_index_tool, is_index_tool, register_index_tools,
 };
 
 // Re-export VFS tool registry functions and execution
-pub use vfs_tools::{all_vfs_tools_to_api_format, execute_vfs_tool, is_vfs_tool};
+pub use vfs_tools::{all_vfs_tools_to_api_format, execute_vfs_tool, is_vfs_tool, register_vfs_tools};
 
 // Re-export security utilities
 pub use security::{
