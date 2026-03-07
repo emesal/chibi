@@ -215,6 +215,8 @@ fn parse_single_tool_schema(schema: &serde_json::Value, path: &Path) -> io::Resu
         hooks,
         metadata,
         summary_params,
+        r#impl: crate::tools::ToolImpl::Plugin(path.to_path_buf()),
+        category: crate::tools::ToolCategory::Plugin,
     })
 }
 
@@ -300,6 +302,8 @@ mod tests {
             hooks: vec![HookPoint::OnStart, HookPoint::OnEnd],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         };
         assert_eq!(tool.name, "test_tool");
         assert_eq!(tool.hooks.len(), 2);
@@ -317,6 +321,8 @@ mod tests {
                 hooks: vec![],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             },
             Tool {
                 name: "tool_two".to_string(),
@@ -326,6 +332,8 @@ mod tests {
                 hooks: vec![HookPoint::PreTool],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             },
         ];
 
@@ -352,6 +360,8 @@ mod tests {
                 hooks: vec![],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             },
             Tool {
                 name: "beta".to_string(),
@@ -361,6 +371,8 @@ mod tests {
                 hooks: vec![],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             },
         ];
 
@@ -409,6 +421,8 @@ mod tests {
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         };
 
         let params = serde_json::json!({"key": "value", "num": 42});
@@ -437,6 +451,8 @@ mod tests {
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         };
 
         let result = execute_tool_with_retry(&tool, &serde_json::json!({})).unwrap();
@@ -456,6 +472,8 @@ mod tests {
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         };
 
         // Note: can't use execute_tool_with_retry here since failure is expected
@@ -498,6 +516,8 @@ echo 'OK'
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         };
 
         let result = execute_tool_with_retry(&tool, &serde_json::json!({})).unwrap();

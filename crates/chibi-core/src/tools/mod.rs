@@ -25,6 +25,7 @@ mod memory;
 mod network;
 pub(crate) mod paths;
 mod plugins;
+pub mod registry;
 pub mod security;
 mod shell;
 pub mod vfs_tools;
@@ -33,6 +34,7 @@ use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 
 pub use hooks::HookPoint;
+pub use registry::{ToolCall, ToolCallContext, ToolCategory, ToolHandler, ToolImpl, ToolRegistry};
 
 /// Property definition for a tool parameter
 pub struct ToolPropertyDef {
@@ -54,6 +56,28 @@ pub struct BuiltinToolDef {
 }
 
 impl BuiltinToolDef {
+    /// Convert this tool definition's parameters to JSON Schema format.
+    ///
+    /// Used by `Tool::from_builtin_def` to populate `Tool.parameters`.
+    pub fn to_json_schema(&self) -> serde_json::Value {
+        let mut props = serde_json::Map::new();
+        for prop in self.properties {
+            let mut prop_obj = serde_json::json!({
+                "type": prop.prop_type,
+                "description": prop.description,
+            });
+            if let Some(default) = prop.default {
+                prop_obj["default"] = serde_json::json!(default);
+            }
+            props.insert(prop.name.to_string(), prop_obj);
+        }
+        serde_json::json!({
+            "type": "object",
+            "properties": props,
+            "required": self.required,
+        })
+    }
+
     /// Convert this tool definition to API format.
     pub fn to_api_format(&self) -> serde_json::Value {
         let mut props = serde_json::Map::new();
@@ -187,17 +211,59 @@ impl ToolMetadata {
     }
 }
 
-/// Represents a tool that can be called by the LLM
-#[derive(Debug, Clone)]
+/// Represents a tool that can be called by the LLM.
+///
+/// `r#impl` carries typed dispatch info (replaces the polymorphic `path` field).
+/// `category` enables filtering and permission routing (replaces `is_*_tool()` predicates).
+/// `path` is kept temporarily during migration and will be removed in Task 10.
+#[derive(Clone)]
 pub struct Tool {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
+    /// Kept temporarily during migration. Use `r#impl` for dispatch. Removed in Task 10.
     pub path: PathBuf,
     pub hooks: Vec<HookPoint>,
     pub metadata: ToolMetadata,
     /// Parameter names whose values should appear in tool-call notices.
     pub summary_params: Vec<String>,
+    /// Typed dispatch discriminant. Replaces `path` field.
+    pub r#impl: registry::ToolImpl,
+    /// Category for filtering and permission routing.
+    pub category: registry::ToolCategory,
+}
+
+impl std::fmt::Debug for Tool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tool")
+            .field("name", &self.name)
+            .field("category", &self.category)
+            .field("impl", &"<handler>")
+            .finish()
+    }
+}
+
+impl Tool {
+    /// Construct a Tool from a `BuiltinToolDef`, a shared handler, and a category.
+    ///
+    /// Reduces boilerplate in the `register_*_tools()` functions across all modules.
+    pub fn from_builtin_def(
+        def: &BuiltinToolDef,
+        handler: registry::ToolHandler,
+        category: registry::ToolCategory,
+    ) -> Self {
+        Self {
+            name: def.name.to_string(),
+            description: def.description.to_string(),
+            parameters: def.to_json_schema(),
+            path: PathBuf::new(),
+            hooks: vec![],
+            metadata: ToolMetadata::new(),
+            summary_params: def.summary_params.iter().map(|s| s.to_string()).collect(),
+            r#impl: registry::ToolImpl::Builtin(handler),
+            category,
+        }
+    }
 }
 
 /// Collect names of all built-in tools across all groups.
@@ -459,6 +525,8 @@ mod tests {
                 ends_turn: true,
             },
             summary_params: vec![],
+            r#impl: registry::ToolImpl::placeholder(),
+            category: registry::ToolCategory::Plugin,
         }];
 
         let meta = get_tool_metadata(&tools, "custom_flow");
@@ -536,6 +604,8 @@ mod tests {
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec!["path".to_string(), "pattern".to_string()],
+            r#impl: registry::ToolImpl::placeholder(),
+            category: registry::ToolCategory::Plugin,
         }];
 
         let summary = tool_call_summary(

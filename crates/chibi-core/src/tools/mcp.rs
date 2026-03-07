@@ -37,6 +37,11 @@ pub fn mcp_tool_from_info(
         hooks: vec![],
         metadata: ToolMetadata::new(),
         summary_params: vec![],
+        r#impl: crate::tools::ToolImpl::Mcp {
+            server: server.to_string(),
+            tool_name: name.to_string(),
+        },
+        category: crate::tools::ToolCategory::Mcp,
     }
 }
 
@@ -368,6 +373,8 @@ mod tests {
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         };
         assert!(!is_mcp_tool(&tool));
     }

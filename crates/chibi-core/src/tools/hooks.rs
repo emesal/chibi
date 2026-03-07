@@ -229,6 +229,8 @@ mod tests {
             hooks: vec![HookPoint::OnStart],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         }];
 
         let data = serde_json::json!({"event": "start", "context": "test"});
@@ -257,6 +259,8 @@ mod tests {
             hooks: vec![HookPoint::PreMessage],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         }];
 
         let results =
@@ -292,6 +296,8 @@ echo 'OK'
             hooks: vec![HookPoint::OnEnd],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         }];
 
         let results =
@@ -315,6 +321,8 @@ echo 'OK'
             hooks: vec![HookPoint::OnStart], // Registered for OnStart only
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         }];
 
         // Call with OnEnd - should not execute the tool
@@ -337,6 +345,8 @@ echo 'OK'
             hooks: vec![HookPoint::OnStart],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::placeholder(),
+            category: crate::tools::ToolCategory::Plugin,
         }];
 
         // Failed hooks should be skipped (not error)
@@ -369,6 +379,8 @@ echo 'OK'
                 hooks: vec![HookPoint::OnStart],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             },
             Tool {
                 name: "second_hook".to_string(),
@@ -378,6 +390,8 @@ echo 'OK'
                 hooks: vec![HookPoint::OnStart],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             },
         ];
 
@@ -410,6 +424,8 @@ echo 'OK'
                 hooks: vec![HookPoint::PreMessage],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             },
             Tool {
                 name: "fail".to_string(),
@@ -419,6 +435,8 @@ echo 'OK'
                 hooks: vec![HookPoint::PreMessage],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             },
             Tool {
                 name: "ok2".to_string(),
@@ -428,6 +446,8 @@ echo 'OK'
                 hooks: vec![HookPoint::PreMessage],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             },
         ];
 
@@ -468,6 +488,8 @@ echo 'OK'
                 hooks: vec![HookPoint::PreMessage],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
+                r#impl: crate::tools::ToolImpl::placeholder(),
+                category: crate::tools::ToolCategory::Plugin,
             })
             .collect();
 

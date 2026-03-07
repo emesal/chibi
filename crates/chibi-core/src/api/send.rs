@@ -2345,6 +2345,8 @@ mod tests {
             hooks: vec![],
             metadata: tools::ToolMetadata::new(),
             summary_params: vec![],
+            r#impl: tools::ToolImpl::Plugin(std::path::PathBuf::from(format!("/plugins/{name}"))),
+            category: tools::ToolCategory::Plugin,
         }
     }
 
