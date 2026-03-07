@@ -294,6 +294,43 @@ pub fn load_mcp_tools(home: &Path) -> io::Result<Vec<Tool>> {
         .collect())
 }
 
+/// Execute an MCP tool by server and tool name.
+///
+/// Standalone function used by `ToolRegistry` dispatch when the `ToolImpl::Mcp`
+/// variant is matched — no `&Tool` needed since server/tool_name come from the
+/// `Mcp { server, tool_name }` variant directly.
+pub fn execute_mcp_call(
+    server: &str,
+    tool_name: &str,
+    args: &serde_json::Value,
+    home: &Path,
+) -> io::Result<String> {
+    let addr = read_bridge_address(home).or_else(|_| ensure_bridge_running(home))?;
+
+    let request = serde_json::json!({
+        "op": "call_tool",
+        "server": server,
+        "tool": tool_name,
+        "args": args,
+    });
+
+    let response = send_request(addr, &request.to_string())?;
+    let parsed: CallToolResponse = serde_json::from_str(&response).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid bridge response: {e}"),
+        )
+    })?;
+
+    if !parsed.ok {
+        return Err(io::Error::other(
+            parsed.error.unwrap_or_else(|| "MCP tool error".into()),
+        ));
+    }
+
+    Ok(parsed.result.unwrap_or_default())
+}
+
 /// Execute an MCP tool via the bridge daemon.
 pub fn execute_mcp_tool(tool: &Tool, args: &serde_json::Value, home: &Path) -> io::Result<String> {
     let (server, tool_name) = parse_mcp_path(&tool.path).ok_or_else(|| {

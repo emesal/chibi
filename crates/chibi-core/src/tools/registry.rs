@@ -162,13 +162,18 @@ impl ToolRegistry {
         let call = ToolCall { name, args, context: ctx };
         match &tool.r#impl {
             ToolImpl::Builtin(handler) => handler(call).await,
-            ToolImpl::Plugin(_path) => {
-                // wired to plugins::execute_tool_by_path in Task 6
-                Err(io::Error::new(io::ErrorKind::Other, "plugin dispatch not yet wired"))
+            ToolImpl::Plugin(path) => {
+                // Plugin dispatch: spawn the executable with args via stdin.
+                // Sync call — extract result before async block so the PathBuf
+                // borrow doesn't need to cross .await.
+                let result = super::plugins::execute_tool_by_path(path, name, args);
+                result
             }
-            ToolImpl::Mcp { .. } => {
-                // wired to mcp::execute_mcp_call in Task 6
-                Err(io::Error::new(io::ErrorKind::Other, "mcp dispatch not yet wired"))
+            ToolImpl::Mcp { server, tool_name } => {
+                // MCP dispatch: forward to bridge daemon via TCP.
+                // Needs chibi_dir from AppState. Sync call.
+                let home = ctx.app.chibi_dir.clone();
+                super::mcp::execute_mcp_call(server, tool_name, args, &home)
             }
         }
     }

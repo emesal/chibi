@@ -124,7 +124,7 @@ pub fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<Str
 pub use hooks::execute_hook;
 
 // Re-export plugin functions
-pub use plugins::{execute_tool, find_tool, load_tools, tools_to_api_format};
+pub use plugins::{execute_tool, execute_tool_by_path, find_tool, load_tools, tools_to_api_format};
 
 // Re-export memory tool constants and functions
 pub use memory::{

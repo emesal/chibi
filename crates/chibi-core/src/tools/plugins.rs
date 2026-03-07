@@ -237,6 +237,46 @@ pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Execute a plugin by path and tool name.
+///
+/// Standalone function used by `ToolRegistry` dispatch when the `ToolImpl::Plugin`
+/// variant is matched — no `&Tool` needed since the registry already holds the path.
+pub fn execute_tool_by_path(
+    path: &PathBuf,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> io::Result<String> {
+    let mut cmd = Command::new(path);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+
+    cmd.env("CHIBI_TOOL_NAME", tool_name);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| io::Error::other(format!("Failed to spawn tool: {e}")))?;
+
+    let json_str = serde_json::to_string(arguments)
+        .map_err(|e| io::Error::other(format!("Failed to serialize arguments: {e}")))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(json_str.as_bytes())?;
+    }
+
+    let timeout = std::time::Duration::from_secs(super::PLUGIN_TIMEOUT_SECS);
+    let context = format!("plugin tool '{tool_name}'");
+    let output = super::wait_with_timeout(child, timeout, &context)
+        .map_err(|e| io::Error::other(format!("Failed to execute tool: {e}")))?;
+
+    if !output.status.success() {
+        return Err(io::Error::other("Tool execution failed or was cancelled".to_string()));
+    }
+
+    String::from_utf8(output.stdout)
+        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid UTF-8 in tool output: {e}")))
+}
+
 /// Execute a tool with the given arguments (as JSON)
 ///
 /// Tools receive arguments via stdin (JSON), leaving stdout for results.
