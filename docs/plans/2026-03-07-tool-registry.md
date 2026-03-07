@@ -1281,13 +1281,26 @@ dispatch chain. permission gating now routes on tool.category.
 
 ---
 
-### Task 10: Remove is_*_tool() predicates, find_tool(), Tool.path
+### Task 10 — COMPLETE (commit `41be0022`)
 
-**Files:**
-- Modify: all 8 tool modules (remove `is_*_tool()`)
-- Modify: `crates/chibi-core/src/tools/plugins.rs` (remove `find_tool`)
-- Modify: `crates/chibi-core/src/tools/mod.rs` (remove re-exports, remove `path` field)
-- Modify: all Tool construction sites (remove `path` field)
+**What was done:**
+- Removed all `is_*_tool()` functions and their tests from all modules
+- Removed `find_tool()` from `plugins.rs`
+- Removed `Tool.path: PathBuf` field; plugins use `ToolImpl::Plugin(path)`, MCP uses `ToolImpl::Mcp { server, tool_name }`
+- Removed all `all_*_to_api_format()` helpers from every builtin module; `Tool::to_api_format()` is the single implementation
+- Removed `tools_to_api_format()` from `plugins.rs` (duplicated what `Tool::to_api_format` does over a slice)
+- Removed `ToolImpl::placeholder()`; all construction sites use the correct variant directly
+- Fixed `RwLockReadGuard`-across-await in `send.rs` and `chibi.rs` dispatch sites via `dispatch_impl`
+- Updated `mcp_integration.rs` tests to use `ToolCategory` + `ToolImpl` pattern match
+
+**Implementation notes:**
+- `execute_tool` extracts `PathBuf` from `ToolImpl::Plugin`; errors on non-plugin
+- `execute_mcp_tool` extracts server/tool_name from `ToolImpl::Mcp`; errors on non-mcp
+- `execute_hook` skips non-plugin tools (they can't register hooks)
+- `parse_mcp_path()` remains in mcp.rs (used internally in tests)
+- 763 tests pass, `just lint` clean; net -296 lines
+
+### Task 10 detailed steps (original):
 
 **Step 1: Remove all is_*_tool() functions**
 

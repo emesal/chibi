@@ -292,12 +292,18 @@ async fn dispatch_command<S: ResponseSink>(
             Ok(CommandEffect::None)
         }
         Command::RunPlugin { name, args } => {
-            let tool = chibi.registry.read().unwrap().get(name).cloned().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Plugin '{}' not found", name),
-                )
-            })?;
+            let tool = chibi
+                .registry
+                .read()
+                .unwrap()
+                .get(name)
+                .cloned()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("Plugin '{}' not found", name),
+                    )
+                })?;
             let args_json = serde_json::json!({ "args": args });
             let result = crate::tools::execute_tool(&tool, &args_json)?;
             output.emit_result(&result);

@@ -55,14 +55,26 @@ pub type ToolHandler = Arc<
 ### ToolCall — extensible input
 
 ```rust
+/// Runtime context passed per-call. Carries values not known at registration time.
+pub struct ToolCallContext<'a> {
+    pub app: &'a AppState,
+    pub context_name: &'a str,
+    pub config: &'a ResolvedConfig,
+    pub project_root: &'a Path,
+    pub vfs: &'a Vfs,
+    pub vfs_caller: VfsCaller<'a>,
+}
+
 pub struct ToolCall<'a> {
     pub name: &'a str,
     pub args: &'a serde_json::Value,
+    pub context: &'a ToolCallContext<'a>,
 }
 ```
 
-minimal now, can add `call_id`, `caller_context`, etc. later without breaking
-handler signatures.
+`ToolCallContext` is per-call, not captured. most handlers capture nothing at
+registration and just use `call.context.*`. can add `call_id`, trace fields,
+etc. to `ToolCallContext` later without changing handler signatures.
 
 ### ToolCategory — replaces all is_*_tool() predicates
 
@@ -109,12 +121,13 @@ impl ToolRegistry {
     pub fn get(&self, name: &str) -> Option<&Tool>;
     pub fn all(&self) -> impl Iterator<Item = &Tool>;
     pub fn filter(&self, pred: impl Fn(&Tool) -> bool) -> Vec<&Tool>;
-    pub async fn dispatch(&self, name: &str, args: &Value) -> io::Result<String>;
+    pub async fn dispatch_with_context(&self, name: &str, args: &Value, ctx: &ToolCallContext<'_>) -> io::Result<String>;
 }
 ```
 
 - **`IndexMap`** — O(1) lookup, preserves insertion order for deterministic
-  tool lists sent to the LLM
+  tool lists sent to the LLM. `shift_remove` (not `swap_remove`) is used for
+  unregistration to keep order stable.
 - **pure dispatch** — `dispatch()` finds the tool and calls its handler. hooks,
   permissions, and caching stay in `send.rs` as middleware wrapping this call
 - **concrete struct, not a trait** — there's only one registry; a trait adds
@@ -123,10 +136,15 @@ impl ToolRegistry {
 dispatch implementation:
 
 ```rust
-async fn dispatch(&self, name: &str, args: &Value) -> io::Result<String> {
+async fn dispatch_with_context(
+    &self,
+    name: &str,
+    args: &Value,
+    ctx: &ToolCallContext<'_>,
+) -> io::Result<String> {
     let tool = self.get(name)
         .ok_or_else(|| io::Error::new(NotFound, format!("unknown tool: {name}")))?;
-    let call = ToolCall { name, args };
+    let call = ToolCall { name, args, context: ctx };
     match &tool.r#impl {
         ToolImpl::Builtin(handler)          => handler(call).await,
         ToolImpl::Plugin(path)              => execute_plugin(path, &call).await,
@@ -293,6 +311,11 @@ synthesised tools are registered globally in the registry. visibility filtering
 happens in `send.rs` based on the active context and zone permissions — the
 registry stays dumb, visibility is policy.
 
+**deferred:** the scoping filter in `send.rs` (checking `ToolImpl::Synthesised { vfs_path }`
+against the active context's accessible VFS zones) is not implemented in Phase 4.
+until it is, all synthesised tools are visible to all contexts. tracked as a follow-up
+before merging Phase 4 to main.
+
 ## tein dependency
 
 feature-gated, default on:
@@ -354,7 +377,7 @@ pub struct Chibi {
 
 // after
 pub struct Chibi {
-    pub registry: ToolRegistry,  // single source of truth
+    pub registry: Arc<RwLock<ToolRegistry>>,  // single source of truth; shared with ToolsBackend
     // ...
 }
 ```
