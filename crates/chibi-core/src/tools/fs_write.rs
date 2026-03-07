@@ -131,19 +131,6 @@ pub fn register_fs_write_tools(registry: &mut super::registry::ToolRegistry) {
     }
 }
 
-/// Convert all fs_write tools to API format
-pub fn all_fs_write_tools_to_api_format() -> Vec<serde_json::Value> {
-    FS_WRITE_TOOL_DEFS
-        .iter()
-        .map(|def| def.to_api_format())
-        .collect()
-}
-
-/// Check if a tool name belongs to the fs_write group
-pub fn is_fs_write_tool(name: &str) -> bool {
-    FS_WRITE_TOOL_DEFS.iter().any(|d| d.name == name)
-}
-
 // === Tool Execution ===
 
 /// Execute an fs_write tool by name.
@@ -521,15 +508,6 @@ mod tests {
             assert!(api["function"]["name"].is_string());
             assert!(api["function"]["description"].is_string());
         }
-    }
-
-    #[test]
-    fn test_is_fs_write_tool() {
-        assert!(is_fs_write_tool(WRITE_FILE_TOOL_NAME));
-        assert!(is_fs_write_tool(FILE_EDIT_TOOL_NAME));
-        assert!(!is_fs_write_tool("file_head"));
-        assert!(!is_fs_write_tool("shell_exec"));
-        assert!(!is_fs_write_tool("unknown"));
     }
 
     #[test]

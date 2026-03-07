@@ -62,7 +62,12 @@ pub fn execute_hook(
             continue;
         }
 
-        let mut child = Command::new(&tool.path)
+        // Only plugin tools can register hooks; extract the executable path.
+        let plugin_path = match &tool.r#impl {
+            super::ToolImpl::Plugin(p) => p.clone(),
+            _ => continue, // non-plugin tools cannot spawn hooks
+        };
+        let mut child = Command::new(&plugin_path)
             .env("CHIBI_HOOK", hook.as_ref())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -225,11 +230,10 @@ mod tests {
             name: "hook_tool".to_string(),
             description: "Hook tester".to_string(),
             parameters: serde_json::json!({}),
-            path: script_path,
             hooks: vec![HookPoint::OnStart],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(script_path),
             category: crate::tools::ToolCategory::Plugin,
         }];
 
@@ -255,11 +259,10 @@ mod tests {
             name: "env_hook".to_string(),
             description: "Env checker".to_string(),
             parameters: serde_json::json!({}),
-            path: script_path,
             hooks: vec![HookPoint::PreMessage],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(script_path),
             category: crate::tools::ToolCategory::Plugin,
         }];
 
@@ -292,11 +295,10 @@ echo 'OK'
             name: "verify_hook".to_string(),
             description: "Env verifier".to_string(),
             parameters: serde_json::json!({}),
-            path: script_path,
             hooks: vec![HookPoint::OnEnd],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(script_path),
             category: crate::tools::ToolCategory::Plugin,
         }];
 
@@ -317,11 +319,10 @@ echo 'OK'
             name: "skip_tool".to_string(),
             description: "Should be skipped".to_string(),
             parameters: serde_json::json!({}),
-            path: script_path,
             hooks: vec![HookPoint::OnStart], // Registered for OnStart only
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(script_path),
             category: crate::tools::ToolCategory::Plugin,
         }];
 
@@ -341,11 +342,10 @@ echo 'OK'
             name: "fail_hook".to_string(),
             description: "Always fails".to_string(),
             parameters: serde_json::json!({}),
-            path: script_path,
             hooks: vec![HookPoint::OnStart],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(script_path),
             category: crate::tools::ToolCategory::Plugin,
         }];
 
@@ -375,22 +375,20 @@ echo 'OK'
                 name: "first_hook".to_string(),
                 description: "First".to_string(),
                 parameters: serde_json::json!({}),
-                path: script1,
                 hooks: vec![HookPoint::OnStart],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
+                r#impl: crate::tools::ToolImpl::Plugin(script1),
                 category: crate::tools::ToolCategory::Plugin,
             },
             Tool {
                 name: "second_hook".to_string(),
                 description: "Second".to_string(),
                 parameters: serde_json::json!({}),
-                path: script2,
                 hooks: vec![HookPoint::OnStart],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
+                r#impl: crate::tools::ToolImpl::Plugin(script2),
                 category: crate::tools::ToolCategory::Plugin,
             },
         ];
@@ -420,33 +418,30 @@ echo 'OK'
                 name: "ok1".to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
-                path: ok1,
                 hooks: vec![HookPoint::PreMessage],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
+                r#impl: crate::tools::ToolImpl::Plugin(ok1),
                 category: crate::tools::ToolCategory::Plugin,
             },
             Tool {
                 name: "fail".to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
-                path: fail,
                 hooks: vec![HookPoint::PreMessage],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
+                r#impl: crate::tools::ToolImpl::Plugin(fail),
                 category: crate::tools::ToolCategory::Plugin,
             },
             Tool {
                 name: "ok2".to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
-                path: ok2,
                 hooks: vec![HookPoint::PreMessage],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
+                r#impl: crate::tools::ToolImpl::Plugin(ok2),
                 category: crate::tools::ToolCategory::Plugin,
             },
         ];
@@ -484,11 +479,10 @@ echo 'OK'
                 name: format!("hook{}", i + 1),
                 description: String::new(),
                 parameters: serde_json::json!({}),
-                path,
                 hooks: vec![HookPoint::PreMessage],
                 metadata: ToolMetadata::new(),
                 summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
+                r#impl: crate::tools::ToolImpl::Plugin(path),
                 category: crate::tools::ToolCategory::Plugin,
             })
             .collect();

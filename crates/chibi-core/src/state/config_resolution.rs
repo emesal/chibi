@@ -162,14 +162,14 @@ impl AppState {
     pub fn validate_config(
         &self,
         resolved: &ResolvedConfig,
-        tools: &[crate::tools::Tool],
+        registry: &crate::tools::ToolRegistry,
     ) -> io::Result<()> {
         let fallback = &resolved.fallback_tool;
 
-        // Get metadata (checks plugins then builtins)
-        let meta = crate::tools::get_tool_metadata(tools, fallback);
+        // Get metadata (checks registry then builtins)
+        let meta = crate::tools::get_tool_metadata(registry, fallback);
 
-        // Verify tool exists: must be in plugins OR be a known builtin.
+        // Verify tool exists: must be in registry OR be a known builtin.
         // call_agent: not in FLOW_TOOL_DEFS (disabled as LLM tool) but still a valid
         // fallback_tool value. Retained for the continuation mechanism and future
         // inter-agent control transfer.
@@ -177,9 +177,9 @@ impl AppState {
             fallback.as_str(),
             crate::tools::CALL_AGENT_TOOL_NAME | crate::tools::CALL_USER_TOOL_NAME
         );
-        let in_plugins = tools.iter().any(|t| t.name == *fallback);
+        let in_registry = registry.get(fallback).is_some();
 
-        if !is_builtin && !in_plugins {
+        if !is_builtin && !in_registry {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
                 format!("fallback_tool '{}' not found", fallback),

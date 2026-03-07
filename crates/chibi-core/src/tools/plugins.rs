@@ -211,30 +211,12 @@ fn parse_single_tool_schema(schema: &serde_json::Value, path: &Path) -> io::Resu
         name,
         description,
         parameters,
-        path: path.to_path_buf(),
         hooks,
         metadata,
         summary_params,
         r#impl: crate::tools::ToolImpl::Plugin(path.to_path_buf()),
         category: crate::tools::ToolCategory::Plugin,
     })
-}
-
-/// Convert tools to OpenAI-style function definitions for the API
-pub fn tools_to_api_format(tools: &[Tool]) -> Vec<serde_json::Value> {
-    tools
-        .iter()
-        .map(|tool| {
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                }
-            })
-        })
-        .collect()
 }
 
 /// Execute a plugin by path and tool name.
@@ -270,18 +252,35 @@ pub fn execute_tool_by_path(
         .map_err(|e| io::Error::other(format!("Failed to execute tool: {e}")))?;
 
     if !output.status.success() {
-        return Err(io::Error::other("Tool execution failed or was cancelled".to_string()));
+        return Err(io::Error::other(
+            "Tool execution failed or was cancelled".to_string(),
+        ));
     }
 
-    String::from_utf8(output.stdout)
-        .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("Invalid UTF-8 in tool output: {e}")))
+    String::from_utf8(output.stdout).map_err(|e| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!("Invalid UTF-8 in tool output: {e}"),
+        )
+    })
 }
 
 /// Execute a tool with the given arguments (as JSON)
 ///
 /// Tools receive arguments via stdin (JSON), leaving stdout for results.
+/// The executable path is extracted from `ToolImpl::Plugin`; returns an error
+/// for non-plugin tools.
 pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value) -> io::Result<String> {
-    let mut cmd = Command::new(&tool.path);
+    let path = match &tool.r#impl {
+        crate::tools::ToolImpl::Plugin(p) => p.clone(),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("execute_tool called on non-plugin tool: {}", tool.name),
+            ));
+        }
+    };
+    let mut cmd = Command::new(&path);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit()); // Let tool's stderr go directly to terminal
@@ -321,11 +320,6 @@ pub fn execute_tool(tool: &Tool, arguments: &serde_json::Value) -> io::Result<St
     })
 }
 
-/// Find a tool by name
-pub fn find_tool<'a>(tools: &'a [Tool], name: &str) -> Option<&'a Tool> {
-    tools.iter().find(|t| t.name == name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::test_helpers::create_test_script;
@@ -338,90 +332,15 @@ mod tests {
             name: "test_tool".to_string(),
             description: "A test tool".to_string(),
             parameters: serde_json::json!({"type": "object", "properties": {}}),
-            path: PathBuf::from("/usr/bin/test"),
             hooks: vec![HookPoint::OnStart, HookPoint::OnEnd],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(PathBuf::from("/usr/bin/test")),
             category: crate::tools::ToolCategory::Plugin,
         };
         assert_eq!(tool.name, "test_tool");
         assert_eq!(tool.hooks.len(), 2);
         assert!(tool.hooks.contains(&HookPoint::OnStart));
-    }
-
-    #[test]
-    fn test_tools_to_api_format() {
-        let tools = vec![
-            Tool {
-                name: "tool_one".to_string(),
-                description: "First tool".to_string(),
-                parameters: serde_json::json!({"type": "object", "properties": {"arg": {"type": "string"}}}),
-                path: PathBuf::from("/bin/one"),
-                hooks: vec![],
-                metadata: ToolMetadata::new(),
-                summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
-                category: crate::tools::ToolCategory::Plugin,
-            },
-            Tool {
-                name: "tool_two".to_string(),
-                description: "Second tool".to_string(),
-                parameters: serde_json::json!({"type": "object", "properties": {}}),
-                path: PathBuf::from("/bin/two"),
-                hooks: vec![HookPoint::PreTool],
-                metadata: ToolMetadata::new(),
-                summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
-                category: crate::tools::ToolCategory::Plugin,
-            },
-        ];
-
-        let api_format = tools_to_api_format(&tools);
-        assert_eq!(api_format.len(), 2);
-
-        // Check first tool
-        assert_eq!(api_format[0]["type"], "function");
-        assert_eq!(api_format[0]["function"]["name"], "tool_one");
-        assert_eq!(api_format[0]["function"]["description"], "First tool");
-
-        // Check second tool
-        assert_eq!(api_format[1]["function"]["name"], "tool_two");
-    }
-
-    #[test]
-    fn test_find_tool() {
-        let tools = vec![
-            Tool {
-                name: "alpha".to_string(),
-                description: "Alpha tool".to_string(),
-                parameters: serde_json::json!({}),
-                path: PathBuf::from("/bin/alpha"),
-                hooks: vec![],
-                metadata: ToolMetadata::new(),
-                summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
-                category: crate::tools::ToolCategory::Plugin,
-            },
-            Tool {
-                name: "beta".to_string(),
-                description: "Beta tool".to_string(),
-                parameters: serde_json::json!({}),
-                path: PathBuf::from("/bin/beta"),
-                hooks: vec![],
-                metadata: ToolMetadata::new(),
-                summary_params: vec![],
-                r#impl: crate::tools::ToolImpl::placeholder(),
-                category: crate::tools::ToolCategory::Plugin,
-            },
-        ];
-
-        assert!(find_tool(&tools, "alpha").is_some());
-        assert_eq!(find_tool(&tools, "alpha").unwrap().name, "alpha");
-
-        assert!(find_tool(&tools, "beta").is_some());
-        assert!(find_tool(&tools, "gamma").is_none());
-        assert!(find_tool(&tools, "").is_none());
     }
 
     #[test]
@@ -457,11 +376,10 @@ mod tests {
             name: "echo_tool".to_string(),
             description: "Echoes params".to_string(),
             parameters: serde_json::json!({"type": "object"}),
-            path: script_path,
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(script_path),
             category: crate::tools::ToolCategory::Plugin,
         };
 
@@ -487,11 +405,10 @@ mod tests {
             name: "env_checker".to_string(),
             description: "Checks env vars".to_string(),
             parameters: serde_json::json!({}),
-            path: script_path,
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(script_path),
             category: crate::tools::ToolCategory::Plugin,
         };
 
@@ -508,11 +425,10 @@ mod tests {
             name: "failing_tool".to_string(),
             description: "Always fails".to_string(),
             parameters: serde_json::json!({}),
-            path: script_path,
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(script_path),
             category: crate::tools::ToolCategory::Plugin,
         };
 
@@ -552,11 +468,10 @@ echo 'OK'
             name: "env_verify".to_string(),
             description: "Verifies env".to_string(),
             parameters: serde_json::json!({}),
-            path: script_path,
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],
-            r#impl: crate::tools::ToolImpl::placeholder(),
+            r#impl: crate::tools::ToolImpl::Plugin(script_path),
             category: crate::tools::ToolCategory::Plugin,
         };
 

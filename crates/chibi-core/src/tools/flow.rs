@@ -424,11 +424,6 @@ pub async fn summarize_content(
 
 // === Predicates & Dispatcher ===
 
-/// Check if a tool name is a flow tool.
-pub fn is_flow_tool(name: &str) -> bool {
-    FLOW_TOOL_DEFS.iter().any(|d| d.name == name)
-}
-
 /// Get metadata for flow tools.
 pub fn flow_tool_metadata(name: &str) -> ToolMetadata {
     match name {
@@ -533,7 +528,6 @@ pub fn register_flow_tools(registry: &mut super::registry::ToolRegistry) {
             name: def.name.to_string(),
             description: def.description.to_string(),
             parameters: def.to_json_schema(),
-            path: std::path::PathBuf::new(),
             hooks: vec![],
             metadata,
             summary_params: def.summary_params.iter().map(|s| s.to_string()).collect(),
@@ -611,22 +605,6 @@ mod tests {
         assert_eq!(MODEL_INFO_TOOL_NAME, "model_info");
         assert_eq!(SPAWN_AGENT_TOOL_NAME, "spawn_agent");
         assert_eq!(SUMMARIZE_CONTENT_TOOL_NAME, "summarize_content");
-    }
-
-    #[test]
-    fn test_is_flow_tool() {
-        assert!(is_flow_tool(SEND_MESSAGE_TOOL_NAME));
-        // call_agent: not in FLOW_TOOL_DEFS (disabled as LLM tool)
-        assert!(
-            !is_flow_tool(CALL_AGENT_TOOL_NAME),
-            "call_agent must not be in flow tool registry"
-        );
-        assert!(is_flow_tool(CALL_USER_TOOL_NAME));
-        assert!(is_flow_tool(MODEL_INFO_TOOL_NAME));
-        assert!(is_flow_tool(SPAWN_AGENT_TOOL_NAME));
-        assert!(is_flow_tool(SUMMARIZE_CONTENT_TOOL_NAME));
-        assert!(!is_flow_tool("file_head"));
-        assert!(!is_flow_tool("update_reflection"));
     }
 
     // === Metadata ===

@@ -67,14 +67,6 @@ pub enum ToolImpl {
     // Synthesised variant added in Phase 4 (tein integration).
 }
 
-impl ToolImpl {
-    /// Placeholder used during migration at construction sites not yet
-    /// converted to typed variants. Will be removed once migration is complete.
-    pub fn placeholder() -> Self {
-        ToolImpl::Plugin(PathBuf::new())
-    }
-}
-
 impl Clone for ToolImpl {
     fn clone(&self) -> Self {
         match self {
@@ -282,7 +274,6 @@ mod tests {
             name: name.into(),
             description: format!("test tool {name}"),
             parameters: serde_json::json!({}),
-            path: PathBuf::new(),
             hooks: vec![],
             metadata: ToolMetadata::new(),
             summary_params: vec![],

@@ -221,9 +221,9 @@ pub static FS_READ_TOOL_DEFS: &[BuiltinToolDef] = &[
 
 /// Register all fs_read tools into the registry.
 pub fn register_fs_read_tools(registry: &mut super::registry::ToolRegistry) {
-    use std::sync::Arc;
-    use super::registry::{ToolCategory, ToolHandler};
     use super::Tool;
+    use super::registry::{ToolCategory, ToolHandler};
+    use std::sync::Arc;
 
     let handler: ToolHandler = Arc::new(|call| {
         // execute_fs_read_tool is sync — extract result before the async block so
@@ -247,21 +247,12 @@ pub fn register_fs_read_tools(registry: &mut super::registry::ToolRegistry) {
     });
 
     for def in FS_READ_TOOL_DEFS {
-        registry.register(Tool::from_builtin_def(def, handler.clone(), ToolCategory::FsRead));
+        registry.register(Tool::from_builtin_def(
+            def,
+            handler.clone(),
+            ToolCategory::FsRead,
+        ));
     }
-}
-
-/// Convert all fs_read tools to API format
-pub fn all_fs_read_tools_to_api_format() -> Vec<serde_json::Value> {
-    FS_READ_TOOL_DEFS
-        .iter()
-        .map(|def| def.to_api_format())
-        .collect()
-}
-
-/// Check if a tool name belongs to the fs_read group
-pub fn is_fs_read_tool(name: &str) -> bool {
-    FS_READ_TOOL_DEFS.iter().any(|d| d.name == name)
 }
 
 // === Tool Execution ===
@@ -930,20 +921,6 @@ mod tests {
             assert!(api["function"]["name"].is_string());
             assert!(api["function"]["description"].is_string());
         }
-    }
-
-    #[test]
-    fn test_is_fs_read_tool() {
-        assert!(is_fs_read_tool(FILE_HEAD_TOOL_NAME));
-        assert!(is_fs_read_tool(FILE_TAIL_TOOL_NAME));
-        assert!(is_fs_read_tool(FILE_LINES_TOOL_NAME));
-        assert!(is_fs_read_tool(FILE_GREP_TOOL_NAME));
-        assert!(is_fs_read_tool(DIR_LIST_TOOL_NAME));
-        assert!(is_fs_read_tool(GLOB_FILES_TOOL_NAME));
-        assert!(is_fs_read_tool(GREP_FILES_TOOL_NAME));
-        assert!(!is_fs_read_tool("write_file"));
-        assert!(!is_fs_read_tool("shell_exec"));
-        assert!(!is_fs_read_tool("unknown_tool"));
     }
 
     #[test]
