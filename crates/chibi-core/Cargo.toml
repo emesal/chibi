@@ -25,6 +25,7 @@ fs2 = "0.4"
 base64 = "0.22"
 hostname = "0.4"
 ignore = "0.4"
+indexmap = { version = "2", features = ["serde"] }
 ratatoskr.workspace = true
 url = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
