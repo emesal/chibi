@@ -32,13 +32,14 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 use crate::api::sink::ResponseSink;
 use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
 use crate::output::{CommandEvent, NoopSink, OutputSink};
 use crate::state::AppState;
-use crate::tools::{self, Tool};
+use crate::tools::{self, Tool, ToolCategory, ToolRegistry};
 
 use std::path::PathBuf;
 
@@ -89,8 +90,11 @@ pub struct LoadOptions {
 pub struct Chibi {
     /// The underlying application state.
     pub app: AppState,
-    /// Loaded tools (plugins from ~/.chibi/plugins/).
-    pub tools: Vec<Tool>,
+    /// Single source of truth for all tools at runtime.
+    ///
+    /// `Arc<RwLock<>>` allows `ToolsBackend` (Phase 3) to hold a shared
+    /// reference without requiring a mutable borrow of `Chibi`.
+    pub registry: Arc<RwLock<ToolRegistry>>,
     /// Project root directory (always resolved, never None).
     pub project_root: PathBuf,
     /// Optional permission handler for gated operations.
@@ -159,7 +163,20 @@ impl Chibi {
     /// ```
     pub fn load_with_options(options: LoadOptions, output: &dyn OutputSink) -> io::Result<Self> {
         let app = AppState::load(options.home)?;
-        let mut tools = tools::load_tools(&app.plugins_dir)?;
+
+        // Build the registry — register builtins first, then plugins, then MCP tools.
+        let mut reg = ToolRegistry::new();
+        tools::register_memory_tools(&mut reg);
+        tools::register_fs_read_tools(&mut reg);
+        tools::register_fs_write_tools(&mut reg);
+        tools::register_shell_tools(&mut reg);
+        tools::register_network_tools(&mut reg);
+        tools::register_index_tools(&mut reg);
+        tools::register_flow_tools(&mut reg);
+        tools::register_vfs_tools(&mut reg);
+        for tool in tools::load_tools(&app.plugins_dir)? {
+            reg.register(tool);
+        }
 
         // Load MCP bridge tools (non-fatal: bridge may not be configured)
         match tools::mcp::load_mcp_tools(&app.chibi_dir) {
@@ -169,7 +186,9 @@ impl Chibi {
                         count: mcp_tools.len(),
                     });
                 }
-                tools.extend(mcp_tools);
+                for tool in mcp_tools {
+                    reg.register(tool);
+                }
             }
             Err(e) => {
                 output.emit_event(CommandEvent::McpBridgeUnavailable {
@@ -192,7 +211,11 @@ impl Chibi {
             .into_iter()
             .map(|s| s.to_string())
             .collect();
-        let plugin_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+        let plugin_names: Vec<String> = reg
+            .filter(|t| t.category == ToolCategory::Plugin || t.category == ToolCategory::Mcp)
+            .into_iter()
+            .map(|t| t.name.clone())
+            .collect();
         output.emit_event(CommandEvent::LoadSummary {
             builtin_count: builtin_names.len(),
             builtin_names,
@@ -200,9 +223,10 @@ impl Chibi {
             plugin_names,
         });
 
+        let registry = Arc::new(RwLock::new(reg));
         Ok(Self {
             app,
-            tools,
+            registry,
             project_root,
             permission_handler: None,
         })
@@ -236,12 +260,19 @@ impl Chibi {
     /// # }
     /// ```
     pub fn init(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
+        let reg = self.registry.read().unwrap();
         let hook_data = serde_json::json!({
             "chibi_home": self.app.chibi_dir.to_string_lossy(),
             "project_root": self.project_root.to_string_lossy(),
-            "tool_count": self.tools.len(),
+            "tool_count": reg.all().count(),
         });
-        tools::execute_hook(&self.tools, tools::HookPoint::OnStart, &hook_data)
+        let plugin_tools: Vec<Tool> = reg
+            .filter(|t| t.category == ToolCategory::Plugin)
+            .into_iter()
+            .cloned()
+            .collect();
+        drop(reg);
+        tools::execute_hook(&plugin_tools, tools::HookPoint::OnStart, &hook_data)
     }
 
     /// Shutdown the session.
@@ -249,12 +280,19 @@ impl Chibi {
     /// Executes `OnEnd` hooks. Call this once at the end of a session,
     /// after all prompts are complete.
     pub fn shutdown(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
+        let reg = self.registry.read().unwrap();
         let hook_data = serde_json::json!({
             "chibi_home": self.app.chibi_dir.to_string_lossy(),
             "project_root": self.project_root.to_string_lossy(),
-            "tool_count": self.tools.len(),
+            "tool_count": reg.all().count(),
         });
-        tools::execute_hook(&self.tools, tools::HookPoint::OnEnd, &hook_data)
+        let plugin_tools: Vec<Tool> = reg
+            .filter(|t| t.category == ToolCategory::Plugin)
+            .into_iter()
+            .cloned()
+            .collect();
+        drop(reg);
+        tools::execute_hook(&plugin_tools, tools::HookPoint::OnEnd, &hook_data)
     }
 
     /// Clear a context, executing PreClear/PostClear hooks.
@@ -269,14 +307,22 @@ impl Chibi {
             "message_count": context.messages.len(),
             "summary": context.summary,
         });
-        let _ = tools::execute_hook(&self.tools, tools::HookPoint::PreClear, &pre_hook_data);
+        let plugin_tools: Vec<Tool> = self
+            .registry
+            .read()
+            .unwrap()
+            .filter(|t| t.category == ToolCategory::Plugin)
+            .into_iter()
+            .cloned()
+            .collect();
+        let _ = tools::execute_hook(&plugin_tools, tools::HookPoint::PreClear, &pre_hook_data);
 
         self.app.clear_context(context_name)?;
 
         let post_hook_data = serde_json::json!({
             "context_name": context_name,
         });
-        let _ = tools::execute_hook(&self.tools, tools::HookPoint::PostClear, &post_hook_data);
+        let _ = tools::execute_hook(&plugin_tools, tools::HookPoint::PostClear, &post_hook_data);
 
         Ok(())
     }
@@ -319,11 +365,15 @@ impl Chibi {
         options: &PromptOptions<'_>,
         sink: &mut S,
     ) -> io::Result<()> {
+        // Collect a snapshot for send_prompt; Task 9 will change the signature
+        // to accept Arc<RwLock<ToolRegistry>> directly.
+        let tools_snap: Vec<Tool> =
+            self.registry.read().unwrap().all().cloned().collect();
         send_prompt(
             &self.app,
             context_name,
             prompt.to_string(),
-            &self.tools,
+            &tools_snap,
             config,
             options,
             sink,
@@ -407,10 +457,11 @@ impl Chibi {
         }
 
         // index tools (sync, no permission gating)
+        // Note: tools ref passed as &[] — wired via registry in Task 8.
         if tools::is_index_tool(name) {
             let config = self.app.resolve_config(context_name, None)?;
             if let Some(result) =
-                tools::execute_index_tool(name, &args, &self.project_root, &config, &self.tools)
+                tools::execute_index_tool(name, &args, &self.project_root, &config, &[])
             {
                 return result;
             }
@@ -432,9 +483,10 @@ impl Chibi {
                 .send_inbox_message_from(context_name, to, content)
                 .map(|_| format!("Message sent to '{}'", to));
         }
+        // Note: tools ref passed as &[] — wired via registry in Task 8.
         if tools::is_flow_tool(name) {
             let config = self.app.resolve_config(context_name, None)?;
-            return match tools::execute_flow_tool(&config, name, &args, &self.tools).await {
+            return match tools::execute_flow_tool(&config, name, &args, &[]).await {
                 Ok(Some(r)) => Ok(r),
                 Ok(None) => Err(io::Error::new(
                     io::ErrorKind::NotFound,
@@ -444,13 +496,13 @@ impl Chibi {
             };
         }
 
-        // Try MCP tools (virtual path mcp://server/tool)
-        if let Some(tool) = tools::find_tool(&self.tools, name) {
-            if tools::mcp::is_mcp_tool(tool) {
-                return tools::mcp::execute_mcp_tool(tool, &args, &self.app.chibi_dir);
+        // Try plugin/MCP tools via registry (Task 8 replaces this whole method)
+        if let Some(tool) = self.registry.read().unwrap().get(name).cloned() {
+            if tools::mcp::is_mcp_tool(&tool) {
+                return tools::mcp::execute_mcp_tool(&tool, &args, &self.app.chibi_dir);
             }
             // Regular plugin
-            return tools::execute_tool(tool, &args);
+            return tools::execute_tool(&tool, &args);
         }
 
         Err(io::Error::new(
@@ -500,7 +552,7 @@ impl Chibi {
 
     /// Get the number of loaded tools.
     pub fn tool_count(&self) -> usize {
-        self.tools.len()
+        self.registry.read().unwrap().all().count()
     }
 
     /// Create a minimal `Chibi` instance for testing.
@@ -511,7 +563,7 @@ impl Chibi {
     pub(crate) fn for_test(app: AppState, root: std::path::PathBuf) -> Self {
         Self {
             app,
-            tools: vec![],
+            registry: Arc::new(RwLock::new(ToolRegistry::new())),
             project_root: root,
             permission_handler: None,
         }
