@@ -12,6 +12,10 @@ sandboxed, shared file space for contexts. contexts can read and write without e
 /sys/contexts/<name>/             read-only context metadata (virtual, generated on-demand)
 /site/                            site-wide flock data (world-writable)
 /flocks/<name>/                   per-flock data (members only)
+/tools/shared/                    synthesised tools: visible to all contexts
+/tools/home/<context>/            synthesised tools: visible to owner context only
+/tools/flocks/<flock>/            synthesised tools: visible to flock members only
+/tools/sys/                       read-only virtual: tool schema JSON (generated on demand)
 ```
 
 ## permission model
@@ -214,6 +218,22 @@ let vfs = Vfs::builder(site_id)
 ```
 
 `prompt_count` counts user prompt entries (`entry_type="message"`, `role="user"`) across all archived and active partitions. Uses `PartitionManager`'s cached partition metadata — no per-line scanning of archived files.
+
+## synthesised tools zone
+
+Scheme (`.scm`) files placed under `/tools/` are automatically loaded as synthesised tools. Three zones are scanned at startup and on hot-reload:
+
+| Zone | VFS Path | Visibility |
+|------|----------|------------|
+| shared | `/tools/shared/` | all contexts |
+| home | `/tools/home/<context>/` | owner context only |
+| flocks | `/tools/flocks/<flock>/` | flock members only |
+
+Files are scanned recursively. Non-`.scm` files and files with invalid Scheme source are silently skipped. Valid tools are registered and appear alongside regular plugin tools.
+
+**Hot-reload:** writing a `.scm` file via the VFS triggers immediate re-registration. If the new source is invalid, the previous version of the tool remains registered. Deleting a file unregisters all tools defined in it (multi-tool files supported).
+
+**Sandbox tiers:** each zone uses the `sandboxed` tier by default (safe R7RS subset). Override per path prefix with `[tools.tiers]` in `config.toml`. See [configuration.md](configuration.md) and [plugins.md](plugins.md) for details.
 
 ## future evolution
 

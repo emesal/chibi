@@ -646,6 +646,24 @@ include = ["update_todos", "update_goals", "update_reflection"]
   - `exclude`: local **appends** to global
   - `exclude_categories`: local **appends** to global
 
+### Synthesised Tool Tiers
+
+Scheme tools loaded from the VFS run in a sandbox by default. Override the tier per VFS path prefix using `[tools.tiers]`:
+
+```toml
+[tools.tiers]
+# path prefix → tier (0 = sandboxed, 1 = unsandboxed)
+"/tools/shared" = 0           # default — Modules::Safe + 10M step limit
+"/tools/home/admin" = 1       # trusted admin context: full R7RS, no step limit
+"/tools/flocks/trusted" = 1   # trusted flock: full R7RS
+```
+
+Tier values:
+- `0` — **sandboxed**: `Modules::Safe` module subset, 10,000,000 step limit. Default for all paths.
+- `1` — **unsandboxed**: full R7RS, no step limit. For trusted authors only.
+
+Tier resolution uses prefix matching: the longest matching prefix wins. If no prefix matches, `sandboxed` (0) is used.
+
 **Filter Precedence:**
 1. Config `include` (if set, only these tools considered)
 2. Config `exclude` (remove from remaining)
