@@ -144,7 +144,7 @@ Users can run plugins directly without the LLM using `-p` (plugin) or `-P` (call
 chibi -p myplugin "arg1 arg2"        # Run a plugin with args (shell-style split)
 chibi -p myplugin "'with spaces'"    # Args with spaces need inner quotes
 chibi -p myplugin ""                 # No args (empty string required)
-chibi -P update_todos '{}'           # Call tool with empty JSON
+chibi -P update_goals '{}'           # Call tool with empty JSON
 chibi -P send '{"to":"x"}'           # Call tool with JSON args
 ```
 
@@ -248,7 +248,6 @@ echo '{}' | CHIBI_HOOK="on_start" ./my_plugin
 Chibi provides built-in tools that don't require plugins:
 
 **Agentic tools:**
-- `update_todos` - Manage per-context todo list
 - `update_goals` - Manage per-context goals
 - `update_reflection` - Update LLM's persistent memory
 - `send_message` - Send messages between contexts
@@ -334,6 +333,45 @@ The `(harness tools)` module exposes:
 - **`call-tool`** — procedure `(call-tool name args)` for calling other registered tools from within a tool's `execute` body. `args` is an alist of `("key" . value)` pairs. Returns the tool's string output.
 
 `call-tool` bridges synchronously into chibi's async tool dispatch. It is available in both sandboxed and unsandboxed tiers.
+
+### Harness Helpers
+
+The harness also injects these foreign functions into every synthesised tool context:
+
+| Procedure | Returns | Description |
+|-----------|---------|-------------|
+| `(generate-id)` | `"a3f2"` (4 hex chars) | Short unique ID seeded from subsecond nanoseconds |
+| `(current-timestamp)` | `"20260308-1423z"` | Current UTC time as `YYYYMMDD-HHMMz` |
+| `%context-name%` | `"alice"` | Mutable binding holding the calling context's name; updated before each call |
+
+Use `%context-name%` to resolve VFS paths relative to the calling context's home directory (e.g. `(string-append "/home/" %context-name% "/tasks")`).
+
+### Task Plugin
+
+The bundled task plugin (`plugins/tasks.scm` in the repo) provides structured task management. Install it to the VFS:
+
+```bash
+# install globally (visible to all contexts)
+chibi -P write_file '{"path": "vfs:///tools/shared/tasks.scm", "content": "<paste file contents>"}'
+```
+
+Or copy to `/tools/shared/tasks.scm` in your VFS root directly.
+
+**Tools:**
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `task_create` | `path`, `body`, `priority`, `assigned-to`, `depends-on` | Create a task; returns id and VFS path |
+| `task_update` | `id`, `status`, `priority`, `body`, `assigned-to` | Update task fields by ID |
+| `task_view` | `id` | Read full task metadata and body |
+| `task_list` | `status`, `priority`, `assigned-to` (optional filters) | List tasks |
+| `task_delete` | `id` | Remove a task file |
+
+**Path conventions:**
+- `auth/login` → `/home/<ctx>/tasks/auth/login.task`
+- `flock:infra/deploy` → `/flocks/infra/tasks/deploy.task`
+
+Tasks are automatically summarised and injected as ephemeral context before each prompt. See [vfs.md](vfs.md) for the `.task` file format.
 
 ### Sandbox Tiers
 

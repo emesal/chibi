@@ -154,7 +154,8 @@ maps `VfsPath("/shared/foo.txt")` → `<chibi_home>/vfs/shared/foo.txt`. uses `s
 │   ├── shared/
 │   ├── home/
 │   │   ├── planner/
-│   │   │   └── todos.md    # context todos (VFS-managed)
+│   │   │   └── tasks/      # per-context task files (see task system)
+│   │   │       └── <id>.task
 │   │   └── coder/
 │   ├── sys/
 │   ├── site/               # site flock data
@@ -164,7 +165,9 @@ maps `VfsPath("/shared/foo.txt")` → `<chibi_home>/vfs/shared/foo.txt`. uses `s
 │       ├── registry.json    # centralised flock membership (SYSTEM only)
 │       └── <name>/
 │           ├── goals.md
-│           └── prompt.md
+│           ├── prompt.md
+│           └── tasks/      # flock-scoped task files
+│               └── <id>.task
 ├── config.toml
 └── contexts/
 ```
@@ -211,7 +214,7 @@ let vfs = Vfs::builder(site_id)
   "auto_destroy_after_inactive_secs": null,
   "flocks": ["site:my-machine-abc123", "frontend"],
   "paths": {
-    "todos": "/home/alice/todos.md",
+    "tasks": "/home/alice/tasks/",
     "goals": ["/site/goals.md", "/flocks/frontend/goals.md"]
   }
 }
@@ -234,6 +237,59 @@ Files are scanned recursively. Non-`.scm` files and files with invalid Scheme so
 **Hot-reload:** writing a `.scm` file via the VFS triggers immediate re-registration. If the new source is invalid, the previous version of the tool remains registered. Deleting a file unregisters all tools defined in it (multi-tool files supported).
 
 **Sandbox tiers:** each zone uses the `sandboxed` tier by default (safe R7RS subset). Override per path prefix with `[tools.tiers]` in `config.toml`. See [configuration.md](configuration.md) and [plugins.md](plugins.md) for details.
+
+## task system
+
+Structured tasks replace the old flat `todos.md`. Each task is a `.task` file containing two Scheme datums: a metadata alist and a body string.
+
+### file format
+
+```scheme
+((id . "a3f2")
+ (status . pending)           ; pending | in-progress | done
+ (priority . high)            ; low | medium | high
+ (assigned-to . "worker-1")  ; optional: context name
+ (depends-on "b1c4" "e7d0")  ; optional: blocking task IDs
+ (created . "20260308-1423z")
+ (updated . "20260308-1445z"))
+
+"implement the auth flow.
+
+acceptance criteria:
+- JWT tokens"
+```
+
+### storage layout
+
+| Scope | VFS path | Access |
+|-------|----------|--------|
+| context | `/home/<ctx>/tasks/<path>.task` | owner context |
+| flock | `/flocks/<name>/tasks/<path>.task` | flock members |
+
+Task paths are arbitrary: `auth/login.task`, `deploy.task`, etc. Subdirectories are created automatically. Use `flock:<name>/path` as the `path` argument to route to a flock's task directory.
+
+### ephemeral injection
+
+At each prompt, chibi reads all accessible task files (context + flocks) via `state::tasks::collect_tasks`, parses metadata with tein-sexp, and injects a compact table summary as a system message immediately before the current user turn. The summary is never persisted to the transcript.
+
+```
+--- tasks ---
+id     status      priority  path              summary
+a3f2   in-progress high      epic/login        implement the auth flow
+--- 1 active, 0 done ---
+```
+
+### crud tools
+
+The `tasks.scm` plugin (installed to `/tools/shared/tasks.scm`) exposes five tools:
+
+| Tool | Description |
+|------|-------------|
+| `task_create` | Create a new `.task` file; returns id and path |
+| `task_update` | Update status, priority, body, or assigned-to by task ID |
+| `task_view` | Read full task content by ID |
+| `task_list` | List tasks with optional status/priority/assigned-to filters |
+| `task_delete` | Remove a task file by ID |
 
 ## future evolution
 
