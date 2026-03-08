@@ -278,19 +278,66 @@ fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
 
 // --- loader ------------------------------------------------------------------
 
+/// Build a tein `ThreadLocalContext` for a synthesised tool, registering
+/// `call-tool`, the harness preamble, and `(harness tools)` module.
+///
+/// Sandbox behaviour depends on `tier`:
+/// - `Sandboxed`: safe modules only, 10M step limit
+/// - `Unsandboxed`: full R7RS, no step limit (trusted tools only)
+#[cfg(feature = "synthesised-tools")]
+fn build_tein_context(
+    source: String,
+    tier: crate::config::SandboxTier,
+) -> io::Result<ThreadLocalContext> {
+    let init = move |ctx: &Context| -> tein::Result<()> {
+        ctx.define_fn_variadic("call-tool", __tein_call_tool_fn)?;
+        ctx.evaluate(HARNESS_PREAMBLE)?;
+        ctx.register_module(HARNESS_TOOLS_MODULE)
+            .map_err(|e| tein::Error::EvalError(format!("harness module: {e}")))?;
+        ctx.evaluate(&source)?;
+        Ok(())
+    };
+
+    match tier {
+        crate::config::SandboxTier::Sandboxed => Context::builder()
+            .standard_env()
+            .sandboxed(Modules::Safe)
+            .step_limit(10_000_000)
+            .build_managed(init),
+        crate::config::SandboxTier::Unsandboxed => {
+            Context::builder().standard_env().build_managed(init)
+        }
+    }
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("tein init: {e}")))
+}
+
 /// Load one or more synthesised tools from scheme source.
 ///
 /// If the source uses `(define-tool ...)` macro, returns all defined tools.
 /// If it uses the convention format (`tool-name`, `tool-description`, etc.),
 /// returns a single tool. Backwards-compatible with both formats.
 ///
-/// Evaluates `source` in a sandboxed tein context, registers `(harness tools)`
-/// and `call-tool`, then extracts tool definitions.
+/// Evaluates `source` in a tein context configured by `tier`:
+/// - `SandboxTier::Sandboxed` (default): safe module subset, step limit.
+/// - `SandboxTier::Unsandboxed`: full R7RS, no step limit (trusted tools).
+///
+/// Registers `(harness tools)` and `call-tool` in every context.
 #[cfg(feature = "synthesised-tools")]
 pub fn load_tools_from_source(
     source: &str,
     vfs_path: &VfsPath,
     registry: &Arc<RwLock<ToolRegistry>>,
+) -> io::Result<Vec<Tool>> {
+    load_tools_from_source_with_tier(source, vfs_path, registry, crate::config::SandboxTier::Sandboxed)
+}
+
+/// Like `load_tools_from_source` but with an explicit sandbox tier.
+#[cfg(feature = "synthesised-tools")]
+pub fn load_tools_from_source_with_tier(
+    source: &str,
+    vfs_path: &VfsPath,
+    registry: &Arc<RwLock<ToolRegistry>>,
+    tier: crate::config::SandboxTier,
 ) -> io::Result<Vec<Tool>> {
     // stash registry in thread-local so call-tool bridge can access it
     BRIDGE_REGISTRY.with(|cell| {
@@ -298,24 +345,8 @@ pub fn load_tools_from_source(
     });
 
     let source_owned = source.to_string();
-    let ctx = Context::builder()
-        .standard_env()
-        .sandboxed(Modules::Safe)
-        .step_limit(10_000_000)
-        .build_managed(move |ctx| {
-            // register call-tool foreign fn BEFORE evaluating the preamble so
-            // that (harness tools) can re-export it.
-            ctx.define_fn_variadic("call-tool", __tein_call_tool_fn)?;
-            // evaluate the preamble: defines %tool-registry% and define-tool
-            // at the top level, then registers (harness tools) module.
-            // preamble also imports (scheme base) so define-syntax is available.
-            ctx.evaluate(HARNESS_PREAMBLE)?;
-            ctx.register_module(HARNESS_TOOLS_MODULE)
-                .map_err(|e| tein::Error::EvalError(format!("harness module: {e}")))?;
-            ctx.evaluate(&source_owned)?;
-            Ok(())
-        })
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("tein init: {e}")))?;
+
+    let ctx = build_tein_context(source_owned, tier)?;
 
     // check if define-tool was used (%tool-registry% is non-empty list)
     let multi = ctx.evaluate("%tool-registry%").ok();
@@ -527,6 +558,9 @@ pub async fn execute_synthesised(
 /// Silently skips zones that don't exist yet, unreadable files, and files
 /// whose source fails to parse/evaluate. Non-`.scm` entries are ignored.
 ///
+/// `tools_config` is used to resolve the sandbox tier for each tool file.
+/// Pass `&ToolsConfig::default()` if no tier overrides are needed.
+///
 /// **Zones scanned:**
 /// - `/tools/shared` — globally shared tools
 /// - `/tools/home/<ctx>/` — per-context tools (one dir per context name)
@@ -535,6 +569,7 @@ pub async fn execute_synthesised(
 pub async fn scan_and_register(
     vfs: &Vfs,
     registry: &Arc<RwLock<ToolRegistry>>,
+    tools_config: &crate::config::ToolsConfig,
 ) -> io::Result<()> {
     let mut zones = vec!["/tools/shared".to_string()];
 
@@ -559,7 +594,7 @@ pub async fn scan_and_register(
     }
 
     for zone in &zones {
-        scan_zone(vfs, registry, zone).await?;
+        scan_zone(vfs, registry, zone, tools_config).await?;
     }
     Ok(())
 }
@@ -570,6 +605,7 @@ async fn scan_zone(
     vfs: &Vfs,
     registry: &Arc<RwLock<ToolRegistry>>,
     zone: &str,
+    tools_config: &crate::config::ToolsConfig,
 ) -> io::Result<()> {
     let Ok(zone_path) = VfsPath::new(zone) else {
         return Ok(());
@@ -599,7 +635,10 @@ async fn scan_zone(
         let Ok(source_str) = String::from_utf8(source) else {
             continue;
         };
-        if let Ok(tools) = load_tools_from_source(&source_str, &file_path, registry) {
+        let tier = tools_config.resolve_tier(file_path.as_str());
+        if let Ok(tools) =
+            load_tools_from_source_with_tier(&source_str, &file_path, registry, tier)
+        {
             let mut reg = registry.write().unwrap();
             for tool in tools {
                 reg.register(tool);
@@ -619,17 +658,22 @@ async fn scan_zone(
 /// so no re-read is needed. Handles multi-tool files: unregisters all previous
 /// tools from this path before registering new ones.
 ///
+/// `tools_config` is used to resolve the sandbox tier for the tool file.
+/// Pass `&ToolsConfig::default()` if no tier overrides are needed.
+///
 /// On parse/eval error, leaves previous versions registered (safe degradation).
 #[cfg(feature = "synthesised-tools")]
 pub fn reload_tool_from_content(
     registry: &Arc<RwLock<ToolRegistry>>,
     path: &VfsPath,
     content: &[u8],
+    tools_config: &crate::config::ToolsConfig,
 ) {
     let Ok(source_str) = std::str::from_utf8(content) else {
         return;
     };
-    if let Ok(tools) = load_tools_from_source(source_str, path, registry) {
+    let tier = tools_config.resolve_tier(path.as_str());
+    if let Ok(tools) = load_tools_from_source_with_tier(source_str, path, registry, tier) {
         let mut reg = registry.write().unwrap();
         // unregister all previous tools from this path
         let old_names = reg.find_all_by_vfs_path(path);
@@ -907,7 +951,7 @@ mod tests {
             .await
             .unwrap();
 
-        scan_and_register(&vfs, &registry).await.unwrap();
+        scan_and_register(&vfs, &registry, &crate::config::ToolsConfig::default()).await.unwrap();
 
         assert!(
             registry.read().unwrap().get("scan_hello").is_some(),
@@ -925,7 +969,7 @@ mod tests {
             .await
             .unwrap();
 
-        scan_and_register(&vfs, &registry).await.unwrap();
+        scan_and_register(&vfs, &registry, &crate::config::ToolsConfig::default()).await.unwrap();
         assert_eq!(
             registry.read().unwrap().all().count(),
             0,
@@ -939,7 +983,7 @@ mod tests {
         let registry = make_registry();
 
         // /tools/shared does not exist — should not error
-        let result = scan_and_register(&vfs, &registry).await;
+        let result = scan_and_register(&vfs, &registry, &crate::config::ToolsConfig::default()).await;
         assert!(result.is_ok());
         assert_eq!(registry.read().unwrap().all().count(), 0);
     }
@@ -956,7 +1000,7 @@ mod tests {
             .unwrap();
 
         // Should complete without error (bad file is silently skipped)
-        let result = scan_and_register(&vfs, &registry).await;
+        let result = scan_and_register(&vfs, &registry, &crate::config::ToolsConfig::default()).await;
         assert!(result.is_ok());
         assert_eq!(
             registry.read().unwrap().all().count(),
@@ -976,7 +1020,7 @@ mod tests {
             .await
             .unwrap();
 
-        scan_and_register(&vfs, &registry).await.unwrap();
+        scan_and_register(&vfs, &registry, &crate::config::ToolsConfig::default()).await.unwrap();
         assert!(
             registry.read().unwrap().get("scan_hello").is_some(),
             "home zone tool should be registered"
@@ -994,7 +1038,7 @@ mod tests {
             .await
             .unwrap();
 
-        scan_and_register(&vfs, &registry).await.unwrap();
+        scan_and_register(&vfs, &registry, &crate::config::ToolsConfig::default()).await.unwrap();
         assert!(
             registry.read().unwrap().get("scan_hello").is_some(),
             "flock zone tool should be registered"
@@ -1008,7 +1052,7 @@ mod tests {
         let registry = make_registry();
         let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
 
-        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes());
+        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes(), &crate::config::ToolsConfig::default());
 
         assert!(
             registry.read().unwrap().get("scan_hello").is_some(),
@@ -1022,7 +1066,7 @@ mod tests {
         let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
 
         // Register first version
-        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes());
+        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes(), &crate::config::ToolsConfig::default());
         assert_eq!(
             registry
                 .read()
@@ -1035,7 +1079,7 @@ mod tests {
 
         // Overwrite with updated description
         let updated = SCAN_TOOL.replace("says hello", "waves hello");
-        reload_tool_from_content(&registry, &path, updated.as_bytes());
+        reload_tool_from_content(&registry, &path, updated.as_bytes(), &crate::config::ToolsConfig::default());
         assert_eq!(
             registry
                 .read()
@@ -1054,7 +1098,7 @@ mod tests {
         let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
 
         // Register first
-        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes());
+        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes(), &crate::config::ToolsConfig::default());
         assert!(registry.read().unwrap().get("scan_hello").is_some());
 
         // Unregister via path
@@ -1080,11 +1124,11 @@ mod tests {
         let path = VfsPath::new("/tools/shared/scan_hello.scm").unwrap();
 
         // Register valid version first
-        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes());
+        reload_tool_from_content(&registry, &path, SCAN_TOOL.as_bytes(), &crate::config::ToolsConfig::default());
         assert!(registry.read().unwrap().get("scan_hello").is_some());
 
         // Try to reload with invalid source — should not remove the existing tool
-        reload_tool_from_content(&registry, &path, b"(define tool-name \"bad\")");
+        reload_tool_from_content(&registry, &path, b"(define tool-name \"bad\")", &crate::config::ToolsConfig::default());
         assert!(
             registry.read().unwrap().get("scan_hello").is_some(),
             "invalid reload should not remove existing valid tool"
@@ -1102,7 +1146,7 @@ mod tests {
         vfs.set_scm_change_callback(Arc::new(move |path, kind, content| match kind {
             ScmChangeKind::Write => {
                 if let Some(bytes) = content {
-                    reload_tool_from_content(&reg, path, bytes);
+                    reload_tool_from_content(&reg, path, bytes, &crate::config::ToolsConfig::default());
                 }
             }
             ScmChangeKind::Delete => unregister_tool_at_path(&reg, path),
@@ -1389,7 +1433,7 @@ mod tests {
 (define-tool tool_b (description "b") (parameters '()) (execute (lambda (args) "b")))
 "#;
         let path = VfsPath::new("/tools/shared/multi.scm").unwrap();
-        reload_tool_from_content(&registry, &path, source_v1.as_bytes());
+        reload_tool_from_content(&registry, &path, source_v1.as_bytes(), &crate::config::ToolsConfig::default());
 
         assert!(registry.read().unwrap().get("tool_a").is_some());
         assert!(registry.read().unwrap().get("tool_b").is_some());
@@ -1401,7 +1445,7 @@ mod tests {
 (define-tool tool_a (description "a v2") (parameters '()) (execute (lambda (args) "a2")))
 (define-tool tool_c (description "c") (parameters '()) (execute (lambda (args) "c")))
 "#;
-        reload_tool_from_content(&registry, &path, source_v2.as_bytes());
+        reload_tool_from_content(&registry, &path, source_v2.as_bytes(), &crate::config::ToolsConfig::default());
 
         let reg = registry.read().unwrap();
         assert!(reg.get("tool_a").is_some());
