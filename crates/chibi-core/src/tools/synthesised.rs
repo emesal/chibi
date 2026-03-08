@@ -49,10 +49,11 @@
 //! ## `call-tool` bridge
 //!
 //! `call-tool` bridges sync tein → async tokio dispatch via
-//! `Handle::current().block_on()`. The tool registry and call context are
-//! stashed in thread-locals (`BRIDGE_REGISTRY`, `BRIDGE_CALL_CTX`) before
-//! each invocation and cleared after via a guard. All mutations to these
-//! thread-locals happen on the tein worker thread.
+//! `Handle::current().block_on()`. The registry and call context are stashed in
+//! `BRIDGE_CALL_CTX` before each invocation and cleared after via a guard.
+//! The registry is embedded in `ToolImpl::Synthesised` and flows through
+//! `execute_synthesised` → `CallContextGuard`, so concurrent calls never
+//! overwrite each other's registry.
 //!
 //! Each synthesised tool gets its own sandboxed tein context, shared via
 //! `Arc` for concurrent dispatch. All access goes through `ThreadLocalContext`,
@@ -67,7 +68,7 @@ use tein::{Context, ThreadLocalContext, Value, sandbox::Modules};
 use std::io;
 
 use crate::tools::registry::{ToolCall, ToolRegistry};
-use crate::tools::{Tool, ToolCategory, ToolImpl, ToolMetadata, vfs_block_on};
+use crate::tools::{Tool, ToolCategory, ToolImpl, ToolMetadata};
 use crate::vfs::{Vfs, VfsCaller, VfsEntryKind, VfsPath}; // Vfs+VfsCaller used in scan_and_register
 
 // --- (harness tools) module source -------------------------------------------
@@ -150,6 +151,13 @@ struct ActiveCallContext {
     vfs: *const Vfs,
     /// Non-empty string = `VfsCaller::Context(name)`, empty = `VfsCaller::System`.
     vfs_caller_context: String,
+    /// Tokio runtime handle from the caller thread. Used by `call_tool_fn` to
+    /// schedule async work from the tein worker thread (which is not a tokio thread
+    /// and cannot use `block_in_place`).
+    runtime_handle: tokio::runtime::Handle,
+    /// Shared tool registry. Used by `call_tool_fn` for per-call dispatch.
+    /// Embedded per-call so concurrent tests never overwrite each other's registry.
+    registry: Arc<RwLock<ToolRegistry>>,
 }
 
 // SAFETY: the pointers in `ActiveCallContext` are only dereferenced on the
@@ -158,19 +166,14 @@ struct ActiveCallContext {
 #[cfg(feature = "synthesised-tools")]
 unsafe impl Send for ActiveCallContext {}
 
-thread_local! {
-    /// Arc to the tool registry, set once per `load_tool_from_source` call
-    /// and retained for the lifetime of the tein worker thread. All tools on
-    /// the same thread share the same registry.
-    #[cfg(feature = "synthesised-tools")]
-    static BRIDGE_REGISTRY: std::cell::RefCell<Option<Arc<RwLock<ToolRegistry>>>> =
-        const { std::cell::RefCell::new(None) };
-
-    /// Per-call context for `call-tool`. Set/cleared via `CallContextGuard`.
-    #[cfg(feature = "synthesised-tools")]
-    static BRIDGE_CALL_CTX: std::cell::RefCell<Option<ActiveCallContext>> =
-        const { std::cell::RefCell::new(None) };
-}
+/// Per-call context for `call-tool`. Set/cleared via `CallContextGuard`.
+///
+/// Global so `call_tool_fn` (which runs on tein's worker thread, not the caller
+/// thread) can read it. `CallContextGuard` RAII guarantees pointer validity
+/// while set and clears it on drop.
+#[cfg(feature = "synthesised-tools")]
+static BRIDGE_CALL_CTX: std::sync::Mutex<Option<ActiveCallContext>> =
+    std::sync::Mutex::new(None);
 
 /// RAII guard that stashes a `ToolCallContext` in `BRIDGE_CALL_CTX` and clears
 /// it on drop. Used in `execute_synthesised` to make the context available to
@@ -180,19 +183,19 @@ struct CallContextGuard;
 
 #[cfg(feature = "synthesised-tools")]
 impl CallContextGuard {
-    fn set(ctx: &crate::tools::registry::ToolCallContext<'_>) -> Self {
-        BRIDGE_CALL_CTX.with(|cell| {
-            *cell.borrow_mut() = Some(ActiveCallContext {
-                app: ctx.app as *const _,
-                context_name: ctx.context_name.to_string(),
-                config: ctx.config as *const _,
-                project_root: ctx.project_root.to_path_buf(),
-                vfs: ctx.vfs as *const _,
-                vfs_caller_context: match ctx.vfs_caller {
-                    VfsCaller::Context(name) => name.to_string(),
-                    VfsCaller::System => String::new(),
-                },
-            });
+    fn set(ctx: &crate::tools::registry::ToolCallContext<'_>, registry: Arc<RwLock<ToolRegistry>>) -> Self {
+        *BRIDGE_CALL_CTX.lock().unwrap() = Some(ActiveCallContext {
+            app: ctx.app as *const _,
+            context_name: ctx.context_name.to_string(),
+            config: ctx.config as *const _,
+            project_root: ctx.project_root.to_path_buf(),
+            vfs: ctx.vfs as *const _,
+            vfs_caller_context: match ctx.vfs_caller {
+                VfsCaller::Context(name) => name.to_string(),
+                VfsCaller::System => String::new(),
+            },
+            runtime_handle: tokio::runtime::Handle::current(),
+            registry,
         });
         CallContextGuard
     }
@@ -201,9 +204,7 @@ impl CallContextGuard {
 #[cfg(feature = "synthesised-tools")]
 impl Drop for CallContextGuard {
     fn drop(&mut self) {
-        BRIDGE_CALL_CTX.with(|cell| {
-            *cell.borrow_mut() = None;
-        });
+        *BRIDGE_CALL_CTX.lock().unwrap() = None;
     }
 }
 
@@ -211,9 +212,9 @@ impl Drop for CallContextGuard {
 
 /// The `call-tool` foreign function: `(call-tool name args-alist) → string`
 ///
-/// Reads `BRIDGE_REGISTRY` and `BRIDGE_CALL_CTX` from thread-locals. Converts
-/// the scheme alist args to JSON, looks up the tool, and dispatches via
-/// `ToolRegistry::dispatch_impl` on the current tokio runtime.
+/// Reads `BRIDGE_CALL_CTX` (which carries the registry for the current call).
+/// Converts the scheme alist args to JSON, looks up the tool, and dispatches
+/// via `ToolRegistry::dispatch_impl` on the current tokio runtime.
 ///
 /// Error handling: returns a scheme error string on failure (tein surfacees it
 /// as a scheme error condition). Does not panic.
@@ -225,54 +226,60 @@ impl Drop for CallContextGuard {
 fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
     let json_args = scheme_value_to_json(&args).map_err(|e| format!("args conversion: {e}"))?;
 
-    BRIDGE_CALL_CTX.with(|ctx_cell| {
-        let ctx_borrow = ctx_cell.borrow();
-        let active = ctx_borrow.as_ref().ok_or_else(|| {
+    // Extract all needed data from the global context while holding the lock,
+    // then drop the lock before dispatching (which may block_on async code).
+    let (app_ptr, context_name, config_ptr, project_root, vfs_ptr, vfs_caller_str, runtime_handle, registry) = {
+        let guard = BRIDGE_CALL_CTX.lock().unwrap();
+        let active = guard.as_ref().ok_or_else(|| {
             "call-tool: no active call context (called outside tool execute?)".to_string()
         })?;
+        (
+            active.app,
+            active.context_name.clone(),
+            active.config,
+            active.project_root.clone(),
+            active.vfs,
+            active.vfs_caller_context.clone(),
+            active.runtime_handle.clone(),
+            Arc::clone(&active.registry),
+        )
+        // guard drops here, releasing the lock
+    };
 
-        let registry = BRIDGE_REGISTRY.with(|reg_cell| {
-            reg_cell
-                .borrow()
-                .as_ref()
-                .map(Arc::clone)
-                .ok_or_else(|| "call-tool: no registry available".to_string())
-        })?;
+    // SAFETY: pointers are valid for the duration of execute_synthesised,
+    // which holds CallContextGuard that set them. We reconstruct a
+    // ToolCallContext only for dispatch — no storage beyond this fn.
+    let call_ctx = unsafe {
+        crate::tools::registry::ToolCallContext {
+            app: &*app_ptr,
+            context_name: &context_name,
+            config: &*config_ptr,
+            project_root: &project_root,
+            vfs: &*vfs_ptr,
+            vfs_caller: if vfs_caller_str.is_empty() {
+                VfsCaller::System
+            } else {
+                VfsCaller::Context(&vfs_caller_str)
+            },
+        }
+    };
 
-        // SAFETY: pointers are valid for the duration of execute_synthesised,
-        // which holds CallContextGuard that set them. We reconstruct a
-        // ToolCallContext only for dispatch — no storage beyond this fn.
-        let vfs_caller_str = active.vfs_caller_context.clone();
-        let call_ctx = unsafe {
-            crate::tools::registry::ToolCallContext {
-                app: &*active.app,
-                context_name: &active.context_name,
-                config: &*active.config,
-                project_root: &active.project_root,
-                vfs: &*active.vfs,
-                vfs_caller: if vfs_caller_str.is_empty() {
-                    VfsCaller::System
-                } else {
-                    VfsCaller::Context(&vfs_caller_str)
-                },
-            }
-        };
+    let tool_impl = {
+        let reg = registry.read().map_err(|e| format!("registry lock: {e}"))?;
+        let tool = reg
+            .get(&name)
+            .ok_or_else(|| format!("unknown tool: {name}"))?;
+        tool.r#impl.clone()
+    };
 
-        let tool_impl = {
-            let reg = registry.read().map_err(|e| format!("registry lock: {e}"))?;
-            let tool = reg
-                .get(&name)
-                .ok_or_else(|| format!("unknown tool: {name}"))?;
-            tool.r#impl.clone()
-        };
-
-        // bridge sync tein → async tokio; vfs_block_on uses block_in_place to
-        // avoid panicking on a multi-thread runtime (same fix as scan_and_register)
-        vfs_block_on(ToolRegistry::dispatch_impl(
+    // bridge sync tein worker thread → async tokio. cannot use block_in_place
+    // because the tein thread is not a tokio worker thread. use block_on
+    // directly with the handle captured at CallContextGuard::set time.
+    runtime_handle
+        .block_on(ToolRegistry::dispatch_impl(
             tool_impl, &name, &json_args, &call_ctx,
         ))
         .map_err(|e| format!("tool error: {e}"))
-    })
 }
 
 /// `(generate-id)` harness helper — returns a 4-hex-char string seeded from
@@ -399,11 +406,6 @@ pub fn load_tools_from_source_with_tier(
     registry: &Arc<RwLock<ToolRegistry>>,
     tier: crate::config::SandboxTier,
 ) -> io::Result<Vec<Tool>> {
-    // stash registry in thread-local so call-tool bridge can access it
-    BRIDGE_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Some(Arc::clone(registry));
-    });
-
     let source_owned = source.to_string();
 
     let ctx = build_tein_context(source_owned, tier)?;
@@ -416,9 +418,9 @@ pub fn load_tools_from_source_with_tier(
     );
 
     if is_multi {
-        extract_multi_tools(ctx, vfs_path)
+        extract_multi_tools(ctx, vfs_path, registry)
     } else {
-        extract_single_tool(ctx, vfs_path).map(|t| vec![t])
+        extract_single_tool(ctx, vfs_path, registry).map(|t| vec![t])
     }
 }
 
@@ -444,7 +446,7 @@ pub fn load_tool_from_source(
 
 /// Extract a single tool from a context using the convention-based format.
 #[cfg(feature = "synthesised-tools")]
-fn extract_single_tool(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Result<Tool> {
+fn extract_single_tool(ctx: ThreadLocalContext, vfs_path: &VfsPath, registry: &Arc<RwLock<ToolRegistry>>) -> io::Result<Tool> {
     let name = extract_string(&ctx, "tool-name")?;
     let description = extract_string(&ctx, "tool-description")?;
     let params_val = ctx.evaluate("tool-parameters").map_err(|e| {
@@ -480,6 +482,7 @@ fn extract_single_tool(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
             vfs_path: vfs_path.clone(),
             exec_binding: "tool-execute".to_string(),
             context,
+            registry: Arc::clone(registry),
         },
         category: ToolCategory::Synthesised,
     })
@@ -497,7 +500,7 @@ fn scheme_escape_string(s: &str) -> String {
 /// Reads `%tool-registry%` (a LIFO list built via `cons`) and produces one
 /// `Tool` per entry. All tools share the same tein context via `Arc`.
 #[cfg(feature = "synthesised-tools")]
-fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Result<Vec<Tool>> {
+fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath, registry: &Arc<RwLock<ToolRegistry>>) -> io::Result<Vec<Tool>> {
     let registry_val = ctx
         .evaluate("%tool-registry%")
         .map_err(|e| io::Error::other(format!("reading %tool-registry%: {e}")))?;
@@ -584,6 +587,7 @@ fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
                 vfs_path: vfs_path.clone(),
                 exec_binding: exec_binding.clone(),
                 context: Arc::clone(&context),
+                registry: Arc::clone(registry),
             },
             category: ToolCategory::Synthesised,
         });
@@ -598,8 +602,8 @@ fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
 /// context, and calls it. The result is coerced to a string via
 /// `Value::as_string()` (for scheme strings) or `Display` (for other values).
 ///
-/// Sets `BRIDGE_CALL_CTX` via `CallContextGuard` before calling into scheme
-/// so that `call-tool` can access the runtime context.
+/// Sets `BRIDGE_CALL_CTX` (with the per-call registry) via `CallContextGuard`
+/// before calling into scheme so that `call-tool` can access the runtime context.
 ///
 /// Also injects the per-call `%context-name%` variable so synthesised tools
 /// can resolve VFS paths relative to the calling context's home directory.
@@ -608,8 +612,9 @@ pub async fn execute_synthesised(
     context: &ThreadLocalContext,
     exec_binding: &str,
     call: &ToolCall<'_>,
+    registry: Arc<RwLock<ToolRegistry>>,
 ) -> io::Result<String> {
-    let _guard = CallContextGuard::set(call.context);
+    let _guard = CallContextGuard::set(call.context, registry);
 
     // Inject per-call bindings before invoking the tool handler.
     // %context-name% mutates the top-level binding defined in HARNESS_PREAMBLE.
@@ -638,6 +643,7 @@ pub async fn execute_synthesised(
     _context: &(),
     _exec_binding: &str,
     _call: &ToolCall<'_>,
+    _registry: std::sync::Arc<std::sync::RwLock<ToolRegistry>>,
 ) -> io::Result<String> {
     unreachable!("synthesised-tools feature not enabled")
 }

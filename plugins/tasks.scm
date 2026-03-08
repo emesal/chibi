@@ -121,13 +121,32 @@
             ((string=? (substring haystack i (+ i nlen)) needle) #t)
             (else (loop (+ i 1))))))))
 
+;;; Extract the value of a symbol-valued alist field like "(field . value)" from content.
+;;; Returns the value string or #f if not found.
+(define (extract-symbol-field content field)
+  (let* ((prefix (string-append "(" field " . "))
+         (plen   (string-length prefix))
+         (clen   (string-length content)))
+    (let loop ((i 0))
+      (cond
+        ((> (+ i plen) clen) #f)
+        ((string=? (substring content i (+ i plen)) prefix)
+         ;; found prefix — read until closing paren
+         (let val-loop ((j (+ i plen)) (out '()))
+           (cond
+             ((>= j clen) (list->string (reverse out)))
+             ((char=? (string-ref content j) #\))
+              (list->string (reverse out)))
+             (else (val-loop (+ j 1) (cons (string-ref content j) out))))))
+        (else (loop (+ i 1)))))))
+
 ;;; List .task files recursively under a VFS directory.
 ;;; vfs_list returns lines of the form "name (file)" or "name (dir)".
-;;; Returns a list of full VFS path strings (without vfs:/// prefix).
+;;; Returns a list of full VFS path strings (without vfs:// prefix).
 (define (list-tasks-recursive dir)
   (let ((listing
           (call-tool "vfs_list"
-            `(("path" . ,(string-append "vfs:///" dir))))))
+            `(("path" . ,(string-append "vfs://" dir))))))
     (if (or (string=? listing "")
             (string=? listing "No entries found."))
         '()
@@ -162,7 +181,7 @@
 (define (read-task-file path)
   (let ((result
           (call-tool "file_head"
-            `(("path"  . ,(string-append "vfs:///" path))
+            `(("path"  . ,(string-append "vfs://" path))
               ("lines" . "200")))))
     ;; file_head returns an error message string on failure
     (if (or (string=? result "")
@@ -172,7 +191,7 @@
         result)))
 
 ;;; Find a .task file by ID by scanning the context's task directory.
-;;; Returns the full VFS path (without vfs:/// prefix) or #f if not found.
+;;; Returns the full VFS path (without vfs:// prefix) or #f if not found.
 (define (find-task-by-id task-id)
   (let* ((local-dir  (string-append "/home/" %context-name% "/tasks"))
          (all-files  (list-tasks-recursive local-dir)))
@@ -187,7 +206,7 @@
 
 ;;; Ensure a VFS directory exists (ignores error if already present).
 (define (vfs-mkdir-safe dir)
-  (call-tool "vfs_mkdir" `(("path" . ,(string-append "vfs:///" dir)))))
+  (call-tool "vfs_mkdir" `(("path" . ,(string-append "vfs://" dir)))))
 
 ;;; Create any intermediate directories for a path like "a/b/c".
 (define (vfs-mkdir-parents base sub)
@@ -243,7 +262,7 @@
               #t)
           ;; Write the task file
           (call-tool "write_file"
-            `(("path"    . ,(string-append "vfs:///" full-path))
+            `(("path"    . ,(string-append "vfs://" full-path))
               ("content" . ,(serialise-task meta body))))
           (string-append "created task " id " at " full-path)))))))
 
@@ -264,102 +283,66 @@
            (path    (find-task-by-id task-id)))
       (if (not path)
           (string-append "error: task " task-id " not found")
-          (let ((vfs-uri (string-append "vfs:///" path))
-                (ts      (current-timestamp)))
-            ;; Update status if provided (symbol value)
-            (let ((new-status (assoc "status" args)))
-              (if new-status
-                  (let* ((old-line (string-append "(status . "))
-                         ;; match any existing status value by using old line prefix
-                         ;; We use replace_string on the whole "(status . X)" pattern.
-                         ;; Since we don't know old value, rebuild with write_file below.
-                         (dummy #f))
-                    dummy)
-                  #f))
-            ;; Simplest correct approach: read file, rebuild with updated fields.
-            (let* ((content  (read-task-file path))
-                   (new-status    (assoc "status" args))
-                   (new-priority  (assoc "priority" args))
-                   (new-body      (assoc "body" args))
-                   (new-assigned  (assoc "assigned-to" args)))
-              (if (not content)
-                  (string-append "error: could not read " path)
-                  ;; Apply replace_string for each changed field, then bump timestamp.
-                  ;; For status and priority (symbol values): find "(field . old)" pattern.
-                  ;; We use a line-oriented approach: replace the entire "(field . X)" token.
-                  (begin
-                    (if new-status
-                        (call-tool "file_edit"
-                          `(("path"      . ,vfs-uri)
-                            ("operation" . "replace_string")
-                            ("find"      . ,(string-append "(status . pending)"))
-                            ("replace"   . ,(string-append "(status . " (cdr new-status) ")"))))
-                        #f)
-                    (if new-status
-                        (call-tool "file_edit"
-                          `(("path"      . ,vfs-uri)
-                            ("operation" . "replace_string")
-                            ("find"      . "(status . in-progress)")
-                            ("replace"   . ,(string-append "(status . " (cdr new-status) ")"))))
-                        #f)
-                    (if new-status
-                        (call-tool "file_edit"
-                          `(("path"      . ,vfs-uri)
-                            ("operation" . "replace_string")
-                            ("find"      . "(status . done)")
-                            ("replace"   . ,(string-append "(status . " (cdr new-status) ")"))))
-                        #f)
-                    (if new-priority
-                        (begin
-                          (call-tool "file_edit"
-                            `(("path"      . ,vfs-uri)
-                              ("operation" . "replace_string")
-                              ("find"      . "(priority . low)")
-                              ("replace"   . ,(string-append "(priority . " (cdr new-priority) ")"))))
-                          (call-tool "file_edit"
-                            `(("path"      . ,vfs-uri)
-                              ("operation" . "replace_string")
-                              ("find"      . "(priority . medium)")
-                              ("replace"   . ,(string-append "(priority . " (cdr new-priority) ")"))))
-                          (call-tool "file_edit"
-                            `(("path"      . ,vfs-uri)
-                              ("operation" . "replace_string")
-                              ("find"      . "(priority . high)")
-                              ("replace"   . ,(string-append "(priority . " (cdr new-priority) ")")))))
-                        #f)
-                    ;; Replace body: rewrite entire file with new body but same metadata
-                    (if new-body
-                        ;; read current content to extract metadata (crude: read lines)
-                        ;; for simplicity: call write_file with current meta + new body.
-                        ;; since we can't parse scheme, we just append/replace the body datum.
-                        ;; The body is after the closing ) of the alist + blank line.
-                        ;; Use replace_string on the old body string.
-                        (call-tool "file_edit"
-                          `(("path"      . ,vfs-uri)
-                            ("operation" . "replace_string")
-                            ("find"      . ,(let ((c (read-task-file path)))
-                                              ;; extract just the body datum (everything after first datum)
-                                              ;; crude: find the closing paren of the alist
-                                              (let find-body ((i 0) (depth 0) (found #f))
-                                                (if (or (not c) (= i (string-length c)))
-                                                    ""
-                                                    (let ((ch (string-ref c i)))
-                                                      (cond
-                                                        ((char=? ch #\() (find-body (+ i 1) (+ depth 1) found))
-                                                        ((char=? ch #\))
-                                                         (if (= depth 1)
-                                                             (substring c i (string-length c))
-                                                             (find-body (+ i 1) (- depth 1) found)))
-                                                        (else (find-body (+ i 1) depth found))))))))
-                            ("replace"   . ,(string-append ")\n\n\"" (escape-string (cdr new-body)) "\"\n"))))
-                        #f)
-                    ;; Always bump the updated timestamp
-                    (call-tool "file_edit"
-                      `(("path"      . ,vfs-uri)
-                        ("operation" . "replace_string")
-                        ("find"      . ,(string-append "(updated . \""))
-                        ("replace"   . ,(string-append "(updated . \"" ts "\""))))
-                    (string-append "updated task " task-id " at " path))))))))))
+          (let* ((vfs-uri       (string-append "vfs://" path))
+                 (ts            (current-timestamp))
+                 (content       (read-task-file path))
+                 (new-status    (assoc "status" args))
+                 (new-priority  (assoc "priority" args))
+                 (new-body      (assoc "body" args))
+                 (new-assigned  (assoc "assigned-to" args)))
+            (if (not content)
+                (string-append "error: could not read " path)
+                (begin
+                  ;; Update status: extract current value, do single targeted replace.
+                  (if new-status
+                      (let ((old-status (extract-symbol-field content "status")))
+                        (if old-status
+                            (call-tool "file_edit"
+                              `(("path"      . ,vfs-uri)
+                                ("operation" . "replace_string")
+                                ("find"      . ,(string-append "(status . " old-status ")"))
+                                ("replace"   . ,(string-append "(status . " (cdr new-status) ")"))))
+                            #f))
+                      #f)
+                  ;; Update priority: same pattern.
+                  (if new-priority
+                      (let ((old-priority (extract-symbol-field content "priority")))
+                        (if old-priority
+                            (call-tool "file_edit"
+                              `(("path"      . ,vfs-uri)
+                                ("operation" . "replace_string")
+                                ("find"      . ,(string-append "(priority . " old-priority ")"))
+                                ("replace"   . ,(string-append "(priority . " (cdr new-priority) ")"))))
+                            #f))
+                      #f)
+                  ;; Replace body: find the closing ) of the alist and replace everything after.
+                  (if new-body
+                      (let ((tail (let find-tail ((i 0) (depth 0))
+                                    (if (= i (string-length content))
+                                        #f
+                                        (let ((ch (string-ref content i)))
+                                          (cond
+                                            ((char=? ch #\() (find-tail (+ i 1) (+ depth 1)))
+                                            ((char=? ch #\))
+                                             (if (= depth 1)
+                                                 (substring content i (string-length content))
+                                                 (find-tail (+ i 1) (- depth 1))))
+                                            (else (find-tail (+ i 1) depth))))))))
+                        (if tail
+                            (call-tool "file_edit"
+                              `(("path"      . ,vfs-uri)
+                                ("operation" . "replace_string")
+                                ("find"      . ,tail)
+                                ("replace"   . ,(string-append ")\n\n\"" (escape-string (cdr new-body)) "\"\n"))))
+                            #f))
+                      #f)
+                  ;; Always bump the updated timestamp.
+                  (call-tool "file_edit"
+                    `(("path"      . ,vfs-uri)
+                      ("operation" . "replace_string")
+                      ("find"      . "(updated . \"")
+                      ("replace"   . ,(string-append "(updated . \"" ts "\""))))
+                  (string-append "updated task " task-id " at " path)))))))))
 
 (define-tool task_view
   (description "View a task by ID. Returns full metadata and body.")
@@ -422,5 +405,5 @@
           (string-append "error: task " task-id " not found")
           (begin
             (call-tool "vfs_delete"
-              `(("path" . ,(string-append "vfs:///" path))))
+              `(("path" . ,(string-append "vfs://" path))))
             (string-append "deleted task " task-id " at " path)))))))

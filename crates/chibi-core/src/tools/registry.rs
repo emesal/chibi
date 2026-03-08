@@ -7,7 +7,7 @@ use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -68,6 +68,8 @@ pub enum ToolImpl {
     /// all tools in the same `.scm` file (Arc). `exec_binding` names the
     /// scheme binding to call: `"tool-execute"` for single-tool convention
     /// format, `"%tool-execute-{name}%"` for `define-tool` multi-tool files.
+    /// `registry` is the owning registry, passed to `execute_synthesised` so
+    /// `call-tool` uses a per-call registry instead of a global static.
     ///
     /// Mutation site: if exec_binding format changes, update `extract_single_tool`
     /// and `extract_multi_tools` in synthesised.rs.
@@ -76,6 +78,7 @@ pub enum ToolImpl {
         vfs_path: crate::vfs::VfsPath,
         exec_binding: String,
         context: std::sync::Arc<tein::ThreadLocalContext>,
+        registry: Arc<RwLock<ToolRegistry>>,
     },
 }
 
@@ -93,10 +96,12 @@ impl Clone for ToolImpl {
                 vfs_path,
                 exec_binding,
                 context,
+                registry,
             } => ToolImpl::Synthesised {
                 vfs_path: vfs_path.clone(),
                 exec_binding: exec_binding.clone(),
                 context: context.clone(),
+                registry: Arc::clone(registry),
             },
         }
     }
@@ -269,8 +274,12 @@ impl ToolRegistry {
             ToolImpl::Synthesised {
                 context,
                 exec_binding,
+                registry,
                 ..
-            } => super::synthesised::execute_synthesised(&context, &exec_binding, &call).await,
+            } => {
+                super::synthesised::execute_synthesised(&context, &exec_binding, &call, registry)
+                    .await
+            }
         }
     }
 
