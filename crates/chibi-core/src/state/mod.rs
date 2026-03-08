@@ -628,6 +628,23 @@ impl AppState {
         pm.read_all_entries()
     }
 
+    /// Returns the total number of user prompts for a context.
+    ///
+    /// Sums prompt counts across all archived partitions and the active
+    /// partition. Uses cached active state when available.
+    pub fn prompt_count(&self, name: &str) -> io::Result<usize> {
+        self.migrate_transcript_if_needed(name)?;
+        let transcript_dir = self.transcript_dir(name);
+        let storage_config = self.resolve_config(name, None)?.storage;
+        let cached_state = self.active_state_cache.borrow().get(name).cloned();
+        let pm = PartitionManager::load_with_cached_state(
+            &transcript_dir,
+            storage_config,
+            cached_state,
+        )?;
+        Ok(pm.total_prompt_count())
+    }
+
     /// Migrate from old context.json format to new context.jsonl format
     fn migrate_and_load_context(&self, name: &str) -> io::Result<Context> {
         let old_path = self.context_file_old(name);

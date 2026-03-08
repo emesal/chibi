@@ -175,7 +175,8 @@ async fn dispatch_command<S: ResponseSink>(
             );
             let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
             output.emit_result(&format!("Context: {}{}", context, status_str));
-            output.emit_result(&format!("Messages: {}", ctx.messages.len()));
+            let prompt_count = chibi.app.prompt_count(context).unwrap_or(0);
+            output.emit_result(&format!("Prompts: {}", prompt_count));
             if !ctx.summary.is_empty() {
                 output.emit_result(&format!(
                     "Summary: {}",
