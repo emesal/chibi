@@ -110,8 +110,9 @@ pub async fn rolling_compact(
     });
     let _ = tools::execute_hook(&tools, tools::HookPoint::PreRollingCompact, &hook_data);
 
-    // Load todos and flock goals to guide compaction decisions.
-    let todos = app.load_todos(context_name)?;
+    // Load tasks and flock goals to guide compaction decisions.
+    let task_metas = crate::state::tasks::collect_tasks(&app.vfs, context_name).await;
+    let todos = crate::state::tasks::build_summary_table(&task_metas);
     let flock_contexts = load_flock_contexts(&app.vfs, context_name).unwrap_or_default();
     let goals = format_flock_sections(&flock_contexts);
 
@@ -171,7 +172,7 @@ pub async fn rolling_compact(
             &if todos.is_empty() {
                 String::new()
             } else {
-                format!("CURRENT TODOS:\n{}\n\n", todos)
+                format!("CURRENT TASKS:\n{}\n\n", todos)
             },
         )
         .replace(
@@ -297,7 +298,7 @@ pub async fn rolling_compact(
             &if todos.is_empty() {
                 String::new()
             } else {
-                format!("\nCURRENT TODOS:\n{}\n", todos)
+                format!("\nCURRENT TASKS:\n{}\n", todos)
             },
         );
 

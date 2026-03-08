@@ -129,7 +129,7 @@ pub use plugins::{execute_tool, execute_tool_by_path, load_tools};
 // Re-export memory tool constants and functions
 pub use memory::{
     GOALS_TOOL_NAME, MEMORY_TOOL_DEFS, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME,
-    TODOS_TOOL_NAME, execute_memory_tool, register_memory_tools,
+    execute_memory_tool, register_memory_tools,
 };
 
 // Re-export flow tool constants, types and functions

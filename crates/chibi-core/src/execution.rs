@@ -592,11 +592,14 @@ fn inspect_context(
             Ok(None)
         }
         Inspectable::Todos => {
-            let todos = chibi.app.load_todos_for(context)?;
-            if todos.is_empty() {
-                output.emit_result("(no todos)");
+            use crate::tools::vfs_block_on;
+            let task_metas =
+                vfs_block_on(crate::state::tasks::collect_tasks(&chibi.app.vfs, context));
+            let summary = crate::state::tasks::build_summary_table(&task_metas);
+            if summary.is_empty() {
+                output.emit_result("(no tasks)");
             } else {
-                output.emit_markdown(todos.trim_end())?;
+                output.emit_result(summary.trim_end());
             }
             Ok(None)
         }

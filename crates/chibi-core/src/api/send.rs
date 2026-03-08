@@ -394,7 +394,7 @@ fn apply_hook_overrides<S: ResponseSink>(
 
 /// Build the full system prompt with all components.
 ///
-/// Handles: loading base prompt, todos, goals, summary, reflection prompt,
+/// Handles: loading base prompt, goals, summary, reflection prompt,
 /// pre/post system_prompt hooks, and username injection.
 #[allow(clippy::too_many_arguments)]
 fn build_full_system_prompt<S: ResponseSink>(
@@ -417,14 +417,12 @@ fn build_full_system_prompt<S: ResponseSink>(
     };
 
     // Load context-specific state
-    let todos = app.load_todos(context_name)?;
     let flock_contexts = load_flock_contexts(&app.vfs, context_name)?;
 
     // Execute pre_system_prompt hook - can inject content before system prompt sections
     let pre_sys_hook_data = serde_json::json!({
         "context_name": context_name,
         "summary": summary,
-        "todos": todos,
         "flock_goals": flock_contexts.iter()
             .filter_map(|fc| fc.goals.as_ref().map(|g| serde_json::json!({
                 "flock": fc.flock_name,
@@ -489,12 +487,6 @@ fn build_full_system_prompt<S: ResponseSink>(
         full_system_prompt.push_str(&flock_sections);
     }
 
-    // Add todos if present
-    if !todos.is_empty() {
-        full_system_prompt.push_str("\n\n--- CURRENT TODOS ---\n");
-        full_system_prompt.push_str(&todos);
-    }
-
     // Add fuel notice when operating under a fuel budget
     if resolved_config.fuel > 0 {
         full_system_prompt.push_str("\n\nUse call_user to return control to the user. You operate within a fuel budget. When fuel runs out control is returned automatically. Fuel refills with each prompt.");
@@ -510,7 +502,6 @@ fn build_full_system_prompt<S: ResponseSink>(
     let post_sys_hook_data = serde_json::json!({
         "context_name": context_name,
         "summary": summary,
-        "todos": todos,
         "flock_goals": flock_contexts.iter()
             .filter_map(|fc| fc.goals.as_ref().map(|g| serde_json::json!({
                 "flock": fc.flock_name,
@@ -1622,8 +1613,8 @@ async fn process_tool_calls<S: ResponseSink>(
             cached: result.was_cached,
         })?;
 
-        // Show full content of todos/goals updates
-        if matches!(tc.name.as_str(), "update_todos" | "update_goals")
+        // Show full content of goals updates
+        if matches!(tc.name.as_str(), "update_goals")
             && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments)
             && let Some(content) = args["content"].as_str()
         {
@@ -2339,7 +2330,7 @@ mod tests {
             json!({"function": {"name": "shell_exec"}}),
             json!({"function": {"name": "dir_list"}}),
             json!({"function": {"name": "file_head"}}),
-            json!({"function": {"name": "update_todos"}}),
+            json!({"function": {"name": "update_reflection"}}),
             json!({"function": {"name": "spawn_agent"}}),
         ];
         let config = ToolsConfig {
@@ -2360,7 +2351,7 @@ mod tests {
         );
         assert!(names.contains(&"dir_list"), "fs_read tool should remain");
         assert!(names.contains(&"file_head"), "fs_read tool should remain");
-        assert!(names.contains(&"update_todos"), "memory tool should remain");
+        assert!(names.contains(&"update_reflection"), "memory tool should remain");
         assert!(names.contains(&"spawn_agent"), "flow tool should remain");
     }
 
@@ -2370,7 +2361,7 @@ mod tests {
             json!({"function": {"name": "shell_exec"}}),
             json!({"function": {"name": "file_head"}}),
             json!({"function": {"name": "spawn_agent"}}),
-            json!({"function": {"name": "update_todos"}}),
+            json!({"function": {"name": "update_reflection"}}),
         ];
         let config = ToolsConfig {
             include: None,
@@ -2384,7 +2375,7 @@ mod tests {
             .iter()
             .filter_map(|t| t.get("function")?.get("name")?.as_str())
             .collect();
-        assert_eq!(names, vec!["file_head", "update_todos"]);
+        assert_eq!(names, vec!["file_head", "update_reflection"]);
     }
 
     #[test]

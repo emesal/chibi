@@ -828,11 +828,11 @@ mod tests {
         let result = chibi
             .execute_tool(
                 "default",
-                "update_todos",
-                serde_json::json!({"content": "- [ ] write tests"}),
+                "update_reflection",
+                serde_json::json!({"content": "I prefer concise answers."}),
             )
             .await;
         let output = result.unwrap();
-        assert!(output.contains("Todos updated"));
+        assert!(output.contains("Reflection updated"));
     }
 }

@@ -1389,10 +1389,10 @@ mod tests {
     #[test]
     fn test_call_tool_short() {
         // -P now requires exactly 2 args: TOOL and JSON (use {} for no args)
-        let input = parse_input("-P update_todos \"{}\"").unwrap();
+        let input = parse_input("-P update_goals \"{}\"").unwrap();
         assert!(
             matches!(input.command, Command::CallTool { ref name, ref args }
-            if name == "update_todos" && args == &["{}"])
+            if name == "update_goals" && args == &["{}"])
         );
         assert!(input.flags.force_call_user);
     }

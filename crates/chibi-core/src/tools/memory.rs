@@ -1,5 +1,5 @@
 //!
-//! Memory tools: reflection, todos, goals, read_context.
+//! Memory tools: reflection, goals, read_context.
 //! These tools read and write internal context state.
 
 use super::{BuiltinToolDef, ToolPropertyDef, require_str_param, vfs_block_on};
@@ -10,7 +10,6 @@ use std::io::{self, ErrorKind};
 use std::path::Path;
 
 pub const REFLECTION_TOOL_NAME: &str = "update_reflection";
-pub const TODOS_TOOL_NAME: &str = "update_todos";
 pub const GOALS_TOOL_NAME: &str = "update_goals";
 pub const READ_CONTEXT_TOOL_NAME: &str = "read_context";
 pub const FLOCK_JOIN_TOOL_NAME: &str = "flock_join";
@@ -24,18 +23,6 @@ pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
             name: "content",
             prop_type: "string",
             description: "The new reflection content. This replaces the entire previous reflection.",
-            default: None,
-        }],
-        required: &["content"],
-        summary_params: &[],
-    },
-    BuiltinToolDef {
-        name: TODOS_TOOL_NAME,
-        description: "Update the todo list for this context. Use this to track tasks you need to complete during this conversation. Todos persist across messages but are specific to this context. Format as markdown checklist.",
-        properties: &[ToolPropertyDef {
-            name: "content",
-            prop_type: "string",
-            description: "The todo list content (markdown format, e.g., '- [ ] Task 1\\n- [x] Completed task')",
             default: None,
         }],
         required: &["content"],
@@ -159,13 +146,6 @@ pub fn execute_memory_tool(
     config: Option<&ResolvedConfig>,
 ) -> Option<io::Result<String>> {
     match name {
-        TODOS_TOOL_NAME => {
-            let content = args.get("content").and_then(|v| v.as_str())?;
-            Some(
-                app.save_todos(context_name, content)
-                    .map(|_| format!("Todos updated ({} characters).", content.len())),
-            )
-        }
         GOALS_TOOL_NAME => Some((|| {
             let flock = require_str_param(args, "flock")?;
             let content = require_str_param(args, "content")?;
@@ -269,8 +249,11 @@ fn execute_read_context(
     let summary = std::fs::read_to_string(app.summary_file(context_name)).unwrap_or_default();
     result.insert("summary".to_string(), serde_json::Value::String(summary));
 
-    let todos = app.load_todos_for(context_name).unwrap_or_default();
-    result.insert("todos".to_string(), serde_json::Value::String(todos));
+    let tasks = crate::state::tasks::collect_tasks(&app.vfs, context_name);
+    // execute_read_context is sync — drive the future with vfs_block_on pattern
+    let task_summary = vfs_block_on(tasks);
+    let task_table = crate::state::tasks::build_summary_table(&task_summary);
+    result.insert("tasks".to_string(), serde_json::Value::String(task_table));
 
     // Goals are flock-scoped: load all flock contexts for the target and format
     // as an attributed flock_goals array for the caller.
@@ -365,18 +348,6 @@ mod tests {
     }
 
     #[test]
-    fn test_todos_tool_api_format() {
-        let tool = get_tool_api(TODOS_TOOL_NAME);
-        assert_eq!(tool["function"]["name"], TODOS_TOOL_NAME);
-        assert!(
-            tool["function"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("todo")
-        );
-    }
-
-    #[test]
     fn test_goals_tool_api_format() {
         let tool = get_tool_api(GOALS_TOOL_NAME);
         assert_eq!(tool["function"]["name"], GOALS_TOOL_NAME);
@@ -391,13 +362,12 @@ mod tests {
     #[test]
     fn test_memory_tool_constants() {
         assert_eq!(REFLECTION_TOOL_NAME, "update_reflection");
-        assert_eq!(TODOS_TOOL_NAME, "update_todos");
         assert_eq!(GOALS_TOOL_NAME, "update_goals");
         assert_eq!(READ_CONTEXT_TOOL_NAME, "read_context");
     }
 
     #[test]
     fn test_memory_defs_count() {
-        assert_eq!(MEMORY_TOOL_DEFS.len(), 6);
+        assert_eq!(MEMORY_TOOL_DEFS.len(), 5);
     }
 }
