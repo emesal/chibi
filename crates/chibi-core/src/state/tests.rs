@@ -1026,14 +1026,11 @@ fn test_list_contexts_excludes_manually_deleted_directories() {
     app.save_context(&ctx2).unwrap();
 
     // Add them to state.json
-    app.state.contexts.push(ContextEntry::with_created_at(
-        "context-one",
-        now_timestamp(),
-    ));
-    app.state.contexts.push(ContextEntry::with_created_at(
-        "context-two",
-        now_timestamp(),
-    ));
+    {
+        let mut state = app.state.write().unwrap();
+        state.contexts.push(ContextEntry::with_created_at("context-one", now_timestamp()));
+        state.contexts.push(ContextEntry::with_created_at("context-two", now_timestamp()));
+    }
     app.save().unwrap();
 
     // Manually delete one context's directory (simulating rm -r)
@@ -1087,7 +1084,7 @@ fn test_save_and_register_context_adds_to_state_contexts() {
     // First save initial state so state.json exists
     app.save().unwrap();
 
-    assert!(!app.state.contexts.iter().any(|e| e.name == "new-context"));
+    assert!(!app.state.read().unwrap().contexts.iter().any(|e| e.name == "new-context"));
 
     let ctx = Context::new("new-context");
     app.save_and_register_context(&ctx).unwrap();
@@ -1112,10 +1109,7 @@ fn test_touch_context_with_destroy_settings_on_new_context() {
 
     // Simulate what happens when switching to a new context with debug settings:
     // 1. Context entry is added to state.contexts (our fix)
-    app.state.contexts.push(ContextEntry::with_created_at(
-        "new-test-context",
-        now_timestamp(),
-    ));
+    app.state.write().unwrap().contexts.push(ContextEntry::with_created_at("new-test-context", now_timestamp()));
 
     // 2. Debug settings are applied via touch_context_with_destroy_settings
     let result = app
@@ -1127,8 +1121,8 @@ fn test_touch_context_with_destroy_settings_on_new_context() {
     );
 
     // 3. Verify the destroy settings were actually saved
-    let entry = app
-        .state
+    let state = app.state.read().unwrap();
+    let entry = state
         .contexts
         .iter()
         .find(|e| e.name == "new-test-context")
@@ -1154,7 +1148,7 @@ fn test_auto_destroy_expired_contexts_by_timestamp() {
     // Add entry to state.contexts with destroy_at in the past
     let mut entry = ContextEntry::with_created_at("to-destroy", now_timestamp());
     entry.destroy_at = 1; // Way in the past
-    app.state.contexts.push(entry);
+    app.state.write().unwrap().contexts.push(entry);
 
     // Run auto-destroy
     let destroyed = app.auto_destroy_expired_contexts().unwrap();
@@ -1174,7 +1168,7 @@ fn test_auto_destroy_expired_contexts_by_inactivity() {
     let mut entry = ContextEntry::with_created_at("to-destroy", now_timestamp());
     entry.last_activity_at = 1; // Way in the past
     entry.destroy_after_seconds_inactive = 60; // 1 minute
-    app.state.contexts.push(entry);
+    app.state.write().unwrap().contexts.push(entry);
 
     // Run auto-destroy
     let destroyed = app.auto_destroy_expired_contexts().unwrap();
@@ -1202,7 +1196,7 @@ fn test_auto_destroy_respects_disabled_settings() {
     entry.last_activity_at = 1; // Way in the past
     entry.destroy_after_seconds_inactive = 0; // Disabled
     entry.destroy_at = 0; // Disabled
-    app.state.contexts.push(entry);
+    app.state.write().unwrap().contexts.push(entry);
 
     // Run auto-destroy - should NOT destroy since both are disabled
     let destroyed = app.auto_destroy_expired_contexts().unwrap();
@@ -2244,7 +2238,7 @@ fn test_resolve_uses_context_cwd_when_set() {
     // Register a context with a specific stored cwd
     let mut entry = crate::context::ContextEntry::with_created_at("myctx", 1234567890);
     entry.cwd = Some("/stored/project/path".to_string());
-    app.state.contexts.push(entry);
+    app.state.write().unwrap().contexts.push(entry);
 
     let config = app.resolve_config("myctx", None).unwrap();
     assert!(
@@ -2263,7 +2257,7 @@ fn test_resolve_falls_back_to_current_dir_when_no_context_cwd() {
 
     let mut entry = crate::context::ContextEntry::with_created_at("myctx", 1234567890);
     entry.cwd = None; // simulate old context
-    app.state.contexts.push(entry);
+    app.state.write().unwrap().contexts.push(entry);
 
     let config = app.resolve_config("myctx", None).unwrap();
     let live_cwd = std::env::current_dir()

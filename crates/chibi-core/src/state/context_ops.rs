@@ -35,12 +35,18 @@ impl AppState {
         // Ensure the context is tracked in state.
         // Read state from disk to get the authoritative list of contexts,
         // rather than using in-memory state which may be stale.
-        if !self.state.contexts.iter().any(|e| e.name == context.name) {
+        let already_known = {
+            let state = self.state.read().unwrap();
+            state.contexts.iter().any(|e| e.name == context.name)
+        };
+        if !already_known {
             let disk_state = if self.state_path.exists() {
                 let content = fs::read_to_string(&self.state_path)?;
-                serde_json::from_str(&content).unwrap_or_else(|_| self.state.clone())
+                let state = self.state.read().unwrap();
+                serde_json::from_str(&content).unwrap_or_else(|_| state.clone())
             } else {
-                self.state.clone()
+                let state = self.state.read().unwrap();
+                state.clone()
             };
             let mut new_state = disk_state;
             if !new_state.contexts.iter().any(|e| e.name == context.name) {
@@ -118,8 +124,11 @@ impl AppState {
         self.active_state_cache.borrow_mut().remove(name);
 
         // Update state - remove from contexts list and save
-        self.state.contexts.retain(|e| e.name != name);
-        self.state.save(&self.state_path)?;
+        {
+            let mut state = self.state.write().unwrap();
+            state.contexts.retain(|e| e.name != name);
+        }
+        self.save()?;
 
         Ok(true)
     }
@@ -148,21 +157,21 @@ impl AppState {
         fs::rename(&old_dir, &new_dir)?;
 
         // Update state: preserve created_at from old entry
-        let created_at = self
-            .state
+        let mut state = self.state.write().unwrap();
+        let created_at = state
             .contexts
             .iter()
             .find(|e| e.name == old_name)
             .map(|e| e.created_at)
             .unwrap_or_else(now_timestamp);
 
-        self.state.contexts.retain(|e| e.name != old_name);
-        if !self.state.contexts.iter().any(|e| e.name == new_name) {
-            self.state
+        state.contexts.retain(|e| e.name != old_name);
+        if !state.contexts.iter().any(|e| e.name == new_name) {
+            state
                 .contexts
                 .push(ContextEntry::with_created_at(new_name, created_at));
         }
-        self.state.save(&self.state_path)?;
+        state.save(&self.state_path)?;
 
         // Note: If CLI's session.current_context was renamed, CLI must update it.
         Ok(())
@@ -170,6 +179,7 @@ impl AppState {
 
     pub fn list_contexts(&self) -> Vec<String> {
         // state.json is the single source of truth (synced with filesystem on startup)
-        self.state.contexts.iter().map(|e| e.name.clone()).collect()
+        let state = self.state.read().unwrap();
+        state.contexts.iter().map(|e| e.name.clone()).collect()
     }
 }
