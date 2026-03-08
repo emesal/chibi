@@ -122,12 +122,14 @@ impl AppState {
         // Prefer the context's stored cwd (captured at creation) over live current_dir,
         // so sessions resumed from a different directory still resolve paths correctly.
         if resolved.file_tools_allowed_paths.is_empty() {
-            let context_cwd = self
-                .state
-                .contexts
-                .iter()
-                .find(|e| e.name == context_name)
-                .and_then(|e| e.cwd.as_deref().map(std::path::PathBuf::from));
+            let context_cwd = {
+                let state = self.state.read().unwrap();
+                state
+                    .contexts
+                    .iter()
+                    .find(|e| e.name == context_name)
+                    .and_then(|e| e.cwd.as_deref().map(std::path::PathBuf::from))
+            };
             let cwd = context_cwd.or_else(|| std::env::current_dir().ok());
             if let Some(cwd) = cwd {
                 resolved.file_tools_allowed_paths = vec![cwd.to_string_lossy().to_string()];

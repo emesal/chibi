@@ -50,7 +50,7 @@
 //!
 //! See: <https://github.com/tomtomwombat/fastbloom>
 
-use crate::context::TranscriptEntry;
+use crate::context::{ENTRY_TYPE_MESSAGE, TranscriptEntry};
 use crate::jsonl::read_jsonl_file;
 use crate::safe_io::{FileLock, atomic_write_json};
 use fastbloom::BloomFilter;
@@ -237,6 +237,10 @@ pub struct PartitionMeta {
     /// Number of entries in this partition.
     pub entry_count: usize,
 
+    /// Number of user prompt entries in this partition.
+    #[serde(default)]
+    pub prompt_count: usize,
+
     /// Estimated token count in this partition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_count: Option<usize>,
@@ -292,6 +296,9 @@ pub struct ActiveState {
     /// Number of entries in active partition.
     entry_count: usize,
 
+    /// Number of user prompt entries in active partition.
+    prompt_count: usize,
+
     /// Estimated token count in active partition.
     token_count: usize,
 
@@ -309,6 +316,7 @@ impl ActiveState {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut count = 0;
+        let mut prompt_count = 0;
         let mut tokens = 0;
         let mut first_ts = None;
 
@@ -323,11 +331,15 @@ impl ActiveState {
                 }
                 count += 1;
                 tokens += estimate_tokens(&entry.content, bytes_per_token);
+                if entry.entry_type == ENTRY_TYPE_MESSAGE && entry.role.as_deref() == Some("user") {
+                    prompt_count += 1;
+                }
             }
         }
 
         Ok(Self {
             entry_count: count,
+            prompt_count,
             token_count: tokens,
             first_entry_ts: first_ts,
         })
@@ -342,11 +354,15 @@ impl ActiveState {
         if self.first_entry_ts.is_none() {
             self.first_entry_ts = Some(entry.timestamp);
         }
+        if entry.entry_type == ENTRY_TYPE_MESSAGE && entry.role.as_deref() == Some("user") {
+            self.prompt_count += 1;
+        }
     }
 
     /// Resets state after rotation.
     fn reset(&mut self) {
         self.entry_count = 0;
+        self.prompt_count = 0;
         self.token_count = 0;
         self.first_entry_ts = None;
     }
@@ -355,6 +371,11 @@ impl ActiveState {
     #[cfg(test)]
     pub fn entry_count(&self) -> usize {
         self.entry_count
+    }
+
+    /// Returns the number of user prompt entries in this state.
+    pub fn prompt_count(&self) -> usize {
+        self.prompt_count
     }
 }
 
@@ -747,11 +768,13 @@ impl PartitionManager {
             .fold(0usize, |acc, n| acc.saturating_add(n));
 
         // Record partition metadata
+        let prompt_count = self.active.prompt_count;
         self.manifest.partitions.push(PartitionMeta {
             file: partition_rel,
             start_ts,
             end_ts,
             entry_count: entries.len(),
+            prompt_count,
             token_count: Some(token_count),
             bloom_file,
         });
@@ -879,6 +902,17 @@ impl PartitionManager {
     fn total_entry_count(&self) -> usize {
         let archived: usize = self.manifest.partitions.iter().map(|p| p.entry_count).sum();
         archived + self.active.entry_count
+    }
+
+    /// Returns the total prompt count across all partitions.
+    pub fn total_prompt_count(&self) -> usize {
+        let archived: usize = self
+            .manifest
+            .partitions
+            .iter()
+            .map(|p| p.prompt_count)
+            .sum();
+        archived + self.active.prompt_count
     }
 }
 
@@ -1090,6 +1124,7 @@ mod tests {
                 start_ts: 1000,
                 end_ts: 2000,
                 entry_count: 100,
+                prompt_count: 0,
                 token_count: Some(5000),
                 bloom_file: Some("partitions/1000-2000.bloom".to_string()),
             }],
@@ -1117,6 +1152,7 @@ mod tests {
             start_ts: 1000,
             end_ts: 2000,
             entry_count: 10,
+            prompt_count: 0,
             token_count: None,
             bloom_file: None,
         };
@@ -1472,6 +1508,7 @@ mod tests {
         // Create a "stale" cache that claims entries exist
         let stale_cache = ActiveState {
             entry_count: 5,
+            prompt_count: 0,
             token_count: 100,
             first_entry_ts: Some(12345),
         };
@@ -1575,5 +1612,78 @@ mod tests {
         // Lock file should exist
         let lock_path = temp_dir.path().join(".transcript.lock");
         assert!(lock_path.exists(), "lock file should be created on rotate");
+    }
+
+    #[test]
+    fn test_prompt_count_tracking() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut pm = PartitionManager::load(temp_dir.path()).unwrap();
+
+        // Regular entry (not a user prompt — role is None)
+        let entry = make_entry("tool output");
+        pm.append_entry(&entry).unwrap();
+        assert_eq!(pm.total_prompt_count(), 0);
+
+        // User prompt entry
+        let prompt = TranscriptEntry::builder()
+            .from("user")
+            .to("default")
+            .content("hello")
+            .entry_type(ENTRY_TYPE_MESSAGE)
+            .role("user")
+            .build();
+        pm.append_entry(&prompt).unwrap();
+        assert_eq!(pm.total_prompt_count(), 1);
+
+        // Another non-prompt message (assistant)
+        let assistant = TranscriptEntry::builder()
+            .from("default")
+            .to("user")
+            .content("hi there")
+            .entry_type(ENTRY_TYPE_MESSAGE)
+            .role("assistant")
+            .build();
+        pm.append_entry(&assistant).unwrap();
+        assert_eq!(pm.total_prompt_count(), 1);
+    }
+
+    #[test]
+    fn test_prompt_count_survives_rotation() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = StorageConfig {
+            partition_max_entries: Some(2),
+            partition_max_age_seconds: Some(86400),
+            partition_max_tokens: None,
+            bytes_per_token: None,
+            enable_bloom_filters: Some(false),
+        };
+        let mut pm = PartitionManager::load_with_config(temp_dir.path(), config).unwrap();
+
+        let prompt = TranscriptEntry::builder()
+            .from("user")
+            .to("default")
+            .content("hello")
+            .entry_type(ENTRY_TYPE_MESSAGE)
+            .role("user")
+            .build();
+        pm.append_entry(&prompt).unwrap();
+        pm.append_entry(&make_entry("response")).unwrap();
+        pm.rotate_if_needed().unwrap();
+
+        // Prompt count preserved in archived partition
+        assert_eq!(pm.manifest.partitions[0].prompt_count, 1);
+        assert_eq!(pm.total_prompt_count(), 1);
+
+        // Add another prompt post-rotation
+        pm.append_entry(&prompt).unwrap();
+        assert_eq!(pm.total_prompt_count(), 2);
+    }
+
+    #[test]
+    fn test_prompt_count_serde_default() {
+        // Old manifests without prompt_count should default to 0
+        let json = r#"{"file":"test.jsonl","start_ts":1000,"end_ts":2000,"entry_count":10}"#;
+        let meta: PartitionMeta = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.prompt_count, 0);
     }
 }

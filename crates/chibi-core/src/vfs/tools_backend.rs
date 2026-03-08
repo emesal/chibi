@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 
 use serde_json::json;
 
-use super::backend::{BoxFuture, VfsBackend};
+use super::backend::{BoxFuture, ReadOnlyVfsBackend};
 use super::path::VfsPath;
 use super::types::{VfsEntry, VfsEntryKind, VfsMetadata};
 use crate::tools::ToolRegistry;
@@ -38,16 +38,13 @@ impl ToolsBackend {
     fn lock_err() -> io::Error {
         io::Error::other("ToolsBackend: registry lock poisoned")
     }
-
-    fn write_denied(path: &VfsPath) -> io::Error {
-        io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("'{}' is read-only (virtual tool registry)", path),
-        )
-    }
 }
 
-impl VfsBackend for ToolsBackend {
+impl ReadOnlyVfsBackend for ToolsBackend {
+    fn backend_name(&self) -> &str {
+        "virtual tool registry"
+    }
+
     fn read<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<Vec<u8>>> {
         Box::pin(async move {
             // strip leading '/' to get tool name
@@ -123,30 +120,6 @@ impl VfsBackend for ToolsBackend {
             }
         })
     }
-
-    fn write<'a>(&'a self, path: &'a VfsPath, _data: &'a [u8]) -> BoxFuture<'a, io::Result<()>> {
-        Box::pin(async move { Err(Self::write_denied(path)) })
-    }
-
-    fn append<'a>(&'a self, path: &'a VfsPath, _data: &'a [u8]) -> BoxFuture<'a, io::Result<()>> {
-        Box::pin(async move { Err(Self::write_denied(path)) })
-    }
-
-    fn delete<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
-        Box::pin(async move { Err(Self::write_denied(path)) })
-    }
-
-    fn mkdir<'a>(&'a self, path: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
-        Box::pin(async move { Err(Self::write_denied(path)) })
-    }
-
-    fn copy<'a>(&'a self, path: &'a VfsPath, _dst: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
-        Box::pin(async move { Err(Self::write_denied(path)) })
-    }
-
-    fn rename<'a>(&'a self, path: &'a VfsPath, _dst: &'a VfsPath) -> BoxFuture<'a, io::Result<()>> {
-        Box::pin(async move { Err(Self::write_denied(path)) })
-    }
 }
 
 #[cfg(test)]
@@ -207,8 +180,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_backend_write_rejected() {
+        #[allow(unused_imports)]
+        use crate::vfs::VfsBackend;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
-        let backend = ToolsBackend::new(registry);
+        let backend: Box<dyn VfsBackend> = Box::new(ToolsBackend::new(registry));
         let path = VfsPath::new("/anything").unwrap();
         let err = backend.write(&path, b"nope").await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);

@@ -21,7 +21,7 @@ chibi-mcp-bridge (binary, async daemon)
 - `gateway.rs` — Type conversions between chibi and ratatoskr; context window auto-resolution
 - `model_info.rs` — Model metadata retrieval and formatting
 - `tools/` — Tool registry (`registry.rs` — `ToolRegistry`, `ToolImpl`, `ToolCategory`), plugins (`plugins.rs`), hooks (`hooks.rs`), built-in tools organised by permission group (`memory.rs`, `fs_read.rs`, `fs_write.rs`, `shell.rs`, `network.rs`, `index.rs`, `flow.rs`, `vfs_tools.rs`), synthesised scheme tools (`synthesised.rs`), canonical path resolver (`paths.rs`), URL and file path security policy (`security.rs`), MCP bridge client (`mcp.rs`)
-- `vfs/` — Virtual file system: path validation (`path.rs`), backend trait (`backend.rs`), permission model (`permissions.rs`), local backend (`local.rs`), virtual tools backend (`tools_backend.rs` — read-only, schema-on-demand), types (`types.rs`), `Vfs` orchestrator with multi-backend mounting (`vfs.rs`), flock operations and registry (`flock.rs`), typed caller enum (`caller.rs`)
+- `vfs/` — Virtual file system: path validation (`path.rs`), backend trait (`backend.rs`), permission model (`permissions.rs`), local backend (`local.rs`), virtual tools backend (`tools_backend.rs` — read-only, schema-on-demand), virtual context metadata backend (`contexts_backend.rs` — read-only, `/sys/contexts/`), types (`types.rs`), `Vfs` orchestrator with multi-backend mounting (`vfs.rs`), flock operations and registry (`flock.rs`), typed caller enum (`caller.rs`)
 - `vfs_cache.rs` — Tool output caching helpers (cache ID generation, VFS path mapping, cache eligibility)
 - `partition.rs` — Partitioned transcript storage with bloom filters
 - `config.rs` — Core configuration types (`Config`, `LocalConfig`, `ResolvedConfig`)
