@@ -11,6 +11,7 @@ mod entries;
 pub mod flocks;
 mod paths;
 mod prompts;
+pub mod tasks;
 
 pub use entries::{
     create_archival_anchor, create_assistant_message_entry, create_compaction_anchor,
