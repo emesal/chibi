@@ -172,8 +172,7 @@ unsafe impl Send for ActiveCallContext {}
 /// thread) can read it. `CallContextGuard` RAII guarantees pointer validity
 /// while set and clears it on drop.
 #[cfg(feature = "synthesised-tools")]
-static BRIDGE_CALL_CTX: std::sync::Mutex<Option<ActiveCallContext>> =
-    std::sync::Mutex::new(None);
+static BRIDGE_CALL_CTX: std::sync::Mutex<Option<ActiveCallContext>> = std::sync::Mutex::new(None);
 
 /// RAII guard that stashes a `ToolCallContext` in `BRIDGE_CALL_CTX` and clears
 /// it on drop. Used in `execute_synthesised` to make the context available to
@@ -183,7 +182,10 @@ struct CallContextGuard;
 
 #[cfg(feature = "synthesised-tools")]
 impl CallContextGuard {
-    fn set(ctx: &crate::tools::registry::ToolCallContext<'_>, registry: Arc<RwLock<ToolRegistry>>) -> Self {
+    fn set(
+        ctx: &crate::tools::registry::ToolCallContext<'_>,
+        registry: Arc<RwLock<ToolRegistry>>,
+    ) -> Self {
         *BRIDGE_CALL_CTX.lock().unwrap() = Some(ActiveCallContext {
             app: ctx.app as *const _,
             context_name: ctx.context_name.to_string(),
@@ -228,7 +230,16 @@ fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
 
     // Extract all needed data from the global context while holding the lock,
     // then drop the lock before dispatching (which may block_on async code).
-    let (app_ptr, context_name, config_ptr, project_root, vfs_ptr, vfs_caller_str, runtime_handle, registry) = {
+    let (
+        app_ptr,
+        context_name,
+        config_ptr,
+        project_root,
+        vfs_ptr,
+        vfs_caller_str,
+        runtime_handle,
+        registry,
+    ) = {
         let guard = BRIDGE_CALL_CTX.lock().unwrap();
         let active = guard.as_ref().ok_or_else(|| {
             "call-tool: no active call context (called outside tool execute?)".to_string()
@@ -311,13 +322,6 @@ fn current_timestamp_fn() -> String {
 
 // --- loader ------------------------------------------------------------------
 
-/// Build a tein `ThreadLocalContext` for a synthesised tool, registering
-/// `call-tool`, the harness preamble, and `(harness tools)` module.
-///
-/// Sandbox behaviour depends on `tier`:
-/// - `Sandboxed`: safe modules only, 10M step limit
-/// - `Unsandboxed`: full R7RS, no step limit (trusted tools only)
-#[cfg(feature = "synthesised-tools")]
 /// Decompose Unix epoch seconds into (year, month, day, hour, minute) UTC.
 ///
 /// Used by the `current-timestamp` harness helper to avoid a chrono dependency
@@ -344,6 +348,12 @@ fn secs_to_ymdhmz(mut s: u64) -> (u32, u32, u32, u32, u32) {
     (y, mo, d, h, mi)
 }
 
+/// Build a tein `ThreadLocalContext` for a synthesised tool, registering
+/// `call-tool`, the harness preamble, and `(harness tools)` module.
+///
+/// Sandbox behaviour depends on `tier`:
+/// - `Sandboxed`: safe modules only, 10M step limit
+/// - `Unsandboxed`: full R7RS, no step limit (trusted tools only)
 #[cfg(feature = "synthesised-tools")]
 fn build_tein_context(
     source: String,
@@ -446,7 +456,11 @@ pub fn load_tool_from_source(
 
 /// Extract a single tool from a context using the convention-based format.
 #[cfg(feature = "synthesised-tools")]
-fn extract_single_tool(ctx: ThreadLocalContext, vfs_path: &VfsPath, registry: &Arc<RwLock<ToolRegistry>>) -> io::Result<Tool> {
+fn extract_single_tool(
+    ctx: ThreadLocalContext,
+    vfs_path: &VfsPath,
+    registry: &Arc<RwLock<ToolRegistry>>,
+) -> io::Result<Tool> {
     let name = extract_string(&ctx, "tool-name")?;
     let description = extract_string(&ctx, "tool-description")?;
     let params_val = ctx.evaluate("tool-parameters").map_err(|e| {
@@ -500,7 +514,11 @@ fn scheme_escape_string(s: &str) -> String {
 /// Reads `%tool-registry%` (a LIFO list built via `cons`) and produces one
 /// `Tool` per entry. All tools share the same tein context via `Arc`.
 #[cfg(feature = "synthesised-tools")]
-fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath, registry: &Arc<RwLock<ToolRegistry>>) -> io::Result<Vec<Tool>> {
+fn extract_multi_tools(
+    ctx: ThreadLocalContext,
+    vfs_path: &VfsPath,
+    registry: &Arc<RwLock<ToolRegistry>>,
+) -> io::Result<Vec<Tool>> {
     let registry_val = ctx
         .evaluate("%tool-registry%")
         .map_err(|e| io::Error::other(format!("reading %tool-registry%: {e}")))?;
@@ -1686,10 +1704,18 @@ mod tests {
         let path = VfsPath::new("/tools/shared/tasks.scm").unwrap();
         let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry).unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        for expected in &["task_create", "task_update", "task_view", "task_list", "task_delete"] {
+        for expected in &[
+            "task_create",
+            "task_update",
+            "task_view",
+            "task_list",
+            "task_delete",
+        ] {
             assert!(
                 names.contains(expected),
-                "expected tool '{}' to be registered, got: {:?}", expected, names
+                "expected tool '{}' to be registered, got: {:?}",
+                expected,
+                names
             );
         }
         assert_eq!(tools.len(), 5, "expected exactly 5 task tools");
@@ -1710,7 +1736,12 @@ mod tests {
 "#;
         let path = VfsPath::new("/tools/shared/helper_test.scm").unwrap();
         let tool = load_tool_from_source(source, &path, &registry).unwrap();
-        if let ToolImpl::Synthesised { ref context, ref exec_binding, .. } = tool.r#impl {
+        if let ToolImpl::Synthesised {
+            ref context,
+            ref exec_binding,
+            ..
+        } = tool.r#impl
+        {
             let exec_fn = context.evaluate(exec_binding).unwrap();
             let alist = json_args_to_scheme_alist(&serde_json::json!({})).unwrap();
             let result = context.call(&exec_fn, &[alist]).unwrap();
@@ -1719,7 +1750,11 @@ mod tests {
             assert!(s.contains(':'), "expected id:timestamp, got: {}", s);
             let parts: Vec<&str> = s.splitn(2, ':').collect();
             assert_eq!(parts[0].len(), 4, "id should be 4 hex chars: {}", parts[0]);
-            assert!(parts[1].ends_with('z'), "timestamp should end with 'z': {}", parts[1]);
+            assert!(
+                parts[1].ends_with('z'),
+                "timestamp should end with 'z': {}",
+                parts[1]
+            );
         } else {
             panic!("expected Synthesised impl");
         }
@@ -1748,8 +1783,14 @@ mod tests {
                 reg.register(t);
             }
         }
-        let result = chibi.execute_tool("default", "ctx_test", serde_json::json!({})).await.unwrap();
-        assert_eq!(result, "default", "context name should be injected as %context-name%");
+        let result = chibi
+            .execute_tool("default", "ctx_test", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            result, "default",
+            "context name should be injected as %context-name%"
+        );
     }
 
     /// Full CRUD integration: create → list → view → update → delete.
@@ -1770,14 +1811,22 @@ mod tests {
 
         // Create a task
         let create_result = chibi
-            .execute_tool("default", "task_create", serde_json::json!({
-                "path": "test/my-task",
-                "body": "do the thing",
-                "priority": "high"
-            }))
+            .execute_tool(
+                "default",
+                "task_create",
+                serde_json::json!({
+                    "path": "test/my-task",
+                    "body": "do the thing",
+                    "priority": "high"
+                }),
+            )
             .await
             .unwrap();
-        assert!(create_result.contains("created task"), "unexpected: {}", create_result);
+        assert!(
+            create_result.contains("created task"),
+            "unexpected: {}",
+            create_result
+        );
         // Extract ID from "created task XXXX at ..."
         let id = create_result
             .split_whitespace()
@@ -1790,45 +1839,77 @@ mod tests {
             .execute_tool("default", "task_list", serde_json::json!({}))
             .await
             .unwrap();
-        assert!(list_result.contains(&id), "id should appear in list: {}", list_result);
+        assert!(
+            list_result.contains(&id),
+            "id should appear in list: {}",
+            list_result
+        );
 
         // View the task
         let view_result = chibi
             .execute_tool("default", "task_view", serde_json::json!({"id": id}))
             .await
             .unwrap();
-        assert!(view_result.contains(&id), "id should appear in view: {}", view_result);
-        assert!(view_result.contains("do the thing"), "body should appear in view: {}", view_result);
+        assert!(
+            view_result.contains(&id),
+            "id should appear in view: {}",
+            view_result
+        );
+        assert!(
+            view_result.contains("do the thing"),
+            "body should appear in view: {}",
+            view_result
+        );
 
         // Update status to in-progress
         let update_result = chibi
-            .execute_tool("default", "task_update", serde_json::json!({
-                "id": id,
-                "status": "in-progress"
-            }))
+            .execute_tool(
+                "default",
+                "task_update",
+                serde_json::json!({
+                    "id": id,
+                    "status": "in-progress"
+                }),
+            )
             .await
             .unwrap();
-        assert!(update_result.contains("updated task"), "unexpected: {}", update_result);
+        assert!(
+            update_result.contains("updated task"),
+            "unexpected: {}",
+            update_result
+        );
 
         // View again — status should be in-progress
         let view2 = chibi
             .execute_tool("default", "task_view", serde_json::json!({"id": id}))
             .await
             .unwrap();
-        assert!(view2.contains("in-progress"), "status should be in-progress: {}", view2);
+        assert!(
+            view2.contains("in-progress"),
+            "status should be in-progress: {}",
+            view2
+        );
 
         // Delete the task
         let delete_result = chibi
             .execute_tool("default", "task_delete", serde_json::json!({"id": id}))
             .await
             .unwrap();
-        assert!(delete_result.contains("deleted task"), "unexpected: {}", delete_result);
+        assert!(
+            delete_result.contains("deleted task"),
+            "unexpected: {}",
+            delete_result
+        );
 
         // List again — should be gone
         let list2 = chibi
             .execute_tool("default", "task_list", serde_json::json!({}))
             .await
             .unwrap();
-        assert!(!list2.contains(&id), "id should be gone after delete: {}", list2);
+        assert!(
+            !list2.contains(&id),
+            "id should be gone after delete: {}",
+            list2
+        );
     }
 }
