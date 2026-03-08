@@ -1957,6 +1957,28 @@ pub async fn send_prompt<S: ResponseSink>(
             messages.push(msg);
         }
 
+        // === Ephemeral Task Injection ===
+        // Collect task metadata from VFS at request time and inject a summary
+        // table as a system message before the current user turn. Never persisted
+        // to transcript — cache-friendly.
+        {
+            let tasks = crate::state::tasks::collect_tasks(&app.vfs, context_name).await;
+            let summary = crate::state::tasks::build_summary_table(&tasks);
+            if !summary.is_empty() {
+                let inject = serde_json::json!({
+                    "role": "system",
+                    "content": summary,
+                });
+                // Insert before the last user message so it contextualises the
+                // current turn without disrupting the conversation history.
+                if let Some(pos) = messages.iter().rposition(|m| m["role"] == "user") {
+                    messages.insert(pos, inject);
+                } else {
+                    messages.push(inject);
+                }
+            }
+        }
+
         // === Prepare Tools ===
         // Resolve available preset capability names for the current cost tier so the
         // LLM sees valid values in the spawn_agent tool description.

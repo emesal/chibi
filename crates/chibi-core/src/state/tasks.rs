@@ -432,4 +432,51 @@ acceptance criteria:
         let table = build_summary_table(&[]);
         assert!(table.is_empty(), "no tasks = no injection");
     }
+
+    /// Verify that the injection logic (rposition + insert) places the task
+    /// summary system message directly before the last user message.
+    /// This mirrors the logic in send.rs without requiring AppState.
+    #[test]
+    fn test_injection_position() {
+        use serde_json::json;
+
+        let tasks = vec![TaskMeta {
+            id: "a3f2".into(),
+            status: "in-progress".into(),
+            priority: "high".into(),
+            depends_on: vec![],
+            assigned_to: None,
+            path: "epic/login.task".into(),
+            summary_line: "implement the auth flow".into(),
+        }];
+
+        let summary = build_summary_table(&tasks);
+        assert!(!summary.is_empty());
+
+        let mut messages = vec![
+            json!({"role": "user", "content": "first turn"}),
+            json!({"role": "assistant", "content": "first reply"}),
+            json!({"role": "user", "content": "current turn"}),
+        ];
+
+        // Replicate the injection logic from send.rs
+        let inject = json!({"role": "system", "content": summary});
+        if let Some(pos) = messages.iter().rposition(|m| m["role"] == "user") {
+            messages.insert(pos, inject);
+        }
+
+        // System message should be at index 2 (before the last user message)
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[2]["role"], "system");
+        assert!(messages[2]["content"].as_str().unwrap().contains("a3f2"));
+        assert_eq!(messages[3]["role"], "user");
+        assert_eq!(messages[3]["content"], "current turn");
+    }
+
+    /// When no tasks exist, build_summary_table returns empty — no injection.
+    #[test]
+    fn test_no_injection_when_no_tasks() {
+        let summary = build_summary_table(&[]);
+        assert!(summary.is_empty(), "empty summary → no injection happens");
+    }
 }
