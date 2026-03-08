@@ -245,9 +245,8 @@ impl Chibi {
 
         #[cfg(feature = "synthesised-tools")]
         {
-            let mut reg = registry.write().unwrap();
             crate::tools::vfs_block_on(crate::tools::synthesised::scan_and_register(
-                &app.vfs, &mut reg,
+                &app.vfs, &registry,
             ))?;
         }
 

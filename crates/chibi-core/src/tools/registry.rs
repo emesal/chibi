@@ -64,11 +64,17 @@ pub enum ToolImpl {
     Plugin(PathBuf),
     /// MCP bridge tool (JSON-over-TCP to mcp-bridge daemon).
     Mcp { server: String, tool_name: String },
-    /// Scheme tool loaded from VFS source via tein. Context is per-tool (one
-    /// sandboxed tein context per synthesised tool, shared via Arc).
+    /// Scheme tool loaded from VFS source via tein. Context is shared across
+    /// all tools in the same `.scm` file (Arc). `exec_binding` names the
+    /// scheme binding to call: `"tool-execute"` for single-tool convention
+    /// format, `"%tool-execute-{name}%"` for `define-tool` multi-tool files.
+    ///
+    /// Mutation site: if exec_binding format changes, update `extract_single_tool`
+    /// and `extract_multi_tools` in synthesised.rs.
     #[cfg(feature = "synthesised-tools")]
     Synthesised {
         vfs_path: crate::vfs::VfsPath,
+        exec_binding: String,
         context: std::sync::Arc<tein::ThreadLocalContext>,
     },
 }
@@ -83,8 +89,13 @@ impl Clone for ToolImpl {
                 tool_name: tool_name.clone(),
             },
             #[cfg(feature = "synthesised-tools")]
-            ToolImpl::Synthesised { vfs_path, context } => ToolImpl::Synthesised {
+            ToolImpl::Synthesised {
+                vfs_path,
+                exec_binding,
+                context,
+            } => ToolImpl::Synthesised {
                 vfs_path: vfs_path.clone(),
+                exec_binding: exec_binding.clone(),
                 context: context.clone(),
             },
         }
@@ -158,15 +169,19 @@ impl ToolRegistry {
         self.tools.shift_remove(name)
     }
 
-    /// Find the first synthesised tool whose VFS path matches `path`.
+    /// Find all synthesised tool names whose VFS path matches `path`.
     ///
-    /// Used by the hot-reload callback to resolve a path to a tool name before
-    /// re-registering or unregistering.
+    /// Returns a `Vec<String>` of tool names so the caller can unregister or
+    /// replace them. Handles multi-tool files (multiple tools per `.scm` file).
     #[cfg(feature = "synthesised-tools")]
-    pub fn find_by_vfs_path(&self, path: &crate::vfs::VfsPath) -> Option<&Tool> {
-        self.tools.values().find(
-            |t| matches!(&t.r#impl, ToolImpl::Synthesised { vfs_path, .. } if vfs_path == path),
-        )
+    pub fn find_all_by_vfs_path(&self, path: &crate::vfs::VfsPath) -> Vec<String> {
+        self.tools
+            .values()
+            .filter_map(|t| {
+                matches!(&t.r#impl, ToolImpl::Synthesised { vfs_path, .. } if vfs_path == path)
+                    .then(|| t.name.clone())
+            })
+            .collect()
     }
 
     /// Look up by name. O(1).
@@ -208,8 +223,12 @@ impl ToolRegistry {
                 super::mcp::execute_mcp_call(&server, &tool_name, args, &home)
             }
             #[cfg(feature = "synthesised-tools")]
-            ToolImpl::Synthesised { context, .. } => {
-                super::synthesised::execute_synthesised(&context, &call).await
+            ToolImpl::Synthesised {
+                context,
+                exec_binding,
+                ..
+            } => {
+                super::synthesised::execute_synthesised(&context, &exec_binding, &call).await
             }
         }
     }
