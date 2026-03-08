@@ -32,7 +32,7 @@ pub mod types;
 #[allow(clippy::module_inception)]
 mod vfs;
 
-pub use backend::VfsBackend;
+pub use backend::{ReadOnlyVfsBackend, VfsBackend};
 pub use caller::VfsCaller;
 pub use local::LocalBackend;
 pub use path::VfsPath;
