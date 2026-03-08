@@ -653,7 +653,14 @@ mod tests {
         .unwrap();
 
         assert!(
-            chibi.app.state.read().unwrap().contexts.iter().any(|e| e.name == "myctx"),
+            chibi
+                .app
+                .state
+                .read()
+                .unwrap()
+                .contexts
+                .iter()
+                .any(|e| e.name == "myctx"),
             "context 'myctx' should be registered in state"
         );
     }
@@ -693,7 +700,14 @@ mod tests {
         .unwrap();
 
         assert!(
-            !chibi.app.state.read().unwrap().contexts.iter().any(|e| e.name == "old-ctx"),
+            !chibi
+                .app
+                .state
+                .read()
+                .unwrap()
+                .contexts
+                .iter()
+                .any(|e| e.name == "old-ctx"),
             "expired context should be auto-destroyed"
         );
         let events = sink.events.borrow();
@@ -738,8 +752,12 @@ mod tests {
         chibi.app.ensure_context_dir("beta").unwrap();
         {
             let mut state = chibi.app.state.write().unwrap();
-            state.contexts.push(ContextEntry::with_created_at("alpha", now_timestamp()));
-            state.contexts.push(ContextEntry::with_created_at("beta", now_timestamp()));
+            state
+                .contexts
+                .push(ContextEntry::with_created_at("alpha", now_timestamp()));
+            state
+                .contexts
+                .push(ContextEntry::with_created_at("beta", now_timestamp()));
         }
 
         let config = chibi.resolve_config("alpha", None).unwrap();
@@ -776,7 +794,13 @@ mod tests {
     async fn dispatch_rename_context_returns_renamed_effect() {
         let (mut chibi, _dir) = create_test_chibi();
         chibi.app.ensure_context_dir("old").unwrap();
-        chibi.app.state.write().unwrap().contexts.push(ContextEntry::with_created_at("old", now_timestamp()));
+        chibi
+            .app
+            .state
+            .write()
+            .unwrap()
+            .contexts
+            .push(ContextEntry::with_created_at("old", now_timestamp()));
         chibi.save().unwrap();
 
         let config = chibi.resolve_config("ctx", None).unwrap();
@@ -812,7 +836,13 @@ mod tests {
     async fn dispatch_destroy_context_confirmed_returns_destroyed_effect() {
         let (mut chibi, _dir) = create_test_chibi();
         chibi.app.ensure_context_dir("doomed").unwrap();
-        chibi.app.state.write().unwrap().contexts.push(ContextEntry::with_created_at("doomed", now_timestamp()));
+        chibi
+            .app
+            .state
+            .write()
+            .unwrap()
+            .contexts
+            .push(ContextEntry::with_created_at("doomed", now_timestamp()));
         chibi.save().unwrap();
 
         let config = chibi.resolve_config("ctx", None).unwrap();
@@ -844,7 +874,13 @@ mod tests {
     async fn dispatch_destroy_context_aborted_returns_none_effect() {
         let (mut chibi, _dir) = create_test_chibi();
         chibi.app.ensure_context_dir("safe").unwrap();
-        chibi.app.state.write().unwrap().contexts.push(ContextEntry::with_created_at("safe", now_timestamp()));
+        chibi
+            .app
+            .state
+            .write()
+            .unwrap()
+            .contexts
+            .push(ContextEntry::with_created_at("safe", now_timestamp()));
         chibi.save().unwrap();
 
         let config = chibi.resolve_config("ctx", None).unwrap();

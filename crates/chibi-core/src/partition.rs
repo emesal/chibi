@@ -50,7 +50,7 @@
 //!
 //! See: <https://github.com/tomtomwombat/fastbloom>
 
-use crate::context::{TranscriptEntry, ENTRY_TYPE_MESSAGE};
+use crate::context::{ENTRY_TYPE_MESSAGE, TranscriptEntry};
 use crate::jsonl::read_jsonl_file;
 use crate::safe_io::{FileLock, atomic_write_json};
 use fastbloom::BloomFilter;
@@ -331,9 +331,7 @@ impl ActiveState {
                 }
                 count += 1;
                 tokens += estimate_tokens(&entry.content, bytes_per_token);
-                if entry.entry_type == ENTRY_TYPE_MESSAGE
-                    && entry.role.as_deref() == Some("user")
-                {
+                if entry.entry_type == ENTRY_TYPE_MESSAGE && entry.role.as_deref() == Some("user") {
                     prompt_count += 1;
                 }
             }
@@ -908,7 +906,12 @@ impl PartitionManager {
 
     /// Returns the total prompt count across all partitions.
     pub fn total_prompt_count(&self) -> usize {
-        let archived: usize = self.manifest.partitions.iter().map(|p| p.prompt_count).sum();
+        let archived: usize = self
+            .manifest
+            .partitions
+            .iter()
+            .map(|p| p.prompt_count)
+            .sum();
         archived + self.active.prompt_count
     }
 }

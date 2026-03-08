@@ -38,7 +38,6 @@ impl ToolsBackend {
     fn lock_err() -> io::Error {
         io::Error::other("ToolsBackend: registry lock poisoned")
     }
-
 }
 
 impl ReadOnlyVfsBackend for ToolsBackend {
@@ -121,7 +120,6 @@ impl ReadOnlyVfsBackend for ToolsBackend {
             }
         })
     }
-
 }
 
 #[cfg(test)]

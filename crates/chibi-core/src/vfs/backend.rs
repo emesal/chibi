@@ -183,8 +183,8 @@ impl<T: ReadOnlyVfsBackend> VfsBackend for T {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::types::{VfsEntry, VfsEntryKind, VfsMetadata};
     use crate::vfs::path::VfsPath;
+    use crate::vfs::types::{VfsEntry, VfsEntryKind, VfsMetadata};
 
     /// Minimal read-only backend for testing the blanket impl.
     struct StubBackend;
@@ -241,10 +241,25 @@ mod tests {
         let p = VfsPath::new("/x").unwrap();
         let p2 = VfsPath::new("/y").unwrap();
 
-        assert_eq!(backend.append(&p, b"d").await.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-        assert_eq!(backend.delete(&p).await.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-        assert_eq!(backend.mkdir(&p).await.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-        assert_eq!(backend.copy(&p, &p2).await.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-        assert_eq!(backend.rename(&p, &p2).await.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            backend.append(&p, b"d").await.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            backend.delete(&p).await.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            backend.mkdir(&p).await.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            backend.copy(&p, &p2).await.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            backend.rename(&p, &p2).await.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 }

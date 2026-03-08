@@ -64,27 +64,26 @@ struct ContextPaths {
 }
 
 impl ContextsBackend {
-    pub fn new(
-        state: Arc<RwLock<ContextState>>,
-        data_dir: PathBuf,
-        site_id: String,
-    ) -> Self {
-        Self { state, data_dir, site_id }
+    pub fn new(state: Arc<RwLock<ContextState>>, data_dir: PathBuf, site_id: String) -> Self {
+        Self {
+            state,
+            data_dir,
+            site_id,
+        }
     }
 
     /// Look up a context entry by name. Returns `NotFound` if missing.
     fn find_context(&self, name: &str) -> io::Result<ContextEntry> {
-        let state = self.state.read().map_err(|_| {
-            io::Error::other("ContextsBackend: state lock poisoned")
-        })?;
+        let state = self
+            .state
+            .read()
+            .map_err(|_| io::Error::other("ContextsBackend: state lock poisoned"))?;
         state
             .contexts
             .iter()
             .find(|c| c.name == name)
             .cloned()
-            .ok_or_else(|| {
-                io::Error::new(ErrorKind::NotFound, format!("no context: {name}"))
-            })
+            .ok_or_else(|| io::Error::new(ErrorKind::NotFound, format!("no context: {name}")))
     }
 
     /// Context directory on disk (e.g. `~/.chibi/contexts/<name>`).
@@ -157,7 +156,11 @@ impl ContextsBackend {
             created_at: entry.created_at,
             last_activity_at: entry.last_activity_at,
             prompt_count,
-            auto_destroy_at: if entry.destroy_at == 0 { None } else { Some(entry.destroy_at) },
+            auto_destroy_at: if entry.destroy_at == 0 {
+                None
+            } else {
+                Some(entry.destroy_at)
+            },
             auto_destroy_after_inactive_secs: if entry.destroy_after_seconds_inactive == 0 {
                 None
             } else {
@@ -179,9 +182,8 @@ impl ContextsBackend {
         let manifest_path = dir.join("manifest.json");
         if manifest_path.exists() {
             let data = std::fs::read_to_string(&manifest_path)?;
-            serde_json::from_str(&data).map_err(|e| {
-                io::Error::new(ErrorKind::InvalidData, format!("bad manifest: {e}"))
-            })
+            serde_json::from_str(&data)
+                .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("bad manifest: {e}")))
         } else {
             Ok(Manifest::default())
         }
@@ -259,13 +261,17 @@ impl ReadOnlyVfsBackend for ContextsBackend {
 
             if p.is_empty() {
                 // Root: list all contexts as directories.
-                let state = self.state.read().map_err(|_| {
-                    io::Error::other("ContextsBackend: state lock poisoned")
-                })?;
+                let state = self
+                    .state
+                    .read()
+                    .map_err(|_| io::Error::other("ContextsBackend: state lock poisoned"))?;
                 return Ok(state
                     .contexts
                     .iter()
-                    .map(|c| VfsEntry { name: c.name.clone(), kind: VfsEntryKind::Directory })
+                    .map(|c| VfsEntry {
+                        name: c.name.clone(),
+                        kind: VfsEntryKind::Directory,
+                    })
                     .collect());
             }
 
@@ -278,13 +284,28 @@ impl ReadOnlyVfsBackend for ContextsBackend {
 
             match rest {
                 "" => Ok(vec![
-                    VfsEntry { name: "state.json".into(), kind: VfsEntryKind::File },
-                    VfsEntry { name: "transcript".into(), kind: VfsEntryKind::Directory },
+                    VfsEntry {
+                        name: "state.json".into(),
+                        kind: VfsEntryKind::File,
+                    },
+                    VfsEntry {
+                        name: "transcript".into(),
+                        kind: VfsEntryKind::Directory,
+                    },
                 ]),
                 "transcript" => Ok(vec![
-                    VfsEntry { name: "manifest.json".into(), kind: VfsEntryKind::File },
-                    VfsEntry { name: "active.jsonl".into(), kind: VfsEntryKind::File },
-                    VfsEntry { name: "partitions".into(), kind: VfsEntryKind::Directory },
+                    VfsEntry {
+                        name: "manifest.json".into(),
+                        kind: VfsEntryKind::File,
+                    },
+                    VfsEntry {
+                        name: "active.jsonl".into(),
+                        kind: VfsEntryKind::File,
+                    },
+                    VfsEntry {
+                        name: "partitions".into(),
+                        kind: VfsEntryKind::Directory,
+                    },
                 ]),
                 "transcript/partitions" => {
                     let manifest = self.load_manifest(name)?;
@@ -330,11 +351,18 @@ impl ReadOnlyVfsBackend for ContextsBackend {
                 }
                 "transcript/active.jsonl" => {
                     let manifest = self.load_manifest(name).unwrap_or_default();
-                    Ok(self.transcript_dir(name).join(&manifest.active_partition).exists())
+                    Ok(self
+                        .transcript_dir(name)
+                        .join(&manifest.active_partition)
+                        .exists())
                 }
                 rest if rest.starts_with("transcript/partitions/") => {
                     let file = rest.strip_prefix("transcript/partitions/").unwrap();
-                    Ok(self.transcript_dir(name).join("partitions").join(file).exists())
+                    Ok(self
+                        .transcript_dir(name)
+                        .join("partitions")
+                        .join(file)
+                        .exists())
                 }
                 _ => Ok(false),
             }
@@ -353,7 +381,11 @@ impl ReadOnlyVfsBackend for ContextsBackend {
                 size: 0,
                 created: None,
                 modified: None,
-                kind: if is_dir { VfsEntryKind::Directory } else { VfsEntryKind::File },
+                kind: if is_dir {
+                    VfsEntryKind::Directory
+                } else {
+                    VfsEntryKind::File
+                },
             })
         })
     }
@@ -380,7 +412,10 @@ mod tests {
         Arc::new(RwLock::new(ContextState { contexts }))
     }
 
-    fn make_backend(state: Arc<RwLock<ContextState>>, data_dir: &std::path::Path) -> ContextsBackend {
+    fn make_backend(
+        state: Arc<RwLock<ContextState>>,
+        data_dir: &std::path::Path,
+    ) -> ContextsBackend {
         std::fs::create_dir_all(data_dir.join("contexts")).unwrap();
         std::fs::create_dir_all(data_dir.join("vfs").join("flocks")).unwrap();
         ContextsBackend::new(state, data_dir.to_path_buf(), "test-site".into())
@@ -406,7 +441,10 @@ mod tests {
         let backend: &dyn VfsBackend = &make_backend(state, tmp.path());
         std::fs::create_dir_all(tmp.path().join("contexts/alice")).unwrap();
 
-        let entries = backend.list(&VfsPath::new("/alice").unwrap()).await.unwrap();
+        let entries = backend
+            .list(&VfsPath::new("/alice").unwrap())
+            .await
+            .unwrap();
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"state.json"));
         assert!(names.contains(&"transcript"));
@@ -419,7 +457,10 @@ mod tests {
         let backend: &dyn VfsBackend = &make_backend(state, tmp.path());
         std::fs::create_dir_all(tmp.path().join("contexts/alice")).unwrap();
 
-        let data = backend.read(&VfsPath::new("/alice/state.json").unwrap()).await.unwrap();
+        let data = backend
+            .read(&VfsPath::new("/alice/state.json").unwrap())
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&data).unwrap();
         assert_eq!(json["created_at"], 1000);
         assert_eq!(json["last_activity_at"], 2000);
@@ -435,7 +476,10 @@ mod tests {
         let state = mock_state(&[]);
         let backend: &dyn VfsBackend = &make_backend(state, tmp.path());
 
-        let err = backend.read(&VfsPath::new("/ghost/state.json").unwrap()).await.unwrap_err();
+        let err = backend
+            .read(&VfsPath::new("/ghost/state.json").unwrap())
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::NotFound);
     }
 
@@ -447,10 +491,30 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("contexts/alice")).unwrap();
 
         assert!(backend.exists(&VfsPath::new("/").unwrap()).await.unwrap());
-        assert!(backend.exists(&VfsPath::new("/alice").unwrap()).await.unwrap());
-        assert!(backend.exists(&VfsPath::new("/alice/state.json").unwrap()).await.unwrap());
-        assert!(!backend.exists(&VfsPath::new("/ghost").unwrap()).await.unwrap());
-        assert!(!backend.exists(&VfsPath::new("/alice/nope.txt").unwrap()).await.unwrap());
+        assert!(
+            backend
+                .exists(&VfsPath::new("/alice").unwrap())
+                .await
+                .unwrap()
+        );
+        assert!(
+            backend
+                .exists(&VfsPath::new("/alice/state.json").unwrap())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !backend
+                .exists(&VfsPath::new("/ghost").unwrap())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !backend
+                .exists(&VfsPath::new("/alice/nope.txt").unwrap())
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -492,7 +556,8 @@ mod tests {
         std::fs::write(
             transcript_dir.join("manifest.json"),
             serde_json::to_string_pretty(&manifest).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let data = backend
             .read(&VfsPath::new("/alice/transcript/manifest.json").unwrap())
@@ -524,7 +589,8 @@ mod tests {
         std::fs::write(
             transcript_dir.join("manifest.json"),
             serde_json::to_string_pretty(&manifest).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let entries = backend
             .list(&VfsPath::new("/alice/transcript/partitions").unwrap())
