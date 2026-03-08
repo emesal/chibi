@@ -285,7 +285,17 @@ impl Vfs {
         let flock_ctx = registry.as_ref().map(|r| (r, self.site_id.as_str()));
         permissions::check_write(caller, path, flock_ctx)?;
         let (backend, stripped) = self.resolve_backend(path);
-        backend.append(&stripped, data).await
+        backend.append(&stripped, data).await?;
+        // Appending mutates a .scm tool file — re-read the full content so
+        // the hot-reload callback can update the registry to match what's on
+        // disk (same contract as `write`, which passes the new content inline).
+        if Self::is_scm_tool_path(path)
+            && let Some(cb) = &self.on_scm_change
+        {
+            let full = backend.read(&stripped).await.unwrap_or_default();
+            cb(path, ScmChangeKind::Write, Some(&full));
+        }
+        Ok(())
     }
 
     pub async fn delete(&self, caller: VfsCaller<'_>, path: &VfsPath) -> io::Result<()> {

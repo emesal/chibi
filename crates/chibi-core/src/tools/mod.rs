@@ -136,8 +136,8 @@ pub use memory::{
 pub use flow::{
     CALL_AGENT_TOOL_NAME, CALL_USER_TOOL_NAME, FLOW_TOOL_DEFS, Handoff, HandoffTarget,
     MODEL_INFO_TOOL_NAME, SEND_MESSAGE_TOOL_NAME, SPAWN_AGENT_TOOL_NAME,
-    SUMMARIZE_CONTENT_TOOL_NAME, SpawnOptions, all_flow_tools_to_api_format, execute_flow_tool,
-    flow_tool_metadata, is_url, register_flow_tools, spawn_agent,
+    SUMMARIZE_CONTENT_TOOL_NAME, SpawnOptions, execute_flow_tool, flow_tool_metadata, is_url,
+    register_flow_tools, spawn_agent, spawn_agent_preset_description,
 };
 
 // Re-export fs_read tool registry functions and execution
@@ -209,9 +209,8 @@ impl ToolMetadata {
 
 /// Represents a tool that can be called by the LLM.
 ///
-/// `r#impl` carries typed dispatch info (replaces the polymorphic `path` field).
-/// `category` enables filtering and permission routing (replaces `is_*_tool()` predicates).
-/// `path` is kept temporarily during migration and will be removed in Task 10.
+/// `r#impl` carries typed dispatch info; `category` enables filtering and
+/// permission routing without per-tool predicate functions.
 #[derive(Clone)]
 pub struct Tool {
     pub name: String,

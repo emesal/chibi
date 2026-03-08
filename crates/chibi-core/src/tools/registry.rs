@@ -218,15 +218,13 @@ impl ToolRegistry {
     /// no permissions. Policy stays in `send.rs` as middleware.
     ///
     /// Clones `ToolImpl` before any `.await` so no borrow of `self` crosses
-    /// an async suspension point. Callers holding an `RwLockReadGuard` can
-    /// drop it before calling this method.
+    /// an async suspension point, then delegates to `dispatch_impl`.
     pub async fn dispatch_with_context(
         &self,
         name: &str,
         args: &Value,
         ctx: &ToolCallContext<'_>,
     ) -> io::Result<String> {
-        // Clone ToolImpl so no borrow on `self` crosses an await point.
         let tool_impl = self
             .get(name)
             .ok_or_else(|| {
@@ -234,28 +232,7 @@ impl ToolRegistry {
             })?
             .r#impl
             .clone();
-        let call = ToolCall {
-            name,
-            args,
-            context: ctx,
-        };
-        match tool_impl {
-            ToolImpl::Builtin(handler) => handler(call).await,
-            ToolImpl::Plugin(path) => {
-                // Plugin dispatch: spawn the executable with args via stdin.
-                // Sync call — no .await needed.
-                super::plugins::execute_tool_by_path(&path, name, args)
-            }
-            ToolImpl::Mcp { server, tool_name } => {
-                // MCP dispatch: forward to bridge daemon via TCP. Sync call.
-                let home = ctx.app.chibi_dir.clone();
-                super::mcp::execute_mcp_call(&server, &tool_name, args, &home)
-            }
-            #[cfg(feature = "synthesised-tools")]
-            ToolImpl::Synthesised { context, .. } => {
-                super::synthesised::execute_synthesised(&context, &call).await
-            }
-        }
+        Self::dispatch_impl(tool_impl, name, args, ctx).await
     }
 }
 

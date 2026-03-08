@@ -166,7 +166,19 @@ maps `VfsPath("/shared/foo.txt")` → `<chibi_home>/vfs/shared/foo.txt`. uses `s
 
 `vfs/` sits alongside `contexts/` in CHIBI_HOME.
 
+## multi-backend mounting
+
+`Vfs` supports multiple backends mounted at different path prefixes, resolved by longest-prefix match. Use `Vfs::builder(site_id)` to compose them:
+
+```rust
+let vfs = Vfs::builder(site_id)
+    .mount("/", Box::new(LocalBackend::new(vfs_root)))
+    .mount("/tools/sys", Box::new(ToolsBackend::new(registry)))
+    .build();
+```
+
+`ToolsBackend` is a read-only virtual backend mounted at `/tools/sys/` that synthesises tool schema JSON on demand from the registry. Reads enumerate tools; writes are rejected.
+
 ## future evolution
 
-- **multi-backend mounting** — `Vfs` maps path prefixes to different backends (e.g. `/shared/` on disk, `/remote/` on XMPP). longest-prefix match.
 - **middleware layers** — composable tower-style layers (logging, caching) wrapping backends (approach C). refactor from approach A when needed.

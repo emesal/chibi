@@ -240,9 +240,9 @@ impl Chibi {
         #[cfg(feature = "synthesised-tools")]
         {
             let mut reg = registry.write().unwrap();
-            tokio::runtime::Handle::current().block_on(
-                crate::tools::synthesised::scan_and_register(&app.vfs, &mut reg),
-            )?;
+            crate::tools::vfs_block_on(crate::tools::synthesised::scan_and_register(
+                &app.vfs, &mut reg,
+            ))?;
         }
 
         #[cfg(feature = "synthesised-tools")]

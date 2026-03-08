@@ -983,8 +983,9 @@ async fn execute_tool_pure(
                                     permission_handler,
                                 )?
                                 .err()
+                                .map(|r| format!("Permission denied: {r}"))
                             }
-                            Err(e) => Some(e.to_string()),
+                            Err(e) => Some(format!("Permission denied: {e}")),
                         }
                     } else {
                         None // cache_id / no-path access — always allowed
@@ -1018,6 +1019,7 @@ async fn execute_tool_pure(
                         permission_handler,
                     )?
                     .err()
+                    .map(|r| format!("Permission denied: {r}"))
                 }
             }
             ToolCategory::Shell => {
@@ -1956,18 +1958,6 @@ pub async fn send_prompt<S: ResponseSink>(
         }
 
         // === Prepare Tools ===
-        // Build from registry: all categories except Flow (added separately below
-        // because spawn_agent needs a dynamic preset_capabilities list injected
-        // into its description at request time).
-        let mut all_tools: Vec<serde_json::Value> = {
-            let reg = registry.read().unwrap();
-            reg.all()
-                .filter(|t| t.category != tools::ToolCategory::Flow)
-                .filter(|t| t.name != tools::REFLECTION_TOOL_NAME || use_reflection)
-                .map(|t| t.to_api_format())
-                .collect()
-        };
-
         // Resolve available preset capability names for the current cost tier so the
         // LLM sees valid values in the spawn_agent tool description.
         let preset_capabilities: Vec<String> = {
@@ -1981,8 +1971,25 @@ pub async fn send_prompt<S: ResponseSink>(
                 Err(_) => vec![],
             }
         };
-        let preset_cap_refs: Vec<&str> = preset_capabilities.iter().map(String::as_str).collect();
-        all_tools.extend(tools::all_flow_tools_to_api_format(&preset_cap_refs));
+        let spawn_agent_preset_desc = tools::spawn_agent_preset_description(&preset_capabilities);
+
+        // Build all tools from the registry in a single pass. Flow tools are
+        // included here; spawn_agent's `preset` param description is patched
+        // inline with the dynamic preset list.
+        let mut all_tools: Vec<serde_json::Value> = {
+            let reg = registry.read().unwrap();
+            reg.all()
+                .filter(|t| t.name != tools::REFLECTION_TOOL_NAME || use_reflection)
+                .map(|t| {
+                    let mut json = t.to_api_format();
+                    if t.name == tools::SPAWN_AGENT_TOOL_NAME {
+                        json["function"]["parameters"]["properties"]["preset"]["description"] =
+                            serde_json::Value::String(spawn_agent_preset_desc.clone());
+                    }
+                    json
+                })
+                .collect()
+        };
         annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
         all_tools = filter_tools_by_config(all_tools, &resolved_config.tools, &registry);
 

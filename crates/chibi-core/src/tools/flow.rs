@@ -538,12 +538,15 @@ pub fn register_flow_tools(registry: &mut super::registry::ToolRegistry) {
     }
 }
 
-/// Convert all flow tools to API format.
+/// Build the dynamic description for `spawn_agent`'s `preset` parameter.
 ///
 /// `preset_capabilities`: capability names available via the configured cost tier.
-/// If empty, the `preset` param description notes no presets are configured.
-pub fn all_flow_tools_to_api_format(preset_capabilities: &[&str]) -> Vec<serde_json::Value> {
-    let preset_desc = if preset_capabilities.is_empty() {
+/// If empty, the description notes no presets are configured.
+///
+/// Used by `send.rs` to patch the description inline while iterating the registry,
+/// keeping tool-list construction in a single registry pass.
+pub fn spawn_agent_preset_description(preset_capabilities: &[String]) -> String {
+    if preset_capabilities.is_empty() {
         "Preset capability name (no presets configured for this tier)".to_string()
     } else {
         format!(
@@ -552,7 +555,23 @@ pub fn all_flow_tools_to_api_format(preset_capabilities: &[&str]) -> Vec<serde_j
              Explicit model/temperature/max_tokens override preset defaults.",
             preset_capabilities.join(", ")
         )
-    };
+    }
+}
+
+/// Convert all flow tools to API format.
+///
+/// `preset_capabilities`: capability names available via the configured cost tier.
+/// If empty, the `preset` param description notes no presets are configured.
+///
+/// Kept for use in tests. Production code uses registry iteration + inline patching.
+#[cfg(test)]
+pub fn all_flow_tools_to_api_format(preset_capabilities: &[&str]) -> Vec<serde_json::Value> {
+    let preset_desc = spawn_agent_preset_description(
+        &preset_capabilities
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+    );
 
     FLOW_TOOL_DEFS
         .iter()

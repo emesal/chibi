@@ -237,6 +237,9 @@ pub fn default_markdown_style() -> MarkdownStyle {
         // Code
         code_bg: "black".to_string(),
         code_label: "cyan".to_string(),
+        code_fg: String::new(),
+        code_dim: false,
+        code_pad: false,
 
         // Lists
         bullet: "cyan".to_string(),
@@ -345,6 +348,9 @@ pub struct MarkdownStyleOverride {
     // Code
     pub code_bg: Option<String>,
     pub code_label: Option<String>,
+    pub code_fg: Option<String>,
+    pub code_dim: Option<bool>,
+    pub code_pad: Option<bool>,
 
     // Lists
     pub bullet: Option<String>,
@@ -456,6 +462,12 @@ fn merge_markdown_style(base: &MarkdownStyle, overrides: &MarkdownStyleOverride)
             .code_label
             .clone()
             .unwrap_or_else(|| base.code_label.clone()),
+        code_fg: overrides
+            .code_fg
+            .clone()
+            .unwrap_or_else(|| base.code_fg.clone()),
+        code_dim: overrides.code_dim.unwrap_or(base.code_dim),
+        code_pad: overrides.code_pad.unwrap_or(base.code_pad),
 
         // Lists
         bullet: overrides

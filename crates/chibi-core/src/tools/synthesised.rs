@@ -134,8 +134,8 @@ pub async fn execute_synthesised(_context: &(), _call: &ToolCall<'_>) -> io::Res
 /// Scan writable VFS zones for `.scm` tool files and register them.
 ///
 /// Called once at startup after the VFS and registry are fully constructed.
-/// Silently skips zones that don't exist yet and logs warnings for files that
-/// fail to load. Non-`.scm` entries are ignored.
+/// Silently skips zones that don't exist yet, unreadable files, and files
+/// whose source fails to parse/evaluate. Non-`.scm` entries are ignored.
 ///
 /// **Zones scanned:** `/tools/shared` (globally shared tools).
 /// Context-home and flock zones are deferred to a future scoping task.
@@ -173,8 +173,8 @@ pub async fn scan_and_register(vfs: &Vfs, registry: &mut ToolRegistry) -> io::Re
             };
             if let Ok(tool) = load_tool_from_source(&source_str, &file_path) {
                 registry.register(tool);
-                // invalid source — skip silently (caller can inspect via VFS)
             }
+            // Err(_): invalid source — skip silently (caller can inspect via VFS)
         }
     }
     Ok(())
@@ -423,7 +423,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_scan_and_register_logs_bad_source() {
+    async fn test_scan_and_register_skips_bad_source() {
         let (_dir, vfs) = make_test_vfs();
         let mut registry = ToolRegistry::new();
 
@@ -433,7 +433,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Should complete without error (bad file is warned and skipped)
+        // Should complete without error (bad file is silently skipped)
         let result = scan_and_register(&vfs, &mut registry).await;
         assert!(result.is_ok());
         assert_eq!(
