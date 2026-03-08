@@ -67,8 +67,8 @@ use tein::{Context, ThreadLocalContext, Value, sandbox::Modules};
 use std::io;
 
 use crate::tools::registry::{ToolCall, ToolRegistry};
-use crate::tools::{Tool, ToolCategory, ToolImpl, ToolMetadata};
-use crate::vfs::{Vfs, VfsCaller, VfsPath}; // Vfs+VfsCaller used in scan_and_register
+use crate::tools::{Tool, ToolCategory, ToolImpl, ToolMetadata, vfs_block_on};
+use crate::vfs::{Vfs, VfsCaller, VfsEntryKind, VfsPath}; // Vfs+VfsCaller used in scan_and_register
 
 // --- (harness tools) module source -------------------------------------------
 
@@ -262,13 +262,12 @@ fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
             tool.r#impl.clone()
         };
 
-        // bridge sync tein → async tokio
-        let handle = tokio::runtime::Handle::current();
-        handle
-            .block_on(ToolRegistry::dispatch_impl(
-                tool_impl, &name, &json_args, &call_ctx,
-            ))
-            .map_err(|e| format!("tool error: {e}"))
+        // bridge sync tein → async tokio; vfs_block_on uses block_in_place to
+        // avoid panicking on a multi-thread runtime (same fix as scan_and_register)
+        vfs_block_on(ToolRegistry::dispatch_impl(
+            tool_impl, &name, &json_args, &call_ctx,
+        ))
+        .map_err(|e| format!("tool error: {e}"))
     })
 }
 
@@ -428,6 +427,13 @@ fn extract_single_tool(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
 
 /// Extract multiple tools from a context that used `(define-tool ...)`.
 ///
+/// Escape a string for safe embedding inside a Scheme string literal.
+/// Replaces `\` with `\\` and `"` with `\"`.
+#[cfg(feature = "synthesised-tools")]
+fn scheme_escape_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// Reads `%tool-registry%` (a LIFO list built via `cons`) and produces one
 /// `Tool` per entry. All tools share the same tein context via `Arc`.
 #[cfg(feature = "synthesised-tools")]
@@ -475,9 +481,23 @@ fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
             )));
         }
 
+        // reject names that would produce invalid Scheme identifiers when
+        // embedded in `%tool-execute-{name}%` (whitespace or parentheses break
+        // the symbol syntax)
+        if name
+            .chars()
+            .any(|c| c.is_whitespace() || c == '(' || c == ')')
+        {
+            return Err(io::Error::other(format!(
+                "define-tool: name {name:?} contains invalid characters (whitespace or parens)"
+            )));
+        }
+
         // bind the execute handler to a per-tool name so execute_synthesised
         // can find it by name. the context is shared across all tools in this file.
         let exec_binding = format!("%tool-execute-{name}%");
+        // scheme-escape name before interpolating into a string literal
+        let name_escaped = scheme_escape_string(&name);
         // %tool-registry% entries are (name desc params handler).
         // use list-ref to extract the handler (index 3) for this tool by name.
         // list-ref is in (scheme base) which the preamble already imports.
@@ -486,7 +506,7 @@ fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
                 "(define {exec_binding} \
                  (list-ref \
                    (let loop ((reg %tool-registry%)) \
-                     (if (string=? (car (car reg)) \"{name}\") \
+                     (if (string=? (car (car reg)) \"{name_escaped}\") \
                          (car reg) \
                          (loop (cdr reg)))) \
                    3))"
@@ -623,6 +643,12 @@ async fn scan_zone(
         Err(_) => return Ok(()), // zone unreadable — skip silently
     };
     for entry in entries {
+        if entry.kind == VfsEntryKind::Directory {
+            // recurse into subdirectories — ignore errors (zone boundary)
+            let subzone = format!("{zone}/{}", entry.name);
+            let _ = Box::pin(scan_zone(vfs, registry, &subzone, tools_config)).await;
+            continue;
+        }
         if !entry.name.ends_with(".scm") {
             continue;
         }

@@ -352,10 +352,10 @@ The `tool-parameters` / `parameters` value is a Scheme alist that chibi converts
 
 ```scheme
 '((text  . ((type . "string")  (description . "input text")))
-  (count . ((type . "integer") (description . "how many") (default . 10))))
+  (count . ((type . "integer") (description . "how many") (required . #f))))
 ```
 
-The `required` array is populated from all keys that lack a `(default . ...)` entry.
+All parameters are required by default. Add `(required . #f)` to an attribute alist to make a parameter optional.
 
 ## Language Plugins
 
