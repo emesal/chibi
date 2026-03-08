@@ -2351,7 +2351,10 @@ mod tests {
         );
         assert!(names.contains(&"dir_list"), "fs_read tool should remain");
         assert!(names.contains(&"file_head"), "fs_read tool should remain");
-        assert!(names.contains(&"update_reflection"), "memory tool should remain");
+        assert!(
+            names.contains(&"update_reflection"),
+            "memory tool should remain"
+        );
         assert!(names.contains(&"spawn_agent"), "flow tool should remain");
     }
 

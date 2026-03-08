@@ -55,9 +55,7 @@ pub fn parse_task(content: &str, relative_path: &str) -> io::Result<TaskMeta> {
                 }
                 (&heads[0], vec![tail.as_ref()])
             }
-            SexpKind::List(items) if items.len() >= 2 => {
-                (&items[0], items[1..].iter().collect())
-            }
+            SexpKind::List(items) if items.len() >= 2 => (&items[0], items[1..].iter().collect()),
             _ => continue,
         };
 
@@ -100,10 +98,16 @@ pub fn parse_task(content: &str, relative_path: &str) -> io::Result<TaskMeta> {
     }
 
     if id.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "task missing id field"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "task missing id field",
+        ));
     }
     if status.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "task missing status field"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "task missing status field",
+        ));
     }
 
     let summary_line = datums
@@ -127,8 +131,10 @@ pub fn parse_task(content: &str, relative_path: &str) -> io::Result<TaskMeta> {
 ///
 /// Returns a map of task_id → vec of blocking dep IDs (only entries with blockers).
 pub fn compute_blocked(tasks: &[TaskMeta]) -> HashMap<String, Vec<String>> {
-    let status_map: HashMap<&str, &str> =
-        tasks.iter().map(|t| (t.id.as_str(), t.status.as_str())).collect();
+    let status_map: HashMap<&str, &str> = tasks
+        .iter()
+        .map(|t| (t.id.as_str(), t.status.as_str()))
+        .collect();
 
     let mut blocked = HashMap::new();
     for task in tasks {
@@ -140,7 +146,11 @@ pub fn compute_blocked(tasks: &[TaskMeta]) -> HashMap<String, Vec<String>> {
             .iter()
             .filter(|dep_id| {
                 // Blocked if dep status is not "done" (including unknown/missing deps)
-                status_map.get(dep_id.as_str()).copied().unwrap_or("unknown") != "done"
+                status_map
+                    .get(dep_id.as_str())
+                    .copied()
+                    .unwrap_or("unknown")
+                    != "done"
             })
             .cloned()
             .collect();
@@ -187,7 +197,11 @@ pub fn build_summary_table(tasks: &[TaskMeta]) -> String {
         }
 
         let summary = if let Some(blockers) = blocked.get(&task.id) {
-            format!("{} (blocked by: {})", task.summary_line, blockers.join(", "))
+            format!(
+                "{} (blocked by: {})",
+                task.summary_line,
+                blockers.join(", ")
+            )
         } else {
             task.summary_line.clone()
         };
@@ -226,10 +240,7 @@ pub fn build_summary_table(tasks: &[TaskMeta]) -> String {
 /// Reads `/home/<ctx>/tasks/` and `/flocks/<flock>/tasks/` for each
 /// flock the context belongs to. Parses metadata only (first datum).
 /// Skips unreadable or unparseable files silently.
-pub async fn collect_tasks(
-    vfs: &crate::vfs::Vfs,
-    context_name: &str,
-) -> Vec<TaskMeta> {
+pub async fn collect_tasks(vfs: &crate::vfs::Vfs, context_name: &str) -> Vec<TaskMeta> {
     let mut tasks = Vec::new();
 
     // Collect from context-local tasks dir
@@ -258,7 +269,11 @@ async fn collect_from_dir(
     let Ok(zone_path) = VfsPath::new(dir_path) else {
         return;
     };
-    if !vfs.exists(VfsCaller::System, &zone_path).await.unwrap_or(false) {
+    if !vfs
+        .exists(VfsCaller::System, &zone_path)
+        .await
+        .unwrap_or(false)
+    {
         return;
     }
     let entries = match vfs.list(VfsCaller::System, &zone_path).await {
