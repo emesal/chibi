@@ -232,9 +232,15 @@ impl Chibi {
         let vfs_root = app.chibi_dir.join("vfs");
         let local_backend = crate::vfs::LocalBackend::new(vfs_root);
         let tools_backend = crate::vfs::ToolsBackend::new(Arc::clone(&registry));
+        let contexts_backend = crate::vfs::ContextsBackend::new(
+            Arc::clone(&app.state),
+            app.chibi_dir.clone(),
+            app.site_id.clone(),
+        );
         app.vfs = crate::vfs::Vfs::builder(site_id)
             .mount("/", Box::new(local_backend))
             .mount("/tools/sys", Box::new(tools_backend))
+            .mount("/sys/contexts", Box::new(contexts_backend))
             .build();
 
         #[cfg(feature = "synthesised-tools")]
