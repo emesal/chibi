@@ -246,18 +246,23 @@ impl Chibi {
         #[cfg(feature = "synthesised-tools")]
         {
             crate::tools::vfs_block_on(crate::tools::synthesised::scan_and_register(
-                &app.vfs, &registry,
+                &app.vfs,
+                &registry,
+                &app.config.tools,
             ))?;
         }
 
         #[cfg(feature = "synthesised-tools")]
         {
             let reg = Arc::clone(&registry);
+            let tools_cfg = app.config.tools.clone();
             app.vfs
                 .set_scm_change_callback(Arc::new(move |path, kind, content| match kind {
                     crate::vfs::ScmChangeKind::Write => {
                         if let Some(bytes) = content {
-                            crate::tools::synthesised::reload_tool_from_content(&reg, path, bytes);
+                            crate::tools::synthesised::reload_tool_from_content(
+                                &reg, path, bytes, &tools_cfg,
+                            );
                         }
                     }
                     crate::vfs::ScmChangeKind::Delete => {
