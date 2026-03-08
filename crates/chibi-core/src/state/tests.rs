@@ -1028,8 +1028,14 @@ fn test_list_contexts_excludes_manually_deleted_directories() {
     // Add them to state.json
     {
         let mut state = app.state.write().unwrap();
-        state.contexts.push(ContextEntry::with_created_at("context-one", now_timestamp()));
-        state.contexts.push(ContextEntry::with_created_at("context-two", now_timestamp()));
+        state.contexts.push(ContextEntry::with_created_at(
+            "context-one",
+            now_timestamp(),
+        ));
+        state.contexts.push(ContextEntry::with_created_at(
+            "context-two",
+            now_timestamp(),
+        ));
     }
     app.save().unwrap();
 
@@ -1084,7 +1090,14 @@ fn test_save_and_register_context_adds_to_state_contexts() {
     // First save initial state so state.json exists
     app.save().unwrap();
 
-    assert!(!app.state.read().unwrap().contexts.iter().any(|e| e.name == "new-context"));
+    assert!(
+        !app.state
+            .read()
+            .unwrap()
+            .contexts
+            .iter()
+            .any(|e| e.name == "new-context")
+    );
 
     let ctx = Context::new("new-context");
     app.save_and_register_context(&ctx).unwrap();
@@ -1109,7 +1122,14 @@ fn test_touch_context_with_destroy_settings_on_new_context() {
 
     // Simulate what happens when switching to a new context with debug settings:
     // 1. Context entry is added to state.contexts (our fix)
-    app.state.write().unwrap().contexts.push(ContextEntry::with_created_at("new-test-context", now_timestamp()));
+    app.state
+        .write()
+        .unwrap()
+        .contexts
+        .push(ContextEntry::with_created_at(
+            "new-test-context",
+            now_timestamp(),
+        ));
 
     // 2. Debug settings are applied via touch_context_with_destroy_settings
     let result = app
@@ -2233,7 +2253,7 @@ fn test_rebuild_context_includes_unified_flow_control_entries() {
 fn test_resolve_uses_context_cwd_when_set() {
     // When file_tools_allowed_paths is empty in config, and context has a stored cwd,
     // resolve_config should use the stored cwd rather than live current_dir.
-    let (mut app, _dir) = create_test_app();
+    let (app, _dir) = create_test_app();
 
     // Register a context with a specific stored cwd
     let mut entry = crate::context::ContextEntry::with_created_at("myctx", 1234567890);
@@ -2253,7 +2273,7 @@ fn test_resolve_uses_context_cwd_when_set() {
 #[test]
 fn test_resolve_falls_back_to_current_dir_when_no_context_cwd() {
     // When context has no stored cwd, resolve_config should fall back to live current_dir.
-    let (mut app, _dir) = create_test_app();
+    let (app, _dir) = create_test_app();
 
     let mut entry = crate::context::ContextEntry::with_created_at("myctx", 1234567890);
     entry.cwd = None; // simulate old context

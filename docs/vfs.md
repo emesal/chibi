@@ -9,6 +9,7 @@ sandboxed, shared file space for contexts. contexts can read and write without e
 /home/<context>/                  owner: read + write; others: read only
 /sys/                             read only (SYSTEM-populated)
 /sys/tool_cache/<context>/        cached tool outputs (SYSTEM-written, world-readable)
+/sys/contexts/<name>/             read-only context metadata (virtual, generated on-demand)
 /site/                            site-wide flock data (world-writable)
 /flocks/<name>/                   per-flock data (members only)
 ```
@@ -174,10 +175,45 @@ maps `VfsPath("/shared/foo.txt")` → `<chibi_home>/vfs/shared/foo.txt`. uses `s
 let vfs = Vfs::builder(site_id)
     .mount("/", Box::new(LocalBackend::new(vfs_root)))
     .mount("/tools/sys", Box::new(ToolsBackend::new(registry)))
+    .mount("/sys/contexts", Box::new(ContextsBackend::new(state, data_dir, site_id)))
     .build();
 ```
 
 `ToolsBackend` is a read-only virtual backend mounted at `/tools/sys/` that synthesises tool schema JSON on demand from the registry. Reads enumerate tools; writes are rejected.
+
+`ContextsBackend` is a read-only virtual backend mounted at `/sys/contexts/` that synthesises context metadata from the shared `Arc<RwLock<ContextState>>`. It does not hold its own copy of context data — it reads from the same source of truth as `AppState`.
+
+### `/sys/contexts/` virtual file structure
+
+```
+/sys/contexts/
+└── <name>/
+    ├── state.json        # generated: timestamps, prompt_count, flocks, path refs
+    └── transcript/
+        ├── manifest.json       # read-through from disk
+        ├── active.jsonl        # read-through from disk (active partition)
+        └── partitions/
+            └── <file>.jsonl    # read-through from disk (archived partitions)
+```
+
+`state.json` schema:
+
+```json
+{
+  "created_at": 1700000000,
+  "last_activity_at": 1700001234,
+  "prompt_count": 42,
+  "auto_destroy_at": null,
+  "auto_destroy_after_inactive_secs": null,
+  "flocks": ["site:my-machine-abc123", "frontend"],
+  "paths": {
+    "todos": "/home/alice/todos.md",
+    "goals": ["/site/goals.md", "/flocks/frontend/goals.md"]
+  }
+}
+```
+
+`prompt_count` counts user prompt entries (`entry_type="message"`, `role="user"`) across all archived and active partitions. Uses `PartitionManager`'s cached partition metadata — no per-line scanning of archived files.
 
 ## future evolution
 
