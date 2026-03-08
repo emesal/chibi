@@ -115,6 +115,10 @@ const HARNESS_PREAMBLE: &str = r#"
 ;; (name-string description-string params-value execute-procedure)
 (define %tool-registry% '())
 
+;; name of the calling context — mutated by execute_synthesised before each call.
+;; plugins read this to resolve /home/<ctx>/... VFS paths.
+(define %context-name% "")
+
 ;; registers a tool: appends to %tool-registry% in definition order (LIFO via cons).
 ;; rust reads %tool-registry% after evaluation; non-empty → multi-tool mode.
 (define-syntax define-tool
@@ -271,6 +275,33 @@ fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
     })
 }
 
+/// `(generate-id)` harness helper — returns a 4-hex-char string seeded from
+/// the current time's sub-second nanoseconds. Unique enough for short-lived
+/// task IDs within a session; not a cryptographic identifier.
+#[cfg(feature = "synthesised-tools")]
+#[tein::tein_fn(name = "generate-id")]
+fn generate_id_fn() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    format!("{:04x}", nanos % 0x10000)
+}
+
+/// `(current-timestamp)` harness helper — returns `"YYYYMMDD-HHMMz"` UTC.
+#[cfg(feature = "synthesised-tools")]
+#[tein::tein_fn(name = "current-timestamp")]
+fn current_timestamp_fn() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let (y, mo, d, h, mi) = secs_to_ymdhmz(secs);
+    format!("{:04}{:02}{:02}-{:02}{:02}z", y, mo, d, h, mi)
+}
+
 // --- loader ------------------------------------------------------------------
 
 /// Build a tein `ThreadLocalContext` for a synthesised tool, registering
@@ -280,12 +311,41 @@ fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
 /// - `Sandboxed`: safe modules only, 10M step limit
 /// - `Unsandboxed`: full R7RS, no step limit (trusted tools only)
 #[cfg(feature = "synthesised-tools")]
+/// Decompose Unix epoch seconds into (year, month, day, hour, minute) UTC.
+///
+/// Used by the `current-timestamp` harness helper to avoid a chrono dependency
+/// in the synthesised-tools module path.
+#[cfg(feature = "synthesised-tools")]
+fn secs_to_ymdhmz(mut s: u64) -> (u32, u32, u32, u32, u32) {
+    let mi = (s % 60) as u32;
+    let _ = mi; // minute-in-second, unused
+    s /= 60;
+    let mi = (s % 60) as u32;
+    s /= 60;
+    let h = (s % 24) as u32;
+    s /= 24;
+    // Gregorian calendar decomposition
+    let z = s + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = (yoe + era * 400 + if mo <= 2 { 1 } else { 0 }) as u32;
+    (y, mo, d, h, mi)
+}
+
+#[cfg(feature = "synthesised-tools")]
 fn build_tein_context(
     source: String,
     tier: crate::config::SandboxTier,
 ) -> io::Result<ThreadLocalContext> {
     let init = move |ctx: &Context| -> tein::Result<()> {
         ctx.define_fn_variadic("call-tool", __tein_call_tool_fn)?;
+        ctx.define_fn_variadic("generate-id", __tein_generate_id_fn)?;
+        ctx.define_fn_variadic("current-timestamp", __tein_current_timestamp_fn)?;
         ctx.evaluate(HARNESS_PREAMBLE)?;
         ctx.register_module(HARNESS_TOOLS_MODULE)
             .map_err(|e| tein::Error::EvalError(format!("harness module: {e}")))?;
@@ -540,6 +600,9 @@ fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
 ///
 /// Sets `BRIDGE_CALL_CTX` via `CallContextGuard` before calling into scheme
 /// so that `call-tool` can access the runtime context.
+///
+/// Also injects the per-call `%context-name%` variable so synthesised tools
+/// can resolve VFS paths relative to the calling context's home directory.
 #[cfg(feature = "synthesised-tools")]
 pub async fn execute_synthesised(
     context: &ThreadLocalContext,
@@ -547,6 +610,14 @@ pub async fn execute_synthesised(
     call: &ToolCall<'_>,
 ) -> io::Result<String> {
     let _guard = CallContextGuard::set(call.context);
+
+    // Inject per-call bindings before invoking the tool handler.
+    // %context-name% mutates the top-level binding defined in HARNESS_PREAMBLE.
+    let ctx_name_escaped = call.context.context_name.replace('"', "\\\"");
+    context
+        .evaluate(&format!("(set! %context-name% \"{ctx_name_escaped}\")"))
+        .map_err(|e| io::Error::other(format!("inject %context-name%: {e}")))?;
+
     let args_alist = json_args_to_scheme_alist(call.args)?;
     let exec_fn = context
         .evaluate(exec_binding)
@@ -1596,5 +1667,162 @@ mod tests {
         let vfs_path = VfsPath::new("/tools/shared/harness_test.scm").unwrap();
         let tool = load_tool_from_source(source, &vfs_path, &registry).unwrap();
         assert_eq!(tool.name, "harness_test");
+    }
+
+    // --- task plugin integration tests ---------------------------------------
+
+    const TASKS_PLUGIN: &str = include_str!("../../../../plugins/tasks.scm");
+
+    /// Load the tasks.scm plugin and verify all five tools are registered.
+    #[test]
+    fn test_tasks_plugin_loads() {
+        let registry = make_registry();
+        let path = VfsPath::new("/tools/shared/tasks.scm").unwrap();
+        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry).unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        for expected in &["task_create", "task_update", "task_view", "task_list", "task_delete"] {
+            assert!(
+                names.contains(expected),
+                "expected tool '{}' to be registered, got: {:?}", expected, names
+            );
+        }
+        assert_eq!(tools.len(), 5, "expected exactly 5 task tools");
+    }
+
+    /// Verify generate-id and current-timestamp harness helpers work.
+    #[test]
+    fn test_harness_helpers_generate_id_and_timestamp() {
+        let registry = make_registry();
+        let source = r#"
+(import (scheme base))
+(import (harness tools))
+(define tool-name "helper_test")
+(define tool-description "test generate-id and current-timestamp")
+(define tool-parameters '())
+(define (tool-execute args)
+  (string-append (generate-id) ":" (current-timestamp)))
+"#;
+        let path = VfsPath::new("/tools/shared/helper_test.scm").unwrap();
+        let tool = load_tool_from_source(source, &path, &registry).unwrap();
+        if let ToolImpl::Synthesised { ref context, ref exec_binding, .. } = tool.r#impl {
+            let exec_fn = context.evaluate(exec_binding).unwrap();
+            let alist = json_args_to_scheme_alist(&serde_json::json!({})).unwrap();
+            let result = context.call(&exec_fn, &[alist]).unwrap();
+            let s = result.as_string().unwrap().to_string();
+            // format: "XXXX:YYYYMMDD-HHMMz"
+            assert!(s.contains(':'), "expected id:timestamp, got: {}", s);
+            let parts: Vec<&str> = s.splitn(2, ':').collect();
+            assert_eq!(parts[0].len(), 4, "id should be 4 hex chars: {}", parts[0]);
+            assert!(parts[1].ends_with('z'), "timestamp should end with 'z': {}", parts[1]);
+        } else {
+            panic!("expected Synthesised impl");
+        }
+    }
+
+    /// Verify %context-name% injection via execute_synthesised.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_context_name_injection() {
+        use crate::test_support::create_test_chibi;
+
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+        let source = r#"
+(import (scheme base))
+(import (harness tools))
+(define tool-name "ctx_test")
+(define tool-description "return context name")
+(define tool-parameters '())
+(define (tool-execute args) %context-name%)
+"#;
+        let path = VfsPath::new("/tools/shared/ctx_test.scm").unwrap();
+        let tools = load_tools_from_source(source, &path, &registry).unwrap();
+        {
+            let mut reg = registry.write().unwrap();
+            for t in tools {
+                reg.register(t);
+            }
+        }
+        let result = chibi.execute_tool("default", "ctx_test", serde_json::json!({})).await.unwrap();
+        assert_eq!(result, "default", "context name should be injected as %context-name%");
+    }
+
+    /// Full CRUD integration: create → list → view → update → delete.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_task_crud_integration() {
+        use crate::test_support::create_test_chibi;
+
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+        let path = VfsPath::new("/tools/shared/tasks.scm").unwrap();
+        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry).unwrap();
+        {
+            let mut reg = registry.write().unwrap();
+            for t in tools {
+                reg.register(t);
+            }
+        }
+
+        // Create a task
+        let create_result = chibi
+            .execute_tool("default", "task_create", serde_json::json!({
+                "path": "test/my-task",
+                "body": "do the thing",
+                "priority": "high"
+            }))
+            .await
+            .unwrap();
+        assert!(create_result.contains("created task"), "unexpected: {}", create_result);
+        // Extract ID from "created task XXXX at ..."
+        let id = create_result
+            .split_whitespace()
+            .nth(2)
+            .expect("expected id in create result")
+            .to_string();
+
+        // List tasks — should include our task
+        let list_result = chibi
+            .execute_tool("default", "task_list", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(list_result.contains(&id), "id should appear in list: {}", list_result);
+
+        // View the task
+        let view_result = chibi
+            .execute_tool("default", "task_view", serde_json::json!({"id": id}))
+            .await
+            .unwrap();
+        assert!(view_result.contains(&id), "id should appear in view: {}", view_result);
+        assert!(view_result.contains("do the thing"), "body should appear in view: {}", view_result);
+
+        // Update status to in-progress
+        let update_result = chibi
+            .execute_tool("default", "task_update", serde_json::json!({
+                "id": id,
+                "status": "in-progress"
+            }))
+            .await
+            .unwrap();
+        assert!(update_result.contains("updated task"), "unexpected: {}", update_result);
+
+        // View again — status should be in-progress
+        let view2 = chibi
+            .execute_tool("default", "task_view", serde_json::json!({"id": id}))
+            .await
+            .unwrap();
+        assert!(view2.contains("in-progress"), "status should be in-progress: {}", view2);
+
+        // Delete the task
+        let delete_result = chibi
+            .execute_tool("default", "task_delete", serde_json::json!({"id": id}))
+            .await
+            .unwrap();
+        assert!(delete_result.contains("deleted task"), "unexpected: {}", delete_result);
+
+        // List again — should be gone
+        let list2 = chibi
+            .execute_tool("default", "task_list", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(!list2.contains(&id), "id should be gone after delete: {}", list2);
     }
 }
