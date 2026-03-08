@@ -255,36 +255,43 @@ impl AppState {
     pub fn sync_state_with_filesystem(&mut self) -> io::Result<bool> {
         use std::collections::HashSet;
 
-        let mut modified = false;
         let contexts_dir = self.contexts_dir.clone();
 
+        // Collect all filesystem facts before acquiring the write lock, so we
+        // don't hold a global write lock across blocking read_dir / file_type
+        // syscalls (which would stall other readers on the tokio executor).
+        let existing_dirs: HashSet<String> = if let Ok(entries) = fs::read_dir(&contexts_dir) {
+            entries
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()))
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        } else {
+            HashSet::new()
+        };
+
         let mut state = self.state.write().unwrap();
+        let mut modified = false;
 
         // Phase 1: Remove stale entries (directory doesn't exist)
         let original_count = state.contexts.len();
         state
             .contexts
-            .retain(|entry| contexts_dir.join(&entry.name).is_dir());
+            .retain(|entry| existing_dirs.contains(&entry.name));
         if state.contexts.len() != original_count {
             modified = true;
         }
 
         // Phase 2: Discover orphan directories
         let known_names: HashSet<_> = state.contexts.iter().map(|e| e.name.clone()).collect();
-
-        if let Ok(entries) = fs::read_dir(&contexts_dir) {
-            for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if !known_names.contains(&name) && is_valid_context_name(&name) {
-                        // Orphaned context directory - use current timestamp
-                        // (state.json is the single source of truth for created_at)
-                        state
-                            .contexts
-                            .push(ContextEntry::with_created_at(name, now_timestamp()));
-                        modified = true;
-                    }
-                }
+        for name in existing_dirs {
+            if !known_names.contains(&name) && is_valid_context_name(&name) {
+                // Orphaned context directory - use current timestamp
+                // (state.json is the single source of truth for created_at)
+                state
+                    .contexts
+                    .push(ContextEntry::with_created_at(name, now_timestamp()));
+                modified = true;
             }
         }
 

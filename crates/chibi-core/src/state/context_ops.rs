@@ -156,22 +156,26 @@ impl AppState {
         // Rename the directory (context name is derived from directory, no file updates needed)
         fs::rename(&old_dir, &new_dir)?;
 
-        // Update state: preserve created_at from old entry
-        let mut state = self.state.write().unwrap();
-        let created_at = state
-            .contexts
-            .iter()
-            .find(|e| e.name == old_name)
-            .map(|e| e.created_at)
-            .unwrap_or_else(now_timestamp);
-
-        state.contexts.retain(|e| e.name != old_name);
-        if !state.contexts.iter().any(|e| e.name == new_name) {
-            state
+        // Update state: preserve created_at from old entry.
+        // Drop write guard before file I/O (atomic_write_json) to avoid
+        // blocking the tokio executor while holding a global write lock.
+        {
+            let mut state = self.state.write().unwrap();
+            let created_at = state
                 .contexts
-                .push(ContextEntry::with_created_at(new_name, created_at));
-        }
-        state.save(&self.state_path)?;
+                .iter()
+                .find(|e| e.name == old_name)
+                .map(|e| e.created_at)
+                .unwrap_or_else(now_timestamp);
+
+            state.contexts.retain(|e| e.name != old_name);
+            if !state.contexts.iter().any(|e| e.name == new_name) {
+                state
+                    .contexts
+                    .push(ContextEntry::with_created_at(new_name, created_at));
+            }
+        } // write guard dropped here
+        self.save()?;
 
         // Note: If CLI's session.current_context was renamed, CLI must update it.
         Ok(())
