@@ -4,14 +4,16 @@
 
 ## Progress
 
-**Tasks 1–5 complete** (committed on branch `feature/context-metadata-vfs-2603`):
+**All tasks complete** (branch `feature/context-metadata-vfs-2603`):
 - ✅ Task 1: `prompt_count` in `PartitionMeta` + `ActiveState` — commit `c67b2c94`
 - ✅ Task 2: `AppState::prompt_count` + `chibi -l` shows "Prompts: N" — commit `ddffaa56`
 - ✅ Task 3: `ReadOnlyVfsBackend` trait with blanket impl — commit `3714c687`
 - ✅ Task 4: `ToolsBackend` migrated to `ReadOnlyVfsBackend` — commit `36a88c47`
 - ✅ Task 5: `AppState.state` → `Arc<RwLock<ContextState>>` — commit `372dac41`
-
-**Remaining: Tasks 6, 7, 8, 9**
+- ✅ Task 6: `ContextsBackend` implemented — commit `2982866f`
+- ✅ Task 7: `ContextsBackend` mounted at `/sys/contexts/` — commit `fd80fcac`
+- ✅ Task 8: Docs updated, unused_mut warnings fixed — commit `5310fe00`
+- ✅ Task 9: Final verification — 1140/1140 tests pass, `just pre-push` clean
 
 ### Implementation notes from completed tasks
 - `BoxFuture` is `pub(super)` — accessible within the `vfs` module (all backends live there, fine)

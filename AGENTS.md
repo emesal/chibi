@@ -57,3 +57,7 @@ LLM communication is delegated to ratatoskr; `gateway.rs` bridges chibi's types 
 - `ContextEntry.cwd` is `None` for contexts created before this field was added; `config_resolution` falls back to `std::env::current_dir()` in that case.
 - `call_agent` is not exposed to the LLM as a callable tool (not in `FLOW_TOOL_DEFS`). Its constant, metadata, and `HandoffTarget::Agent` are retained for the fallback tool mechanism, hook overrides, and future inter-agent control transfer.
 - `TranscriptEntry` now has `role: Option<String>` and `flow_control: bool`. Old entries without `role` use the `to == "user"` heuristic in `entries_to_messages` for backwards compat. Prefer builder pattern over struct literals to avoid missing new fields.
+- `AppState.state` is `Arc<RwLock<ContextState>>` — use `.read().unwrap()` / `.write().unwrap()` guards. Panics only on lock poison (indicates a prior panic, not normal flow).
+- `ContextsBackend` reads the flock registry directly from disk (not via VFS) to avoid a circular dependency — it is itself a VFS backend.
+- `PartitionMeta.prompt_count` uses `serde(default)` — pre-existing manifests without this field deserialise to 0; no backfill of old manifests.
+- `ContextsBackend` uses `PartitionManager::load_with_config` for `prompt_count` on each `state.json` read (full active-partition scan). If performance becomes a concern, pass a cached `ActiveState` via `load_with_cached_state`.
