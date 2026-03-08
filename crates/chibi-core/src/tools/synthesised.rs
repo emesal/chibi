@@ -1452,4 +1452,68 @@ mod tests {
         assert!(reg.get("tool_b").is_none(), "tool_b should be unregistered");
         assert!(reg.get("tool_c").is_some());
     }
+
+    // --- sandbox tier tests ---
+
+    #[test]
+    fn test_tier1_rejects_unsafe_imports() {
+        // (scheme regex) has default_safe: false — not in Modules::Safe allowlist
+        let source = r#"
+(import (scheme base))
+(import (scheme regex))  ; blocked by Modules::Safe (default_safe: false)
+(define tool-name "bad_tool")
+(define tool-description "tries unsafe import")
+(define tool-parameters '())
+(define (tool-execute args) "should not load")
+"#;
+        let vfs_path = VfsPath::new("/tools/shared/bad.scm").unwrap();
+        let registry = make_registry();
+        let result = load_tools_from_source_with_tier(
+            source,
+            &vfs_path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        );
+        assert!(result.is_err(), "sandboxed tier should reject (scheme regex)");
+    }
+
+    #[test]
+    fn test_tier2_allows_full_scheme() {
+        let source = r#"
+(import (scheme base))
+(define tool-name "tier2_tool")
+(define tool-description "uses full scheme")
+(define tool-parameters '())
+(define (tool-execute args) "full scheme works")
+"#;
+        let vfs_path = VfsPath::new("/tools/shared/full.scm").unwrap();
+        let registry = make_registry();
+        // tier 2 — no sandboxing; just verify it loads without error
+        let result = load_tools_from_source_with_tier(
+            source,
+            &vfs_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        );
+        assert!(result.is_ok(), "unsandboxed tier should allow loading");
+    }
+
+    // --- integration test: harness import ---
+
+    #[test]
+    fn test_integration_harness_import_works() {
+        // verify (import (harness tools)) succeeds and call-tool is available
+        let registry = make_registry();
+        let source = r#"
+(import (scheme base))
+(import (harness tools))
+(define tool-name "harness_test")
+(define tool-description "tests harness import")
+(define tool-parameters '())
+(define (tool-execute args) "harness ok")
+"#;
+        let vfs_path = VfsPath::new("/tools/shared/harness_test.scm").unwrap();
+        let tool = load_tool_from_source(source, &vfs_path, &registry).unwrap();
+        assert_eq!(tool.name, "harness_test");
+    }
 }
