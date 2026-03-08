@@ -177,11 +177,54 @@ impl ToolRegistry {
     pub fn find_all_by_vfs_path(&self, path: &crate::vfs::VfsPath) -> Vec<String> {
         self.tools
             .values()
-            .filter_map(|t| {
-                matches!(&t.r#impl, ToolImpl::Synthesised { vfs_path, .. } if vfs_path == path)
-                    .then(|| t.name.clone())
-            })
+            .filter(
+                |t| matches!(&t.r#impl, ToolImpl::Synthesised { vfs_path, .. } if vfs_path == path),
+            )
+            .map(|t| t.name.clone())
             .collect()
+    }
+
+    /// Check if a synthesised tool is visible to the given context.
+    ///
+    /// Visibility rules (non-synthesised tools always visible):
+    /// - `/tools/shared/*` — visible to all contexts
+    /// - `/tools/home/<ctx>/*` — visible only to context `<ctx>`
+    /// - `/tools/flocks/<flock>/*` — visible to contexts that are members of `<flock>`
+    /// - Unknown zone — visible by default (forward-compat)
+    ///
+    /// `flock_memberships` is the list of flock names the context belongs to.
+    /// Returns `true` if tool is not found (caller's filter can then skip it).
+    #[cfg(feature = "synthesised-tools")]
+    pub fn is_tool_visible(
+        &self,
+        tool_name: &str,
+        context_name: &str,
+        flock_memberships: &[String],
+    ) -> bool {
+        let tool = match self.get(tool_name) {
+            Some(t) => t,
+            None => return true, // not found — let other filters handle it
+        };
+        match &tool.r#impl {
+            ToolImpl::Synthesised { vfs_path, .. } => {
+                let path = vfs_path.as_str();
+                if path.starts_with("/tools/shared/") {
+                    true
+                } else if let Some(rest) = path.strip_prefix("/tools/home/") {
+                    // /tools/home/alice/foo.scm → owner is "alice"
+                    rest.split('/').next() == Some(context_name)
+                } else if let Some(rest) = path.strip_prefix("/tools/flocks/") {
+                    // /tools/flocks/dev-team/foo.scm → flock is "dev-team"
+                    rest.split('/')
+                        .next()
+                        .map(|flock| flock_memberships.iter().any(|f| f == flock))
+                        .unwrap_or(false)
+                } else {
+                    true // unknown zone — visible by default
+                }
+            }
+            _ => true, // non-synthesised tools always visible
+        }
     }
 
     /// Look up by name. O(1).
@@ -227,9 +270,7 @@ impl ToolRegistry {
                 context,
                 exec_binding,
                 ..
-            } => {
-                super::synthesised::execute_synthesised(&context, &exec_binding, &call).await
-            }
+            } => super::synthesised::execute_synthesised(&context, &exec_binding, &call).await,
         }
     }
 
@@ -410,6 +451,78 @@ mod tests {
             .map(|t| t.name.as_str())
             .collect();
         assert_eq!(reads, vec!["read1", "read2"]);
+    }
+
+    // --- visibility tests (synthesised-tools feature) ---
+
+    #[cfg(feature = "synthesised-tools")]
+    fn make_synth_tool(name: &str, vfs_path: &str) -> Tool {
+        // minimal synthesised tool stub for visibility tests
+        // uses a fresh context that evaluates to a trivial single-tool
+        let path = crate::vfs::VfsPath::new(vfs_path).unwrap();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let source = format!(
+            r#"(import (scheme base))
+(define tool-name "{name}")
+(define tool-description "stub")
+(define tool-parameters '())
+(define (tool-execute args) "stub")"#
+        );
+        crate::tools::synthesised::load_tool_from_source(&source, &path, &registry).unwrap()
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    fn registry_with_synth_tool(name: &str, vfs_path: &str) -> ToolRegistry {
+        let mut reg = ToolRegistry::new();
+        reg.register(make_synth_tool(name, vfs_path));
+        reg
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_visibility_shared_visible_to_all() {
+        let reg = registry_with_synth_tool("shared_tool", "/tools/shared/tool.scm");
+        assert!(reg.is_tool_visible("shared_tool", "alice", &[]));
+        assert!(reg.is_tool_visible("shared_tool", "bob", &[]));
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_visibility_home_only_owner() {
+        let reg = registry_with_synth_tool("alice_tool", "/tools/home/alice/tool.scm");
+        assert!(reg.is_tool_visible("alice_tool", "alice", &[]));
+        assert!(!reg.is_tool_visible("alice_tool", "bob", &[]));
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_visibility_flock_members_only() {
+        let reg = registry_with_synth_tool("flock_tool", "/tools/flocks/dev/tool.scm");
+        assert!(reg.is_tool_visible("flock_tool", "alice", &["dev".to_string()]));
+        assert!(!reg.is_tool_visible("flock_tool", "bob", &[]));
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_visibility_builtin_always_visible() {
+        let handler: ToolHandler = Arc::new(|_| Box::pin(async { Ok("ok".into()) }));
+        let reg = {
+            let mut r = ToolRegistry::new();
+            r.register(make_test_tool(
+                "builtin_tool",
+                ToolCategory::Shell,
+                ToolImpl::Builtin(handler),
+            ));
+            r
+        };
+        assert!(reg.is_tool_visible("builtin_tool", "anyone", &[]));
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_visibility_missing_tool_returns_true() {
+        let reg = ToolRegistry::new();
+        assert!(reg.is_tool_visible("nonexistent", "alice", &[]));
     }
 
     #[test]
