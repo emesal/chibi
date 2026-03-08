@@ -61,3 +61,8 @@ LLM communication is delegated to ratatoskr; `gateway.rs` bridges chibi's types 
 - `ContextsBackend` reads the flock registry directly from disk (not via VFS) to avoid a circular dependency — it is itself a VFS backend.
 - `PartitionMeta.prompt_count` uses `serde(default)` — pre-existing manifests without this field deserialise to 0; no backfill of old manifests.
 - `ContextsBackend` uses `PartitionManager::load_with_config` for `prompt_count` on each `state.json` read (full active-partition scan). If performance becomes a concern, pass a cached `ActiveState` via `load_with_cached_state`.
+- Synthesised tools: `(harness tools)` module provides `call-tool` and `define-tool`. `HARNESS_PREAMBLE` defines `%tool-registry%` and `define-tool` at top level (not inside the library) so `set!` can mutate it and rust can read it post-eval.
+- `ToolImpl::Synthesised` has `exec_binding` field: `"tool-execute"` for convention format, `"%tool-execute-{name}%"` for `define-tool` multi-tool files.
+- `reload_tool_from_content` and `scan_and_register` require `&ToolsConfig` for tier resolution. Pass `&ToolsConfig::default()` when no tier overrides needed.
+- `call-tool` bridge uses two thread-locals: `BRIDGE_REGISTRY` (set at load time, retained) and `BRIDGE_CALL_CTX` (set/cleared per execute via `CallContextGuard`).
+- `Modules::Safe` allowlist (tein) includes `(scheme base)`, `(scheme write)`, `(scheme read)`, `(scheme char)`, and other pure modules. Modules with `default_safe: false` (e.g. `(scheme regex)`, `(tein modules)`) are blocked in the sandboxed tier.

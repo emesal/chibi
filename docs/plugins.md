@@ -276,6 +276,87 @@ Chibi provides built-in tools that don't require plugins:
 
 See [agentic.md](agentic.md) for details on sub-agents and tool output caching.
 
+## Synthesised Tools (Scheme)
+
+Synthesised tools are written in R7RS Scheme and live in the VFS under `/tools/`. Chibi evaluates them via [tein](https://github.com/emesal/tein) and registers them alongside regular plugins.
+
+### File Locations
+
+| VFS Path | Tier | Visibility |
+|----------|------|------------|
+| `/tools/shared/*.scm` | sandboxed (default) | all contexts |
+| `/tools/home/<context>/*.scm` | sandboxed | owner context only |
+| `/tools/flocks/<flock>/*.scm` | sandboxed | flock members only |
+
+Subdirectories are scanned recursively. Files are loaded at startup and hot-reloaded when written via the VFS.
+
+### Convention Format (single tool per file)
+
+```scheme
+(import (scheme base))
+
+(define tool-name "word_count")
+(define tool-description "Count words in text")
+(define tool-parameters
+  '((text . ((type . "string") (description . "text to count")))))
+
+(define (tool-execute args)
+  (let ((text (cdr (assoc "text" args))))
+    (number->string (string-length text))))
+```
+
+### Multi-Tool Format (`define-tool`)
+
+Use `(import (harness tools))` to access the `define-tool` macro. A single file can define multiple tools:
+
+```scheme
+(import (scheme base))
+(import (harness tools))
+
+(define-tool greet
+  (description "Greet someone")
+  (parameters '((name . ((type . "string") (description . "name")))))
+  (execute (lambda (args)
+    (string-append "Hello, " (cdr (assoc "name" args)) "!"))))
+
+(define-tool farewell
+  (description "Say goodbye")
+  (parameters '((name . ((type . "string") (description . "name")))))
+  (execute (lambda (args)
+    (string-append "Goodbye, " (cdr (assoc "name" args)) "!"))))
+```
+
+### `(harness tools)` Module
+
+The `(harness tools)` module exposes:
+
+- **`define-tool`** — macro for defining multiple tools in one file. Registers the tool into an internal `%tool-registry%` list that chibi reads after evaluation.
+- **`call-tool`** — procedure `(call-tool name args)` for calling other registered tools from within a tool's `execute` body. `args` is an alist of `("key" . value)` pairs. Returns the tool's string output.
+
+`call-tool` bridges synchronously into chibi's async tool dispatch. It is available in both sandboxed and unsandboxed tiers.
+
+### Sandbox Tiers
+
+Tools run in one of two tiers, configured per-path in `[tools.tiers]` (see [configuration.md](configuration.md)):
+
+| Tier | Access | Step Limit |
+|------|--------|------------|
+| `sandboxed` (default) | `Modules::Safe` subset of R7RS | 10,000,000 steps |
+| `unsandboxed` | Full R7RS | None |
+
+`Modules::Safe` allows `(scheme base)`, `(scheme write)`, `(scheme read)`, `(scheme char)`, and other pure modules. It blocks modules with `default_safe: false` — notably `(scheme regex)`, `(tein modules)`, and network/filesystem access.
+
+### Parameters Format
+
+The `tool-parameters` / `parameters` value is a Scheme alist that chibi converts to JSON Schema:
+
+```scheme
+'((text  . ((type . "string")  (description . "input text")))
+  (count . ((type . "integer") (description . "how many") (required . #f))))
+```
+
+All parameters are required by default. Add `(required . #f)` to an attribute alist to make a parameter optional.
+
 ## Language Plugins
 
 Language plugins provide symbol extraction for the codebase index. Core handles all database writes.

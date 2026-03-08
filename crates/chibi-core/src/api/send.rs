@@ -1993,6 +1993,22 @@ pub async fn send_prompt<S: ResponseSink>(
         annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
         all_tools = filter_tools_by_config(all_tools, &resolved_config.tools, &registry);
 
+        // filter synthesised tools by visibility (zone-based scoping)
+        #[cfg(feature = "synthesised-tools")]
+        {
+            let context_flocks =
+                tools::vfs_block_on(app.vfs.flock_list_for(&context.name)).unwrap_or_default();
+            let registry_guard = registry.read().unwrap();
+            all_tools.retain(|tool| {
+                let name = tool
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
+                registry_guard.is_tool_visible(name, &context.name, &context_flocks)
+            });
+        }
+
         // Execute pre_api_tools hook
         let tool_info = build_tool_info_list(&all_tools, &registry);
         let mut hook_data = json!({
@@ -2270,6 +2286,7 @@ mod tests {
             include: Some(vec!["tool1".to_string(), "tool3".to_string()]),
             exclude: None,
             exclude_categories: None,
+            ..Default::default()
         };
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let result = filter_tools_by_config(tools, &config, &registry);
@@ -2287,6 +2304,7 @@ mod tests {
             include: None,
             exclude: Some(vec!["tool2".to_string()]),
             exclude_categories: None,
+            ..Default::default()
         };
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let result = filter_tools_by_config(tools, &config, &registry);
@@ -2306,6 +2324,7 @@ mod tests {
             include: None,
             exclude: None,
             exclude_categories: Some(vec!["shell".to_string()]),
+            ..Default::default()
         };
         let registry = make_test_registry();
         let result = filter_tools_by_config(tools, &config, &registry);
@@ -2335,6 +2354,7 @@ mod tests {
             include: None,
             exclude: None,
             exclude_categories: Some(vec!["shell".to_string(), "flow".to_string()]),
+            ..Default::default()
         };
         let registry = make_test_registry();
         let result = filter_tools_by_config(tools, &config, &registry);
