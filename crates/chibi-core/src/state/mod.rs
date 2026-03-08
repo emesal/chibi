@@ -36,6 +36,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, ErrorKind, Write};
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 /// Runtime application state.
@@ -49,7 +50,9 @@ pub struct AppState {
     /// Global configuration loaded from `~/.chibi/config.toml`.
     pub config: Config,
     /// In-memory list of all known contexts (names and metadata).
-    pub state: ContextState,
+    /// Wrapped in `Arc<RwLock<>>` so virtual VFS backends can share
+    /// the same live state without a separate copy.
+    pub state: Arc<RwLock<ContextState>>,
     /// Root chibi data directory (typically `~/.chibi`).
     pub chibi_dir: PathBuf,
     /// Path to the `state.json` file that records all context metadata.
@@ -90,9 +93,9 @@ impl AppState {
         fs::create_dir_all(&prompts_dir)?;
         fs::create_dir_all(&plugins_dir)?;
 
-        let state = ContextState {
+        let state = Arc::new(RwLock::new(ContextState {
             contexts: Vec::new(),
-        };
+        }));
 
         let vfs_root = chibi_dir.join("vfs");
         if config.vfs.backend != "local" {
@@ -179,7 +182,7 @@ impl AppState {
             );
         }
 
-        let state = if state_path.exists() {
+        let loaded_state = if state_path.exists() {
             let file = File::open(&state_path)?;
             serde_json::from_reader(BufReader::new(file)).unwrap_or_else(|e| {
                 eprintln!("[WARN] State file corrupted, resetting to defaults: {}", e);
@@ -192,6 +195,7 @@ impl AppState {
                 contexts: Vec::new(),
             }
         };
+        let state = Arc::new(RwLock::new(loaded_state));
 
         let vfs_root = chibi_dir.join("vfs");
         if config.vfs.backend != "local" {
@@ -234,7 +238,8 @@ impl AppState {
     }
 
     pub fn save(&self) -> io::Result<()> {
-        self.state.save(&self.state_path)
+        let state = self.state.read().unwrap();
+        state.save(&self.state_path)
     }
 
     /// Synchronize state.json with filesystem reality.
@@ -250,39 +255,48 @@ impl AppState {
     pub fn sync_state_with_filesystem(&mut self) -> io::Result<bool> {
         use std::collections::HashSet;
 
-        let mut modified = false;
         let contexts_dir = self.contexts_dir.clone();
 
+        // Collect all filesystem facts before acquiring the write lock, so we
+        // don't hold a global write lock across blocking read_dir / file_type
+        // syscalls (which would stall other readers on the tokio executor).
+        let existing_dirs: HashSet<String> = if let Ok(entries) = fs::read_dir(&contexts_dir) {
+            entries
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()))
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        } else {
+            HashSet::new()
+        };
+
+        let mut state = self.state.write().unwrap();
+        let mut modified = false;
+
         // Phase 1: Remove stale entries (directory doesn't exist)
-        let original_count = self.state.contexts.len();
-        self.state
+        let original_count = state.contexts.len();
+        state
             .contexts
-            .retain(|entry| contexts_dir.join(&entry.name).is_dir());
-        if self.state.contexts.len() != original_count {
+            .retain(|entry| existing_dirs.contains(&entry.name));
+        if state.contexts.len() != original_count {
             modified = true;
         }
 
         // Phase 2: Discover orphan directories
-        let known_names: HashSet<_> = self.state.contexts.iter().map(|e| e.name.clone()).collect();
-
-        if let Ok(entries) = fs::read_dir(&contexts_dir) {
-            for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if !known_names.contains(&name) && is_valid_context_name(&name) {
-                        // Orphaned context directory - use current timestamp
-                        // (state.json is the single source of truth for created_at)
-                        self.state
-                            .contexts
-                            .push(ContextEntry::with_created_at(name, now_timestamp()));
-                        modified = true;
-                    }
-                }
+        let known_names: HashSet<_> = state.contexts.iter().map(|e| e.name.clone()).collect();
+        for name in existing_dirs {
+            if !known_names.contains(&name) && is_valid_context_name(&name) {
+                // Orphaned context directory - use current timestamp
+                // (state.json is the single source of truth for created_at)
+                state
+                    .contexts
+                    .push(ContextEntry::with_created_at(name, now_timestamp()));
+                modified = true;
             }
         }
 
         // Sort by name for consistent ordering
-        self.state.contexts.sort_by(|a, b| a.name.cmp(&b.name));
+        state.contexts.sort_by(|a, b| a.name.cmp(&b.name));
 
         Ok(modified)
     }
@@ -296,7 +310,8 @@ impl AppState {
         destroy_at: Option<u64>,
         destroy_after_seconds_inactive: Option<u64>,
     ) -> io::Result<bool> {
-        if let Some(entry) = self.state.contexts.iter_mut().find(|e| e.name == name) {
+        let mut state = self.state.write().unwrap();
+        if let Some(entry) = state.contexts.iter_mut().find(|e| e.name == name) {
             entry.touch();
             if let Some(ts) = destroy_at {
                 entry.destroy_at = ts;
@@ -319,13 +334,15 @@ impl AppState {
         let mut destroyed = Vec::new();
 
         // Collect contexts to destroy
-        let to_destroy: Vec<String> = self
-            .state
-            .contexts
-            .iter()
-            .filter(|e| e.should_auto_destroy())
-            .map(|e| e.name.clone())
-            .collect();
+        let to_destroy: Vec<String> = {
+            let state = self.state.read().unwrap();
+            state
+                .contexts
+                .iter()
+                .filter(|e| e.should_auto_destroy())
+                .map(|e| e.name.clone())
+                .collect()
+        };
 
         // Destroy each one
         for name in to_destroy {
@@ -335,7 +352,8 @@ impl AppState {
                 fs::remove_dir_all(&dir)?;
             }
             // Remove from state
-            self.state.contexts.retain(|e| e.name != name);
+            let mut state = self.state.write().unwrap();
+            state.contexts.retain(|e| e.name != name);
             destroyed.push(name);
         }
 
@@ -628,6 +646,23 @@ impl AppState {
         pm.read_all_entries()
     }
 
+    /// Returns the total number of user prompts for a context.
+    ///
+    /// Sums prompt counts across all archived partitions and the active
+    /// partition. Uses cached active state when available.
+    pub fn prompt_count(&self, name: &str) -> io::Result<usize> {
+        self.migrate_transcript_if_needed(name)?;
+        let transcript_dir = self.transcript_dir(name);
+        let storage_config = self.resolve_config(name, None)?.storage;
+        let cached_state = self.active_state_cache.borrow().get(name).cloned();
+        let pm = PartitionManager::load_with_cached_state(
+            &transcript_dir,
+            storage_config,
+            cached_state,
+        )?;
+        Ok(pm.total_prompt_count())
+    }
+
     /// Migrate from old context.json format to new context.jsonl format
     fn migrate_and_load_context(&self, name: &str) -> io::Result<Context> {
         let old_path = self.context_file_old(name);
@@ -728,7 +763,8 @@ impl AppState {
 
     /// Get created_at timestamp for a context from state.json (single source of truth)
     pub fn get_context_created_at(&self, name: &str) -> u64 {
-        self.state
+        let state = self.state.read().unwrap();
+        state
             .contexts
             .iter()
             .find(|c| c.name == name)

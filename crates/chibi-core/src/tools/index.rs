@@ -80,20 +80,36 @@ pub static INDEX_TOOL_DEFS: &[BuiltinToolDef] = &[
 
 // === Registry Helpers ===
 
-/// Convert all index tools to API format
-pub fn all_index_tools_to_api_format() -> Vec<serde_json::Value> {
-    INDEX_TOOL_DEFS
-        .iter()
-        .map(|def| def.to_api_format())
-        .collect()
-}
+/// Register all index tools into the registry.
+///
+/// Note: the `tools` slice passed to `execute_index_tool` is `&[]` here.
+/// Full registry wiring (for language plugin dispatch) happens in Task 7+.
+pub fn register_index_tools(registry: &mut super::registry::ToolRegistry) {
+    use super::Tool;
+    use super::registry::{ToolCategory, ToolHandler};
+    use std::sync::Arc;
 
-/// Check if a tool name belongs to the index group
-pub fn is_index_tool(name: &str) -> bool {
-    matches!(
-        name,
-        INDEX_UPDATE_TOOL_NAME | INDEX_QUERY_TOOL_NAME | INDEX_STATUS_TOOL_NAME
-    )
+    let handler: ToolHandler = Arc::new(|call| {
+        // execute_index_tool is sync — extract result before the async block so
+        // no !Sync references cross an .await point.
+        let ctx = call.context;
+        let result = execute_index_tool(call.name, call.args, ctx.project_root, ctx.config, &[])
+            .unwrap_or_else(|| {
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("unknown index tool: {}", call.name),
+                ))
+            });
+        Box::pin(async move { result })
+    });
+
+    for def in INDEX_TOOL_DEFS {
+        registry.register(Tool::from_builtin_def(
+            def,
+            handler.clone(),
+            ToolCategory::Index,
+        ));
+    }
 }
 
 // === Tool Execution ===
@@ -230,15 +246,6 @@ mod tests {
             assert_eq!(api["type"], "function");
             assert!(api["function"]["name"].is_string());
         }
-    }
-
-    #[test]
-    fn test_is_index_tool() {
-        assert!(is_index_tool(INDEX_UPDATE_TOOL_NAME));
-        assert!(is_index_tool(INDEX_QUERY_TOOL_NAME));
-        assert!(is_index_tool(INDEX_STATUS_TOOL_NAME));
-        assert!(!is_index_tool("shell_exec"));
-        assert!(!is_index_tool("file_head"));
     }
 
     #[test]

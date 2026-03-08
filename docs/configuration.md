@@ -139,11 +139,11 @@ reflection_character_limit = 10000
 # Fuel Budget (Agentic Loop Limits)
 # =============================================================================
 
-# Total fuel budget for autonomous tool loops (default: 30)
+# Total fuel budget for autonomous tool loops (default: 0 = unlimited)
 # Each tool-call round and agent continuation costs 1 fuel. First turn is free.
-# Set to 0 to disable fuel tracking entirely (unlimited mode — no budget enforced,
-# no fuel info injected into prompts or hook payloads).
-fuel = 30
+# Set to a positive number to enable fuel tracking (budget enforced,
+# fuel info injected into prompts and hook payloads).
+fuel = 0
 
 # Fuel cost of an empty LLM response (default: 15)
 # When the LLM returns an empty response (no text, no tool calls), this much
@@ -645,6 +645,24 @@ include = ["update_todos", "update_goals", "update_reflection"]
   - `include`: local **overrides** global entirely (if set)
   - `exclude`: local **appends** to global
   - `exclude_categories`: local **appends** to global
+
+### Synthesised Tool Tiers
+
+Scheme tools loaded from the VFS run in a sandbox by default. Override the tier per VFS path prefix using `[tools.tiers]`:
+
+```toml
+[tools.tiers]
+# path prefix → tier (1 = sandboxed, 2 = unsandboxed)
+"/tools/shared" = 1           # default — Modules::Safe + 10M step limit
+"/tools/home/admin" = 2       # trusted admin context: full R7RS, no step limit
+"/tools/flocks/trusted" = 2   # trusted flock: full R7RS
+```
+
+Tier values:
+- `1` — **sandboxed**: `Modules::Safe` module subset, 10,000,000 step limit. Default for all paths.
+- `2` — **unsandboxed**: full R7RS, no step limit. For trusted authors only.
+
+Tier resolution uses prefix matching: the longest matching prefix wins. If no prefix matches, `sandboxed` (1) is used.
 
 **Filter Precedence:**
 1. Config `include` (if set, only these tools considered)

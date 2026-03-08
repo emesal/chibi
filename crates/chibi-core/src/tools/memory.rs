@@ -113,14 +113,39 @@ pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
     },
 ];
 
-/// Check if a tool name is a memory tool.
-pub fn is_memory_tool(name: &str) -> bool {
-    MEMORY_TOOL_DEFS.iter().any(|d| d.name == name)
-}
+/// Register all memory tools into the registry.
+pub fn register_memory_tools(registry: &mut super::registry::ToolRegistry) {
+    use super::Tool;
+    use super::registry::{ToolCategory, ToolHandler};
+    use std::sync::Arc;
 
-/// Convert all memory tools to API format.
-pub fn all_memory_tools_to_api_format() -> Vec<serde_json::Value> {
-    MEMORY_TOOL_DEFS.iter().map(|d| d.to_api_format()).collect()
+    let handler: ToolHandler = Arc::new(|call| {
+        // execute_memory_tool is sync — extract result before entering the async block
+        // so no !Sync references cross an .await point.
+        let ctx = call.context;
+        let result = execute_memory_tool(
+            ctx.app,
+            ctx.context_name,
+            call.name,
+            call.args,
+            Some(ctx.config),
+        )
+        .unwrap_or_else(|| {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("unknown memory tool: {}", call.name),
+            ))
+        });
+        Box::pin(async move { result })
+    });
+
+    for def in MEMORY_TOOL_DEFS {
+        registry.register(Tool::from_builtin_def(
+            def,
+            handler.clone(),
+            ToolCategory::Memory,
+        ));
+    }
 }
 
 /// Execute a memory tool by name.
@@ -369,16 +394,6 @@ mod tests {
         assert_eq!(TODOS_TOOL_NAME, "update_todos");
         assert_eq!(GOALS_TOOL_NAME, "update_goals");
         assert_eq!(READ_CONTEXT_TOOL_NAME, "read_context");
-    }
-
-    #[test]
-    fn test_is_memory_tool() {
-        assert!(is_memory_tool(REFLECTION_TOOL_NAME));
-        assert!(is_memory_tool(TODOS_TOOL_NAME));
-        assert!(is_memory_tool(GOALS_TOOL_NAME));
-        assert!(is_memory_tool(READ_CONTEXT_TOOL_NAME));
-        assert!(!is_memory_tool("shell_exec"));
-        assert!(!is_memory_tool("call_agent"));
     }
 
     #[test]

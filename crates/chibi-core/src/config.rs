@@ -412,6 +412,24 @@ impl ApiParams {
     }
 }
 
+/// Sandbox tier for synthesised (tein/scheme) tools.
+///
+/// Controls how much of R7RS the tool can access.
+///
+/// - `Sandboxed` (default): only safe module subset, step limit enforced.
+/// - `Unsandboxed`: full R7RS access, no step limit. Use with trusted tools only.
+///
+/// Configured via `[tools.tiers]` in `chibi.toml`. Most specific path wins.
+#[cfg(feature = "synthesised-tools")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SandboxTier {
+    /// Tier 1: sandboxed, safe modules only, step limit. Default.
+    #[default]
+    Sandboxed,
+    /// Tier 2: full R7RS, no step limit. Opt-in via config.
+    Unsandboxed,
+}
+
 /// Tool filtering configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ToolsConfig {
@@ -424,6 +442,20 @@ pub struct ToolsConfig {
     /// Exclude entire tool categories: "builtin", "file", "agent", "coding"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude_categories: Option<Vec<String>>,
+    /// Sandbox tier overrides for synthesised tools.
+    ///
+    /// Keys are VFS path prefixes (tool file or zone directory), values are
+    /// tier numbers: `1` = sandboxed (default), `2` = unsandboxed (full R7RS).
+    /// Most specific (longest) matching prefix wins.
+    ///
+    /// Example in `chibi.toml`:
+    /// ```toml
+    /// [tools.tiers]
+    /// "/tools/home/admin/" = 2        # all tools in admin's home run unsandboxed
+    /// "/tools/home/admin/safe.scm" = 1  # except this one stays sandboxed
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiers: Option<std::collections::HashMap<String, u8>>,
 }
 
 /// VFS (virtual file system) configuration.
@@ -489,11 +521,24 @@ impl ToolsConfig {
     /// - `include`: local overrides global entirely if set
     /// - `exclude`: local appends to global (deduplicated)
     /// - `exclude_categories`: local appends to global (deduplicated)
+    /// - `tiers`: local overrides global (local entries win per path)
     pub fn merge_local(&self, local: &ToolsConfig) -> ToolsConfig {
         let include = if local.include.is_some() {
             local.include.clone()
         } else {
             self.include.clone()
+        };
+
+        // merge tiers: start with global, overlay local entries
+        let tiers = match (&self.tiers, &local.tiers) {
+            (None, None) => None,
+            (Some(g), None) => Some(g.clone()),
+            (None, Some(l)) => Some(l.clone()),
+            (Some(g), Some(l)) => {
+                let mut merged = g.clone();
+                merged.extend(l.iter().map(|(k, v)| (k.clone(), *v)));
+                Some(merged)
+            }
         };
 
         ToolsConfig {
@@ -503,6 +548,36 @@ impl ToolsConfig {
                 &self.exclude_categories,
                 &local.exclude_categories,
             ),
+            tiers,
+        }
+    }
+
+    /// Resolve the sandbox tier for a synthesised tool at the given VFS path.
+    ///
+    /// Scans `tiers` for path prefixes that match `vfs_path`. The most specific
+    /// (longest) matching prefix wins. Absent entry or unknown tier → sandboxed.
+    #[cfg(feature = "synthesised-tools")]
+    pub fn resolve_tier(&self, vfs_path: &str) -> SandboxTier {
+        let tiers = match &self.tiers {
+            Some(t) => t,
+            None => return SandboxTier::Sandboxed,
+        };
+        // find the most specific (longest) matching prefix
+        let mut best: Option<(&str, u8)> = None;
+        for (pattern, tier) in tiers {
+            if vfs_path.starts_with(pattern.as_str()) {
+                match best {
+                    None => best = Some((pattern, *tier)),
+                    Some((prev, _)) if pattern.len() > prev.len() => {
+                        best = Some((pattern, *tier));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match best {
+            Some((_, 2)) => SandboxTier::Unsandboxed,
+            _ => SandboxTier::Sandboxed,
         }
     }
 }
@@ -527,7 +602,7 @@ impl ConfigDefaults {
     /// Sentinel: 0 = fetch from ratatoskr at runtime
     pub const CONTEXT_WINDOW_LIMIT: usize = 0;
     pub const REFLECTION_CHARACTER_LIMIT: usize = 10_000;
-    pub const FUEL: usize = 30;
+    pub const FUEL: usize = 0;
     pub const FUEL_EMPTY_RESPONSE_COST: usize = 15;
     pub const LOCK_HEARTBEAT_SECONDS: u64 = 30;
     pub const ROLLING_COMPACT_DROP_PERCENTAGE: f32 = 50.0;
@@ -1327,11 +1402,13 @@ mod tests {
             include: None,
             exclude: Some(vec!["tool_a".to_string()]),
             exclude_categories: Some(vec!["builtin".to_string()]),
+            ..Default::default()
         };
         let local = ToolsConfig {
             include: None,
             exclude: Some(vec!["tool_b".to_string()]),
             exclude_categories: Some(vec!["agent".to_string()]),
+            ..Default::default()
         };
         let merged = global.merge_local(&local);
         assert_eq!(
@@ -1350,11 +1427,13 @@ mod tests {
             include: Some(vec!["tool_a".to_string(), "tool_b".to_string()]),
             exclude: None,
             exclude_categories: None,
+            ..Default::default()
         };
         let local = ToolsConfig {
             include: Some(vec!["tool_c".to_string()]),
             exclude: None,
             exclude_categories: None,
+            ..Default::default()
         };
         let merged = global.merge_local(&local);
         assert_eq!(merged.include, Some(vec!["tool_c".to_string()]));
@@ -1366,16 +1445,80 @@ mod tests {
             include: None,
             exclude: Some(vec!["tool_a".to_string()]),
             exclude_categories: None,
+            ..Default::default()
         };
         let local = ToolsConfig {
             include: None,
             exclude: Some(vec!["tool_a".to_string(), "tool_b".to_string()]),
             exclude_categories: None,
+            ..Default::default()
         };
         let merged = global.merge_local(&local);
         assert_eq!(
             merged.exclude,
             Some(vec!["tool_a".to_string(), "tool_b".to_string()])
+        );
+    }
+
+    // --- tier resolution tests ---
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_tier_resolution_default_sandboxed() {
+        let config = ToolsConfig::default();
+        assert_eq!(
+            config.resolve_tier("/tools/shared/foo.scm"),
+            SandboxTier::Sandboxed
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_tier_resolution_specific_path_wins() {
+        let mut tiers = std::collections::HashMap::new();
+        tiers.insert("/tools/home/admin/".into(), 2u8);
+        tiers.insert("/tools/home/admin/safe.scm".into(), 1u8);
+        let config = ToolsConfig {
+            tiers: Some(tiers),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.resolve_tier("/tools/home/admin/danger.scm"),
+            SandboxTier::Unsandboxed
+        );
+        assert_eq!(
+            config.resolve_tier("/tools/home/admin/safe.scm"),
+            SandboxTier::Sandboxed
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_tier_resolution_unknown_value_is_sandboxed() {
+        let mut tiers = std::collections::HashMap::new();
+        tiers.insert("/tools/shared/".into(), 99u8); // unknown tier → sandboxed
+        let config = ToolsConfig {
+            tiers: Some(tiers),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.resolve_tier("/tools/shared/foo.scm"),
+            SandboxTier::Sandboxed
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_tier_resolution_no_match_is_sandboxed() {
+        let mut tiers = std::collections::HashMap::new();
+        tiers.insert("/tools/home/alice/".into(), 2u8);
+        let config = ToolsConfig {
+            tiers: Some(tiers),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.resolve_tier("/tools/shared/foo.scm"),
+            SandboxTier::Sandboxed
         );
     }
 

@@ -8,7 +8,7 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 |------|-------------|
 | `-c, --switch-context <NAME>` | Switch to a context (persistent); `new` for auto-name, `new:prefix` for prefixed, `-` for previous |
 | `-C, --ephemeral-context <NAME>` | Use context for this invocation only (doesn't change global state) |
-| `-l, --list-current-context` | Show current context info (name, message count, todos, goals) |
+| `-l, --list-current-context` | Show current context info (name, prompt count, todos, goals) |
 | `-L, --list-contexts` | List all contexts (shows `[active]` or `[stale]` lock status) |
 | `-d, --destroy-current-context` | Destroy the current context |
 | `-D, --destroy-context <CTX>` | Destroy a specified context |

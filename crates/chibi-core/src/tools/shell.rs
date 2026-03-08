@@ -38,17 +38,32 @@ pub static SHELL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
 
 // === Registry Helpers ===
 
-/// Convert all shell tools to API format
-pub fn all_shell_tools_to_api_format() -> Vec<serde_json::Value> {
-    SHELL_TOOL_DEFS
-        .iter()
-        .map(|def| def.to_api_format())
-        .collect()
-}
+/// Register all shell tools into the registry.
+pub fn register_shell_tools(registry: &mut super::registry::ToolRegistry) {
+    use super::Tool;
+    use super::registry::{ToolCategory, ToolHandler};
+    use std::sync::Arc;
 
-/// Check if a tool name belongs to the shell group
-pub fn is_shell_tool(name: &str) -> bool {
-    name == SHELL_EXEC_TOOL_NAME
+    let handler: ToolHandler = Arc::new(|call| {
+        Box::pin(async move {
+            execute_shell_tool(call.name, call.args, call.context.project_root)
+                .await
+                .unwrap_or_else(|| {
+                    Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("unknown shell tool: {}", call.name),
+                    ))
+                })
+        })
+    });
+
+    for def in SHELL_TOOL_DEFS {
+        registry.register(Tool::from_builtin_def(
+            def,
+            handler.clone(),
+            ToolCategory::Shell,
+        ));
+    }
 }
 
 // === Tool Execution ===
@@ -142,13 +157,6 @@ mod tests {
             assert_eq!(api["type"], "function");
             assert!(api["function"]["name"].is_string());
         }
-    }
-
-    #[test]
-    fn test_is_shell_tool() {
-        assert!(is_shell_tool(SHELL_EXEC_TOOL_NAME));
-        assert!(!is_shell_tool("file_head"));
-        assert!(!is_shell_tool("fetch_url"));
     }
 
     #[test]

@@ -424,11 +424,6 @@ pub async fn summarize_content(
 
 // === Predicates & Dispatcher ===
 
-/// Check if a tool name is a flow tool.
-pub fn is_flow_tool(name: &str) -> bool {
-    FLOW_TOOL_DEFS.iter().any(|d| d.name == name)
-}
-
 /// Get metadata for flow tools.
 pub fn flow_tool_metadata(name: &str) -> ToolMetadata {
     match name {
@@ -492,12 +487,66 @@ pub async fn execute_flow_tool(
     }
 }
 
-/// Convert all flow tools to API format.
+/// Register all flow tools into the registry with per-tool metadata overrides.
+///
+/// Flow tools that are intercepted by `send.rs` middleware (send_message,
+/// call_user, model_info) are registered for metadata/lookup purposes but their
+/// handler returns an error if directly dispatched — `send.rs` must intercept
+/// them before calling `registry.dispatch_with_context`.
+pub fn register_flow_tools(registry: &mut super::registry::ToolRegistry) {
+    use super::Tool;
+    use super::registry::{ToolCategory, ToolHandler};
+    use std::sync::Arc;
+
+    for def in FLOW_TOOL_DEFS {
+        let name = def.name;
+        // Per-tool metadata: flow tools have non-default ToolMetadata values.
+        let metadata = flow_tool_metadata(name);
+
+        let handler: ToolHandler = Arc::new(move |call| {
+            let ctx = call.context;
+            let config = ctx.config;
+            let tool_name = call.name;
+            let args = call.args;
+            Box::pin(async move {
+                execute_flow_tool(config, tool_name, args, &[])
+                    .await
+                    // io::Result<Option<String>> -> io::Result<String>
+                    .and_then(|opt| {
+                        opt.ok_or_else(|| {
+                            io::Error::other(format!(
+                                "flow tool '{tool_name}' is handled by send.rs middleware \
+                                 and must not be dispatched through the registry directly"
+                            ))
+                        })
+                    })
+            })
+        });
+
+        // Construct with per-tool metadata override (from_builtin_def uses ToolMetadata::new()).
+        let tool = Tool {
+            name: def.name.to_string(),
+            description: def.description.to_string(),
+            parameters: def.to_json_schema(),
+            hooks: vec![],
+            metadata,
+            summary_params: def.summary_params.iter().map(|s| s.to_string()).collect(),
+            r#impl: super::registry::ToolImpl::Builtin(handler),
+            category: ToolCategory::Flow,
+        };
+        registry.register(tool);
+    }
+}
+
+/// Build the dynamic description for `spawn_agent`'s `preset` parameter.
 ///
 /// `preset_capabilities`: capability names available via the configured cost tier.
-/// If empty, the `preset` param description notes no presets are configured.
-pub fn all_flow_tools_to_api_format(preset_capabilities: &[&str]) -> Vec<serde_json::Value> {
-    let preset_desc = if preset_capabilities.is_empty() {
+/// If empty, the description notes no presets are configured.
+///
+/// Used by `send.rs` to patch the description inline while iterating the registry,
+/// keeping tool-list construction in a single registry pass.
+pub fn spawn_agent_preset_description(preset_capabilities: &[String]) -> String {
+    if preset_capabilities.is_empty() {
         "Preset capability name (no presets configured for this tier)".to_string()
     } else {
         format!(
@@ -506,7 +555,23 @@ pub fn all_flow_tools_to_api_format(preset_capabilities: &[&str]) -> Vec<serde_j
              Explicit model/temperature/max_tokens override preset defaults.",
             preset_capabilities.join(", ")
         )
-    };
+    }
+}
+
+/// Convert all flow tools to API format.
+///
+/// `preset_capabilities`: capability names available via the configured cost tier.
+/// If empty, the `preset` param description notes no presets are configured.
+///
+/// Kept for use in tests. Production code uses registry iteration + inline patching.
+#[cfg(test)]
+pub fn all_flow_tools_to_api_format(preset_capabilities: &[&str]) -> Vec<serde_json::Value> {
+    let preset_desc = spawn_agent_preset_description(
+        &preset_capabilities
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+    );
 
     FLOW_TOOL_DEFS
         .iter()
@@ -559,22 +624,6 @@ mod tests {
         assert_eq!(MODEL_INFO_TOOL_NAME, "model_info");
         assert_eq!(SPAWN_AGENT_TOOL_NAME, "spawn_agent");
         assert_eq!(SUMMARIZE_CONTENT_TOOL_NAME, "summarize_content");
-    }
-
-    #[test]
-    fn test_is_flow_tool() {
-        assert!(is_flow_tool(SEND_MESSAGE_TOOL_NAME));
-        // call_agent: not in FLOW_TOOL_DEFS (disabled as LLM tool)
-        assert!(
-            !is_flow_tool(CALL_AGENT_TOOL_NAME),
-            "call_agent must not be in flow tool registry"
-        );
-        assert!(is_flow_tool(CALL_USER_TOOL_NAME));
-        assert!(is_flow_tool(MODEL_INFO_TOOL_NAME));
-        assert!(is_flow_tool(SPAWN_AGENT_TOOL_NAME));
-        assert!(is_flow_tool(SUMMARIZE_CONTENT_TOOL_NAME));
-        assert!(!is_flow_tool("file_head"));
-        assert!(!is_flow_tool("update_reflection"));
     }
 
     // === Metadata ===

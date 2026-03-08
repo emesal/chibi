@@ -23,21 +23,25 @@
 
 pub mod backend;
 pub mod caller;
+pub mod contexts_backend;
 pub mod flock;
 pub mod local;
 pub mod path;
 pub mod permissions;
+pub mod tools_backend;
 pub mod types;
 #[allow(clippy::module_inception)]
 mod vfs;
 
-pub use backend::VfsBackend;
+pub use backend::{ReadOnlyVfsBackend, VfsBackend};
 pub use caller::VfsCaller;
+pub use contexts_backend::ContextsBackend;
 pub use local::LocalBackend;
 pub use path::VfsPath;
 pub use permissions::{check_read, check_write, is_reserved_caller_name};
+pub use tools_backend::ToolsBackend;
 pub use types::{VfsEntry, VfsEntryKind, VfsMetadata};
-pub use vfs::Vfs;
+pub use vfs::{ScmChangeCallback, ScmChangeKind, Vfs, VfsBuilder};
 
 #[cfg(test)]
 mod integration_tests {

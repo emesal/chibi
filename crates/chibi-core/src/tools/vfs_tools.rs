@@ -216,28 +216,48 @@ pub async fn execute_vfs_move(
     Ok(format!("Moved {} -> {}", src.as_str(), dst.as_str()))
 }
 
-/// Convert all VFS tools to API format for LLM tool registration.
-pub fn all_vfs_tools_to_api_format() -> Vec<serde_json::Value> {
-    VFS_TOOL_DEFS
-        .iter()
-        .map(|def| def.to_api_format())
-        .collect()
+/// Register all VFS tools into the registry.
+pub fn register_vfs_tools(registry: &mut super::registry::ToolRegistry) {
+    use super::Tool;
+    use super::registry::{ToolCategory, ToolHandler};
+    use std::sync::Arc;
+
+    let handler: ToolHandler = Arc::new(|call| {
+        // execute_vfs_tool is async. We can't hold &Vfs or VfsCaller<'_> across
+        // .await because Vfs contains !Sync RefCell fields. Instead, call the
+        // function synchronously-wrapped in an async block — it borrows vfs only
+        // within the async fn body and those borrows don't cross an .await in the
+        // sense that VfsCaller is passed by value (Copy) and &Vfs is borrowed for
+        // the duration of the call, not stored into the future state machine.
+        // This works because the future is !Send (BoxFuture is not Send), so the
+        // future stays on the same thread as the &Vfs it borrows.
+        let ctx = call.context;
+        let name = call.name;
+        let args = call.args;
+        let vfs = ctx.vfs;
+        let caller = ctx.vfs_caller;
+        Box::pin(async move {
+            execute_vfs_tool(vfs, caller, name, args)
+                .await
+                .unwrap_or_else(|| {
+                    Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("unknown vfs tool: {name}"),
+                    ))
+                })
+        })
+    });
+
+    for def in VFS_TOOL_DEFS {
+        registry.register(Tool::from_builtin_def(
+            def,
+            handler.clone(),
+            ToolCategory::Vfs,
+        ));
+    }
 }
 
 // === Dispatch ===
-
-/// Check if a tool name is a VFS tool.
-pub fn is_vfs_tool(name: &str) -> bool {
-    matches!(
-        name,
-        VFS_LIST_TOOL_NAME
-            | VFS_INFO_TOOL_NAME
-            | VFS_COPY_TOOL_NAME
-            | VFS_MOVE_TOOL_NAME
-            | VFS_MKDIR_TOOL_NAME
-            | VFS_DELETE_TOOL_NAME
-    )
-}
 
 /// Execute a VFS tool by name.
 ///
@@ -395,17 +415,6 @@ mod tests {
         let args = serde_json::json!({"path": "vfs:///sys/forbidden"});
         let result = execute_vfs_mkdir(&vfs, VfsCaller::Context("ctx"), &args).await;
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_is_vfs_tool() {
-        assert!(is_vfs_tool("vfs_list"));
-        assert!(is_vfs_tool("vfs_info"));
-        assert!(is_vfs_tool("vfs_copy"));
-        assert!(is_vfs_tool("vfs_move"));
-        assert!(is_vfs_tool("vfs_mkdir"));
-        assert!(is_vfs_tool("vfs_delete"));
-        assert!(!is_vfs_tool("file_head"));
     }
 
     #[test]

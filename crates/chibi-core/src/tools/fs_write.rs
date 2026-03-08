@@ -95,17 +95,40 @@ pub static FS_WRITE_TOOL_DEFS: &[BuiltinToolDef] = &[
 
 // === Registry Helpers ===
 
-/// Convert all fs_write tools to API format
-pub fn all_fs_write_tools_to_api_format() -> Vec<serde_json::Value> {
-    FS_WRITE_TOOL_DEFS
-        .iter()
-        .map(|def| def.to_api_format())
-        .collect()
-}
+/// Register all fs_write tools into the registry.
+pub fn register_fs_write_tools(registry: &mut super::registry::ToolRegistry) {
+    use super::Tool;
+    use super::registry::{ToolCategory, ToolHandler};
+    use std::sync::Arc;
 
-/// Check if a tool name belongs to the fs_write group
-pub fn is_fs_write_tool(name: &str) -> bool {
-    FS_WRITE_TOOL_DEFS.iter().any(|d| d.name == name)
+    let handler: ToolHandler = Arc::new(|call| {
+        // execute_fs_write_tool is sync — extract result before the async block so
+        // no !Sync references (&Vfs) cross an .await point.
+        let ctx = call.context;
+        let result = execute_fs_write_tool(
+            call.name,
+            call.args,
+            ctx.project_root,
+            ctx.config,
+            ctx.vfs,
+            ctx.vfs_caller,
+        )
+        .unwrap_or_else(|| {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("unknown fs_write tool: {}", call.name),
+            ))
+        });
+        Box::pin(async move { result })
+    });
+
+    for def in FS_WRITE_TOOL_DEFS {
+        registry.register(Tool::from_builtin_def(
+            def,
+            handler.clone(),
+            ToolCategory::FsWrite,
+        ));
+    }
 }
 
 // === Tool Execution ===
@@ -485,15 +508,6 @@ mod tests {
             assert!(api["function"]["name"].is_string());
             assert!(api["function"]["description"].is_string());
         }
-    }
-
-    #[test]
-    fn test_is_fs_write_tool() {
-        assert!(is_fs_write_tool(WRITE_FILE_TOOL_NAME));
-        assert!(is_fs_write_tool(FILE_EDIT_TOOL_NAME));
-        assert!(!is_fs_write_tool("file_head"));
-        assert!(!is_fs_write_tool("shell_exec"));
-        assert!(!is_fs_write_tool("unknown"));
     }
 
     #[test]

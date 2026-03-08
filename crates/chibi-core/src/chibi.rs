@@ -32,13 +32,14 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 use crate::api::sink::ResponseSink;
 use crate::api::{PromptOptions, send_prompt};
 use crate::config::ResolvedConfig;
 use crate::output::{CommandEvent, NoopSink, OutputSink};
 use crate::state::AppState;
-use crate::tools::{self, Tool};
+use crate::tools::{self, Tool, ToolCategory, ToolRegistry};
 
 use std::path::PathBuf;
 
@@ -89,8 +90,11 @@ pub struct LoadOptions {
 pub struct Chibi {
     /// The underlying application state.
     pub app: AppState,
-    /// Loaded tools (plugins from ~/.chibi/plugins/).
-    pub tools: Vec<Tool>,
+    /// Single source of truth for all tools at runtime.
+    ///
+    /// `Arc<RwLock<>>` allows `ToolsBackend` (Phase 3) to hold a shared
+    /// reference without requiring a mutable borrow of `Chibi`.
+    pub registry: Arc<RwLock<ToolRegistry>>,
     /// Project root directory (always resolved, never None).
     pub project_root: PathBuf,
     /// Optional permission handler for gated operations.
@@ -158,8 +162,21 @@ impl Chibi {
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn load_with_options(options: LoadOptions, output: &dyn OutputSink) -> io::Result<Self> {
-        let app = AppState::load(options.home)?;
-        let mut tools = tools::load_tools(&app.plugins_dir)?;
+        let mut app = AppState::load(options.home)?;
+
+        // Build the registry — register builtins first, then plugins, then MCP tools.
+        let mut reg = ToolRegistry::new();
+        tools::register_memory_tools(&mut reg);
+        tools::register_fs_read_tools(&mut reg);
+        tools::register_fs_write_tools(&mut reg);
+        tools::register_shell_tools(&mut reg);
+        tools::register_network_tools(&mut reg);
+        tools::register_index_tools(&mut reg);
+        tools::register_flow_tools(&mut reg);
+        tools::register_vfs_tools(&mut reg);
+        for tool in tools::load_tools(&app.plugins_dir)? {
+            reg.register(tool);
+        }
 
         // Load MCP bridge tools (non-fatal: bridge may not be configured)
         match tools::mcp::load_mcp_tools(&app.chibi_dir) {
@@ -169,7 +186,9 @@ impl Chibi {
                         count: mcp_tools.len(),
                     });
                 }
-                tools.extend(mcp_tools);
+                for tool in mcp_tools {
+                    reg.register(tool);
+                }
             }
             Err(e) => {
                 output.emit_event(CommandEvent::McpBridgeUnavailable {
@@ -192,7 +211,11 @@ impl Chibi {
             .into_iter()
             .map(|s| s.to_string())
             .collect();
-        let plugin_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+        let plugin_names: Vec<String> = reg
+            .filter(|t| t.category == ToolCategory::Plugin || t.category == ToolCategory::Mcp)
+            .into_iter()
+            .map(|t| t.name.clone())
+            .collect();
         output.emit_event(CommandEvent::LoadSummary {
             builtin_count: builtin_names.len(),
             builtin_names,
@@ -200,9 +223,57 @@ impl Chibi {
             plugin_names,
         });
 
+        let registry = Arc::new(RwLock::new(reg));
+
+        // Mount /tools/sys/ as a virtual read-only backend backed by the registry.
+        // The local backend (already constructed in AppState) stays at root.
+        // We rebuild the VFS using the builder, transferring the existing local backend.
+        let site_id = app.vfs.site_id().to_string();
+        let vfs_root = app.chibi_dir.join("vfs");
+        let local_backend = crate::vfs::LocalBackend::new(vfs_root);
+        let tools_backend = crate::vfs::ToolsBackend::new(Arc::clone(&registry));
+        let contexts_backend = crate::vfs::ContextsBackend::new(
+            Arc::clone(&app.state),
+            app.chibi_dir.clone(),
+            app.site_id.clone(),
+        );
+        app.vfs = crate::vfs::Vfs::builder(site_id)
+            .mount("/", Box::new(local_backend))
+            .mount("/tools/sys", Box::new(tools_backend))
+            .mount("/sys/contexts", Box::new(contexts_backend))
+            .build();
+
+        #[cfg(feature = "synthesised-tools")]
+        {
+            crate::tools::vfs_block_on(crate::tools::synthesised::scan_and_register(
+                &app.vfs,
+                &registry,
+                &app.config.tools,
+            ))?;
+        }
+
+        #[cfg(feature = "synthesised-tools")]
+        {
+            let reg = Arc::clone(&registry);
+            let tools_cfg = app.config.tools.clone();
+            app.vfs
+                .set_scm_change_callback(Arc::new(move |path, kind, content| match kind {
+                    crate::vfs::ScmChangeKind::Write => {
+                        if let Some(bytes) = content {
+                            crate::tools::synthesised::reload_tool_from_content(
+                                &reg, path, bytes, &tools_cfg,
+                            );
+                        }
+                    }
+                    crate::vfs::ScmChangeKind::Delete => {
+                        crate::tools::synthesised::unregister_tool_at_path(&reg, path);
+                    }
+                }));
+        }
+
         Ok(Self {
             app,
-            tools,
+            registry,
             project_root,
             permission_handler: None,
         })
@@ -236,12 +307,19 @@ impl Chibi {
     /// # }
     /// ```
     pub fn init(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
+        let reg = self.registry.read().unwrap();
         let hook_data = serde_json::json!({
             "chibi_home": self.app.chibi_dir.to_string_lossy(),
             "project_root": self.project_root.to_string_lossy(),
-            "tool_count": self.tools.len(),
+            "tool_count": reg.all().count(),
         });
-        tools::execute_hook(&self.tools, tools::HookPoint::OnStart, &hook_data)
+        let plugin_tools: Vec<Tool> = reg
+            .filter(|t| t.category == ToolCategory::Plugin)
+            .into_iter()
+            .cloned()
+            .collect();
+        drop(reg);
+        tools::execute_hook(&plugin_tools, tools::HookPoint::OnStart, &hook_data)
     }
 
     /// Shutdown the session.
@@ -249,12 +327,19 @@ impl Chibi {
     /// Executes `OnEnd` hooks. Call this once at the end of a session,
     /// after all prompts are complete.
     pub fn shutdown(&self) -> io::Result<Vec<(String, serde_json::Value)>> {
+        let reg = self.registry.read().unwrap();
         let hook_data = serde_json::json!({
             "chibi_home": self.app.chibi_dir.to_string_lossy(),
             "project_root": self.project_root.to_string_lossy(),
-            "tool_count": self.tools.len(),
+            "tool_count": reg.all().count(),
         });
-        tools::execute_hook(&self.tools, tools::HookPoint::OnEnd, &hook_data)
+        let plugin_tools: Vec<Tool> = reg
+            .filter(|t| t.category == ToolCategory::Plugin)
+            .into_iter()
+            .cloned()
+            .collect();
+        drop(reg);
+        tools::execute_hook(&plugin_tools, tools::HookPoint::OnEnd, &hook_data)
     }
 
     /// Clear a context, executing PreClear/PostClear hooks.
@@ -269,14 +354,22 @@ impl Chibi {
             "message_count": context.messages.len(),
             "summary": context.summary,
         });
-        let _ = tools::execute_hook(&self.tools, tools::HookPoint::PreClear, &pre_hook_data);
+        let plugin_tools: Vec<Tool> = self
+            .registry
+            .read()
+            .unwrap()
+            .filter(|t| t.category == ToolCategory::Plugin)
+            .into_iter()
+            .cloned()
+            .collect();
+        let _ = tools::execute_hook(&plugin_tools, tools::HookPoint::PreClear, &pre_hook_data);
 
         self.app.clear_context(context_name)?;
 
         let post_hook_data = serde_json::json!({
             "context_name": context_name,
         });
-        let _ = tools::execute_hook(&self.tools, tools::HookPoint::PostClear, &post_hook_data);
+        let _ = tools::execute_hook(&plugin_tools, tools::HookPoint::PostClear, &post_hook_data);
 
         Ok(())
     }
@@ -323,7 +416,7 @@ impl Chibi {
             &self.app,
             context_name,
             prompt.to_string(),
-            &self.tools,
+            Arc::clone(&self.registry),
             config,
             options,
             sink,
@@ -336,7 +429,9 @@ impl Chibi {
 
     /// Execute a tool by name with the given arguments.
     ///
-    /// Tries built-in tools first, then falls back to loaded plugins.
+    /// Delegates to `ToolRegistry::dispatch_with_context`. Policy (hooks,
+    /// permissions, caching) is handled by `send.rs` for the agentic path;
+    /// this method provides ungated access for programmatic/embedding use.
     ///
     /// # Arguments
     ///
@@ -354,109 +449,36 @@ impl Chibi {
         name: &str,
         args: serde_json::Value,
     ) -> io::Result<String> {
-        // Memory tools (sync)
-        if let Some(result) = tools::execute_memory_tool(&self.app, context_name, name, &args, None)
-        {
-            return result;
-        }
+        use crate::tools::ToolCallContext;
+        use crate::vfs::VfsCaller;
 
-        // fs_read tools (sync, no permission gating in chibi.rs)
-        if tools::is_fs_read_tool(name) {
-            let mut config = self.app.resolve_config(context_name, None)?;
-            tools::ensure_project_root_allowed(&mut config, &self.project_root);
-            if let Some(result) = tools::execute_fs_read_tool(
-                &self.app,
-                context_name,
-                name,
-                &args,
-                &config,
-                &self.project_root,
-            ) {
-                return result;
-            }
-        }
+        let mut config = self.app.resolve_config(context_name, None)?;
+        // Ensure project root is in the allowed list (mirrors send.rs behaviour).
+        tools::ensure_project_root_allowed(&mut config, &self.project_root);
 
-        // fs_write tools (sync, no permission gating in chibi.rs)
-        if tools::is_fs_write_tool(name) {
-            let mut config = self.app.resolve_config(context_name, None)?;
-            tools::ensure_project_root_allowed(&mut config, &self.project_root);
-            if let Some(result) = tools::execute_fs_write_tool(
-                name,
-                &args,
-                &self.project_root,
-                &config,
-                &self.app.vfs,
-                crate::vfs::VfsCaller::Context(context_name),
-            ) {
-                return result;
-            }
-        }
-
-        // shell tools (async, no permission gating in chibi.rs)
-        if tools::is_shell_tool(name)
-            && let Some(result) = tools::execute_shell_tool(name, &args, &self.project_root).await
-        {
-            return result;
-        }
-
-        // network tools (async, no permission gating in chibi.rs)
-        if tools::is_network_tool(name)
-            && let Some(result) = tools::execute_network_tool(name, &args).await
-        {
-            return result;
-        }
-
-        // index tools (sync, no permission gating)
-        if tools::is_index_tool(name) {
-            let config = self.app.resolve_config(context_name, None)?;
-            if let Some(result) =
-                tools::execute_index_tool(name, &args, &self.project_root, &config, &self.tools)
-            {
-                return result;
-            }
-        }
-
-        // flow tools (async: spawn_agent, summarize_content; sync: send_message)
-        if name == tools::SEND_MESSAGE_TOOL_NAME {
-            let to = args.get("to").and_then(|v| v.as_str()).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "Missing 'to' parameter")
-            })?;
-            let content = args
-                .get("content")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "Missing 'content' parameter")
-                })?;
-            return self
-                .app
-                .send_inbox_message_from(context_name, to, content)
-                .map(|_| format!("Message sent to '{}'", to));
-        }
-        if tools::is_flow_tool(name) {
-            let config = self.app.resolve_config(context_name, None)?;
-            return match tools::execute_flow_tool(&config, name, &args, &self.tools).await {
-                Ok(Some(r)) => Ok(r),
-                Ok(None) => Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Flow tool '{}' not found", name),
-                )),
-                Err(e) => Err(e),
-            };
-        }
-
-        // Try MCP tools (virtual path mcp://server/tool)
-        if let Some(tool) = tools::find_tool(&self.tools, name) {
-            if tools::mcp::is_mcp_tool(tool) {
-                return tools::mcp::execute_mcp_tool(tool, &args, &self.app.chibi_dir);
-            }
-            // Regular plugin
-            return tools::execute_tool(tool, &args);
-        }
-
-        Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("Tool '{}' not found", name),
-        ))
+        let call_ctx = ToolCallContext {
+            app: &self.app,
+            context_name,
+            config: &config,
+            project_root: &self.project_root,
+            vfs: &self.app.vfs,
+            vfs_caller: VfsCaller::Context(context_name),
+        };
+        // Clone ToolImpl while holding the lock, then drop the guard before
+        // .await so no RwLockReadGuard is held across an async suspension.
+        let tool_impl = self
+            .registry
+            .read()
+            .unwrap()
+            .get(name)
+            .map(|t| t.r#impl.clone());
+        let Some(tool_impl) = tool_impl else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("unknown tool: {name}"),
+            ));
+        };
+        tools::ToolRegistry::dispatch_impl(tool_impl, name, &args, &call_ctx).await
     }
 
     // NOTE: The following methods were removed in the stateless-core refactor:
@@ -500,7 +522,7 @@ impl Chibi {
 
     /// Get the number of loaded tools.
     pub fn tool_count(&self) -> usize {
-        self.tools.len()
+        self.registry.read().unwrap().all().count()
     }
 
     /// Create a minimal `Chibi` instance for testing.
@@ -509,9 +531,18 @@ impl Chibi {
     /// Returns `(Chibi, TempDir)` — the `TempDir` must outlive `Chibi`.
     #[cfg(test)]
     pub(crate) fn for_test(app: AppState, root: std::path::PathBuf) -> Self {
+        let mut reg = ToolRegistry::new();
+        tools::register_memory_tools(&mut reg);
+        tools::register_fs_read_tools(&mut reg);
+        tools::register_fs_write_tools(&mut reg);
+        tools::register_shell_tools(&mut reg);
+        tools::register_network_tools(&mut reg);
+        tools::register_index_tools(&mut reg);
+        tools::register_flow_tools(&mut reg);
+        tools::register_vfs_tools(&mut reg);
         Self {
             app,
-            tools: vec![],
+            registry: Arc::new(RwLock::new(reg)),
             project_root: root,
             permission_handler: None,
         }
@@ -773,9 +804,10 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_count_empty() {
+    fn test_tool_count_has_builtins() {
+        // for_test registers all builtin tools; no plugins are loaded.
         let (chibi, _tmp) = create_test_chibi();
-        assert_eq!(chibi.tool_count(), 0);
+        assert!(chibi.tool_count() > 0, "expected builtins to be registered");
     }
 
     #[tokio::test]

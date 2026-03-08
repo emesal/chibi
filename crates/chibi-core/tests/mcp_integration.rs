@@ -88,11 +88,12 @@ fn load_mcp_tools_returns_tools_from_mock_bridge() {
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name, "test_server_greet");
     assert_eq!(tools[0].description, "say hello");
-    assert!(mcp::is_mcp_tool(&tools[0]));
-    assert_eq!(
-        mcp::parse_mcp_path(&tools[0].path),
-        Some(("test_server", "greet"))
-    );
+    assert_eq!(tools[0].category, chibi_core::tools::ToolCategory::Mcp);
+    assert!(matches!(
+        &tools[0].r#impl,
+        chibi_core::tools::ToolImpl::Mcp { server, tool_name }
+            if server == "test_server" && tool_name == "greet"
+    ));
 }
 
 #[test]

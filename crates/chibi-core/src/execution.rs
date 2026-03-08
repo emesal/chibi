@@ -76,15 +76,14 @@ pub async fn execute_command<S: ResponseSink>(
 
     // Ensure context dir + ContextEntry exist
     chibi.app.ensure_context_dir(context)?;
-    if !chibi.app.state.contexts.iter().any(|e| e.name == context) {
-        chibi
-            .app
-            .state
-            .contexts
-            .push(context::ContextEntry::with_created_at(
+    {
+        let mut state = chibi.app.state.write().unwrap();
+        if !state.contexts.iter().any(|e| e.name == context) {
+            state.contexts.push(context::ContextEntry::with_created_at(
                 context.to_string(),
                 context::now_timestamp(),
             ));
+        }
     }
 
     // Touch context with destroy settings from ExecutionFlags
@@ -175,7 +174,8 @@ async fn dispatch_command<S: ResponseSink>(
             );
             let status_str = status.map(|s| format!(" {}", s)).unwrap_or_default();
             output.emit_result(&format!("Context: {}{}", context, status_str));
-            output.emit_result(&format!("Messages: {}", ctx.messages.len()));
+            let prompt_count = chibi.app.prompt_count(context).unwrap_or(0);
+            output.emit_result(&format!("Prompts: {}", prompt_count));
             if !ctx.summary.is_empty() {
                 output.emit_result(&format!(
                     "Summary: {}",
@@ -292,14 +292,20 @@ async fn dispatch_command<S: ResponseSink>(
             Ok(CommandEffect::None)
         }
         Command::RunPlugin { name, args } => {
-            let tool = crate::tools::find_tool(&chibi.tools, name).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Plugin '{}' not found", name),
-                )
-            })?;
+            let tool = chibi
+                .registry
+                .read()
+                .unwrap()
+                .get(name)
+                .cloned()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("Plugin '{}' not found", name),
+                    )
+                })?;
             let args_json = serde_json::json!({ "args": args });
-            let result = crate::tools::execute_tool(tool, &args_json)?;
+            let result = crate::tools::execute_tool(&tool, &args_json)?;
             output.emit_result(&result);
             Ok(CommandEffect::None)
         }
@@ -647,7 +653,14 @@ mod tests {
         .unwrap();
 
         assert!(
-            chibi.app.state.contexts.iter().any(|e| e.name == "myctx"),
+            chibi
+                .app
+                .state
+                .read()
+                .unwrap()
+                .contexts
+                .iter()
+                .any(|e| e.name == "myctx"),
             "context 'myctx' should be registered in state"
         );
     }
@@ -666,7 +679,7 @@ mod tests {
             destroy_at: now_timestamp() - 1800,
             cwd: None,
         };
-        chibi.app.state.contexts.push(entry);
+        chibi.app.state.write().unwrap().contexts.push(entry);
         chibi.save().unwrap();
 
         let config = chibi.resolve_config("myctx", None).unwrap();
@@ -687,7 +700,14 @@ mod tests {
         .unwrap();
 
         assert!(
-            !chibi.app.state.contexts.iter().any(|e| e.name == "old-ctx"),
+            !chibi
+                .app
+                .state
+                .read()
+                .unwrap()
+                .contexts
+                .iter()
+                .any(|e| e.name == "old-ctx"),
             "expired context should be auto-destroyed"
         );
         let events = sink.events.borrow();
@@ -730,16 +750,15 @@ mod tests {
         // Pre-create two contexts
         chibi.app.ensure_context_dir("alpha").unwrap();
         chibi.app.ensure_context_dir("beta").unwrap();
-        chibi
-            .app
-            .state
-            .contexts
-            .push(ContextEntry::with_created_at("alpha", now_timestamp()));
-        chibi
-            .app
-            .state
-            .contexts
-            .push(ContextEntry::with_created_at("beta", now_timestamp()));
+        {
+            let mut state = chibi.app.state.write().unwrap();
+            state
+                .contexts
+                .push(ContextEntry::with_created_at("alpha", now_timestamp()));
+            state
+                .contexts
+                .push(ContextEntry::with_created_at("beta", now_timestamp()));
+        }
 
         let config = chibi.resolve_config("alpha", None).unwrap();
         let flags = ExecutionFlags::default();
@@ -778,6 +797,8 @@ mod tests {
         chibi
             .app
             .state
+            .write()
+            .unwrap()
             .contexts
             .push(ContextEntry::with_created_at("old", now_timestamp()));
         chibi.save().unwrap();
@@ -818,6 +839,8 @@ mod tests {
         chibi
             .app
             .state
+            .write()
+            .unwrap()
             .contexts
             .push(ContextEntry::with_created_at("doomed", now_timestamp()));
         chibi.save().unwrap();
@@ -854,6 +877,8 @@ mod tests {
         chibi
             .app
             .state
+            .write()
+            .unwrap()
             .contexts
             .push(ContextEntry::with_created_at("safe", now_timestamp()));
         chibi.save().unwrap();

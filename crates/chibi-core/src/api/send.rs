@@ -21,9 +21,10 @@ use crate::state::{
     create_flow_control_message_entry, create_tool_call_entry, create_tool_result_entry,
     create_user_message_entry, format_flock_sections, load_flock_contexts,
 };
-use crate::tools::{self, Tool};
+use crate::tools::{self, Tool, ToolCategory, ToolRegistry};
 use crate::vfs::path::VfsPath;
 use futures_util::stream::StreamExt;
+use std::sync::{Arc, RwLock};
 // ModelGateway trait must be in scope to call chat_stream() on EmbeddedGateway
 use ratatoskr::{ChatEvent, ChatOptions, ModelGateway};
 use serde_json::json;
@@ -60,72 +61,6 @@ impl<'a> PromptOptions<'a> {
 
 /// Maximum number of simultaneous tool calls allowed (prevents memory exhaustion from malicious responses)
 const MAX_TOOL_CALLS: usize = 100;
-
-/// Tool type classification for pre_api_tools hook
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToolType {
-    Memory,
-    FsRead,
-    FsWrite,
-    Shell,
-    Network,
-    Index,
-    Flow,
-    Vfs,
-    Mcp,
-    Plugin,
-}
-
-impl ToolType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            ToolType::Memory => "memory",
-            ToolType::FsRead => "fs_read",
-            ToolType::FsWrite => "fs_write",
-            ToolType::Shell => "shell",
-            ToolType::Network => "network",
-            ToolType::Index => "index",
-            ToolType::Flow => "flow",
-            ToolType::Vfs => "vfs",
-            ToolType::Mcp => "mcp",
-            ToolType::Plugin => "plugin",
-        }
-    }
-}
-
-/// Classify a tool's type based on its name.
-///
-/// Delegates to the authoritative `is_*_tool()` functions in each tool module,
-/// ensuring classification stays in sync with tool registration automatically.
-fn classify_tool_type(name: &str, plugin_tools: &[Tool]) -> ToolType {
-    if tools::is_memory_tool(name) {
-        ToolType::Memory
-    } else if tools::is_fs_read_tool(name) {
-        ToolType::FsRead
-    } else if tools::is_fs_write_tool(name) {
-        ToolType::FsWrite
-    } else if tools::is_shell_tool(name) {
-        ToolType::Shell
-    } else if tools::is_network_tool(name) {
-        ToolType::Network
-    } else if tools::is_index_tool(name) {
-        ToolType::Index
-    } else if tools::is_flow_tool(name) {
-        ToolType::Flow
-    } else if tools::is_vfs_tool(name) {
-        ToolType::Vfs
-    } else if plugin_tools
-        .iter()
-        .any(|t| t.name == name && tools::mcp::is_mcp_tool(t))
-    {
-        ToolType::Mcp
-    } else if plugin_tools.iter().any(|t| t.name == name) {
-        ToolType::Plugin
-    } else {
-        // Unknown tools default to plugin type
-        ToolType::Plugin
-    }
-}
 
 // ============================================================================
 // Permission Checking
@@ -180,8 +115,9 @@ fn check_permission(
 /// Build tool info list for pre_api_tools hook data
 fn build_tool_info_list(
     all_tools: &[serde_json::Value],
-    plugin_tools: &[Tool],
+    registry: &Arc<RwLock<ToolRegistry>>,
 ) -> Vec<serde_json::Value> {
+    let reg = registry.read().unwrap();
     all_tools
         .iter()
         .filter_map(|tool| {
@@ -189,10 +125,13 @@ fn build_tool_info_list(
                 .get("function")
                 .and_then(|f| f.get("name"))
                 .and_then(|n| n.as_str())?;
-            let tool_type = classify_tool_type(name, plugin_tools);
+            let category = reg
+                .get(name)
+                .map(|t| t.category.as_str())
+                .unwrap_or("plugin"); // unknown tools default to plugin
             Some(json!({
                 "name": name,
-                "type": tool_type.as_str(),
+                "type": category,
             }))
         })
         .collect()
@@ -225,7 +164,7 @@ fn annotate_fallback_tool(tools: &mut [serde_json::Value], fallback_name: &str) 
 fn filter_tools_by_config(
     tools: Vec<serde_json::Value>,
     config: &ToolsConfig,
-    plugin_tools: &[Tool],
+    registry: &Arc<RwLock<ToolRegistry>>,
 ) -> Vec<serde_json::Value> {
     let mut result = tools;
 
@@ -251,13 +190,17 @@ fn filter_tools_by_config(
 
     // Apply category exclusion (remove tools whose category is excluded)
     if let Some(ref categories) = config.exclude_categories {
+        let reg = registry.read().unwrap();
         result.retain(|tool| {
             tool.get("function")
                 .and_then(|f| f.get("name"))
                 .and_then(|n| n.as_str())
                 .map(|name| {
-                    let tool_type = classify_tool_type(name, plugin_tools);
-                    !categories.contains(&tool_type.as_str().to_string())
+                    let cat = reg
+                        .get(name)
+                        .map(|t| t.category.as_str())
+                        .unwrap_or("plugin"); // unknown tools default to plugin
+                    !categories.contains(&cat.to_string())
                 })
                 .unwrap_or(true)
         });
@@ -918,21 +861,10 @@ fn apply_pre_tool_output_results(
 
 /// Sink-free execution core for a single tool call.
 ///
-/// Performs all tool execution logic (hooks, dispatch, caching, output hooks)
-/// without touching the sink or handoff state. Collects verbose diagnostics
-/// Unwrap a tool dispatch result (`Option<Result<String>>`) into a result string.
-///
-/// Converts the three-variant pattern used by `execute_*_tool` functions into
-/// a single `String`: `Ok(r)` → result, `Err(e)` → error message, `None` → unknown tool.
-fn unwrap_tool_dispatch(result: Option<io::Result<String>>, tool_name: &str) -> String {
-    match result {
-        Some(Ok(r)) => r,
-        Some(Err(e)) => format!("Error: {}", e),
-        None => format!("Error: Unknown tool '{}'", tool_name),
-    }
-}
-
-/// into `ToolExecutionResult::diagnostics` for the caller to emit.
+/// Performs all tool execution logic (hooks, permission middleware, dispatch via
+/// registry, caching, output hooks) without touching the sink or handoff state.
+/// Collects verbose diagnostics into `ToolExecutionResult::diagnostics` for the
+/// caller to emit.
 ///
 /// This enables concurrent execution via `join_all` since it doesn't require
 /// `&mut` access to shared state.
@@ -941,7 +873,8 @@ async fn execute_tool_pure(
     app: &AppState,
     context_name: &str,
     tool_call: &ratatoskr::ToolCall,
-    tools: &[Tool],
+    plugin_tools: &[Tool],
+    registry: &Arc<RwLock<ToolRegistry>>,
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
     permission_handler: Option<&PermissionHandler>,
@@ -951,16 +884,24 @@ async fn execute_tool_pure(
         serde_json::from_str(&tool_call.arguments).unwrap_or(serde_json::json!({}));
     let mut diagnostics = Vec::new();
 
-    // Check for control flow tools using metadata — we compute the result message
-    // but leave handoff mutation to the caller
-    let tool_metadata = tools::get_tool_metadata(tools, &tool_call.name);
+    // Look up tool category and metadata once. Drop the lock before any .await.
+    let (tool_category, tool_metadata) = {
+        let reg = registry.read().unwrap();
+        let tool = reg.get(&tool_call.name);
+        let category = tool.map(|t| t.category).unwrap_or(ToolCategory::Plugin);
+        let metadata = tool
+            .map(|t| t.metadata.clone())
+            .unwrap_or_else(|| tools::flow_tool_metadata(&tool_call.name));
+        (category, metadata)
+    };
 
     // Execute pre_tool hooks (can modify arguments OR block execution)
     let pre_hook_data = serde_json::json!({
         "tool_name": tool_call.name,
         "arguments": args,
     });
-    let pre_hook_results = tools::execute_hook(tools, tools::HookPoint::PreTool, &pre_hook_data)?;
+    let pre_hook_results =
+        tools::execute_hook(plugin_tools, tools::HookPoint::PreTool, &pre_hook_data)?;
 
     let pre_tool = apply_pre_tool_results(pre_hook_results, &tool_call.name, args);
     let blocked = pre_tool.blocked;
@@ -991,20 +932,12 @@ async fn execute_tool_pure(
         }
     } else if tool_call.name == tools::REFLECTION_TOOL_NAME && !use_reflection {
         "Error: Reflection tool is not enabled".to_string()
-    } else if let Some(memory_result) = tools::execute_memory_tool(
-        app,
-        context_name,
-        &tool_call.name,
-        &args,
-        Some(resolved_config),
-    ) {
-        match memory_result {
-            Ok(r) => r,
-            Err(e) => format!("Error: {}", e),
-        }
     } else if tool_call.name == tools::SEND_MESSAGE_TOOL_NAME {
-        execute_send_message_pure(app, context_name, tools, &args, &mut diagnostics)?
+        // send_message is intercepted here before registry dispatch — it uses
+        // plugin hooks and async inbox delivery not expressible as a plain handler.
+        execute_send_message_pure(app, context_name, plugin_tools, &args, &mut diagnostics)?
     } else if tool_call.name == tools::MODEL_INFO_TOOL_NAME {
+        // model_info requires an async gateway call not available at registration time.
         match args.get_str("model") {
             Some(model) => {
                 let gateway = build_gateway(resolved_config)?;
@@ -1019,265 +952,203 @@ async fn execute_tool_pure(
             }
             None => "Error: missing required 'model' parameter".to_string(),
         }
-    } else if tools::is_fs_read_tool(&tool_call.name) {
-        // VFS paths bypass OS permission gating; zone-based permissions enforced inside execute_fs_read_tool.
-        let raw_path = args.get_str("path").unwrap_or("");
-        if VfsPath::is_vfs_uri(raw_path) {
-            unwrap_tool_dispatch(
-                tools::execute_fs_read_tool(
-                    app,
-                    context_name,
-                    &tool_call.name,
-                    &args,
-                    resolved_config,
-                    project_root,
-                ),
-                &tool_call.name,
-            )
-        } else {
-            // Read-only file tools: auto-allow inside allowed paths, prompt outside
-            let resolved_path_str =
-                if !raw_path.is_empty() && std::path::Path::new(raw_path).is_relative() {
-                    project_root.join(raw_path).to_string_lossy().to_string()
+    } else {
+        // Permission middleware: gate on category, then dispatch via registry.
+        // Category was looked up from registry above; unknown tools default to Plugin.
+        let permission_denied: Option<String> = match tool_category {
+            ToolCategory::FsRead => {
+                // VFS paths bypass OS permission gating; zone-based permissions enforced inside handler.
+                let raw_path = args.get_str("path").unwrap_or("");
+                if VfsPath::is_vfs_uri(raw_path) {
+                    None // bypass: let registry dispatch handle it
                 } else {
-                    raw_path.to_string()
-                };
-            let permission_denied = if !resolved_path_str.is_empty() {
-                match tools::classify_file_path(&resolved_path_str, resolved_config) {
-                    Ok(tools::FilePathAccess::Allowed(_)) => None,
-                    Ok(tools::FilePathAccess::NeedsPermission(_)) => {
-                        let hook_data = serde_json::json!({
-                            "tool_name": tool_call.name,
-                            "path": resolved_path_str,
-                        });
-                        check_permission(
-                            tools,
-                            tools::HookPoint::PreFileRead,
-                            &hook_data,
-                            permission_handler,
-                        )?
-                        .err()
+                    let resolved_path_str =
+                        if !raw_path.is_empty() && std::path::Path::new(raw_path).is_relative() {
+                            project_root.join(raw_path).to_string_lossy().to_string()
+                        } else {
+                            raw_path.to_string()
+                        };
+                    if !resolved_path_str.is_empty() {
+                        match tools::classify_file_path(&resolved_path_str, resolved_config) {
+                            Ok(tools::FilePathAccess::Allowed(_)) => None,
+                            Ok(tools::FilePathAccess::NeedsPermission(_)) => {
+                                let hook_data = serde_json::json!({
+                                    "tool_name": tool_call.name,
+                                    "path": resolved_path_str,
+                                });
+                                check_permission(
+                                    plugin_tools,
+                                    tools::HookPoint::PreFileRead,
+                                    &hook_data,
+                                    permission_handler,
+                                )?
+                                .err()
+                                .map(|r| format!("Permission denied: {r}"))
+                            }
+                            Err(e) => Some(format!("Permission denied: {e}")),
+                        }
+                    } else {
+                        None // cache_id / no-path access — always allowed
                     }
-                    Err(e) => Some(e.to_string()),
                 }
-            } else {
-                // cache_id / no-path access — always allowed
-                None
-            };
-
-            if let Some(reason) = permission_denied {
-                format!("Error: {}", reason)
-            } else {
-                unwrap_tool_dispatch(
-                    tools::execute_fs_read_tool(
-                        app,
-                        context_name,
-                        &tool_call.name,
-                        &args,
-                        resolved_config,
-                        project_root,
-                    ),
-                    &tool_call.name,
-                )
             }
-        }
-    } else if tools::is_fs_write_tool(&tool_call.name) {
-        // VFS paths are handled inside execute_fs_write_tool; OS paths need PreFileWrite gate.
-        let raw_path = args.get_str("path").unwrap_or("");
-        if VfsPath::is_vfs_uri(raw_path) {
-            unwrap_tool_dispatch(
-                tools::execute_fs_write_tool(
-                    &tool_call.name,
-                    &args,
-                    project_root,
-                    resolved_config,
-                    &app.vfs,
-                    crate::vfs::VfsCaller::Context(context_name),
-                ),
-                &tool_call.name,
-            )
-        } else {
-            let hook_data = if tool_call.name == tools::FILE_EDIT_TOOL_NAME {
-                serde_json::json!({
-                    "tool_name": tool_call.name,
-                    "path": raw_path,
-                    "operation": args.get_str("operation").unwrap_or(""),
-                    "content": args.get_str("content"),
-                })
-            } else {
-                serde_json::json!({
-                    "tool_name": tool_call.name,
-                    "path": raw_path,
-                    "content": args.get_str("content"),
-                })
-            };
-            match check_permission(
-                tools,
-                tools::HookPoint::PreFileWrite,
-                &hook_data,
-                permission_handler,
-            )? {
-                Ok(()) => unwrap_tool_dispatch(
-                    tools::execute_fs_write_tool(
-                        &tool_call.name,
-                        &args,
-                        project_root,
-                        resolved_config,
-                        &app.vfs,
-                        crate::vfs::VfsCaller::Context(context_name),
-                    ),
-                    &tool_call.name,
-                ),
-                Err(reason) => format!("Error: {}", reason),
-            }
-        }
-    } else if tools::is_vfs_tool(&tool_call.name) {
-        // VFS tools enforce their own zone-based permission model.
-        // No PreFileRead/PreFileWrite hooks needed.
-        unwrap_tool_dispatch(
-            tools::execute_vfs_tool(
-                &app.vfs,
-                crate::vfs::VfsCaller::Context(context_name),
-                &tool_call.name,
-                &args,
-            )
-            .await,
-            &tool_call.name,
-        )
-    } else if tools::is_shell_tool(&tool_call.name) {
-        let hook_data = serde_json::json!({
-            "tool_name": tool_call.name,
-            "command": args.get_str("command").unwrap_or(""),
-        });
-        match check_permission(
-            tools,
-            tools::HookPoint::PreShellExec,
-            &hook_data,
-            permission_handler,
-        )? {
-            Ok(()) => unwrap_tool_dispatch(
-                tools::execute_shell_tool(&tool_call.name, &args, project_root).await,
-                &tool_call.name,
-            ),
-            Err(reason) => format!("Error: {}", reason),
-        }
-    } else if tools::is_network_tool(&tool_call.name) {
-        // URL policy / permission check for fetch_url
-        let url = args.get_str("url").unwrap_or("");
-        let safety = tools::classify_url(url);
-
-        let denied = if let Some(ref policy) = resolved_config.url_policy {
-            tools::evaluate_url_policy(url, &safety, policy) == tools::UrlAction::Deny
-        } else {
-            false
-        };
-
-        if denied {
-            let reason = match &safety {
-                tools::UrlSafety::Sensitive(cat) => cat.to_string(),
-                tools::UrlSafety::Safe => "denied by URL policy".to_string(),
-            };
-            format!("Permission denied: {}", reason)
-        } else if let tools::UrlSafety::Sensitive(category) = &safety {
-            // No policy — fall back to permission handler for sensitive URLs
-            let hook_data = json!({
-                "tool_name": tool_call.name,
-                "url": url,
-                "safety": "sensitive",
-                "reason": category.to_string(),
-            });
-            match check_permission(
-                tools,
-                tools::HookPoint::PreFetchUrl,
-                &hook_data,
-                permission_handler,
-            )? {
-                Ok(()) => unwrap_tool_dispatch(
-                    tools::execute_network_tool(&tool_call.name, &args).await,
-                    &tool_call.name,
-                ),
-                Err(reason) => format!("Permission denied: {}", reason),
-            }
-        } else {
-            unwrap_tool_dispatch(
-                tools::execute_network_tool(&tool_call.name, &args).await,
-                &tool_call.name,
-            )
-        }
-    } else if tools::is_index_tool(&tool_call.name) {
-        unwrap_tool_dispatch(
-            tools::execute_index_tool(&tool_call.name, &args, project_root, resolved_config, tools),
-            &tool_call.name,
-        )
-    } else if tools::is_flow_tool(&tool_call.name) {
-        // URL policy / permission check for summarize_content when source is a URL
-        if tool_call.name == tools::SUMMARIZE_CONTENT_TOOL_NAME
-            && let Some(source) = args.get_str("source")
-            && tools::is_url(source)
-        {
-            let safety = tools::classify_url(source);
-
-            if let Some(ref policy) = resolved_config.url_policy {
-                // policy is authoritative — no fallback to permission handler
-                if tools::evaluate_url_policy(source, &safety, policy) == tools::UrlAction::Deny {
-                    let reason = match &safety {
-                        tools::UrlSafety::Sensitive(cat) => cat.to_string(),
-                        tools::UrlSafety::Safe => "denied by URL policy".to_string(),
+            ToolCategory::FsWrite => {
+                // VFS paths handled inside the handler; OS paths need PreFileWrite gate.
+                let raw_path = args.get_str("path").unwrap_or("");
+                if VfsPath::is_vfs_uri(raw_path) {
+                    None // bypass: let registry dispatch handle it
+                } else {
+                    let hook_data = if tool_call.name == tools::FILE_EDIT_TOOL_NAME {
+                        serde_json::json!({
+                            "tool_name": tool_call.name,
+                            "path": raw_path,
+                            "operation": args.get_str("operation").unwrap_or(""),
+                            "content": args.get_str("content"),
+                        })
+                    } else {
+                        serde_json::json!({
+                            "tool_name": tool_call.name,
+                            "path": raw_path,
+                            "content": args.get_str("content"),
+                        })
                     };
-                    let msg = format!("Permission denied: {}", reason);
-                    return Ok(ToolExecutionResult {
-                        final_result: msg.clone(),
-                        original_result: msg,
-                        was_cached: false,
-                        diagnostics,
-                    });
+                    check_permission(
+                        plugin_tools,
+                        tools::HookPoint::PreFileWrite,
+                        &hook_data,
+                        permission_handler,
+                    )?
+                    .err()
+                    .map(|r| format!("Permission denied: {r}"))
                 }
-            } else if let tools::UrlSafety::Sensitive(category) = &safety {
-                // no policy — fall back to permission handler
-                let hook_data = json!({
+            }
+            ToolCategory::Shell => {
+                let hook_data = serde_json::json!({
                     "tool_name": tool_call.name,
-                    "url": source,
-                    "safety": "sensitive",
-                    "reason": category.to_string(),
+                    "command": args.get_str("command").unwrap_or(""),
                 });
-                match check_permission(
-                    tools,
-                    tools::HookPoint::PreFetchUrl,
+                check_permission(
+                    plugin_tools,
+                    tools::HookPoint::PreShellExec,
                     &hook_data,
                     permission_handler,
-                )? {
-                    Ok(()) => {}
-                    Err(reason) => {
-                        let msg = format!("Permission denied: {}", reason);
-                        return Ok(ToolExecutionResult {
-                            final_result: msg.clone(),
-                            original_result: msg,
-                            was_cached: false,
-                            diagnostics,
-                        });
+                )?
+                .err()
+            }
+            ToolCategory::Network => {
+                let url = args.get_str("url").unwrap_or("");
+                let safety = tools::classify_url(url);
+                if let Some(ref policy) = resolved_config.url_policy {
+                    if tools::evaluate_url_policy(url, &safety, policy) == tools::UrlAction::Deny {
+                        let reason = match &safety {
+                            tools::UrlSafety::Sensitive(cat) => cat.to_string(),
+                            tools::UrlSafety::Safe => "denied by URL policy".to_string(),
+                        };
+                        Some(format!("Permission denied: {}", reason))
+                    } else {
+                        None
                     }
+                } else if let tools::UrlSafety::Sensitive(category) = &safety {
+                    let hook_data = json!({
+                        "tool_name": tool_call.name,
+                        "url": url,
+                        "safety": "sensitive",
+                        "reason": category.to_string(),
+                    });
+                    check_permission(
+                        plugin_tools,
+                        tools::HookPoint::PreFetchUrl,
+                        &hook_data,
+                        permission_handler,
+                    )?
+                    .err()
+                    .map(|r| format!("Permission denied: {}", r))
+                } else {
+                    None
                 }
             }
-        }
-        match tools::execute_flow_tool(resolved_config, &tool_call.name, &args, tools).await {
-            Ok(Some(r)) => r,
-            Ok(None) => format!("Error: Unknown flow tool '{}'", tool_call.name),
-            Err(e) => format!("Error: {}", e),
-        }
-    } else if let Some(tool) = tools::find_tool(tools, &tool_call.name) {
-        if tools::mcp::is_mcp_tool(tool) {
-            match tools::mcp::execute_mcp_tool(tool, &args, &app.chibi_dir) {
-                Ok(r) => r,
-                Err(e) => format!("Error: {}", e),
+            ToolCategory::Flow => {
+                // summarize_content URL check (the only flow tool with a URL policy gate)
+                if tool_call.name == tools::SUMMARIZE_CONTENT_TOOL_NAME
+                    && let Some(source) = args.get_str("source")
+                    && tools::is_url(source)
+                {
+                    let safety = tools::classify_url(source);
+                    if let Some(ref policy) = resolved_config.url_policy {
+                        if tools::evaluate_url_policy(source, &safety, policy)
+                            == tools::UrlAction::Deny
+                        {
+                            let reason = match &safety {
+                                tools::UrlSafety::Sensitive(cat) => cat.to_string(),
+                                tools::UrlSafety::Safe => "denied by URL policy".to_string(),
+                            };
+                            let msg = format!("Permission denied: {}", reason);
+                            return Ok(ToolExecutionResult {
+                                final_result: msg.clone(),
+                                original_result: msg,
+                                was_cached: false,
+                                diagnostics,
+                            });
+                        }
+                    } else if let tools::UrlSafety::Sensitive(category) = &safety {
+                        let hook_data = json!({
+                            "tool_name": tool_call.name,
+                            "url": source,
+                            "safety": "sensitive",
+                            "reason": category.to_string(),
+                        });
+                        match check_permission(
+                            plugin_tools,
+                            tools::HookPoint::PreFetchUrl,
+                            &hook_data,
+                            permission_handler,
+                        )? {
+                            Ok(()) => {}
+                            Err(reason) => {
+                                let msg = format!("Permission denied: {}", reason);
+                                return Ok(ToolExecutionResult {
+                                    final_result: msg.clone(),
+                                    original_result: msg,
+                                    was_cached: false,
+                                    diagnostics,
+                                });
+                            }
+                        }
+                    }
+                }
+                None
             }
+            _ => None,
+        };
+
+        if let Some(reason) = permission_denied {
+            reason
         } else {
-            match tools::execute_tool(tool, &args) {
-                Ok(r) => r,
-                Err(e) => format!("Error: {}", e),
+            // Dispatch via registry.
+            // Clone ToolImpl while holding the read lock, then drop the guard
+            // before the .await so no lock is held across an async suspension.
+            let tool_impl = {
+                let reg = registry.read().unwrap();
+                reg.get(&tool_call.name).map(|t| t.r#impl.clone())
+            };
+            let call_ctx = tools::ToolCallContext {
+                app,
+                context_name,
+                config: resolved_config,
+                project_root,
+                vfs: &app.vfs,
+                vfs_caller: crate::vfs::VfsCaller::Context(context_name),
+            };
+            match tool_impl {
+                Some(ti) => {
+                    match ToolRegistry::dispatch_impl(ti, &tool_call.name, &args, &call_ctx).await {
+                        Ok(r) => r,
+                        Err(e) => format!("Error: {}", e),
+                    }
+                }
+                None => format!("Error: unknown tool: {}", tool_call.name),
             }
         }
-    } else {
-        format!("Error: Unknown tool '{}'", tool_call.name)
     };
 
     // Execute pre_tool_output hooks (can modify or replace output)
@@ -1287,7 +1158,7 @@ async fn execute_tool_pure(
         "output": tool_result,
     });
     let pre_output_hook_results = tools::execute_hook(
-        tools,
+        plugin_tools,
         tools::HookPoint::PreToolOutput,
         &pre_output_hook_data,
     )?;
@@ -1306,8 +1177,11 @@ async fn execute_tool_pure(
             "output_size": tool_result.len(),
             "arguments": args,
         });
-        let pre_cache_results =
-            tools::execute_hook(tools, tools::HookPoint::PreCacheOutput, &pre_cache_data)?;
+        let pre_cache_results = tools::execute_hook(
+            plugin_tools,
+            tools::HookPoint::PreCacheOutput,
+            &pre_cache_data,
+        )?;
         let cache_blocked = pre_cache_results
             .iter()
             .any(|(_, r)| r.get_bool_or("block", false));
@@ -1358,7 +1232,7 @@ async fn execute_tool_pure(
                         "preview_size": truncated.len(),
                     });
                     let _ = tools::execute_hook(
-                        tools,
+                        plugin_tools,
                         tools::HookPoint::PostCacheOutput,
                         &post_cache_data,
                     );
@@ -1384,7 +1258,7 @@ async fn execute_tool_pure(
         "cached": was_cached,
     });
     let _ = tools::execute_hook(
-        tools,
+        plugin_tools,
         tools::HookPoint::PostToolOutput,
         &post_output_hook_data,
     );
@@ -1406,7 +1280,8 @@ async fn execute_single_tool<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
     tool_call: &ratatoskr::ToolCall,
-    tools: &[Tool],
+    plugin_tools: &[Tool],
+    registry: &Arc<RwLock<ToolRegistry>>,
     handoff: &mut tools::Handoff,
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
@@ -1417,7 +1292,10 @@ async fn execute_single_tool<S: ResponseSink>(
     // Apply handoff if this is a flow control tool
     let args: serde_json::Value =
         serde_json::from_str(&tool_call.arguments).unwrap_or(serde_json::json!({}));
-    let tool_metadata = tools::get_tool_metadata(tools, &tool_call.name);
+    let tool_metadata = {
+        let reg = registry.read().unwrap();
+        tools::get_tool_metadata(&reg, &tool_call.name)
+    };
     if tool_metadata.flow_control {
         if tool_metadata.ends_turn {
             handoff.set_user(args.get_str_or("message", "").to_string());
@@ -1430,7 +1308,8 @@ async fn execute_single_tool<S: ResponseSink>(
         app,
         context_name,
         tool_call,
-        tools,
+        plugin_tools,
+        registry,
         use_reflection,
         resolved_config,
         permission_handler,
@@ -1535,7 +1414,8 @@ async fn process_tool_calls<S: ResponseSink>(
     username: &str,
     tool_calls: &[ratatoskr::ToolCall],
     messages: &mut Vec<serde_json::Value>,
-    tools: &[Tool],
+    plugin_tools: &[Tool],
+    registry: &Arc<RwLock<ToolRegistry>>,
     handoff: &mut tools::Handoff,
     use_reflection: bool,
     resolved_config: &ResolvedConfig,
@@ -1573,7 +1453,7 @@ async fn process_tool_calls<S: ResponseSink>(
     let mut sequential_batch: Vec<(usize, &ratatoskr::ToolCall)> = Vec::new();
 
     for (i, tc) in tool_calls.iter().enumerate() {
-        let metadata = tools::get_tool_metadata(tools, &tc.name);
+        let metadata = tools::get_tool_metadata(&registry.read().unwrap(), &tc.name);
         if metadata.parallel && !metadata.flow_control {
             parallel_batch.push((i, tc));
         } else {
@@ -1596,7 +1476,8 @@ async fn process_tool_calls<S: ResponseSink>(
                     app,
                     context_name,
                     tc,
-                    tools,
+                    plugin_tools,
+                    registry,
                     use_reflection,
                     resolved_config,
                     permission_handler,
@@ -1621,7 +1502,8 @@ async fn process_tool_calls<S: ResponseSink>(
             app,
             context_name,
             tc,
-            tools,
+            plugin_tools,
+            registry,
             handoff,
             use_reflection,
             resolved_config,
@@ -1637,7 +1519,7 @@ async fn process_tool_calls<S: ResponseSink>(
     // one assistant message with tool_calls[], then individual tool result messages).
     // Flow control tools produce message + control_transfer entries instead.
     for (i, tc) in tool_calls.iter().enumerate() {
-        let metadata = tools::get_tool_metadata(tools, &tc.name);
+        let metadata = tools::get_tool_metadata(&registry.read().unwrap(), &tc.name);
         if metadata.flow_control {
             // Flow control tools produce message + control_transfer entries later (in the
             // results loop). No tool_call entry written for them.
@@ -1673,7 +1555,7 @@ async fn process_tool_calls<S: ResponseSink>(
             message: format!("[Tool: {}]", tc.name),
         })?;
 
-        let summary = tools::tool_call_summary(tools, &tc.name, &tc.arguments);
+        let summary = tools::tool_call_summary(&registry.read().unwrap(), &tc.name, &tc.arguments);
         sink.handle(ResponseEvent::ToolStart {
             name: tc.name.clone(),
             summary,
@@ -1681,7 +1563,7 @@ async fn process_tool_calls<S: ResponseSink>(
 
         // Log tool result to transcript.
         // Flow control tools produce message + control_transfer entries instead of tool_call/result.
-        let metadata = tools::get_tool_metadata(tools, &tc.name);
+        let metadata = tools::get_tool_metadata(&registry.read().unwrap(), &tc.name);
 
         if metadata.flow_control {
             // call_user: write the message entry + control_transfer entry
@@ -1760,7 +1642,7 @@ async fn process_tool_calls<S: ResponseSink>(
             "result": result.original_result,
             "cached": result.was_cached,
         });
-        let _ = tools::execute_hook(tools, tools::HookPoint::PostTool, &post_hook_data);
+        let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostTool, &post_hook_data);
 
         // Apply handoff for parallel-executed flow control tools
         // (sequential ones already applied via execute_single_tool)
@@ -1830,7 +1712,8 @@ async fn process_tool_calls<S: ResponseSink>(
         hook_data["fuel_remaining"] = json!(*fuel_remaining);
         hook_data["fuel_total"] = json!(fuel_total);
     }
-    let hook_results = tools::execute_hook(tools, tools::HookPoint::PostToolBatch, &hook_data)?;
+    let hook_results =
+        tools::execute_hook(plugin_tools, tools::HookPoint::PostToolBatch, &hook_data)?;
     apply_hook_overrides(handoff, fuel_remaining, fuel_unlimited, &hook_results, sink)?;
 
     Ok(())
@@ -1855,7 +1738,7 @@ fn handle_final_response<S: ResponseSink>(
     full_response: &str,
     final_prompt: &str,
     mut handoff: tools::Handoff,
-    tools: &[Tool],
+    plugin_tools: &[Tool],
     resolved_config: &ResolvedConfig,
     sink: &mut S,
 ) -> io::Result<FinalResponseAction> {
@@ -1880,7 +1763,7 @@ fn handle_final_response<S: ResponseSink>(
         "response": full_response,
         "context_name": context_name,
     });
-    let _ = tools::execute_hook(tools, tools::HookPoint::PostMessage, &hook_data);
+    let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostMessage, &hook_data);
 
     if app.should_warn(&context.messages) {
         let remaining = app.remaining_tokens(&context.messages);
@@ -1924,7 +1807,7 @@ pub async fn send_prompt<S: ResponseSink>(
     app: &AppState,
     context_name: &str,
     initial_prompt: String,
-    tools: &[Tool],
+    registry: Arc<RwLock<ToolRegistry>>,
     resolved_config: &ResolvedConfig,
     options: &PromptOptions<'_>,
     sink: &mut S,
@@ -1941,6 +1824,16 @@ pub async fn send_prompt<S: ResponseSink>(
     let fuel_unlimited = fuel_total == 0;
     let mut current_prompt = initial_prompt;
 
+    // Plugin tools: used for hook execution throughout this call.
+    // Builtins don't have hooks; only plugin tools register hook scripts.
+    let plugin_tools: Vec<Tool> = registry
+        .read()
+        .unwrap()
+        .filter(|t| t.category == ToolCategory::Plugin)
+        .into_iter()
+        .cloned()
+        .collect();
+
     // Outer loop: each iteration is a full setup + agentic exchange.
     // First iteration is the user's turn (free); continuations cost 1 fuel.
     loop {
@@ -1952,7 +1845,7 @@ pub async fn send_prompt<S: ResponseSink>(
             ));
         }
 
-        app.validate_config(&resolved_config, tools)?;
+        app.validate_config(&resolved_config, &registry.read().unwrap())?;
 
         if !fuel_unlimited {
             sink.handle(ResponseEvent::FuelStatus {
@@ -1973,7 +1866,8 @@ pub async fn send_prompt<S: ResponseSink>(
             "context_name": context.name,
             "summary": context.summary,
         });
-        let hook_results = tools::execute_hook(tools, tools::HookPoint::PreMessage, &hook_data)?;
+        let hook_results =
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreMessage, &hook_data)?;
         for (tool_name, result) in hook_results {
             if let Some(modified) = result.get_str("prompt") {
                 sink.handle(ResponseEvent::HookDebug {
@@ -2033,7 +1927,7 @@ pub async fn send_prompt<S: ResponseSink>(
             context_name,
             &context.summary,
             use_reflection,
-            tools,
+            &plugin_tools,
             &resolved_config,
             sink,
             home_dir,
@@ -2064,24 +1958,6 @@ pub async fn send_prompt<S: ResponseSink>(
         }
 
         // === Prepare Tools ===
-        let mut all_tools = tools::tools_to_api_format(tools);
-        all_tools.extend(
-            tools::all_memory_tools_to_api_format()
-                .into_iter()
-                .filter(|t| {
-                    use_reflection
-                        || t.get("function")
-                            .and_then(|f| f.get("name"))
-                            .and_then(|n| n.as_str())
-                            != Some(tools::REFLECTION_TOOL_NAME)
-                }),
-        );
-        all_tools.extend(tools::all_fs_read_tools_to_api_format());
-        all_tools.extend(tools::all_fs_write_tools_to_api_format());
-        all_tools.extend(tools::all_shell_tools_to_api_format());
-        all_tools.extend(tools::all_network_tools_to_api_format());
-        all_tools.extend(tools::all_index_tools_to_api_format());
-
         // Resolve available preset capability names for the current cost tier so the
         // LLM sees valid values in the spawn_agent tool description.
         let preset_capabilities: Vec<String> = {
@@ -2095,14 +1971,46 @@ pub async fn send_prompt<S: ResponseSink>(
                 Err(_) => vec![],
             }
         };
-        let preset_cap_refs: Vec<&str> = preset_capabilities.iter().map(String::as_str).collect();
-        all_tools.extend(tools::all_flow_tools_to_api_format(&preset_cap_refs));
-        all_tools.extend(tools::all_vfs_tools_to_api_format());
+        let spawn_agent_preset_desc = tools::spawn_agent_preset_description(&preset_capabilities);
+
+        // Build all tools from the registry in a single pass. Flow tools are
+        // included here; spawn_agent's `preset` param description is patched
+        // inline with the dynamic preset list.
+        let mut all_tools: Vec<serde_json::Value> = {
+            let reg = registry.read().unwrap();
+            reg.all()
+                .filter(|t| t.name != tools::REFLECTION_TOOL_NAME || use_reflection)
+                .map(|t| {
+                    let mut json = t.to_api_format();
+                    if t.name == tools::SPAWN_AGENT_TOOL_NAME {
+                        json["function"]["parameters"]["properties"]["preset"]["description"] =
+                            serde_json::Value::String(spawn_agent_preset_desc.clone());
+                    }
+                    json
+                })
+                .collect()
+        };
         annotate_fallback_tool(&mut all_tools, &resolved_config.fallback_tool);
-        all_tools = filter_tools_by_config(all_tools, &resolved_config.tools, tools);
+        all_tools = filter_tools_by_config(all_tools, &resolved_config.tools, &registry);
+
+        // filter synthesised tools by visibility (zone-based scoping)
+        #[cfg(feature = "synthesised-tools")]
+        {
+            let context_flocks =
+                tools::vfs_block_on(app.vfs.flock_list_for(&context.name)).unwrap_or_default();
+            let registry_guard = registry.read().unwrap();
+            all_tools.retain(|tool| {
+                let name = tool
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
+                registry_guard.is_tool_visible(name, &context.name, &context_flocks)
+            });
+        }
 
         // Execute pre_api_tools hook
-        let tool_info = build_tool_info_list(&all_tools, tools);
+        let tool_info = build_tool_info_list(&all_tools, &registry);
         let mut hook_data = json!({
             "context_name": context.name,
             "tools": tool_info,
@@ -2111,7 +2019,8 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_remaining"] = json!(fuel_remaining);
             hook_data["fuel_total"] = json!(fuel_total);
         }
-        let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiTools, &hook_data)?;
+        let hook_results =
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiTools, &hook_data)?;
         all_tools = filter_tools_from_hook_results(all_tools, &hook_results, sink)?;
 
         // === Build Request ===
@@ -2142,7 +2051,8 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_remaining"] = json!(fuel_remaining);
             hook_data["fuel_total"] = json!(fuel_total);
         }
-        let hook_results = tools::execute_hook(tools, tools::HookPoint::PreApiRequest, &hook_data)?;
+        let hook_results =
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiRequest, &hook_data)?;
         request_body = apply_request_modifications(request_body, &hook_results, sink)?;
 
         // Deserialise ChatOptions from the (potentially hook-modified) request body
@@ -2152,7 +2062,8 @@ pub async fn send_prompt<S: ResponseSink>(
 
         // === Initialize Handoff ===
         let fallback = options.fallback_override.clone().unwrap_or_else(|| {
-            let meta = tools::get_tool_metadata(tools, &resolved_config.fallback_tool);
+            let meta =
+                tools::get_tool_metadata(&registry.read().unwrap(), &resolved_config.fallback_tool);
             if meta.ends_turn {
                 tools::HandoffTarget::User {
                     message: String::new(),
@@ -2176,7 +2087,7 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_total"] = json!(fuel_total);
         }
         let hook_results =
-            tools::execute_hook(tools, tools::HookPoint::PreAgenticLoop, &hook_data)?;
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreAgenticLoop, &hook_data)?;
         apply_hook_overrides(
             &mut handoff,
             &mut fuel_remaining,
@@ -2218,7 +2129,8 @@ pub async fn send_prompt<S: ResponseSink>(
                     &resolved_config.username,
                     &response.tool_calls,
                     &mut messages,
-                    tools,
+                    &plugin_tools,
+                    &registry,
                     &mut handoff,
                     use_reflection,
                     &resolved_config,
@@ -2282,7 +2194,7 @@ pub async fn send_prompt<S: ResponseSink>(
                 &response.full_response,
                 &final_prompt,
                 handoff,
-                tools,
+                &plugin_tools,
                 &resolved_config,
                 sink,
             )? {
@@ -2335,137 +2247,20 @@ mod tests {
     use super::*;
     use crate::CollectingSink;
 
-    /// Helper: create a minimal plugin Tool for classification tests.
-    fn fake_plugin_tool(name: &str) -> Tool {
-        Tool {
-            name: name.to_string(),
-            description: String::new(),
-            parameters: serde_json::json!({}),
-            path: std::path::PathBuf::from(format!("/plugins/{name}")),
-            hooks: vec![],
-            metadata: tools::ToolMetadata::new(),
-            summary_params: vec![],
-        }
-    }
+    // ToolCategory classification is now tested via registry::tests and tools/mod.rs tests.
+    // ToolType and classify_tool_type have been removed; ToolCategory::as_str() replaces them.
 
-    /// Helper: create a minimal MCP Tool for classification tests.
-    fn fake_mcp_tool(server: &str, tool: &str) -> Tool {
-        tools::mcp::mcp_tool_from_info(server, tool, "", serde_json::json!({}))
-    }
-
-    #[test]
-    fn test_classify_tool_type_memory() {
-        for name in [
-            "update_todos",
-            "update_goals",
-            "update_reflection",
-            "read_context",
-        ] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::Memory, "{name}");
-        }
-    }
-
-    #[test]
-    fn test_classify_tool_type_fs_read() {
-        for name in [
-            "file_head",
-            "file_tail",
-            "file_lines",
-            "file_grep",
-            "dir_list",
-            "glob_files",
-            "grep_files",
-        ] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::FsRead, "{name}");
-        }
-    }
-
-    #[test]
-    fn test_classify_tool_type_fs_write() {
-        for name in ["write_file", "file_edit"] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::FsWrite, "{name}");
-        }
-    }
-
-    #[test]
-    fn test_classify_tool_type_shell() {
-        assert_eq!(classify_tool_type("shell_exec", &[]), ToolType::Shell);
-    }
-
-    #[test]
-    fn test_classify_tool_type_network() {
-        assert_eq!(classify_tool_type("fetch_url", &[]), ToolType::Network);
-    }
-
-    #[test]
-    fn test_classify_tool_type_index() {
-        for name in ["index_update", "index_query", "index_status"] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::Index, "{name}");
-        }
-    }
-
-    #[test]
-    fn test_classify_tool_type_flow() {
-        // call_agent excluded from FLOW_TOOL_DEFS (disabled as LLM tool)
-        for name in [
-            "send_message",
-            "call_user",
-            "model_info",
-            "spawn_agent",
-            "summarize_content",
-        ] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::Flow, "{name}");
-        }
-        // call_agent no longer classifies as Flow (not in registry)
-        assert_ne!(classify_tool_type("call_agent", &[]), ToolType::Flow);
-    }
-
-    #[test]
-    fn test_classify_tool_type_vfs() {
-        for name in [
-            "vfs_list",
-            "vfs_info",
-            "vfs_copy",
-            "vfs_move",
-            "vfs_mkdir",
-            "vfs_delete",
-        ] {
-            assert_eq!(classify_tool_type(name, &[]), ToolType::Vfs, "{name}");
-        }
-    }
-
-    #[test]
-    fn test_classify_tool_type_plugin() {
-        let tools = vec![fake_plugin_tool("my_plugin")];
-        assert_eq!(classify_tool_type("my_plugin", &tools), ToolType::Plugin);
-    }
-
-    #[test]
-    fn test_classify_tool_type_mcp() {
-        let tools = vec![fake_mcp_tool("serena", "find_symbol")];
-        assert_eq!(
-            classify_tool_type("serena_find_symbol", &tools),
-            ToolType::Mcp
-        );
-    }
-
-    #[test]
-    fn test_classify_tool_type_unknown_defaults_to_plugin() {
-        assert_eq!(classify_tool_type("unknown_tool", &[]), ToolType::Plugin);
-    }
-
-    #[test]
-    fn test_tool_type_as_str() {
-        assert_eq!(ToolType::Memory.as_str(), "memory");
-        assert_eq!(ToolType::FsRead.as_str(), "fs_read");
-        assert_eq!(ToolType::FsWrite.as_str(), "fs_write");
-        assert_eq!(ToolType::Shell.as_str(), "shell");
-        assert_eq!(ToolType::Network.as_str(), "network");
-        assert_eq!(ToolType::Index.as_str(), "index");
-        assert_eq!(ToolType::Flow.as_str(), "flow");
-        assert_eq!(ToolType::Vfs.as_str(), "vfs");
-        assert_eq!(ToolType::Mcp.as_str(), "mcp");
-        assert_eq!(ToolType::Plugin.as_str(), "plugin");
+    fn make_test_registry() -> Arc<RwLock<ToolRegistry>> {
+        let mut reg = ToolRegistry::new();
+        tools::register_memory_tools(&mut reg);
+        tools::register_fs_read_tools(&mut reg);
+        tools::register_fs_write_tools(&mut reg);
+        tools::register_shell_tools(&mut reg);
+        tools::register_network_tools(&mut reg);
+        tools::register_index_tools(&mut reg);
+        tools::register_flow_tools(&mut reg);
+        tools::register_vfs_tools(&mut reg);
+        Arc::new(RwLock::new(reg))
     }
 
     #[test]
@@ -2475,7 +2270,8 @@ mod tests {
             json!({"function": {"name": "tool2"}}),
         ];
         let config = ToolsConfig::default();
-        let result = filter_tools_by_config(tools.clone(), &config, &[]);
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let result = filter_tools_by_config(tools.clone(), &config, &registry);
         assert_eq!(result.len(), 2);
     }
 
@@ -2490,8 +2286,10 @@ mod tests {
             include: Some(vec!["tool1".to_string(), "tool3".to_string()]),
             exclude: None,
             exclude_categories: None,
+            ..Default::default()
         };
-        let result = filter_tools_by_config(tools, &config, &[]);
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let result = filter_tools_by_config(tools, &config, &registry);
         assert_eq!(result.len(), 2);
     }
 
@@ -2506,20 +2304,15 @@ mod tests {
             include: None,
             exclude: Some(vec!["tool2".to_string()]),
             exclude_categories: None,
+            ..Default::default()
         };
-        let result = filter_tools_by_config(tools, &config, &[]);
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let result = filter_tools_by_config(tools, &config, &registry);
         assert_eq!(result.len(), 2);
     }
 
     #[test]
     fn test_filter_tools_by_category_exclude() {
-        // shell_exec and dir_list are "coding" category tools
-        // file_head is a "file" category tool
-        // update_todos is a "memory" category tool
-        // spawn_agent is a "flow" category tool
-        // shell_exec is a "shell" category tool
-        // dir_list is an "fs_read" category tool
-        // file_head is an "fs_read" category tool
         let tools = vec![
             json!({"function": {"name": "shell_exec"}}),
             json!({"function": {"name": "dir_list"}}),
@@ -2531,8 +2324,10 @@ mod tests {
             include: None,
             exclude: None,
             exclude_categories: Some(vec!["shell".to_string()]),
+            ..Default::default()
         };
-        let result = filter_tools_by_config(tools, &config, &[]);
+        let registry = make_test_registry();
+        let result = filter_tools_by_config(tools, &config, &registry);
         let names: Vec<&str> = result
             .iter()
             .filter_map(|t| t.get("function")?.get("name")?.as_str())
@@ -2558,10 +2353,11 @@ mod tests {
         let config = ToolsConfig {
             include: None,
             exclude: None,
-            // exclude shell and flow categories, keeping fs_read and memory
             exclude_categories: Some(vec!["shell".to_string(), "flow".to_string()]),
+            ..Default::default()
         };
-        let result = filter_tools_by_config(tools, &config, &[]);
+        let registry = make_test_registry();
+        let result = filter_tools_by_config(tools, &config, &registry);
         let names: Vec<&str> = result
             .iter()
             .filter_map(|t| t.get("function")?.get("name")?.as_str())
@@ -2785,11 +2581,13 @@ mod tests {
             "write_file",
             serde_json::json!({"path": "vfs:///shared/hello.txt", "content": "hello vfs"}),
         );
+        let registry = make_test_registry();
         let result = execute_tool_pure(
             &app,
             "default",
             &tc,
             &[],
+            &registry,
             false,
             &resolved_config,
             None,
@@ -2826,11 +2624,13 @@ mod tests {
             "file_head",
             serde_json::json!({"path": "vfs:///shared/hello.txt", "lines": 2}),
         );
+        let registry = make_test_registry();
         let result = execute_tool_pure(
             &app,
             "default",
             &tc,
             &[],
+            &registry,
             false,
             &resolved_config,
             None,

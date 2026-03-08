@@ -9,8 +9,13 @@ sandboxed, shared file space for contexts. contexts can read and write without e
 /home/<context>/                  owner: read + write; others: read only
 /sys/                             read only (SYSTEM-populated)
 /sys/tool_cache/<context>/        cached tool outputs (SYSTEM-written, world-readable)
+/sys/contexts/<name>/             read-only context metadata (virtual, generated on-demand)
 /site/                            site-wide flock data (world-writable)
 /flocks/<name>/                   per-flock data (members only)
+/tools/shared/                    synthesised tools: visible to all contexts
+/tools/home/<context>/            synthesised tools: visible to owner context only
+/tools/flocks/<flock>/            synthesised tools: visible to flock members only
+/tools/sys/                       read-only virtual: tool schema JSON (generated on demand)
 ```
 
 ## permission model
@@ -166,7 +171,70 @@ maps `VfsPath("/shared/foo.txt")` → `<chibi_home>/vfs/shared/foo.txt`. uses `s
 
 `vfs/` sits alongside `contexts/` in CHIBI_HOME.
 
+## multi-backend mounting
+
+`Vfs` supports multiple backends mounted at different path prefixes, resolved by longest-prefix match. Use `Vfs::builder(site_id)` to compose them:
+
+```rust
+let vfs = Vfs::builder(site_id)
+    .mount("/", Box::new(LocalBackend::new(vfs_root)))
+    .mount("/tools/sys", Box::new(ToolsBackend::new(registry)))
+    .mount("/sys/contexts", Box::new(ContextsBackend::new(state, data_dir, site_id)))
+    .build();
+```
+
+`ToolsBackend` is a read-only virtual backend mounted at `/tools/sys/` that synthesises tool schema JSON on demand from the registry. Reads enumerate tools; writes are rejected.
+
+`ContextsBackend` is a read-only virtual backend mounted at `/sys/contexts/` that synthesises context metadata from the shared `Arc<RwLock<ContextState>>`. It does not hold its own copy of context data — it reads from the same source of truth as `AppState`.
+
+### `/sys/contexts/` virtual file structure
+
+```
+/sys/contexts/
+└── <name>/
+    ├── state.json        # generated: timestamps, prompt_count, flocks, path refs
+    └── transcript/
+        ├── manifest.json       # read-through from disk
+        ├── active.jsonl        # read-through from disk (active partition)
+        └── partitions/
+            └── <file>.jsonl    # read-through from disk (archived partitions)
+```
+
+`state.json` schema:
+
+```json
+{
+  "created_at": 1700000000,
+  "last_activity_at": 1700001234,
+  "prompt_count": 42,
+  "auto_destroy_at": null,
+  "auto_destroy_after_inactive_secs": null,
+  "flocks": ["site:my-machine-abc123", "frontend"],
+  "paths": {
+    "todos": "/home/alice/todos.md",
+    "goals": ["/site/goals.md", "/flocks/frontend/goals.md"]
+  }
+}
+```
+
+`prompt_count` counts user prompt entries (`entry_type="message"`, `role="user"`) across all archived and active partitions. Uses `PartitionManager`'s cached partition metadata — no per-line scanning of archived files.
+
+## synthesised tools zone
+
+Scheme (`.scm`) files placed under `/tools/` are automatically loaded as synthesised tools. Three zones are scanned at startup and on hot-reload:
+
+| Zone | VFS Path | Visibility |
+|------|----------|------------|
+| shared | `/tools/shared/` | all contexts |
+| home | `/tools/home/<context>/` | owner context only |
+| flocks | `/tools/flocks/<flock>/` | flock members only |
+
+Files are scanned recursively. Non-`.scm` files and files with invalid Scheme source are silently skipped. Valid tools are registered and appear alongside regular plugin tools.
+
+**Hot-reload:** writing a `.scm` file via the VFS triggers immediate re-registration. If the new source is invalid, the previous version of the tool remains registered. Deleting a file unregisters all tools defined in it (multi-tool files supported).
+
+**Sandbox tiers:** each zone uses the `sandboxed` tier by default (safe R7RS subset). Override per path prefix with `[tools.tiers]` in `config.toml`. See [configuration.md](configuration.md) and [plugins.md](plugins.md) for details.
+
 ## future evolution
 
-- **multi-backend mounting** — `Vfs` maps path prefixes to different backends (e.g. `/shared/` on disk, `/remote/` on XMPP). longest-prefix match.
 - **middleware layers** — composable tower-style layers (logging, caching) wrapping backends (approach C). refactor from approach A when needed.

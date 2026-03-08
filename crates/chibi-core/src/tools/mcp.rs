@@ -10,11 +10,6 @@ use std::path::{Path, PathBuf};
 
 use super::{Tool, ToolMetadata};
 
-/// Check if a tool has an MCP virtual path.
-pub fn is_mcp_tool(tool: &Tool) -> bool {
-    tool.path.to_str().is_some_and(|p| p.starts_with("mcp://"))
-}
-
 /// Parse server and tool name from an `mcp://server/tool` path.
 pub fn parse_mcp_path(path: &Path) -> Option<(&str, &str)> {
     let s = path.to_str()?;
@@ -33,10 +28,14 @@ pub fn mcp_tool_from_info(
         name: format!("{server}_{name}"),
         description: description.to_string(),
         parameters,
-        path: PathBuf::from(format!("mcp://{server}/{name}")),
         hooks: vec![],
         metadata: ToolMetadata::new(),
         summary_params: vec![],
+        r#impl: crate::tools::ToolImpl::Mcp {
+            server: server.to_string(),
+            tool_name: name.to_string(),
+        },
+        category: crate::tools::ToolCategory::Mcp,
     }
 }
 
@@ -289,14 +288,54 @@ pub fn load_mcp_tools(home: &Path) -> io::Result<Vec<Tool>> {
         .collect())
 }
 
-/// Execute an MCP tool via the bridge daemon.
-pub fn execute_mcp_tool(tool: &Tool, args: &serde_json::Value, home: &Path) -> io::Result<String> {
-    let (server, tool_name) = parse_mcp_path(&tool.path).ok_or_else(|| {
+/// Execute an MCP tool by server and tool name.
+///
+/// Standalone function used by `ToolRegistry` dispatch when the `ToolImpl::Mcp`
+/// variant is matched — no `&Tool` needed since server/tool_name come from the
+/// `Mcp { server, tool_name }` variant directly.
+pub fn execute_mcp_call(
+    server: &str,
+    tool_name: &str,
+    args: &serde_json::Value,
+    home: &Path,
+) -> io::Result<String> {
+    let addr = read_bridge_address(home).or_else(|_| ensure_bridge_running(home))?;
+
+    let request = serde_json::json!({
+        "op": "call_tool",
+        "server": server,
+        "tool": tool_name,
+        "args": args,
+    });
+
+    let response = send_request(addr, &request.to_string())?;
+    let parsed: CallToolResponse = serde_json::from_str(&response).map_err(|e| {
         io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("not an MCP tool path: {:?}", tool.path),
+            io::ErrorKind::InvalidData,
+            format!("invalid bridge response: {e}"),
         )
     })?;
+
+    if !parsed.ok {
+        return Err(io::Error::other(
+            parsed.error.unwrap_or_else(|| "MCP tool error".into()),
+        ));
+    }
+
+    Ok(parsed.result.unwrap_or_default())
+}
+
+/// Execute an MCP tool via the bridge daemon.
+pub fn execute_mcp_tool(tool: &Tool, args: &serde_json::Value, home: &Path) -> io::Result<String> {
+    let (server, tool_name) = match &tool.r#impl {
+        crate::tools::ToolImpl::Mcp { server, tool_name } => (server.as_str(), tool_name.as_str()),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("execute_mcp_tool called on non-MCP tool: {}", tool.name),
+            ));
+        }
+    };
 
     let addr = read_bridge_address(home).or_else(|_| ensure_bridge_running(home))?;
 
@@ -348,31 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn is_mcp_tool_true() {
-        let tool = mcp_tool_from_info(
-            "serena",
-            "find_symbol",
-            "find symbols",
-            serde_json::json!({}),
-        );
-        assert!(is_mcp_tool(&tool));
-    }
-
-    #[test]
-    fn is_mcp_tool_false() {
-        let tool = Tool {
-            name: "my_plugin".into(),
-            description: "a plugin".into(),
-            parameters: serde_json::json!({}),
-            path: PathBuf::from("/home/user/.chibi/plugins/my_plugin"),
-            hooks: vec![],
-            metadata: ToolMetadata::new(),
-            summary_params: vec![],
-        };
-        assert!(!is_mcp_tool(&tool));
-    }
-
-    #[test]
     fn mcp_tool_from_info_creates_correct_tool() {
         let tool = mcp_tool_from_info(
             "serena",
@@ -387,7 +401,12 @@ mod tests {
         );
         assert_eq!(tool.name, "serena_find_symbol");
         assert_eq!(tool.description, "find code symbols by name");
-        assert_eq!(tool.path, PathBuf::from("mcp://serena/find_symbol"));
+        assert_eq!(tool.category, crate::tools::ToolCategory::Mcp);
+        assert!(matches!(
+            &tool.r#impl,
+            crate::tools::ToolImpl::Mcp { server, tool_name }
+                if server == "serena" && tool_name == "find_symbol"
+        ));
         assert!(tool.hooks.is_empty());
         assert!(tool.summary_params.is_empty());
     }
