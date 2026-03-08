@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.10.0] - 2026-03-06
+## [0.10.2] - 2026-03-08
 
 ### Bug Fixes
 
@@ -27,6 +27,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Update TranscriptEntry struct literals in chibi-cli tests ([`b188412`](https://github.com/emesal/chibi/commit/b18841274e10a22b13ac87c5bb32a6f04caaff99))
 
+- **review:** Address post-#190 code review findings ([`1154f48`](https://github.com/emesal/chibi/commit/1154f487f84e3b6f896f172985dde52784d87aa2))
+
+- **review:** Address code review findings — doc sync and lock scope ([`7080e49`](https://github.com/emesal/chibi/commit/7080e49da1fe241ea1f55d939b76970a40042531))
+
+- **tein:** Pass ToolsConfig to reload_tool_from_content in tests ([`252d614`](https://github.com/emesal/chibi/commit/252d614c70bb7f73eff7220159e0b8c3ecf16bb3))
+
+- **tein:** Post-review fixes for synthesised tool layer ([`2016b19`](https://github.com/emesal/chibi/commit/2016b1937005dc9a48a274924b0a6e1bee9c03ed))
+
 
 ### Chores
 
@@ -39,6 +47,12 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Disable call_agent as LLM tool ([`172975a`](https://github.com/emesal/chibi/commit/172975a5fc14b13900ae9e0da5c4f3665e6eb64d))
 
 - Apply fmt from just lint ([`fe0994d`](https://github.com/emesal/chibi/commit/fe0994d7d3b25b0cc70fb783837bc361df496d58))
+
+- Switch tein dep to git main (v0.2.1) (#190) ([`770f9cf`](https://github.com/emesal/chibi/commit/770f9cfaea71792282653f62b9a3d1552655e0a8))
+
+- Collect AGENTS.md notes, mark plan complete ([`2e1e5c7`](https://github.com/emesal/chibi/commit/2e1e5c72b6320289dbc346e64b4095a8a7fbac6e))
+
+- Lint fixes for tein integration (#193) ([`843e664`](https://github.com/emesal/chibi/commit/843e6645ae5e0086bfaf4469646d59d0ee9e438e))
 
 
 ### Documentation
@@ -64,6 +78,26 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Update transcript format for unified flow control messages ([`898672f`](https://github.com/emesal/chibi/commit/898672f8dbb68b19d884427e8f4fc1af188a305f))
 
 - Add call_agent and TranscriptEntry quirks to AGENTS.md ([`45269b6`](https://github.com/emesal/chibi/commit/45269b6952571e71e68c2b41bb2d485a0d7821fd))
+
+- Update CHANGELOG for v0.10.0 ([`fe37233`](https://github.com/emesal/chibi/commit/fe372334b80612b1fe1495215af40a74c66ffa1d))
+
+- ToolRegistry + VFS tool namespace design (#190) ([`e0a03d6`](https://github.com/emesal/chibi/commit/e0a03d6b46cb273dddf32c5346c6cf13b933fd98))
+
+- ToolRegistry implementation plan (#190) ([`a1977b9`](https://github.com/emesal/chibi/commit/a1977b9479c9d08857a9c780abe2b9f8e300d846))
+
+- Update ToolRegistry plan — Tasks 7-8 complete, Task 9 analysis (#190) ([`9503ce5`](https://github.com/emesal/chibi/commit/9503ce5d90148c00b8c1f913a19a4eb923a55a23))
+
+- Full Task 9 execution plan in ToolRegistry plan file (#190) ([`9c475cf`](https://github.com/emesal/chibi/commit/9c475cfc05c406802ebd5c0bafcc4b9f97b61719))
+
+- **plan:** Mark tasks 1-5 complete, add implementation notes ([`9645703`](https://github.com/emesal/chibi/commit/96457034949e00703bf18b062a38bcfe341949a0))
+
+- Document /sys/contexts/ virtual files and cli -l prompt count ([`5310fe0`](https://github.com/emesal/chibi/commit/5310fe00d6fbbcfb03f067dec4208fc25f722951))
+
+- Design for tein integration remaining items (#193) ([`5564f91`](https://github.com/emesal/chibi/commit/5564f91df23ec45de105ff81fc9756858fe77826))
+
+- Implementation plan for tein integration (#193) ([`1759403`](https://github.com/emesal/chibi/commit/1759403b16c752d86303a3273b6c4155804b4f98))
+
+- Document harness tools module, tiers, and VFS tool zones (#193) ([`8dc7be8`](https://github.com/emesal/chibi/commit/8dc7be8ef3f89c0f3e9cb1a7695180de86553a76))
 
 
 ### Features
@@ -98,6 +132,38 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Unified flow control messages (#211) ([`2dc235e`](https://github.com/emesal/chibi/commit/2dc235e6d36435ab5beab72b412f845ad65ec6d7))
 
+- Add indexmap dependency for ToolRegistry (#190) ([`9cc6e07`](https://github.com/emesal/chibi/commit/9cc6e07d64c12e69e317349d125bcbd286ff8f39))
+
+- Define core ToolRegistry types and update Tool struct (#190) ([`cad1fa5`](https://github.com/emesal/chibi/commit/cad1fa5932be1ba2cc4888859b9ae4a45aec913d))
+
+- Add register_*_tools() to all builtin modules (#190) ([`cde36bb`](https://github.com/emesal/chibi/commit/cde36bb9502e18cabe6497cb6077b45a9e7d9138))
+
+- Wire plugin and MCP dispatch into ToolRegistry (#190) ([`68d3dca`](https://github.com/emesal/chibi/commit/68d3dca08fb7348dbd6958af817b2021682749c6))
+
+- Build ToolRegistry at Chibi init, replace Vec<Tool> (#190) ([`99d56cf`](https://github.com/emesal/chibi/commit/99d56cfea403d563845ba82073a702e5fe4aacfd))
+
+- Add /tools/ zone permissions to VFS (#190) ([`cc36097`](https://github.com/emesal/chibi/commit/cc3609700d9c19cd22d36c0b813b7836fdef815d))
+
+- Multi-backend VFS mounting with longest-prefix match (#190) ([`b98c2da`](https://github.com/emesal/chibi/commit/b98c2da5dc74560b20b6808c927aa5a888e26e54))
+
+- ToolsBackend — virtual VFS backend for /tools/sys/ (#190) ([`04d41eb`](https://github.com/emesal/chibi/commit/04d41ebca0dd3f2be14ef00c7ea7e34201685762))
+
+- Mount /tools/sys/ backend at VFS init (#190) ([`87ea04d`](https://github.com/emesal/chibi/commit/87ea04dc1c13e5f31abb4d89b0ce15b5268efbc8))
+
+- Synthesised tools via tein (tasks 15–17) (#190) ([`70486df`](https://github.com/emesal/chibi/commit/70486dfce2e6c073a3945ff915beb000b5f9e540))
+
+- Startup scan + hot-reload for synthesised tools (#190) ([`7c04c8f`](https://github.com/emesal/chibi/commit/7c04c8f9c6dd7eac247e6d808ed04a235af1b2ee))
+
+- **partition:** Track prompt_count in PartitionMeta and ActiveState ([`c67b2c9`](https://github.com/emesal/chibi/commit/c67b2c9489ca031915c9d6d91b4ff90e786cc878))
+
+- **cli:** Show prompt count from transcript in chibi -l ([`ddffaa5`](https://github.com/emesal/chibi/commit/ddffaa561af951eefbd6f8744b9326593af48078))
+
+- **vfs:** Implement ContextsBackend for /sys/contexts/ ([`2982866`](https://github.com/emesal/chibi/commit/2982866f6cc7f23a7cd100a29204953d216caa71))
+
+- **vfs:** Mount ContextsBackend at /sys/contexts/ ([`fd80fca`](https://github.com/emesal/chibi/commit/fd80fcac17633ef7482c796bea9aaa489ff7932b))
+
+- **tein:** Call-tool bridge, multi-zone scan, define-tool macro (#193) ([`7cd92df`](https://github.com/emesal/chibi/commit/7cd92df659318b856f98371d86b47589a77944b9))
+
 
 ### Refactoring
 
@@ -127,6 +193,18 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Remove flow_control_call/result entry types ([`a1962e0`](https://github.com/emesal/chibi/commit/a1962e0d4601bdf11d7e926c43488cf628b11441))
 
+- Replace chibi.rs dispatch chain with registry.dispatch (#190) ([`5a05a9e`](https://github.com/emesal/chibi/commit/5a05a9e60f0c2c2c2a65b81c892c3cac2767f488))
+
+- Replace send.rs tool-building loop with registry iteration (#190) ([`8d6ddc2`](https://github.com/emesal/chibi/commit/8d6ddc28a9e86c9e2df27a24a9a5a6096f3b77e9))
+
+- Remove Tool.path, is_*_tool predicates, and all_*_to_api_format helpers (#190) ([`41be002`](https://github.com/emesal/chibi/commit/41be0022ba06461596f2650e600083f1d8df303c))
+
+- **vfs:** Introduce ReadOnlyVfsBackend trait with blanket impl ([`3714c68`](https://github.com/emesal/chibi/commit/3714c687c54b22223183e58a11b98bc7e3cb3b44))
+
+- **vfs:** Migrate ToolsBackend to ReadOnlyVfsBackend ([`36a88c4`](https://github.com/emesal/chibi/commit/36a88c47ed3d5f394481746ff67cb39cf026619b))
+
+- **state:** Wrap ContextState in Arc<RwLock> for shared access ([`372dac4`](https://github.com/emesal/chibi/commit/372dac410738780be97ba1bc138bed6989a8316a))
+
 
 ### Tests
 
@@ -145,6 +223,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **compaction:** Unit tests for manual compact — early return, empty summary, bootstrap structure ([`313e140`](https://github.com/emesal/chibi/commit/313e140c180a3fa8884c84000f1daaf08476fc06))
 
 - **compaction:** Large transcript stress test — repeated rolling compaction, #174 ([`24f7ed1`](https://github.com/emesal/chibi/commit/24f7ed121afad71aeb4398b273adf129e8f7208b))
+
+- **tein:** Tier sandbox boundary + harness integration tests ([`683069f`](https://github.com/emesal/chibi/commit/683069f6f1dfc513840e83258fadd64b195d8a41))
 
 
 ## [0.8.10] - 2026-02-22
