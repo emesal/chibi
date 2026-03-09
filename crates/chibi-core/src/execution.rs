@@ -560,7 +560,8 @@ fn show_log(chibi: &Chibi, context: &str, count: isize, output: &dyn OutputSink)
 
 /// Inspect a context property.
 ///
-/// Renders markdown-bearing content (todos, goals) via `emit_markdown()`.
+/// Renders content via `emit_result()`. Tasks use `build_summary_table`,
+/// goals use `emit_markdown()`.
 /// Returns `Some(CommandEffect)` for config-related inspections that require
 /// binary-specific resolution (binaries may have extended config fields).
 fn inspect_context(

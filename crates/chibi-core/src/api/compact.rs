@@ -79,7 +79,7 @@ pub(crate) fn filter_messages(
 
 /// Rolling compaction: strips messages and integrates them into the summary
 /// This is triggered automatically when context exceeds threshold
-/// The LLM decides which messages to drop based on goals/todos, with fallback to percentage
+/// The LLM decides which messages to drop based on goals/tasks, with fallback to percentage
 pub async fn rolling_compact(
     app: &AppState,
     context_name: &str,
@@ -112,7 +112,7 @@ pub async fn rolling_compact(
 
     // Load tasks and flock goals to guide compaction decisions.
     let task_metas = crate::state::tasks::collect_tasks(&app.vfs, context_name).await;
-    let todos = crate::state::tasks::build_summary_table(&task_metas);
+    let task_table = crate::state::tasks::build_summary_table(&task_metas);
     let flock_contexts = load_flock_contexts(&app.vfs, context_name).unwrap_or_default();
     let goals = format_flock_sections(&flock_contexts);
 
@@ -169,10 +169,10 @@ pub async fn rolling_compact(
         )
         .replace(
             "{TODOS}",
-            &if todos.is_empty() {
+            &if task_table.is_empty() {
                 String::new()
             } else {
-                format!("CURRENT TASKS:\n{}\n\n", todos)
+                format!("CURRENT TASKS:\n{}\n\n", task_table)
             },
         )
         .replace(
@@ -295,10 +295,10 @@ pub async fn rolling_compact(
         )
         .replace(
             "{TODOS}",
-            &if todos.is_empty() {
+            &if task_table.is_empty() {
                 String::new()
             } else {
-                format!("\nCURRENT TASKS:\n{}\n", todos)
+                format!("\nCURRENT TASKS:\n{}\n", task_table)
             },
         );
 

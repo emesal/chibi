@@ -51,7 +51,7 @@ pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
     },
     BuiltinToolDef {
         name: READ_CONTEXT_TOOL_NAME,
-        description: "Read the state of another context (read-only). Returns summary, todos, goals, and recent messages. Useful for inspecting sub-agents or coordinating with related contexts.",
+        description: "Read the state of another context (read-only). Returns summary, tasks, goals, and recent messages. Useful for inspecting sub-agents or coordinating with related contexts.",
         properties: &[
             ToolPropertyDef {
                 name: "context_name",
@@ -230,7 +230,7 @@ pub fn execute_reflection_tool(
 
 /// Execute read_context: read the state of another context (read-only).
 ///
-/// Returns a JSON object with the context's summary, todos, flock_goals, and
+/// Returns a JSON object with the context's summary, tasks, flock_goals, and
 /// optionally recent messages from context.jsonl.
 fn execute_read_context(
     app: &AppState,

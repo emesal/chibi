@@ -1,6 +1,6 @@
 //! System prompt and content file handling for AppState.
 //!
-//! Methods for loading/saving system prompts, todos, goals, and reflection content.
+//! Methods for loading/saving system prompts, goals, and reflection content.
 
 use crate::context::{ENTRY_TYPE_SYSTEM_PROMPT_CHANGED, TranscriptEntry, now_timestamp};
 use std::fs;

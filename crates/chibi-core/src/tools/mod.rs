@@ -4,7 +4,7 @@
 //! - Plugin loading and execution from the plugins directory
 //! - MCP bridge client for tools from remote MCP servers
 //! - Built-in tools organised by permission/capability group:
-//!   - `memory`: reflection, todos, goals, read_context
+//!   - `memory`: reflection, goals, flock_list, read_context
 //!   - `fs_read`: read-only file and directory access
 //!   - `fs_write`: file write and edit (triggers PreFileWrite hooks)
 //!   - `shell`: OS command execution (triggers PreShellExec hooks)
