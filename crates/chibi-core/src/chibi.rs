@@ -314,7 +314,7 @@ impl Chibi {
             "tool_count": reg.all().count(),
         });
         let plugin_tools: Vec<Tool> = reg
-            .filter(|t| t.category == ToolCategory::Plugin)
+            .filter(|t| t.is_hook_eligible())
             .into_iter()
             .cloned()
             .collect();
@@ -334,7 +334,7 @@ impl Chibi {
             "tool_count": reg.all().count(),
         });
         let plugin_tools: Vec<Tool> = reg
-            .filter(|t| t.category == ToolCategory::Plugin)
+            .filter(|t| t.is_hook_eligible())
             .into_iter()
             .cloned()
             .collect();
@@ -358,7 +358,7 @@ impl Chibi {
             .registry
             .read()
             .unwrap()
-            .filter(|t| t.category == ToolCategory::Plugin)
+            .filter(|t| t.is_hook_eligible())
             .into_iter()
             .cloned()
             .collect();

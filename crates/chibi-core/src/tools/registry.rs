@@ -83,6 +83,9 @@ pub enum ToolImpl {
         /// Used as the key in `BRIDGE_CALL_CTX` so concurrent synthesised tool
         /// calls from different tein contexts never overwrite each other's entry.
         worker_thread_id: std::thread::ThreadId,
+        /// Maps hook points to scheme binding names for hook callbacks.
+        /// Populated from `%hook-registry%` during tool loading.
+        hook_bindings: std::collections::HashMap<super::hooks::HookPoint, String>,
     },
 }
 
@@ -102,12 +105,14 @@ impl Clone for ToolImpl {
                 context,
                 registry,
                 worker_thread_id,
+                hook_bindings,
             } => ToolImpl::Synthesised {
                 vfs_path: vfs_path.clone(),
                 exec_binding: exec_binding.clone(),
                 context: context.clone(),
                 registry: Arc::clone(registry),
                 worker_thread_id: *worker_thread_id,
+                hook_bindings: hook_bindings.clone(),
             },
         }
     }

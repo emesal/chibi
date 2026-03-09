@@ -120,6 +120,40 @@ Plugins register for hooks via their `--schema` JSON output:
 }
 ```
 
+## Tein Hook Registration
+
+Synthesised tools (`.scm` files) can register for hooks using the `(harness hooks)` module:
+
+```scheme
+(import (harness hooks))
+
+(register-hook 'pre_message
+  (lambda (payload)
+    ;; payload is an alist parsed from the hook's JSON data.
+    ;; return an alist to modify behaviour, or '() for no-op.
+    (list (cons "prompt" "modified prompt"))))
+
+(define tool-name "my-tool")
+(define tool-description "A tool that also hooks into pre_message")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+```
+
+Tein hooks follow the same contract as subprocess plugin hooks:
+- They receive the hook payload converted from JSON to a scheme alist.
+- They return a scheme alist (converted back to JSON), or `'()` (empty list) for no-op.
+- Errors in callbacks are caught and skipped silently (same as subprocess hook failures).
+- `register-hook` takes a symbol for the hook point name and a one-argument procedure.
+
+**Ordering:** subprocess plugin hooks fire first, then tein hooks, in registration order.
+
+**Re-entrancy:** If a tein hook callback triggers an action that fires the same hook point,
+tein callbacks are skipped on the recursive call to prevent infinite loops. Subprocess
+hooks still fire normally.
+
+**Lifecycle:** Hook registrations are tied to the `.scm` file. When a file is hot-reloaded
+or deleted, its hooks are automatically cleared and re-evaluated from the fresh source.
+
 ## Hook Execution
 
 When a hook fires, registered plugins are called with:

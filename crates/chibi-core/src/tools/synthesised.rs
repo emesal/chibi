@@ -96,6 +96,24 @@ const HARNESS_TOOLS_MODULE: &str = r#"
     #t))
 "#;
 
+/// Scheme source for the `(harness hooks)` module.
+///
+/// `register-hook` is defined at top level in `HARNESS_PREAMBLE` so it can
+/// mutate `%hook-registry%`. This library re-exports it for clean imports.
+///
+/// Mutation site: if `register-hook` signature changes, update
+/// `extract_hook_registrations` which reads `%hook-registry%` entries.
+#[cfg(feature = "synthesised-tools")]
+const HARNESS_HOOKS_MODULE: &str = r#"
+(define-library (harness hooks)
+  (import (scheme base))
+  (export register-hook)
+  (begin
+    ;; register-hook is defined in HARNESS_PREAMBLE (top-level).
+    ;; re-export it so (import (harness hooks)) provides it.
+    #t))
+"#;
+
 /// Top-level scheme preamble evaluated in every synthesised tool context.
 ///
 /// Defines `%tool-registry%` and the `define-tool` syntax at the top level
@@ -116,6 +134,11 @@ const HARNESS_PREAMBLE: &str = r#"
 ;; (name-string description-string params-value execute-procedure)
 (define %tool-registry% '())
 
+;; accumulates hook registrations. each entry is a list:
+;; (hook-name-string handler-procedure)
+;; rust reads %hook-registry% after evaluation to populate Tool.hooks.
+(define %hook-registry% '())
+
 ;; name of the calling context — mutated by execute_synthesised before each call.
 ;; plugins read this to resolve /home/<ctx>/... VFS paths.
 (define %context-name% "")
@@ -131,6 +154,15 @@ const HARNESS_PREAMBLE: &str = r#"
      (set! %tool-registry%
        (cons (list (symbol->string 'name) desc params handler)
              %tool-registry%)))))
+
+;; registers a hook handler for a given hook point.
+;; hook-name is a symbol (e.g. 'pre_vfs_write).
+;; handler is a procedure taking one argument (the hook payload as an alist)
+;; and returning an alist (or '() for no-op).
+(define (register-hook hook-name handler)
+  (set! %hook-registry%
+    (cons (list (symbol->string hook-name) handler)
+          %hook-registry%)))
 "#;
 
 // --- thread-local bridge state -----------------------------------------------
@@ -381,6 +413,8 @@ fn build_tein_context(
         ctx.evaluate(HARNESS_PREAMBLE)?;
         ctx.register_module(HARNESS_TOOLS_MODULE)
             .map_err(|e| tein::Error::EvalError(format!("harness module: {e}")))?;
+        ctx.register_module(HARNESS_HOOKS_MODULE)
+            .map_err(|e| tein::Error::EvalError(format!("harness hooks module: {e}")))?;
         ctx.evaluate(&source)?;
         Ok(())
     };
@@ -506,12 +540,13 @@ fn extract_single_tool(
         ));
     }
 
+    let (hooks, hook_bindings) = extract_hook_registrations(&ctx)?;
     let context = Arc::new(ctx);
     Ok(Tool {
         name,
         description,
         parameters,
-        hooks: vec![],
+        hooks,
         metadata: ToolMetadata::new(),
         summary_params: vec![],
         r#impl: ToolImpl::Synthesised {
@@ -520,6 +555,7 @@ fn extract_single_tool(
             context,
             registry: Arc::clone(registry),
             worker_thread_id,
+            hook_bindings,
         },
         category: ToolCategory::Synthesised,
     })
@@ -554,6 +590,7 @@ fn extract_multi_tools(
         }
     };
 
+    let (hooks, hook_bindings) = extract_hook_registrations(&ctx)?;
     let context = Arc::new(ctx);
     let mut tools = Vec::with_capacity(entries.len());
 
@@ -620,7 +657,7 @@ fn extract_multi_tools(
             name,
             description,
             parameters,
-            hooks: vec![],
+            hooks: hooks.clone(),
             metadata: ToolMetadata::new(),
             summary_params: vec![],
             r#impl: ToolImpl::Synthesised {
@@ -629,6 +666,7 @@ fn extract_multi_tools(
                 context: Arc::clone(&context),
                 registry: Arc::clone(registry),
                 worker_thread_id,
+                hook_bindings: hook_bindings.clone(),
             },
             category: ToolCategory::Synthesised,
         });
@@ -866,6 +904,96 @@ fn extract_string(ctx: &ThreadLocalContext, name: &str) -> io::Result<String> {
     })
 }
 
+/// Read `%hook-registry%` from a tein context and return (hooks, hook_bindings).
+///
+/// Each entry in `%hook-registry%` is `(hook-name-string handler-procedure)`.
+/// For each valid entry, we:
+/// 1. Parse the hook name string into a `HookPoint`.
+/// 2. Bind the handler to `%hook-{hook_name}%` in the context.
+/// 3. Record the mapping in `hook_bindings`.
+///
+/// Invalid hook names are warned and skipped (same as plugin hook parsing).
+///
+/// Mutation site: if `register-hook` alist shape changes, update this function
+/// and `HARNESS_PREAMBLE` accordingly.
+#[cfg(feature = "synthesised-tools")]
+fn extract_hook_registrations(
+    ctx: &ThreadLocalContext,
+) -> io::Result<(
+    Vec<super::hooks::HookPoint>,
+    std::collections::HashMap<super::hooks::HookPoint, String>,
+)> {
+    let registry_val = ctx
+        .evaluate("%hook-registry%")
+        .map_err(|e| io::Error::other(format!("reading %hook-registry%: {e}")))?;
+
+    let entries = match registry_val {
+        Value::List(items) if !items.is_empty() => items,
+        _ => return Ok((vec![], std::collections::HashMap::new())),
+    };
+
+    let mut hooks = Vec::new();
+    let mut hook_bindings = std::collections::HashMap::new();
+
+    // entries are LIFO (via cons); reverse for definition order
+    for entry in entries.iter().rev() {
+        let fields = match entry {
+            Value::List(f) if f.len() >= 2 => f,
+            other => {
+                eprintln!("[WARN] register-hook entry has unexpected shape: {other}");
+                continue;
+            }
+        };
+
+        let hook_name = match fields[0].as_string() {
+            Some(s) => s.to_string(),
+            None => {
+                eprintln!("[WARN] register-hook: hook name not a string");
+                continue;
+            }
+        };
+
+        let hook_point = match hook_name.parse::<super::hooks::HookPoint>() {
+            Ok(hp) => hp,
+            Err(_) => {
+                eprintln!("[WARN] Unknown hook '{hook_name}' in register-hook");
+                continue;
+            }
+        };
+
+        if !fields[1].is_procedure() {
+            eprintln!("[WARN] register-hook {hook_name}: handler is not a procedure");
+            continue;
+        }
+
+        // bind handler to a well-known name so execute_hook can find it
+        let binding = format!("%hook-{hook_name}%");
+        let hook_name_escaped = scheme_escape_string(&hook_name);
+        // look up handler from %hook-registry% by name (first match in LIFO list = newest).
+        // when the same hook point is registered multiple times, `define` overwrites on
+        // each iteration (oldest-first), so the last-defined handler wins.
+        ctx.evaluate(&format!(
+            "(define {binding} \
+             (cadr \
+               (let loop ((reg %hook-registry%)) \
+                 (if (string=? (car (car reg)) \"{hook_name_escaped}\") \
+                     (car reg) \
+                     (loop (cdr reg))))))"
+        ))
+        .map_err(|e| io::Error::other(format!("binding {binding}: {e}")))?;
+
+        // deduplicate hook points: only push to `hooks` once per hook point.
+        // the binding name is the same regardless (`%hook-{hook_name}%`), so
+        // or_insert_with is used purely to avoid duplicate entries in `hooks`.
+        hook_bindings.entry(hook_point).or_insert_with(|| {
+            hooks.push(hook_point);
+            binding
+        });
+    }
+
+    Ok((hooks, hook_bindings))
+}
+
 /// Convert a scheme params alist to a JSON Schema object.
 ///
 /// Input (scheme): `((name . ((type . "string") (description . "..."))) ...)`
@@ -984,7 +1112,7 @@ fn params_alist_to_json_schema(val: &Value) -> io::Result<serde_json::Value> {
 ///
 /// Mutation site: if scheme value representation changes in tein, update here.
 #[cfg(feature = "synthesised-tools")]
-fn scheme_value_to_json(val: &Value) -> io::Result<serde_json::Value> {
+pub(crate) fn scheme_value_to_json(val: &Value) -> io::Result<serde_json::Value> {
     match val {
         Value::Nil => Ok(serde_json::Value::Null),
         Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
@@ -1055,7 +1183,7 @@ fn scheme_value_to_json(val: &Value) -> io::Result<serde_json::Value> {
 /// `{"key": "val", ...}` → `(("key" . val) ...)` using `tein::json_value_to_value`.
 /// Keys are scheme strings. Use `(assoc "key" args)` in scheme to extract.
 #[cfg(feature = "synthesised-tools")]
-fn json_args_to_scheme_alist(args: &serde_json::Value) -> io::Result<Value> {
+pub(crate) fn json_args_to_scheme_alist(args: &serde_json::Value) -> io::Result<Value> {
     tein::json_value_to_value(args.clone())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("args conversion: {e}")))
 }
@@ -1940,5 +2068,132 @@ mod tests {
             "id should be gone after delete: {}",
             list2
         );
+    }
+
+    // --- hook registration tests ---
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_hook_registration_populates_tool_hooks() {
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) '()))
+(register-hook 'pre_message (lambda (payload) '()))
+
+(define tool-name "test-hook-tool")
+(define tool-description "A tool that registers hooks")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/test-hooks.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        assert_eq!(tools.len(), 1);
+        assert!(
+            tools[0]
+                .hooks
+                .contains(&crate::tools::hooks::HookPoint::OnStart),
+            "expected OnStart in hooks: {:?}",
+            tools[0].hooks
+        );
+        assert!(
+            tools[0]
+                .hooks
+                .contains(&crate::tools::hooks::HookPoint::PreMessage),
+            "expected PreMessage in hooks: {:?}",
+            tools[0].hooks
+        );
+
+        if let ToolImpl::Synthesised { hook_bindings, .. } = &tools[0].r#impl {
+            assert!(hook_bindings.contains_key(&crate::tools::hooks::HookPoint::OnStart));
+            assert!(hook_bindings.contains_key(&crate::tools::hooks::HookPoint::PreMessage));
+        } else {
+            panic!("expected Synthesised");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_hook_registration_invalid_hook_name_skipped() {
+        let source = r#"
+(import (harness hooks))
+(register-hook 'nonexistent_hook (lambda (payload) '()))
+(register-hook 'on_start (lambda (payload) '()))
+
+(define tool-name "test-invalid-hook")
+(define tool-description "Tool with invalid hook")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/test-invalid.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        assert_eq!(tools.len(), 1);
+        // only valid hook should be registered
+        assert_eq!(
+            tools[0].hooks.len(),
+            1,
+            "invalid hook should be skipped: {:?}",
+            tools[0].hooks
+        );
+        assert!(
+            tools[0]
+                .hooks
+                .contains(&crate::tools::hooks::HookPoint::OnStart)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_hook_registration_multi_tool_file() {
+        // all tools in a multi-tool file share the same hooks
+        let source = r#"
+(import (harness hooks))
+(import (harness tools))
+(register-hook 'on_start (lambda (payload) '()))
+
+(define-tool tool-a
+  (description "first tool")
+  (parameters '())
+  (execute (lambda (args) "a")))
+
+(define-tool tool-b
+  (description "second tool")
+  (parameters '())
+  (execute (lambda (args) "b")))
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/multi-hooks.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        assert_eq!(tools.len(), 2);
+        for tool in &tools {
+            assert!(
+                tool.hooks
+                    .contains(&crate::tools::hooks::HookPoint::OnStart),
+                "tool {} should have OnStart hook",
+                tool.name
+            );
+        }
     }
 }

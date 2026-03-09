@@ -252,6 +252,17 @@ impl Tool {
         })
     }
 
+    /// Returns `true` if this tool can participate in hook dispatch.
+    ///
+    /// Plugin tools always register hooks via their `--schema` output.
+    /// Synthesised tools participate only when they called `register-hook`.
+    /// All other categories (builtin, MCP) never register hooks.
+    pub fn is_hook_eligible(&self) -> bool {
+        use registry::ToolCategory;
+        self.category == ToolCategory::Plugin
+            || (self.category == ToolCategory::Synthesised && !self.hooks.is_empty())
+    }
+
     /// Construct a Tool from a `BuiltinToolDef`, a shared handler, and a category.
     ///
     /// Reduces boilerplate in the `register_*_tools()` functions across all modules.
