@@ -1105,7 +1105,7 @@ fn params_alist_to_json_schema(val: &Value) -> io::Result<serde_json::Value> {
 ///
 /// Mutation site: if scheme value representation changes in tein, update here.
 #[cfg(feature = "synthesised-tools")]
-fn scheme_value_to_json(val: &Value) -> io::Result<serde_json::Value> {
+pub(crate) fn scheme_value_to_json(val: &Value) -> io::Result<serde_json::Value> {
     match val {
         Value::Nil => Ok(serde_json::Value::Null),
         Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
@@ -1176,7 +1176,7 @@ fn scheme_value_to_json(val: &Value) -> io::Result<serde_json::Value> {
 /// `{"key": "val", ...}` → `(("key" . val) ...)` using `tein::json_value_to_value`.
 /// Keys are scheme strings. Use `(assoc "key" args)` in scheme to extract.
 #[cfg(feature = "synthesised-tools")]
-fn json_args_to_scheme_alist(args: &serde_json::Value) -> io::Result<Value> {
+pub(crate) fn json_args_to_scheme_alist(args: &serde_json::Value) -> io::Result<Value> {
     tein::json_value_to_value(args.clone())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("args conversion: {e}")))
 }

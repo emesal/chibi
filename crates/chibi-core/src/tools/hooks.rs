@@ -8,6 +8,21 @@ use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use strum::{AsRefStr, EnumString};
 
+#[cfg(feature = "synthesised-tools")]
+use std::cell::RefCell;
+#[cfg(feature = "synthesised-tools")]
+use std::collections::HashSet;
+
+/// Tracks which hook points are currently being dispatched to tein callbacks.
+///
+/// Prevents re-entrancy: if a tein hook callback triggers an action that fires
+/// the same hook point, tein callbacks are skipped on the recursive call.
+/// Subprocess hooks still fire normally regardless.
+#[cfg(feature = "synthesised-tools")]
+thread_local! {
+    static TEIN_HOOK_GUARD: RefCell<HashSet<HookPoint>> = RefCell::new(HashSet::new());
+}
+
 /// Hook points where tools can register to be called
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, AsRefStr)]
 #[strum(serialize_all = "snake_case")]
@@ -119,6 +134,95 @@ pub fn execute_hook(
             .unwrap_or_else(|_| serde_json::Value::String(trimmed.to_string()));
 
         results.push((tool.name.clone(), value));
+    }
+
+    // --- synthesised tein hooks ---
+    #[cfg(feature = "synthesised-tools")]
+    {
+        let should_dispatch = TEIN_HOOK_GUARD.with(|guard| !guard.borrow().contains(&hook));
+
+        if should_dispatch {
+            TEIN_HOOK_GUARD.with(|guard| {
+                guard.borrow_mut().insert(hook);
+            });
+
+            for tool in tools {
+                if !tool.hooks.contains(&hook) {
+                    continue;
+                }
+                let (context, hook_bindings) = match &tool.r#impl {
+                    super::ToolImpl::Synthesised {
+                        context,
+                        hook_bindings,
+                        ..
+                    } => (context, hook_bindings),
+                    _ => continue,
+                };
+
+                let Some(binding) = hook_bindings.get(&hook) else {
+                    continue;
+                };
+
+                let payload =
+                    match super::synthesised::json_args_to_scheme_alist(data) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!(
+                                "[WARN] tein hook {}: payload conversion: {e}",
+                                hook.as_ref()
+                            );
+                            continue;
+                        }
+                    };
+
+                let hook_fn = match context.evaluate(binding) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] tein hook {} on {}: resolve {binding}: {e}",
+                            hook.as_ref(),
+                            tool.name
+                        );
+                        continue;
+                    }
+                };
+
+                let result = match context.call(&hook_fn, &[payload]) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] tein hook {} on {}: {e}",
+                            hook.as_ref(),
+                            tool.name
+                        );
+                        continue;
+                    }
+                };
+
+                // empty list or nil → no-op, don't push a result
+                if result.is_nil() {
+                    continue;
+                }
+                if matches!(&result, tein::Value::List(items) if items.is_empty()) {
+                    continue;
+                }
+
+                match super::synthesised::scheme_value_to_json(&result) {
+                    Ok(value) => results.push((tool.name.clone(), value)),
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] tein hook {} on {}: result conversion: {e}",
+                            hook.as_ref(),
+                            tool.name
+                        );
+                    }
+                }
+            }
+
+            TEIN_HOOK_GUARD.with(|guard| {
+                guard.borrow_mut().remove(&hook);
+            });
+        }
     }
 
     Ok(results)
@@ -454,6 +558,43 @@ echo 'OK'
         assert_eq!(results[0].1["order"], 1);
         assert_eq!(results[1].0, "ok2");
         assert_eq!(results[1].1["order"], 3);
+    }
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_execute_hook_dispatches_to_synthesised() {
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::registry::ToolRegistry;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start
+  (lambda (payload)
+    (list (cons "saw_event" (cdr (assoc "event" payload))))))
+
+(define tool-name "tein-hook-test")
+(define tool-description "Hook tester")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        let data = serde_json::json!({"event": "start"});
+        let results = execute_hook(&tools, HookPoint::OnStart, &data).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "tein-hook-test");
+        assert_eq!(results[0].1["saw_event"], "start");
     }
 
     #[test]
