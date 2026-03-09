@@ -824,4 +824,91 @@ echo 'OK'
         assert_eq!(results[0].1["from"], "plugin");
         assert_eq!(results[1].1["from"], "tein");
     }
+
+    // --- re-entrancy guard tests ---
+
+    /// Verify that when a hook point is already in TEIN_HOOK_GUARD (simulating
+    /// a recursive call from within a tein hook callback), tein callbacks are
+    /// skipped entirely while the guard is held.
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_reentrancy_guard_skips_tein_callbacks() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) (list (cons "fired" #t))))
+(define tool-name "reentrancy-guard-test")
+(define tool-description "Should be skipped under guard")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/reentrancy.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        // Simulate re-entrancy: mark on_start as already-in-progress
+        TEIN_HOOK_GUARD.with(|guard| {
+            guard.borrow_mut().insert(HookPoint::OnStart);
+        });
+
+        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+
+        // Clean up guard state so other tests in this thread aren't affected
+        TEIN_HOOK_GUARD.with(|guard| {
+            guard.borrow_mut().remove(&HookPoint::OnStart);
+        });
+
+        assert_eq!(
+            results.len(),
+            0,
+            "tein callbacks must be skipped when guard is held (re-entrancy)"
+        );
+    }
+
+    /// Verify that the guard is cleared after execute_hook completes, so
+    /// a subsequent call on the same thread dispatches normally.
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_reentrancy_guard_cleared_after_dispatch() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) (list (cons "fired" #t))))
+(define tool-name "guard-cleanup-test")
+(define tool-description "Checks guard is cleared post-dispatch")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/guard-cleanup.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        // First call — fires normally
+        let r1 = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+        assert_eq!(r1.len(), 1, "first call should fire normally");
+
+        // Second call on the same thread — guard must be cleared; fires again
+        let r2 = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+        assert_eq!(r2.len(), 1, "guard must be cleared; second call must fire");
+    }
 }

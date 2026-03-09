@@ -969,7 +969,9 @@ fn extract_hook_registrations(
         // bind handler to a well-known name so execute_hook can find it
         let binding = format!("%hook-{hook_name}%");
         let hook_name_escaped = scheme_escape_string(&hook_name);
-        // look up handler from %hook-registry% by name (first match)
+        // look up handler from %hook-registry% by name (first match in LIFO list = newest).
+        // when the same hook point is registered multiple times, `define` overwrites on
+        // each iteration (oldest-first), so the last-defined handler wins.
         ctx.evaluate(&format!(
             "(define {binding} \
              (cadr \
@@ -980,7 +982,9 @@ fn extract_hook_registrations(
         ))
         .map_err(|e| io::Error::other(format!("binding {binding}: {e}")))?;
 
-        // only register the first handler per hook point (definition order after reversing)
+        // deduplicate hook points: only push to `hooks` once per hook point.
+        // the binding name is the same regardless (`%hook-{hook_name}%`), so
+        // or_insert_with is used purely to avoid duplicate entries in `hooks`.
         hook_bindings.entry(hook_point).or_insert_with(|| {
             hooks.push(hook_point);
             binding

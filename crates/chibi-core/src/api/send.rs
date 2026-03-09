@@ -1870,15 +1870,11 @@ pub async fn send_prompt<S: ResponseSink>(
     let fuel_unlimited = fuel_total == 0;
     let mut current_prompt = initial_prompt;
 
-    // Tools for hook execution: plugin tools + synthesised tools with hooks.
-    // Builtins don't register hooks. Synthesised tools with no hooks are excluded.
+    // Tools eligible for hook dispatch: see Tool::is_hook_eligible.
     let plugin_tools: Vec<Tool> = registry
         .read()
         .unwrap()
-        .filter(|t| {
-            t.category == ToolCategory::Plugin
-                || (t.category == ToolCategory::Synthesised && !t.hooks.is_empty())
-        })
+        .filter(|t| t.is_hook_eligible())
         .into_iter()
         .cloned()
         .collect();
