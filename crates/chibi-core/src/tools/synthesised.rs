@@ -251,7 +251,8 @@ fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
         let tid = std::thread::current().id();
         let guard = BRIDGE_CALL_CTX.lock().unwrap();
         let active = guard.get(&tid).ok_or_else(|| {
-            "call-tool: no active call context for this thread (called outside tool execute?)".to_string()
+            "call-tool: no active call context for this thread (called outside tool execute?)"
+                .to_string()
         })?;
         (
             active.app,
@@ -527,7 +528,6 @@ fn extract_single_tool(
 fn scheme_escape_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
-
 
 /// Reads `%tool-registry%` (a LIFO list built via `cons`) and produces one
 /// `Tool` per entry. All tools share the same tein context via `Arc`.
