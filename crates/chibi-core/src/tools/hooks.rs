@@ -13,11 +13,10 @@ use std::cell::RefCell;
 #[cfg(feature = "synthesised-tools")]
 use std::collections::HashSet;
 
-/// Tracks which hook points are currently being dispatched to tein callbacks.
-///
-/// Prevents re-entrancy: if a tein hook callback triggers an action that fires
-/// the same hook point, tein callbacks are skipped on the recursive call.
-/// Subprocess hooks still fire normally regardless.
+// Tracks which hook points are currently being dispatched to tein callbacks.
+// Prevents re-entrancy: if a tein hook callback triggers an action that fires
+// the same hook point, tein callbacks are skipped on the recursive call.
+// Subprocess hooks still fire normally regardless.
 #[cfg(feature = "synthesised-tools")]
 thread_local! {
     static TEIN_HOOK_GUARD: RefCell<HashSet<HookPoint>> = RefCell::new(HashSet::new());
@@ -163,17 +162,16 @@ pub fn execute_hook(
                     continue;
                 };
 
-                let payload =
-                    match super::synthesised::json_args_to_scheme_alist(data) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            eprintln!(
-                                "[WARN] tein hook {}: payload conversion: {e}",
-                                hook.as_ref()
-                            );
-                            continue;
-                        }
-                    };
+                let payload = match super::synthesised::json_args_to_scheme_alist(data) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] tein hook {}: payload conversion: {e}",
+                            hook.as_ref()
+                        );
+                        continue;
+                    }
+                };
 
                 let hook_fn = match context.evaluate(binding) {
                     Ok(v) => v,
@@ -190,11 +188,7 @@ pub fn execute_hook(
                 let result = match context.call(&hook_fn, &[payload]) {
                     Ok(v) => v,
                     Err(e) => {
-                        eprintln!(
-                            "[WARN] tein hook {} on {}: {e}",
-                            hook.as_ref(),
-                            tool.name
-                        );
+                        eprintln!("[WARN] tein hook {} on {}: {e}", hook.as_ref(), tool.name);
                         continue;
                     }
                 };
@@ -563,8 +557,8 @@ echo 'OK'
     #[test]
     #[cfg(feature = "synthesised-tools")]
     fn test_execute_hook_dispatches_to_synthesised() {
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
         use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -667,7 +661,11 @@ echo 'OK'
         .unwrap();
 
         let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
-        assert_eq!(results.len(), 0, "empty list return should be treated as no-op");
+        assert_eq!(
+            results.len(),
+            0,
+            "empty list return should be treated as no-op"
+        );
     }
 
     #[test]

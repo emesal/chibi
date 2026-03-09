@@ -919,7 +919,10 @@ fn extract_string(ctx: &ThreadLocalContext, name: &str) -> io::Result<String> {
 #[cfg(feature = "synthesised-tools")]
 fn extract_hook_registrations(
     ctx: &ThreadLocalContext,
-) -> io::Result<(Vec<super::hooks::HookPoint>, std::collections::HashMap<super::hooks::HookPoint, String>)> {
+) -> io::Result<(
+    Vec<super::hooks::HookPoint>,
+    std::collections::HashMap<super::hooks::HookPoint, String>,
+)> {
     let registry_val = ctx
         .evaluate("%hook-registry%")
         .map_err(|e| io::Error::other(format!("reading %hook-registry%: {e}")))?;
@@ -977,11 +980,11 @@ fn extract_hook_registrations(
         ))
         .map_err(|e| io::Error::other(format!("binding {binding}: {e}")))?;
 
-        // only push if not already registered (first definition wins when reversed)
-        if !hook_bindings.contains_key(&hook_point) {
+        // only register the first handler per hook point (definition order after reversing)
+        hook_bindings.entry(hook_point).or_insert_with(|| {
             hooks.push(hook_point);
-            hook_bindings.insert(hook_point, binding);
-        }
+            binding
+        });
     }
 
     Ok((hooks, hook_bindings))
@@ -2143,7 +2146,11 @@ mod tests {
             "invalid hook should be skipped: {:?}",
             tools[0].hooks
         );
-        assert!(tools[0].hooks.contains(&crate::tools::hooks::HookPoint::OnStart));
+        assert!(
+            tools[0]
+                .hooks
+                .contains(&crate::tools::hooks::HookPoint::OnStart)
+        );
     }
 
     #[test]
@@ -2178,7 +2185,8 @@ mod tests {
         assert_eq!(tools.len(), 2);
         for tool in &tools {
             assert!(
-                tool.hooks.contains(&crate::tools::hooks::HookPoint::OnStart),
+                tool.hooks
+                    .contains(&crate::tools::hooks::HookPoint::OnStart),
                 "tool {} should have OnStart hook",
                 tool.name
             );
