@@ -270,7 +270,7 @@
 (define-tool task_create
   (description "Create a new task file. Returns the task ID and VFS path. Use 'flock:<name>/sub/path' for flock-scoped tasks.")
   (parameters '((path . ((type . "string")
-                          (description . "Task path relative to tasks root, e.g. 'auth/login' or 'flock:infra/deploy'. Directories are created automatically.")))
+                          (description . "Task path relative to tasks root, e.g. 'auth/login' or 'flock:infra/deploy'. Must include a filename — 'flock:name' alone is invalid. Directories are created automatically.")))
                 (body . ((type . "string")
                          (description . "Task description (plain text, can be multi-line). Optional.")))
                 (priority . ((type . "string")
@@ -301,6 +301,8 @@
                         (list (cons "created" ts)
                               (cons "updated" ts)))))
       (let-values (((base sub) (resolve-task-base path-arg)))
+        (if (string=? sub "")
+            "error: task path must include a filename, e.g. 'auth/login' or 'flock:infra/deploy'"
         (let ((full-path (string-append base "/" sub ".task")))
           ;; Ensure base dir and any intermediate subdirs exist
           (vfs-mkdir-safe base)
@@ -311,7 +313,7 @@
           (call-tool "write_file"
             `(("path"    . ,(string-append "vfs://" full-path))
               ("content" . ,(serialise-task meta body))))
-          (string-append "created task " id " at " full-path)))))))
+          (string-append "created task " id " at " full-path))))))))
 
 (define-tool task_update
   (description "Update an existing task by ID. Finds the task by scanning task directories and updates specified fields.")

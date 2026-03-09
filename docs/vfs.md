@@ -214,7 +214,7 @@ let vfs = Vfs::builder(site_id)
   "auto_destroy_after_inactive_secs": null,
   "flocks": ["site:my-machine-abc123", "frontend"],
   "paths": {
-    "tasks": "/home/alice/tasks/",
+    "tasks": "/home/alice/tasks",
     "goals": ["/site/goals.md", "/flocks/frontend/goals.md"]
   }
 }
@@ -288,7 +288,7 @@ The `tasks.scm` plugin (installed to `/tools/shared/tasks.scm`) exposes five too
 | `task_create` | Create a new `.task` file; returns id and path |
 | `task_update` | Update status, priority, body, or assigned-to by task ID |
 | `task_view` | Read full task content by ID |
-| `task_list` | List tasks with optional status/priority/assigned-to filters |
+| `task_list` | List tasks with optional status/priority/assigned-to filters (substring match on raw file content — body text mentioning a filter value will also match) |
 | `task_delete` | Remove a task file by ID |
 
 ## future evolution

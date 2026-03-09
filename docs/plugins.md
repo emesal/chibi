@@ -340,7 +340,7 @@ The harness also injects these foreign functions into every synthesised tool con
 
 | Procedure | Returns | Description |
 |-----------|---------|-------------|
-| `(generate-id)` | `"a3f2"` (4 hex chars) | Short unique ID seeded from subsecond nanoseconds |
+| `(generate-id)` | `"a3f2b1c9"` (8 hex chars) | Short unique ID from uuid v4 |
 | `(current-timestamp)` | `"20260308-1423z"` | Current UTC time as `YYYYMMDD-HHMMz` |
 | `%context-name%` | `"alice"` | Mutable binding holding the calling context's name; updated before each call |
 
