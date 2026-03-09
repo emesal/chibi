@@ -302,18 +302,14 @@ fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
         .map_err(|e| format!("tool error: {e}"))
 }
 
-/// `(generate-id)` harness helper — returns a 4-hex-char string seeded from
-/// the current time's sub-second nanoseconds. Unique enough for short-lived
-/// task IDs within a session; not a cryptographic identifier.
+/// `(generate-id)` harness helper — returns an 8-hex-char string from uuid v4.
+/// Provides ~4 billion possible values; sufficient for task IDs within a
+/// workspace. Not a cryptographic identifier.
 #[cfg(feature = "synthesised-tools")]
 #[tein::tein_fn(name = "generate-id")]
 fn generate_id_fn() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    format!("{:04x}", nanos % 0x10000)
+    let id = uuid::Uuid::new_v4();
+    id.simple().to_string()[..8].to_string()
 }
 
 /// `(current-timestamp)` harness helper — returns `"YYYYMMDD-HHMMz"` UTC.
@@ -1776,10 +1772,10 @@ mod tests {
             let alist = json_args_to_scheme_alist(&serde_json::json!({})).unwrap();
             let result = context.call(&exec_fn, &[alist]).unwrap();
             let s = result.as_string().unwrap().to_string();
-            // format: "XXXX:YYYYMMDD-HHMMz"
+            // format: "XXXXXXXX:YYYYMMDD-HHMMz"
             assert!(s.contains(':'), "expected id:timestamp, got: {}", s);
             let parts: Vec<&str> = s.splitn(2, ':').collect();
-            assert_eq!(parts[0].len(), 4, "id should be 4 hex chars: {}", parts[0]);
+            assert_eq!(parts[0].len(), 8, "id should be 8 hex chars: {}", parts[0]);
             assert!(
                 parts[1].ends_with('z'),
                 "timestamp should end with 'z': {}",
