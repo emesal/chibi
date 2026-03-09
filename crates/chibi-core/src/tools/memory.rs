@@ -14,6 +14,7 @@ pub const GOALS_TOOL_NAME: &str = "update_goals";
 pub const READ_CONTEXT_TOOL_NAME: &str = "read_context";
 pub const FLOCK_JOIN_TOOL_NAME: &str = "flock_join";
 pub const FLOCK_LEAVE_TOOL_NAME: &str = "flock_leave";
+pub const FLOCK_LIST_TOOL_NAME: &str = "flock_list";
 
 pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
     BuiltinToolDef {
@@ -97,6 +98,13 @@ pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
         }],
         required: &["flock"],
         summary_params: &["flock"],
+    },
+    BuiltinToolDef {
+        name: FLOCK_LIST_TOOL_NAME,
+        description: "List the flocks this context belongs to (excluding the site flock). Returns one flock name per line, or empty string if none.",
+        properties: &[],
+        required: &[],
+        summary_params: &[],
     },
 ];
 
@@ -184,6 +192,10 @@ pub fn execute_memory_tool(
             let flock = require_str_param(args, "flock")?;
             vfs_block_on(app.vfs.flock_leave(&flock, context_name))
                 .map(|_| format!("Left flock '{}'.", flock))
+        })()),
+        FLOCK_LIST_TOOL_NAME => Some((|| {
+            let flocks = vfs_block_on(app.vfs.flock_list_for(context_name))?;
+            Ok(flocks.join("\n"))
         })()),
         _ => None,
     }
@@ -368,6 +380,6 @@ mod tests {
 
     #[test]
     fn test_memory_defs_count() {
-        assert_eq!(MEMORY_TOOL_DEFS.len(), 5);
+        assert_eq!(MEMORY_TOOL_DEFS.len(), 6);
     }
 }

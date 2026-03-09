@@ -216,25 +216,17 @@
         result)))
 
 ;;; Collect all task directories visible to the current context:
-;;; the context-local dir plus any flock task dirs.
+;;; the context-local dir plus member flock task dirs (via flock_list builtin).
 (define (all-task-dirs)
   (let* ((local-dir (string-append "/home/" %context-name% "/tasks"))
-         (raw (call-tool "vfs_list" '(("path" . "vfs:///flocks"))))
+         (raw (call-tool "flock_list" '()))
          (flock-dirs
-           (if (string-contains? raw "Error")
+           (if (or (string=? raw "") (string-contains? raw "Error"))
                '()
-               (let loop ((parts (string-split raw #\newline)) (acc '()))
-                 (if (null? parts)
-                     (reverse acc)
-                     (let ((name (string-trim-both (car parts))))
-                       (if (string=? name "")
-                           (loop (cdr parts) acc)
-                           (let* ((dir (string-append "/flocks/" name "/tasks"))
-                                  (check (call-tool "vfs_list"
-                                           `(("path" . ,(string-append "vfs://" dir))))))
-                             (if (string-contains? check "Error")
-                                 (loop (cdr parts) acc)
-                                 (loop (cdr parts) (cons dir acc)))))))))))
+               (map (lambda (name)
+                      (string-append "/flocks/" (string-trim-both name) "/tasks"))
+                    (filter (lambda (s) (not (string=? (string-trim-both s) "")))
+                            (string-split raw #\newline))))))
     (cons local-dir flock-dirs)))
 
 ;;; Find a .task file by ID by scanning all visible task directories.
