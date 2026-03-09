@@ -194,22 +194,22 @@
 ;;; the context-local dir plus any flock task dirs.
 (define (all-task-dirs)
   (let* ((local-dir (string-append "/home/" %context-name% "/tasks"))
-         (raw (call-tool "vfs_list" '(("path" . "vfs:///flocks/"))))
-         (flock-names (if (string-prefix? "Error" raw)
-                         '()
-                         (let ((parts (string-split raw #\newline)))
-                           (filter (lambda (s) (> (string-length s) 0)) parts))))
+         (raw (call-tool "vfs_list" '(("path" . "vfs:///flocks"))))
          (flock-dirs
-           (let loop ((names flock-names) (acc '()))
-             (if (null? names)
-                 (reverse acc)
-                 (let* ((name (car names))
-                        (dir (string-append "/flocks/" name "/tasks"))
-                        (check (call-tool "vfs_list"
-                                 `(("path" . ,(string-append "vfs://" dir "/"))))))
-                   (if (string-prefix? "Error" check)
-                       (loop (cdr names) acc)
-                       (loop (cdr names) (cons dir acc))))))))
+           (if (string-contains? raw "Error")
+               '()
+               (let loop ((parts (string-split raw #\newline)) (acc '()))
+                 (if (null? parts)
+                     (reverse acc)
+                     (let ((name (string-trim-both (car parts))))
+                       (if (string=? name "")
+                           (loop (cdr parts) acc)
+                           (let* ((dir (string-append "/flocks/" name "/tasks"))
+                                  (check (call-tool "vfs_list"
+                                           `(("path" . ,(string-append "vfs://" dir))))))
+                             (if (string-contains? check "Error")
+                                 (loop (cdr parts) acc)
+                                 (loop (cdr parts) (cons dir acc)))))))))))
     (cons local-dir flock-dirs)))
 
 ;;; Find a .task file by ID by scanning all visible task directories.
@@ -225,7 +225,7 @@
                 (let ((content (read-task-file (car files))))
                   (if (and content (string-contains? content (string-append "\"" task-id "\"")))
                       (car files)
-                      (loop-files (cdr files)))))))))))
+                      (loop-files (cdr files))))))))))
 
 ;;; Ensure a VFS directory exists (ignores error if already present).
 (define (vfs-mkdir-safe dir)

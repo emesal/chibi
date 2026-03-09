@@ -79,6 +79,10 @@ pub enum ToolImpl {
         exec_binding: String,
         context: std::sync::Arc<tein::ThreadLocalContext>,
         registry: Arc<RwLock<ToolRegistry>>,
+        /// The tein worker thread's `ThreadId`, captured at context init time.
+        /// Used as the key in `BRIDGE_CALL_CTX` so concurrent synthesised tool
+        /// calls from different tein contexts never overwrite each other's entry.
+        worker_thread_id: std::thread::ThreadId,
     },
 }
 
@@ -97,11 +101,13 @@ impl Clone for ToolImpl {
                 exec_binding,
                 context,
                 registry,
+                worker_thread_id,
             } => ToolImpl::Synthesised {
                 vfs_path: vfs_path.clone(),
                 exec_binding: exec_binding.clone(),
                 context: context.clone(),
                 registry: Arc::clone(registry),
+                worker_thread_id: *worker_thread_id,
             },
         }
     }
@@ -275,10 +281,17 @@ impl ToolRegistry {
                 context,
                 exec_binding,
                 registry,
+                worker_thread_id,
                 ..
             } => {
-                super::synthesised::execute_synthesised(&context, &exec_binding, &call, registry)
-                    .await
+                super::synthesised::execute_synthesised(
+                    &context,
+                    &exec_binding,
+                    &call,
+                    registry,
+                    worker_thread_id,
+                )
+                .await
             }
         }
     }
