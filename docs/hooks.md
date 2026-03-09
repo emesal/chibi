@@ -180,7 +180,6 @@ When a hook fires, registered plugins are called with:
 {
   "context_name": "default",
   "summary": "conversation summary...",
-  "tasks": "--- tasks ---\n| id | status | ... |",
   "flock_goals": [
     {"flock": "site:<site_id>", "goals": "site-wide goals..."},
     {"flock": "myteam", "goals": "team goals..."}
@@ -188,7 +187,7 @@ When a hook fires, registered plugins are called with:
 }
 ```
 
-> **Breaking change:** the `goals` field was replaced by `flock_goals` (array) in the flocks migration. each entry is `{"flock": "<name>", "goals": "<content>"}`. the array is empty if no flocks have goals set.
+> **Breaking changes:** the `goals` field was replaced by `flock_goals` (array) in the flocks migration. each entry is `{"flock": "<name>", "goals": "<content>"}`. the array is empty if no flocks have goals set. the `todos` field was removed in the structured-tasks migration (#186); tasks are now VFS-backed `.task` files injected ephemerally into the message stream rather than exposed via hook payloads.
 
 **Can return:**
 ```json
@@ -317,7 +316,7 @@ Called after processing a batch of tool calls, before deciding whether to contin
   "current_fallback": "call_agent",
   "tool_calls": [
     {"name": "file_head", "arguments": {"path": "Cargo.toml"}},
-    {"name": "update_todos", "arguments": {"content": "..."}}
+    {"name": "update_goals", "arguments": {"content": "..."}}
   ]
 }
 ```
@@ -815,7 +814,7 @@ if [[ "$CHIBI_HOOK" == "pre_api_tools" ]]; then
 
   # Restrict tools in "safe" context
   if [[ "$context" == "safe" ]]; then
-    echo '{"include": ["update_todos", "update_goals"]}'
+    echo '{"include": ["update_goals", "update_reflection"]}'
     exit 0
   fi
 

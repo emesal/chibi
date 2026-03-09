@@ -152,7 +152,7 @@ pub async fn rolling_compact(
     let target_drop_count = drop_count(non_system_messages.len(), drop_percentage);
 
     // Ask LLM which messages to drop.
-    // {GOALS} and {TODOS} expand to a labelled section or empty string — the
+    // {GOALS} and {TASKS} expand to a labelled section or empty string — the
     // adjacent placeholders in the template collapse cleanly when both are absent.
     let decision_prompt = ROLLING_COMPACT_DECISION_TEMPLATE
         .replace(
@@ -168,7 +168,7 @@ pub async fn rolling_compact(
             },
         )
         .replace(
-            "{TODOS}",
+            "{TASKS}",
             &if task_table.is_empty() {
                 String::new()
             } else {
@@ -273,7 +273,7 @@ pub async fn rolling_compact(
     let drop_tool_call_ids = collect_tool_call_ids(&dropped_msgs);
 
     // Second LLM call: update summary with dropped content.
-    // {GOALS} and {TODOS} expand to a labelled section or empty string — the
+    // {GOALS} and {TASKS} expand to a labelled section or empty string — the
     // adjacent placeholders in the template collapse cleanly when both are absent.
     let update_prompt = ROLLING_COMPACT_UPDATE_TEMPLATE
         .replace(
@@ -294,7 +294,7 @@ pub async fn rolling_compact(
             },
         )
         .replace(
-            "{TODOS}",
+            "{TASKS}",
             &if task_table.is_empty() {
                 String::new()
             } else {

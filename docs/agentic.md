@@ -15,7 +15,7 @@ The LLM always has access to these tools (no setup required):
 | `update_goals` | Set high-level objectives |
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
 | `send_message` | Send messages to other contexts |
-| `read_context` | Read another context's state (summary, todos, goals, messages) |
+| `read_context` | Read another context's state (summary, goals, messages) |
 | `model_info` | Look up model metadata (context window, pricing, capabilities, parameters) |
 
 ### File

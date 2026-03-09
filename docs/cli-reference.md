@@ -8,7 +8,7 @@ Chibi uses a lowercase/UPPERCASE pattern: lowercase operates on current context,
 |------|-------------|
 | `-c, --switch-context <NAME>` | Switch to a context (persistent); `new` for auto-name, `new:prefix` for prefixed, `-` for previous |
 | `-C, --ephemeral-context <NAME>` | Use context for this invocation only (doesn't change global state) |
-| `-l, --list-current-context` | Show current context info (name, prompt count, todos, goals) |
+| `-l, --list-current-context` | Show current context info (name, prompt count, tasks, goals) |
 | `-L, --list-contexts` | List all contexts (shows `[active]` or `[stale]` lock status) |
 | `-d, --destroy-current-context` | Destroy the current context |
 | `-D, --destroy-context <CTX>` | Destroy a specified context |
@@ -55,7 +55,7 @@ chibi -c -            # current='work', previous='personal'
 |------|-------------|
 | `-g, --show-current-log <N>` | Show last N log entries from current context (negative = from start) |
 | `-G, --show-log <CTX> <N>` | Show last N log entries from specified context |
-| `-n, --inspect-current <THING>` | Inspect: `system_prompt`, `reflection`, `todos`, `goals`, `home`, `list`, or config fields |
+| `-n, --inspect-current <THING>` | Inspect: `system_prompt`, `reflection`, `tasks` (or `todos`), `goals`, `home`, `list`, or config fields |
 | `-N, --inspect <CTX> <THING>` | Inspect specified context |
 
 ## System Prompt
@@ -169,7 +169,7 @@ chibi-json --version
 - `{ "compact_context": { "name": "..." } }`
 - `{ "rename_context": { "old": "...", "new": "..." } }`
 - `{ "show_log": { "context": "...", "count": 10 } }`
-- `{ "inspect": { "context": "...", "thing": "todos" } }`
+- `{ "inspect": { "context": "...", "thing": "tasks" } }`
 - `{ "set_system_prompt": { "context": "...", "prompt": "..." } }`
 - `{ "set_model": { "context": "...", "model": "..." } }` (context optional)
 - `{ "run_plugin": { "name": "...", "args": [...] } }`

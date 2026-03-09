@@ -53,7 +53,7 @@ auto_compact_threshold = 80.0
 
 # Target percentage of messages to archive during rolling compaction (default: 50.0)
 # During auto-compaction, the LLM decides which messages to archive based on
-# current goals/todos. This percentage is guidance for the LLM and fallback
+# current goals/tasks. This percentage is guidance for the LLM and fallback
 # if LLM decision fails.
 rolling_compact_drop_percentage = 50.0
 
