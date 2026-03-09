@@ -637,4 +637,193 @@ echo 'OK'
             assert_eq!(value["order"], (i + 1) as u64);
         }
     }
+
+    // --- tein (synthesised) hook dispatch tests ---
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_empty_list_return_is_noop() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) '()))
+(define tool-name "noop-hook")
+(define tool-description "Returns empty list")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/noop.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+        assert_eq!(results.len(), 0, "empty list return should be treated as no-op");
+    }
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_json_object_return() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'pre_message
+  (lambda (payload)
+    (list (cons "prompt" "modified prompt"))))
+(define tool-name "modify-hook")
+(define tool-description "Modifies prompt")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/modify.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        let results = execute_hook(
+            &tools,
+            HookPoint::PreMessage,
+            &serde_json::json!({"prompt": "hello"}),
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1["prompt"], "modified prompt");
+    }
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_skips_unregistered_hook_point() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) (list (cons "fired" #t))))
+(define tool-name "selective-hook")
+(define tool-description "Only fires on on_start")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/selective.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        // fire on_end — tool is registered for on_start only
+        let results = execute_hook(&tools, HookPoint::OnEnd, &serde_json::json!({})).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_error_in_callback_skipped() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) (error "boom")))
+(define tool-name "error-hook")
+(define tool-description "Errors in hook")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/error.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        // should not error — failed hooks are skipped silently
+        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    #[cfg(all(feature = "synthesised-tools", unix))]
+    fn test_mixed_plugin_and_tein_hooks() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        // subprocess plugin hook
+        let dir = tempfile::tempdir().unwrap();
+        let script = create_test_script(
+            dir.path(),
+            "plugin.sh",
+            b"#!/bin/bash\ncat > /dev/null\necho '{\"from\": \"plugin\"}'",
+        );
+        let plugin_tool = Tool {
+            name: "plugin-hook".to_string(),
+            description: "Plugin".to_string(),
+            parameters: serde_json::json!({}),
+            hooks: vec![HookPoint::OnStart],
+            metadata: ToolMetadata::new(),
+            summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::Plugin(script),
+            category: crate::tools::ToolCategory::Plugin,
+        };
+
+        // tein synthesised hook
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start
+  (lambda (payload) (list (cons "from" "tein"))))
+(define tool-name "tein-hook")
+(define tool-description "Tein hook")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/tein.scm").unwrap();
+        let mut tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        tools.insert(0, plugin_tool);
+
+        let results =
+            execute_hook_with_retry(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+
+        // plugin first (subprocess loop), then tein (synthesised loop)
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].1["from"], "plugin");
+        assert_eq!(results[1].1["from"], "tein");
+    }
 }
