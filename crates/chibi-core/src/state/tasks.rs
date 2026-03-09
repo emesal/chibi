@@ -206,9 +206,10 @@ pub fn build_summary_table(tasks: &[TaskMeta]) -> String {
             task.summary_line.clone()
         };
 
-        // Truncate path for display (max 20 chars)
-        let path_display = if task.path.len() > 20 {
-            format!("{}…", &task.path[..19])
+        // Truncate path for display (max 20 chars, char-indexed to avoid multibyte panic)
+        let path_display = if task.path.chars().count() > 20 {
+            let truncated: String = task.path.chars().take(19).collect();
+            format!("{truncated}…")
         } else {
             task.path.clone()
         };
@@ -486,6 +487,22 @@ acceptance criteria:
         assert!(messages[2]["content"].as_str().unwrap().contains("a3f2"));
         assert_eq!(messages[3]["role"], "user");
         assert_eq!(messages[3]["content"], "current turn");
+    }
+
+    #[test]
+    fn test_summary_table_multibyte_path_no_panic() {
+        let tasks = vec![TaskMeta {
+            id: "a1b2".to_string(),
+            status: "open".to_string(),
+            priority: "medium".to_string(),
+            summary_line: "test task".to_string(),
+            path: "tasks/日本語テスト長いパス名".to_string(),
+            depends_on: vec![],
+            assigned_to: None,
+        }];
+        // should not panic
+        let table = build_summary_table(&tasks);
+        assert!(table.contains("a1b2"));
     }
 
     /// When no tasks exist, build_summary_table returns empty — no injection.
