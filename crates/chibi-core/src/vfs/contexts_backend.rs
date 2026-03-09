@@ -103,6 +103,25 @@ impl ContextsBackend {
         }
     }
 
+    /// Load flock registry from disk and return all flock names for `name`.
+    ///
+    /// Returns `(site_flock, explicit_flocks)`. Reads the registry directly from
+    /// disk (not VFS) to avoid a circular dependency — `ContextsBackend` is itself
+    /// a VFS backend.
+    fn flocks_for_context(&self, name: &str) -> io::Result<(String, Vec<String>)> {
+        let vfs_root = self.data_dir.join("vfs");
+        let registry_path = vfs_root.join("flocks").join("registry.json");
+        let registry: FlockRegistry = if registry_path.exists() {
+            let data = std::fs::read_to_string(&registry_path)?;
+            serde_json::from_str(&data).unwrap_or_default()
+        } else {
+            FlockRegistry::default()
+        };
+        let site_flock = site_flock_name(&self.site_id);
+        let explicit = registry.flocks_for(name, &site_flock);
+        Ok((site_flock, explicit))
+    }
+
     /// Compute the prompt count for a context using `PartitionManager`.
     ///
     /// This uses the same path that `AppState::prompt_count` uses, ensuring
@@ -120,21 +139,8 @@ impl ContextsBackend {
     fn build_state_json(&self, name: &str) -> io::Result<Vec<u8>> {
         let entry = self.find_context(name)?;
 
-        // Load flock registry from disk.
-        // Note: we read this directly from disk rather than via VFS to avoid
-        // a circular dependency (ContextsBackend is itself a VFS backend).
-        let vfs_root = self.data_dir.join("vfs");
-        let registry_path = vfs_root.join("flocks").join("registry.json");
-        let registry: FlockRegistry = if registry_path.exists() {
-            let data = std::fs::read_to_string(&registry_path)?;
-            serde_json::from_str(&data).unwrap_or_default()
-        } else {
-            FlockRegistry::default()
-        };
-
         // Flocks: site flock + explicit memberships.
-        let site_flock = site_flock_name(&self.site_id);
-        let explicit = registry.flocks_for(name, &site_flock);
+        let (site_flock, explicit) = self.flocks_for_context(name)?;
         let mut flocks = vec![site_flock.clone()];
         flocks.extend(explicit.clone());
 
