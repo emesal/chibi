@@ -96,6 +96,24 @@ const HARNESS_TOOLS_MODULE: &str = r#"
     #t))
 "#;
 
+/// Scheme source for the `(harness hooks)` module.
+///
+/// `register-hook` is defined at top level in `HARNESS_PREAMBLE` so it can
+/// mutate `%hook-registry%`. This library re-exports it for clean imports.
+///
+/// Mutation site: if `register-hook` signature changes, update
+/// `extract_hook_registrations` which reads `%hook-registry%` entries.
+#[cfg(feature = "synthesised-tools")]
+const HARNESS_HOOKS_MODULE: &str = r#"
+(define-library (harness hooks)
+  (import (scheme base))
+  (export register-hook)
+  (begin
+    ;; register-hook is defined in HARNESS_PREAMBLE (top-level).
+    ;; re-export it so (import (harness hooks)) provides it.
+    #t))
+"#;
+
 /// Top-level scheme preamble evaluated in every synthesised tool context.
 ///
 /// Defines `%tool-registry%` and the `define-tool` syntax at the top level
@@ -116,6 +134,11 @@ const HARNESS_PREAMBLE: &str = r#"
 ;; (name-string description-string params-value execute-procedure)
 (define %tool-registry% '())
 
+;; accumulates hook registrations. each entry is a list:
+;; (hook-name-string handler-procedure)
+;; rust reads %hook-registry% after evaluation to populate Tool.hooks.
+(define %hook-registry% '())
+
 ;; name of the calling context — mutated by execute_synthesised before each call.
 ;; plugins read this to resolve /home/<ctx>/... VFS paths.
 (define %context-name% "")
@@ -131,6 +154,15 @@ const HARNESS_PREAMBLE: &str = r#"
      (set! %tool-registry%
        (cons (list (symbol->string 'name) desc params handler)
              %tool-registry%)))))
+
+;; registers a hook handler for a given hook point.
+;; hook-name is a symbol (e.g. 'pre_vfs_write).
+;; handler is a procedure taking one argument (the hook payload as an alist)
+;; and returning an alist (or '() for no-op).
+(define (register-hook hook-name handler)
+  (set! %hook-registry%
+    (cons (list (symbol->string hook-name) handler)
+          %hook-registry%)))
 "#;
 
 // --- thread-local bridge state -----------------------------------------------
@@ -381,6 +413,8 @@ fn build_tein_context(
         ctx.evaluate(HARNESS_PREAMBLE)?;
         ctx.register_module(HARNESS_TOOLS_MODULE)
             .map_err(|e| tein::Error::EvalError(format!("harness module: {e}")))?;
+        ctx.register_module(HARNESS_HOOKS_MODULE)
+            .map_err(|e| tein::Error::EvalError(format!("harness hooks module: {e}")))?;
         ctx.evaluate(&source)?;
         Ok(())
     };
