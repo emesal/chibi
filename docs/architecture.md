@@ -93,7 +93,7 @@ MCP tools use virtual `mcp://server/tool` paths and appear as regular `Tool` str
 ├── vfs/                       # Virtual file system (shared storage)
 │   ├── shared/                # World-writable zone
 │   ├── home/<context>/        # Per-context home directories
-│   │   └── todos.md           # Context todos (VFS-managed)
+│   │   └── tasks/             # Structured tasks (.task files)
 │   ├── sys/                   # System-only zone (tool cache, etc.)
 │   ├── site/                  # Site-wide flock (goals.md, prompt.md)
 │   ├── flocks/registry.json    # Centralised flock membership (SYSTEM only)
