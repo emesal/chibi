@@ -140,6 +140,31 @@
              (else (val-loop (+ j 1) (cons (string-ref content j) out))))))
         (else (loop (+ i 1)))))))
 
+;;; Extract the value of a string-valued alist field like '(field . "value")' from content.
+;;; Returns the quoted value (including surrounding quotes) or #f if not found.
+;;; The full match string for replacement is (string-append "(" field " . " result ")").
+(define (extract-string-field content field)
+  (let* ((prefix (string-append "(" field " . \""))
+         (plen   (string-length prefix))
+         (clen   (string-length content)))
+    (let loop ((i 0))
+      (cond
+        ((> (+ i plen) clen) #f)
+        ((string=? (substring content i (+ i plen)) prefix)
+         ;; found prefix — read until closing quote (handle escaped quotes)
+         (let val-loop ((j (+ i plen)) (out (list #\")))
+           (cond
+             ((>= j clen) #f)  ; unterminated string
+             ((and (char=? (string-ref content j) #\\)
+                   (< (+ j 1) clen))
+              ;; escaped char — consume both
+              (val-loop (+ j 2) (cons (string-ref content (+ j 1))
+                                      (cons #\\ out))))
+             ((char=? (string-ref content j) #\")
+              (list->string (reverse (cons #\" out))))
+             (else (val-loop (+ j 1) (cons (string-ref content j) out))))))
+        (else (loop (+ i 1)))))))
+
 ;;; List .task files recursively under a VFS directory.
 ;;; vfs_list returns lines of the form "name (file)" or "name (dir)".
 ;;; Returns a list of full VFS path strings (without vfs:// prefix).
@@ -360,11 +385,14 @@
                             #f))
                       #f)
                   ;; Always bump the updated timestamp.
-                  (call-tool "file_edit"
-                    `(("path"      . ,vfs-uri)
-                      ("operation" . "replace_string")
-                      ("find"      . "(updated . \"")
-                      ("replace"   . ,(string-append "(updated . \"" ts "\")"))))
+                  (let ((old-updated (extract-string-field content "updated")))
+                    (if old-updated
+                        (call-tool "file_edit"
+                          `(("path"      . ,vfs-uri)
+                            ("operation" . "replace_string")
+                            ("find"      . ,(string-append "(updated . " old-updated ")"))
+                            ("replace"   . ,(string-append "(updated . \"" ts "\")"))))
+                        #f))
                   (string-append "updated task " task-id " at " path)))))))))
 
 (define-tool task_view
