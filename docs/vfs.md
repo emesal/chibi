@@ -196,11 +196,18 @@ let vfs = Vfs::builder(site_id)
 /sys/contexts/
 └── <name>/
     ├── state.json        # generated: timestamps, prompt_count, flocks, path refs
+    ├── task-dirs         # generated: scheme list datum of all task dirs visible to context
     └── transcript/
         ├── manifest.json       # read-through from disk
         ├── active.jsonl        # read-through from disk (active partition)
         └── partitions/
             └── <file>.jsonl    # read-through from disk (archived partitions)
+```
+
+`task-dirs` contains a Scheme list datum of all task directories visible to the context — context-local first, followed by each flock's task directory. Example:
+
+```scheme
+("/home/alice/tasks" "/flocks/site:abc123/tasks" "/flocks/frontend/tasks")
 ```
 
 `state.json` schema:
