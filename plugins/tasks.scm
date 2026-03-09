@@ -240,8 +240,15 @@
             (if (null? files)
                 (loop-dirs (cdr dirs))
                 (let ((content (read-task-file (car files))))
-                  (if (and content (string-contains? content (string-append "\"" task-id "\"")))
-                      (car files)
+                  (if content
+                      (let ((file-id (extract-string-field content "id")))
+                        ;; extract-string-field returns the quoted value including
+                        ;; surrounding quotes, e.g. "\"ab12\"" — compare inner value.
+                        (if (and file-id
+                                 (string=? (substring file-id 1 (- (string-length file-id) 1))
+                                           task-id))
+                            (car files)
+                            (loop-files (cdr files))))
                       (loop-files (cdr files))))))))))
 
 ;;; Ensure a VFS directory exists (ignores error if already present).
