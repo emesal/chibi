@@ -328,9 +328,7 @@ fn current_timestamp_fn() -> String {
 /// in the synthesised-tools module path.
 #[cfg(feature = "synthesised-tools")]
 fn secs_to_ymdhmz(mut s: u64) -> (u32, u32, u32, u32, u32) {
-    let mi = (s % 60) as u32;
-    let _ = mi; // minute-in-second, unused
-    s /= 60;
+    s /= 60; // discard seconds
     let mi = (s % 60) as u32;
     s /= 60;
     let h = (s % 24) as u32;
