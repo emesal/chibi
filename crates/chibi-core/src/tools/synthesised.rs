@@ -293,9 +293,12 @@ fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
         tool.r#impl.clone()
     };
 
-    // bridge sync tein worker thread → async tokio. cannot use block_in_place
-    // because the tein thread is not a tokio worker thread. use block_on
-    // directly with the handle captured at CallContextGuard::set time.
+    // Use the captured runtime handle directly rather than `vfs_block_on`:
+    // the tein worker thread is not a tokio thread, so `block_in_place`
+    // (which `vfs_block_on` uses) would panic. The captured handle from
+    // `CallContextGuard::set` (which runs on a tokio thread) is safe to
+    // `block_on` from this non-tokio worker thread. See commit 2016b193
+    // for the original `vfs_block_on` change and why this context differs.
     runtime_handle
         .block_on(ToolRegistry::dispatch_impl(
             tool_impl, &name, &json_args, &call_ctx,
