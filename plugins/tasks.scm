@@ -190,19 +190,42 @@
         #f
         result)))
 
-;;; Find a .task file by ID by scanning the context's task directory.
+;;; Collect all task directories visible to the current context:
+;;; the context-local dir plus any flock task dirs.
+(define (all-task-dirs)
+  (let* ((local-dir (string-append "/home/" %context-name% "/tasks"))
+         (raw (call-tool "vfs_list" '(("path" . "vfs:///flocks/"))))
+         (flock-names (if (string-prefix? "Error" raw)
+                         '()
+                         (let ((parts (string-split raw #\newline)))
+                           (filter (lambda (s) (> (string-length s) 0)) parts))))
+         (flock-dirs
+           (let loop ((names flock-names) (acc '()))
+             (if (null? names)
+                 (reverse acc)
+                 (let* ((name (car names))
+                        (dir (string-append "/flocks/" name "/tasks"))
+                        (check (call-tool "vfs_list"
+                                 `(("path" . ,(string-append "vfs://" dir "/"))))))
+                   (if (string-prefix? "Error" check)
+                       (loop (cdr names) acc)
+                       (loop (cdr names) (cons dir acc))))))))
+    (cons local-dir flock-dirs)))
+
+;;; Find a .task file by ID by scanning all visible task directories.
 ;;; Returns the full VFS path (without vfs:// prefix) or #f if not found.
 (define (find-task-by-id task-id)
-  (let* ((local-dir  (string-append "/home/" %context-name% "/tasks"))
-         (all-files  (list-tasks-recursive local-dir)))
-    (let loop ((files all-files))
-      (if (null? files)
-          #f
-          (let* ((path    (car files))
-                 (content (read-task-file path)))
-            (if (and content (string-contains? content (string-append "\"" task-id "\"")))
-                path
-                (loop (cdr files))))))))
+  (let loop-dirs ((dirs (all-task-dirs)))
+    (if (null? dirs)
+        #f
+        (let ((files (list-tasks-recursive (car dirs))))
+          (let loop-files ((files files))
+            (if (null? files)
+                (loop-dirs (cdr dirs))
+                (let ((content (read-task-file (car files))))
+                  (if (and content (string-contains? content (string-append "\"" task-id "\"")))
+                      (car files)
+                      (loop-files (cdr files)))))))))))
 
 ;;; Ensure a VFS directory exists (ignores error if already present).
 (define (vfs-mkdir-safe dir)
@@ -341,7 +364,7 @@
                     `(("path"      . ,vfs-uri)
                       ("operation" . "replace_string")
                       ("find"      . "(updated . \"")
-                      ("replace"   . ,(string-append "(updated . \"" ts "\""))))
+                      ("replace"   . ,(string-append "(updated . \"" ts "\")"))))
                   (string-append "updated task " task-id " at " path)))))))))
 
 (define-tool task_view
@@ -370,8 +393,11 @@
     (let* ((filter-status   (assoc "status" args))
            (filter-priority (assoc "priority" args))
            (filter-assigned (assoc "assigned-to" args))
-           (local-dir       (string-append "/home/" %context-name% "/tasks"))
-           (all-files       (list-tasks-recursive local-dir)))
+           (all-files       (let loop ((dirs (all-task-dirs)) (acc '()))
+                              (if (null? dirs)
+                                  acc
+                                  (loop (cdr dirs)
+                                        (append acc (list-tasks-recursive (car dirs))))))))
       (if (null? all-files)
           "no tasks found"
           (let loop ((files all-files) (out "") (count 0))
