@@ -1,5 +1,7 @@
 # Structured Task Files Implementation Plan
 
+> **Status: COMPLETED** — All tasks implemented. See `handoff.md` for post-review fixes.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Replace flat `todos.md` with a file-per-task VFS system using a tein synthesised plugin and ephemeral prompt injection.
