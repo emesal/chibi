@@ -14,7 +14,6 @@ Chibi is a minimal, composable building block for LLM interactions — not an ag
 - Missing or incorrect documentation including code comments are critical bugs.
 - Iterate over structures to prevent code duplication.
 - Comprehensive tests including edge cases.
-- Remind user about `just pre-push` before pushing and `just merge-to-dev` when merging feature branches.
 
 ## Build
 
