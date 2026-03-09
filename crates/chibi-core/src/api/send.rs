@@ -1955,19 +1955,7 @@ pub async fn send_prompt<S: ResponseSink>(
         {
             let tasks = crate::state::tasks::collect_tasks(&app.vfs, context_name).await;
             let summary = crate::state::tasks::build_summary_table(&tasks);
-            if !summary.is_empty() {
-                let inject = serde_json::json!({
-                    "role": "system",
-                    "content": summary,
-                });
-                // Insert before the last user message so it contextualises the
-                // current turn without disrupting the conversation history.
-                if let Some(pos) = messages.iter().rposition(|m| m["role"] == "user") {
-                    messages.insert(pos, inject);
-                } else {
-                    messages.push(inject);
-                }
-            }
+            crate::state::tasks::inject_before_last_user(&mut messages, summary);
         }
 
         // === Prepare Tools ===

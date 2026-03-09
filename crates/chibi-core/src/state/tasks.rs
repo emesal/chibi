@@ -236,6 +236,24 @@ pub fn build_summary_table(tasks: &[TaskMeta]) -> String {
     out
 }
 
+/// Insert a system message carrying `content` before the last user message
+/// in `messages`. If no user message exists, appends to the end. No-op if
+/// `content` is empty.
+pub fn inject_before_last_user(messages: &mut Vec<serde_json::Value>, content: String) {
+    if content.is_empty() {
+        return;
+    }
+    let inject = serde_json::json!({
+        "role": "system",
+        "content": content,
+    });
+    if let Some(pos) = messages.iter().rposition(|m| m["role"] == "user") {
+        messages.insert(pos, inject);
+    } else {
+        messages.push(inject);
+    }
+}
+
 /// Collect task metadata from all accessible task directories.
 ///
 /// Reads `/home/<ctx>/tasks/` and `/flocks/<flock>/tasks/` for each
@@ -475,11 +493,8 @@ acceptance criteria:
             json!({"role": "user", "content": "current turn"}),
         ];
 
-        // Replicate the injection logic from send.rs
-        let inject = json!({"role": "system", "content": summary});
-        if let Some(pos) = messages.iter().rposition(|m| m["role"] == "user") {
-            messages.insert(pos, inject);
-        }
+        // Use the shared injection function (same as send.rs).
+        inject_before_last_user(&mut messages, summary);
 
         // System message should be at index 2 (before the last user message)
         assert_eq!(messages.len(), 4);
