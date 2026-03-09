@@ -520,6 +520,7 @@ fn extract_single_tool(
             context,
             registry: Arc::clone(registry),
             worker_thread_id,
+            hook_bindings: std::collections::HashMap::new(),
         },
         category: ToolCategory::Synthesised,
     })
@@ -629,6 +630,7 @@ fn extract_multi_tools(
                 context: Arc::clone(&context),
                 registry: Arc::clone(registry),
                 worker_thread_id,
+                hook_bindings: std::collections::HashMap::new(),
             },
             category: ToolCategory::Synthesised,
         });
