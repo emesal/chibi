@@ -694,7 +694,9 @@ struct LoopDetector {
     last_tool_name: String,
     last_args: String,
     last_result: String,
-    /// How many times this exact (tool, args, result) triple has appeared in a row.
+    /// Whether the last recorded call had a cached result.
+    last_was_cached: bool,
+    /// How many times this call has repeated consecutively.
     /// Starts at 0 (no previous call). Becomes 1 on first call, 2 on first repeat, etc.
     pub consecutive_count: u32,
 }
@@ -705,21 +707,39 @@ impl LoopDetector {
             last_tool_name: String::new(),
             last_args: String::new(),
             last_result: String::new(),
+            last_was_cached: false,
             consecutive_count: 0,
         }
     }
 
     /// Record a tool call result. Returns `true` if this is a duplicate (loop detected).
-    /// Resets the counter whenever the (tool, args, result) triple changes.
-    fn check_and_update(&mut self, tool_name: &str, args: &str, result: &str) -> bool {
-        if tool_name == self.last_tool_name && args == self.last_args && result == self.last_result
-        {
+    ///
+    /// When both the current and previous calls were cached, compares `(tool_name, args)`
+    /// only — cached stubs contain timestamp-based VFS URIs that differ every time,
+    /// defeating result-based comparison (#207).
+    fn check_and_update(
+        &mut self,
+        tool_name: &str,
+        args: &str,
+        result: &str,
+        was_cached: bool,
+    ) -> bool {
+        let is_repeat = tool_name == self.last_tool_name
+            && args == self.last_args
+            && if was_cached && self.last_was_cached {
+                true // both cached: (tool, args) match is sufficient
+            } else {
+                result == self.last_result
+            };
+
+        if is_repeat {
             self.consecutive_count += 1;
             true
         } else {
             self.last_tool_name = tool_name.to_string();
             self.last_args = args.to_string();
             self.last_result = result.to_string();
+            self.last_was_cached = was_cached;
             self.consecutive_count = 1;
             false
         }
@@ -733,47 +753,77 @@ mod loop_detector_tests {
     #[test]
     fn test_no_loop_on_first_call() {
         let mut d = LoopDetector::new();
-        assert!(!d.check_and_update("grep", r#"{"path":"x"}"#, "result"));
+        assert!(!d.check_and_update("grep", r#"{"path":"x"}"#, "result", false));
     }
 
     #[test]
     fn test_no_loop_on_different_args() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", r#"{"path":"a"}"#, "result");
-        assert!(!d.check_and_update("grep", r#"{"path":"b"}"#, "result"));
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result", false);
+        assert!(!d.check_and_update("grep", r#"{"path":"b"}"#, "result", false));
     }
 
     #[test]
     fn test_no_loop_on_different_result() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", r#"{"path":"a"}"#, "result1");
-        assert!(!d.check_and_update("grep", r#"{"path":"a"}"#, "result2"));
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result1", false);
+        assert!(!d.check_and_update("grep", r#"{"path":"a"}"#, "result2", false));
     }
 
     #[test]
     fn test_loop_detected_on_second_identical_call() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", r#"{"path":"a"}"#, "result");
-        assert!(d.check_and_update("grep", r#"{"path":"a"}"#, "result"));
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result", false);
+        assert!(d.check_and_update("grep", r#"{"path":"a"}"#, "result", false));
     }
 
     #[test]
     fn test_loop_count_increments() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", "args", "res");
-        d.check_and_update("grep", "args", "res"); // count=2, loop
-        d.check_and_update("grep", "args", "res"); // count=3, loop
+        d.check_and_update("grep", "args", "res", false);
+        d.check_and_update("grep", "args", "res", false); // count=2, loop
+        d.check_and_update("grep", "args", "res", false); // count=3, loop
         assert_eq!(d.consecutive_count, 3);
     }
 
     #[test]
     fn test_loop_resets_on_different_call() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", "args", "res");
-        d.check_and_update("grep", "args", "res"); // loop detected
-        d.check_and_update("ls", "{}", "files"); // resets
+        d.check_and_update("grep", "args", "res", false);
+        d.check_and_update("grep", "args", "res", false); // loop detected
+        d.check_and_update("ls", "{}", "files", false); // resets
         assert_eq!(d.consecutive_count, 1);
-        assert!(!d.check_and_update("ls", "{}", "files2")); // different result → no loop
+        assert!(!d.check_and_update("ls", "{}", "files2", false)); // different result → no loop
+    }
+
+    #[test]
+    fn test_cached_loop_detected_despite_different_stubs() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("web_fetch", r#"{"url":"x"}"#, "stub_ts1", true);
+        assert!(d.check_and_update("web_fetch", r#"{"url":"x"}"#, "stub_ts2", true));
+    }
+
+    #[test]
+    fn test_cached_then_uncached_no_loop() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", "args", "stub_cached", true);
+        assert!(!d.check_and_update("grep", "args", "real_result", false));
+    }
+
+    #[test]
+    fn test_uncached_then_cached_no_loop() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", "args", "real_result", false);
+        assert!(!d.check_and_update("grep", "args", "stub_cached", true));
+    }
+
+    #[test]
+    fn test_cached_loop_count_increments() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("fetch", "args", "stub1", true);
+        d.check_and_update("fetch", "args", "stub2", true);
+        d.check_and_update("fetch", "args", "stub3", true);
+        assert_eq!(d.consecutive_count, 3);
     }
 }
 
@@ -1648,7 +1698,12 @@ async fn process_tool_calls<S: ResponseSink>(
         }
 
         // Loop detection: warn and charge fuel if same (tool, args, result) repeats.
-        let is_loop = loop_detector.check_and_update(&tc.name, &tc.arguments, &result.final_result);
+        let is_loop = loop_detector.check_and_update(
+            &tc.name,
+            &tc.arguments,
+            &result.final_result,
+            result.was_cached,
+        );
 
         messages.push(serde_json::json!({
             "role": "tool",
