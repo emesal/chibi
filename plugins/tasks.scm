@@ -363,36 +363,44 @@
                                 ("replace"   . ,(string-append "(priority . " (cdr new-priority) ")"))))
                             #f))
                       #f)
-                  ;; Replace body: find the closing ) of the alist and replace everything after.
-                  (if new-body
-                      (let ((tail (let find-tail ((i 0) (depth 0))
-                                    (if (= i (string-length content))
-                                        #f
-                                        (let ((ch (string-ref content i)))
-                                          (cond
-                                            ((char=? ch #\() (find-tail (+ i 1) (+ depth 1)))
-                                            ((char=? ch #\))
-                                             (if (= depth 1)
-                                                 (substring content i (string-length content))
-                                                 (find-tail (+ i 1) (- depth 1))))
-                                            (else (find-tail (+ i 1) depth))))))))
-                        (if tail
+                  ;; Re-read content after status/priority mutations so body
+                  ;; and timestamp edits operate on current on-disk state.
+                  (let ((content (if (or new-status new-priority)
+                                     (or (read-task-file path) content)
+                                     content)))
+                    ;; Replace body: find the closing ) of the alist and replace everything after.
+                    (if new-body
+                        (let ((tail (let find-tail ((i 0) (depth 0))
+                                      (if (= i (string-length content))
+                                          #f
+                                          (let ((ch (string-ref content i)))
+                                            (cond
+                                              ((char=? ch #\() (find-tail (+ i 1) (+ depth 1)))
+                                              ((char=? ch #\))
+                                               (if (= depth 1)
+                                                   (substring content i (string-length content))
+                                                   (find-tail (+ i 1) (- depth 1))))
+                                              (else (find-tail (+ i 1) depth))))))))
+                          (if tail
+                              (call-tool "file_edit"
+                                `(("path"      . ,vfs-uri)
+                                  ("operation" . "replace_string")
+                                  ("find"      . ,tail)
+                                  ("replace"   . ,(string-append ")\n\n\"" (escape-string (cdr new-body)) "\"\n"))))
+                              #f))
+                        #f)
+                    ;; Always bump the updated timestamp.
+                    (let ((content (if new-body
+                                       (or (read-task-file path) content)
+                                       content)))
+                      (let ((old-updated (extract-string-field content "updated")))
+                        (if old-updated
                             (call-tool "file_edit"
                               `(("path"      . ,vfs-uri)
                                 ("operation" . "replace_string")
-                                ("find"      . ,tail)
-                                ("replace"   . ,(string-append ")\n\n\"" (escape-string (cdr new-body)) "\"\n"))))
-                            #f))
-                      #f)
-                  ;; Always bump the updated timestamp.
-                  (let ((old-updated (extract-string-field content "updated")))
-                    (if old-updated
-                        (call-tool "file_edit"
-                          `(("path"      . ,vfs-uri)
-                            ("operation" . "replace_string")
-                            ("find"      . ,(string-append "(updated . " old-updated ")"))
-                            ("replace"   . ,(string-append "(updated . \"" ts "\")"))))
-                        #f))
+                                ("find"      . ,(string-append "(updated . " old-updated ")"))
+                                ("replace"   . ,(string-append "(updated . \"" ts "\")"))))
+                            #f))))
                   (string-append "updated task " task-id " at " path)))))))))
 
 (define-tool task_view
