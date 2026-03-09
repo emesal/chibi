@@ -13,6 +13,7 @@
 
 (import (scheme base))
 (import (scheme char))
+(import (scheme read))
 (import (harness tools))
 
 ;;; ---- helpers ---------------------------------------------------------------
@@ -215,19 +216,20 @@
         #f
         result)))
 
-;;; Collect all task directories visible to the current context:
-;;; the context-local dir plus member flock task dirs (via flock_list builtin).
+;;; Collect all task directories visible to the current context.
+;;; Reads /sys/contexts/<name>/task-dirs (a Scheme list datum) via VFS.
+;;; Falls back to context-local only on error (e.g. older chibi-core without
+;;; ContextsBackend, or unit test harness with minimal VFS setup).
 (define (all-task-dirs)
-  (let* ((local-dir (string-append "/home/" %context-name% "/tasks"))
-         (raw (call-tool "flock_list" '()))
-         (flock-dirs
-           (if (or (string=? raw "") (string-contains? raw "Error"))
-               '()
-               (map (lambda (name)
-                      (string-append "/flocks/" (string-trim-both name) "/tasks"))
-                    (filter (lambda (s) (not (string=? (string-trim-both s) "")))
-                            (string-split raw #\newline))))))
-    (cons local-dir flock-dirs)))
+  (let ((fallback (list (string-append "/home/" %context-name% "/tasks"))))
+    (guard (exn (#t fallback))
+      (let ((raw (call-tool "file_head"
+                   `(("path" . ,(string-append "vfs:///sys/contexts/"
+                                  %context-name% "/task-dirs"))
+                     ("lines" . "1")))))
+        (if (or (string=? raw "") (string-contains? raw "Error"))
+            fallback
+            (read (open-input-string raw)))))))
 
 ;;; Find a .task file by ID by scanning all visible task directories.
 ;;; Returns the full VFS path (without vfs:// prefix) or #f if not found.

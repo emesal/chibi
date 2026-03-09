@@ -213,7 +213,7 @@ pub struct Cli {
     #[arg(short = 'G', long = "show-log", value_names = ["CTX", "N"], num_args = 2, allow_hyphen_values = true)]
     pub show_log: Option<Vec<String>>,
 
-    /// Inspect current context (system_prompt, reflection, todos, goals, list)
+    /// Inspect current context (system_prompt, reflection, tasks, goals, list)
     #[arg(short = 'n', long = "inspect-current", value_name = "THING")]
     pub inspect_current: Option<String>,
 

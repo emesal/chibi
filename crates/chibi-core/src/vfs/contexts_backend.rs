@@ -103,6 +103,25 @@ impl ContextsBackend {
         }
     }
 
+    /// Load flock registry from disk and return all flock names for `name`.
+    ///
+    /// Returns `(site_flock, explicit_flocks)`. Reads the registry directly from
+    /// disk (not VFS) to avoid a circular dependency — `ContextsBackend` is itself
+    /// a VFS backend.
+    fn flocks_for_context(&self, name: &str) -> io::Result<(String, Vec<String>)> {
+        let vfs_root = self.data_dir.join("vfs");
+        let registry_path = vfs_root.join("flocks").join("registry.json");
+        let registry: FlockRegistry = if registry_path.exists() {
+            let data = std::fs::read_to_string(&registry_path)?;
+            serde_json::from_str(&data).unwrap_or_default()
+        } else {
+            FlockRegistry::default()
+        };
+        let site_flock = site_flock_name(&self.site_id);
+        let explicit = registry.flocks_for(name, &site_flock);
+        Ok((site_flock, explicit))
+    }
+
     /// Compute the prompt count for a context using `PartitionManager`.
     ///
     /// This uses the same path that `AppState::prompt_count` uses, ensuring
@@ -120,21 +139,8 @@ impl ContextsBackend {
     fn build_state_json(&self, name: &str) -> io::Result<Vec<u8>> {
         let entry = self.find_context(name)?;
 
-        // Load flock registry from disk.
-        // Note: we read this directly from disk rather than via VFS to avoid
-        // a circular dependency (ContextsBackend is itself a VFS backend).
-        let vfs_root = self.data_dir.join("vfs");
-        let registry_path = vfs_root.join("flocks").join("registry.json");
-        let registry: FlockRegistry = if registry_path.exists() {
-            let data = std::fs::read_to_string(&registry_path)?;
-            serde_json::from_str(&data).unwrap_or_default()
-        } else {
-            FlockRegistry::default()
-        };
-
         // Flocks: site flock + explicit memberships.
-        let site_flock = site_flock_name(&self.site_id);
-        let explicit = registry.flocks_for(name, &site_flock);
+        let (site_flock, explicit) = self.flocks_for_context(name)?;
         let mut flocks = vec![site_flock.clone()];
         flocks.extend(explicit.clone());
 
@@ -174,6 +180,29 @@ impl ContextsBackend {
         };
 
         serde_json::to_vec_pretty(&state).map_err(|e| io::Error::other(e.to_string()))
+    }
+
+    /// Compute all task directories visible to a context.
+    ///
+    /// Returns `/home/<name>/tasks` followed by `/flocks/<f>/tasks` for each
+    /// flock the context belongs to.
+    fn task_dirs_for(&self, name: &str) -> io::Result<Vec<String>> {
+        let _ = self.find_context(name)?;
+        let (site_flock, explicit) = self.flocks_for_context(name)?;
+
+        let mut dirs = vec![format!("/home/{}/tasks", name)];
+        dirs.push(format!("/flocks/{}/tasks", site_flock));
+        for flock_name in &explicit {
+            dirs.push(format!("/flocks/{}/tasks", flock_name));
+        }
+        Ok(dirs)
+    }
+
+    /// Build the `/task-dirs` virtual file content as a Scheme list datum.
+    fn build_task_dirs_sexp(&self, name: &str) -> io::Result<Vec<u8>> {
+        let dirs = self.task_dirs_for(name)?;
+        let sexp = tein_sexp::Sexp::list(dirs.into_iter().map(tein_sexp::Sexp::string).collect());
+        Ok(sexp.to_string().into_bytes())
     }
 
     /// Load the partition manifest for a context.
@@ -222,6 +251,7 @@ impl ReadOnlyVfsBackend for ContextsBackend {
                     "cannot read directory; use list()",
                 )),
                 "state.json" => self.build_state_json(name),
+                "task-dirs" => self.build_task_dirs_sexp(name),
                 "transcript/manifest.json" => {
                     let path = self.transcript_dir(name).join("manifest.json");
                     std::fs::read(&path).map_err(|e| {
@@ -289,6 +319,10 @@ impl ReadOnlyVfsBackend for ContextsBackend {
                         kind: VfsEntryKind::File,
                     },
                     VfsEntry {
+                        name: "task-dirs".into(),
+                        kind: VfsEntryKind::File,
+                    },
+                    VfsEntry {
                         name: "transcript".into(),
                         kind: VfsEntryKind::Directory,
                     },
@@ -345,7 +379,9 @@ impl ReadOnlyVfsBackend for ContextsBackend {
             }
 
             match rest {
-                "" | "state.json" | "transcript" | "transcript/partitions" => Ok(true),
+                "" | "state.json" | "task-dirs" | "transcript" | "transcript/partitions" => {
+                    Ok(true)
+                }
                 "transcript/manifest.json" => {
                     Ok(self.transcript_dir(name).join("manifest.json").exists())
                 }
@@ -419,6 +455,34 @@ mod tests {
         std::fs::create_dir_all(data_dir.join("contexts")).unwrap();
         std::fs::create_dir_all(data_dir.join("vfs").join("flocks")).unwrap();
         ContextsBackend::new(state, data_dir.to_path_buf(), "test-site".into())
+    }
+
+    #[tokio::test]
+    async fn test_read_task_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let state = mock_state(&["alice"]);
+        let backend: &dyn VfsBackend = &make_backend(state, tmp.path());
+        std::fs::create_dir_all(tmp.path().join("contexts/alice")).unwrap();
+
+        let data = backend
+            .read(&VfsPath::new("/alice/task-dirs").unwrap())
+            .await
+            .unwrap();
+        let content = String::from_utf8(data).unwrap();
+
+        // should be a valid scheme list datum
+        let sexp = tein_sexp::parser::parse(&content).unwrap();
+        let items = sexp.as_list().expect("should be a list");
+
+        // first entry is always the context-local task dir
+        assert_eq!(items[0].as_string().unwrap(), "/home/alice/tasks");
+
+        // site flock task dir should be present
+        assert!(items.iter().any(|s| {
+            s.as_string()
+                .map(|s| s.starts_with("/flocks/site:"))
+                .unwrap_or(false)
+        }));
     }
 
     #[tokio::test]
