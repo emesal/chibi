@@ -59,7 +59,7 @@ struct ContextStateJson {
 /// VFS path references in `state.json`.
 #[derive(Serialize)]
 struct ContextPaths {
-    todos: String,
+    tasks: String,
     goals: Vec<String>,
 }
 
@@ -168,7 +168,7 @@ impl ContextsBackend {
             },
             flocks,
             paths: ContextPaths {
-                todos: format!("/home/{}/todos.md", name),
+                tasks: format!("/home/{}/tasks", name),
                 goals: goal_paths,
             },
         };
@@ -467,7 +467,7 @@ mod tests {
         assert_eq!(json["prompt_count"], 0);
         assert!(json["auto_destroy_at"].is_null());
         assert!(json["flocks"].is_array());
-        assert_eq!(json["paths"]["todos"], "/home/alice/todos.md");
+        assert_eq!(json["paths"]["tasks"], "/home/alice/tasks");
     }
 
     #[tokio::test]

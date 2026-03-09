@@ -3,8 +3,8 @@
 //! All path methods are pure computations with no I/O — they just construct
 //! `PathBuf` values based on the context name and chibi directory structure.
 //!
-//! Note: todos and goals are no longer stored as files on disk; they are
-//! VFS-backed (`/home/<ctx>/todos.md`) and flock-scoped respectively.
+//! Note: todos are now structured tasks stored in the VFS at
+//! `/home/<ctx>/tasks/`; goals are flock-scoped.
 
 use std::path::PathBuf;
 

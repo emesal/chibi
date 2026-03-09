@@ -49,10 +49,11 @@
 //! ## `call-tool` bridge
 //!
 //! `call-tool` bridges sync tein → async tokio dispatch via
-//! `Handle::current().block_on()`. The tool registry and call context are
-//! stashed in thread-locals (`BRIDGE_REGISTRY`, `BRIDGE_CALL_CTX`) before
-//! each invocation and cleared after via a guard. All mutations to these
-//! thread-locals happen on the tein worker thread.
+//! `Handle::current().block_on()`. The registry and call context are stashed in
+//! `BRIDGE_CALL_CTX` before each invocation and cleared after via a guard.
+//! The registry is embedded in `ToolImpl::Synthesised` and flows through
+//! `execute_synthesised` → `CallContextGuard`, so concurrent calls never
+//! overwrite each other's registry.
 //!
 //! Each synthesised tool gets its own sandboxed tein context, shared via
 //! `Arc` for concurrent dispatch. All access goes through `ThreadLocalContext`,
@@ -67,7 +68,7 @@ use tein::{Context, ThreadLocalContext, Value, sandbox::Modules};
 use std::io;
 
 use crate::tools::registry::{ToolCall, ToolRegistry};
-use crate::tools::{Tool, ToolCategory, ToolImpl, ToolMetadata, vfs_block_on};
+use crate::tools::{Tool, ToolCategory, ToolImpl, ToolMetadata};
 use crate::vfs::{Vfs, VfsCaller, VfsEntryKind, VfsPath}; // Vfs+VfsCaller used in scan_and_register
 
 // --- (harness tools) module source -------------------------------------------
@@ -115,6 +116,10 @@ const HARNESS_PREAMBLE: &str = r#"
 ;; (name-string description-string params-value execute-procedure)
 (define %tool-registry% '())
 
+;; name of the calling context — mutated by execute_synthesised before each call.
+;; plugins read this to resolve /home/<ctx>/... VFS paths.
+(define %context-name% "")
+
 ;; registers a tool: appends to %tool-registry% in definition order (LIFO via cons).
 ;; rust reads %tool-registry% after evaluation; non-empty → multi-tool mode.
 (define-syntax define-tool
@@ -146,6 +151,13 @@ struct ActiveCallContext {
     vfs: *const Vfs,
     /// Non-empty string = `VfsCaller::Context(name)`, empty = `VfsCaller::System`.
     vfs_caller_context: String,
+    /// Tokio runtime handle from the caller thread. Used by `call_tool_fn` to
+    /// schedule async work from the tein worker thread (which is not a tokio thread
+    /// and cannot use `block_in_place`).
+    runtime_handle: tokio::runtime::Handle,
+    /// Shared tool registry. Used by `call_tool_fn` for per-call dispatch.
+    /// Embedded per-call so concurrent tests never overwrite each other's registry.
+    registry: Arc<RwLock<ToolRegistry>>,
 }
 
 // SAFETY: the pointers in `ActiveCallContext` are only dereferenced on the
@@ -154,31 +166,34 @@ struct ActiveCallContext {
 #[cfg(feature = "synthesised-tools")]
 unsafe impl Send for ActiveCallContext {}
 
-thread_local! {
-    /// Arc to the tool registry, set once per `load_tool_from_source` call
-    /// and retained for the lifetime of the tein worker thread. All tools on
-    /// the same thread share the same registry.
-    #[cfg(feature = "synthesised-tools")]
-    static BRIDGE_REGISTRY: std::cell::RefCell<Option<Arc<RwLock<ToolRegistry>>>> =
-        const { std::cell::RefCell::new(None) };
-
-    /// Per-call context for `call-tool`. Set/cleared via `CallContextGuard`.
-    #[cfg(feature = "synthesised-tools")]
-    static BRIDGE_CALL_CTX: std::cell::RefCell<Option<ActiveCallContext>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// RAII guard that stashes a `ToolCallContext` in `BRIDGE_CALL_CTX` and clears
-/// it on drop. Used in `execute_synthesised` to make the context available to
-/// the `call-tool` bridge without threading it through tein's FFI boundary.
+/// Per-tein-worker-thread call context. Keyed by the tein worker thread's `ThreadId`
+/// so concurrent synthesised tool calls from different contexts never collide.
+///
+/// `call_tool_fn` runs on the tein worker thread, so `std::thread::current().id()`
+/// gives the correct lookup key. `CallContextGuard` inserts on set and removes on drop.
 #[cfg(feature = "synthesised-tools")]
-struct CallContextGuard;
+static BRIDGE_CALL_CTX: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<std::thread::ThreadId, ActiveCallContext>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// RAII guard that inserts/removes an entry in the thread-ID-keyed `BRIDGE_CALL_CTX` map.
+/// Used in `execute_synthesised` to make the context available to the `call-tool`
+/// bridge without threading it through tein's FFI boundary.
+#[cfg(feature = "synthesised-tools")]
+struct CallContextGuard {
+    thread_id: std::thread::ThreadId,
+}
 
 #[cfg(feature = "synthesised-tools")]
 impl CallContextGuard {
-    fn set(ctx: &crate::tools::registry::ToolCallContext<'_>) -> Self {
-        BRIDGE_CALL_CTX.with(|cell| {
-            *cell.borrow_mut() = Some(ActiveCallContext {
+    fn set(
+        ctx: &crate::tools::registry::ToolCallContext<'_>,
+        registry: Arc<RwLock<ToolRegistry>>,
+        thread_id: std::thread::ThreadId,
+    ) -> Self {
+        BRIDGE_CALL_CTX.lock().unwrap().insert(
+            thread_id,
+            ActiveCallContext {
                 app: ctx.app as *const _,
                 context_name: ctx.context_name.to_string(),
                 config: ctx.config as *const _,
@@ -188,18 +203,18 @@ impl CallContextGuard {
                     VfsCaller::Context(name) => name.to_string(),
                     VfsCaller::System => String::new(),
                 },
-            });
-        });
-        CallContextGuard
+                runtime_handle: tokio::runtime::Handle::current(),
+                registry,
+            },
+        );
+        CallContextGuard { thread_id }
     }
 }
 
 #[cfg(feature = "synthesised-tools")]
 impl Drop for CallContextGuard {
     fn drop(&mut self) {
-        BRIDGE_CALL_CTX.with(|cell| {
-            *cell.borrow_mut() = None;
-        });
+        BRIDGE_CALL_CTX.lock().unwrap().remove(&self.thread_id);
     }
 }
 
@@ -207,9 +222,9 @@ impl Drop for CallContextGuard {
 
 /// The `call-tool` foreign function: `(call-tool name args-alist) → string`
 ///
-/// Reads `BRIDGE_REGISTRY` and `BRIDGE_CALL_CTX` from thread-locals. Converts
-/// the scheme alist args to JSON, looks up the tool, and dispatches via
-/// `ToolRegistry::dispatch_impl` on the current tokio runtime.
+/// Reads `BRIDGE_CALL_CTX` (which carries the registry for the current call).
+/// Converts the scheme alist args to JSON, looks up the tool, and dispatches
+/// via `ToolRegistry::dispatch_impl` on the current tokio runtime.
 ///
 /// Error handling: returns a scheme error string on failure (tein surfacees it
 /// as a scheme error condition). Does not panic.
@@ -221,60 +236,130 @@ impl Drop for CallContextGuard {
 fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
     let json_args = scheme_value_to_json(&args).map_err(|e| format!("args conversion: {e}"))?;
 
-    BRIDGE_CALL_CTX.with(|ctx_cell| {
-        let ctx_borrow = ctx_cell.borrow();
-        let active = ctx_borrow.as_ref().ok_or_else(|| {
-            "call-tool: no active call context (called outside tool execute?)".to_string()
+    // Extract all needed data from the per-thread context while holding the lock,
+    // then drop the lock before dispatching (which may block_on async code).
+    let (
+        app_ptr,
+        context_name,
+        config_ptr,
+        project_root,
+        vfs_ptr,
+        vfs_caller_str,
+        runtime_handle,
+        registry,
+    ) = {
+        let tid = std::thread::current().id();
+        let guard = BRIDGE_CALL_CTX.lock().unwrap();
+        let active = guard.get(&tid).ok_or_else(|| {
+            "call-tool: no active call context for this thread (called outside tool execute?)"
+                .to_string()
         })?;
+        (
+            active.app,
+            active.context_name.clone(),
+            active.config,
+            active.project_root.clone(),
+            active.vfs,
+            active.vfs_caller_context.clone(),
+            active.runtime_handle.clone(),
+            Arc::clone(&active.registry),
+        )
+        // guard drops here, releasing the lock
+    };
 
-        let registry = BRIDGE_REGISTRY.with(|reg_cell| {
-            reg_cell
-                .borrow()
-                .as_ref()
-                .map(Arc::clone)
-                .ok_or_else(|| "call-tool: no registry available".to_string())
-        })?;
+    // SAFETY: pointers are valid for the duration of execute_synthesised,
+    // which holds CallContextGuard that set them. We reconstruct a
+    // ToolCallContext only for dispatch — no storage beyond this fn.
+    let call_ctx = unsafe {
+        crate::tools::registry::ToolCallContext {
+            app: &*app_ptr,
+            context_name: &context_name,
+            config: &*config_ptr,
+            project_root: &project_root,
+            vfs: &*vfs_ptr,
+            vfs_caller: if vfs_caller_str.is_empty() {
+                VfsCaller::System
+            } else {
+                VfsCaller::Context(&vfs_caller_str)
+            },
+        }
+    };
 
-        // SAFETY: pointers are valid for the duration of execute_synthesised,
-        // which holds CallContextGuard that set them. We reconstruct a
-        // ToolCallContext only for dispatch — no storage beyond this fn.
-        let vfs_caller_str = active.vfs_caller_context.clone();
-        let call_ctx = unsafe {
-            crate::tools::registry::ToolCallContext {
-                app: &*active.app,
-                context_name: &active.context_name,
-                config: &*active.config,
-                project_root: &active.project_root,
-                vfs: &*active.vfs,
-                vfs_caller: if vfs_caller_str.is_empty() {
-                    VfsCaller::System
-                } else {
-                    VfsCaller::Context(&vfs_caller_str)
-                },
-            }
-        };
+    let tool_impl = {
+        let reg = registry.read().map_err(|e| format!("registry lock: {e}"))?;
+        let tool = reg
+            .get(&name)
+            .ok_or_else(|| format!("unknown tool: {name}"))?;
+        tool.r#impl.clone()
+    };
 
-        let tool_impl = {
-            let reg = registry.read().map_err(|e| format!("registry lock: {e}"))?;
-            let tool = reg
-                .get(&name)
-                .ok_or_else(|| format!("unknown tool: {name}"))?;
-            tool.r#impl.clone()
-        };
-
-        // bridge sync tein → async tokio; vfs_block_on uses block_in_place to
-        // avoid panicking on a multi-thread runtime (same fix as scan_and_register)
-        vfs_block_on(ToolRegistry::dispatch_impl(
+    // Use the captured runtime handle directly rather than `vfs_block_on`:
+    // the tein worker thread is not a tokio thread, so `block_in_place`
+    // (which `vfs_block_on` uses) would panic. The captured handle from
+    // `CallContextGuard::set` (which runs on a tokio thread) is safe to
+    // `block_on` from this non-tokio worker thread. See commit 2016b193
+    // for the original `vfs_block_on` change and why this context differs.
+    runtime_handle
+        .block_on(ToolRegistry::dispatch_impl(
             tool_impl, &name, &json_args, &call_ctx,
         ))
         .map_err(|e| format!("tool error: {e}"))
-    })
+}
+
+/// `(generate-id)` harness helper — returns an 8-hex-char string from uuid v4.
+/// Provides ~4 billion possible values; sufficient for task IDs within a
+/// workspace. Not a cryptographic identifier.
+#[cfg(feature = "synthesised-tools")]
+#[tein::tein_fn(name = "generate-id")]
+fn generate_id_fn() -> String {
+    let id = uuid::Uuid::new_v4();
+    id.simple().to_string()[..8].to_string()
+}
+
+/// `(current-timestamp)` harness helper — returns `"YYYYMMDD-HHMMz"` UTC.
+#[cfg(feature = "synthesised-tools")]
+#[tein::tein_fn(name = "current-timestamp")]
+fn current_timestamp_fn() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let (y, mo, d, h, mi) = secs_to_ymdhmz(secs);
+    format!("{:04}{:02}{:02}-{:02}{:02}z", y, mo, d, h, mi)
 }
 
 // --- loader ------------------------------------------------------------------
 
+/// Decompose Unix epoch seconds into (year, month, day, hour, minute) UTC.
+///
+/// Used by the `current-timestamp` harness helper to avoid a chrono dependency
+/// in the synthesised-tools module path.
+#[cfg(feature = "synthesised-tools")]
+fn secs_to_ymdhmz(mut s: u64) -> (u32, u32, u32, u32, u32) {
+    s /= 60; // discard seconds
+    let mi = (s % 60) as u32;
+    s /= 60;
+    let h = (s % 24) as u32;
+    s /= 24;
+    // Gregorian calendar decomposition
+    let z = s + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = (yoe + era * 400 + if mo <= 2 { 1 } else { 0 }) as u32;
+    (y, mo, d, h, mi)
+}
+
 /// Build a tein `ThreadLocalContext` for a synthesised tool, registering
 /// `call-tool`, the harness preamble, and `(harness tools)` module.
+///
+/// Returns the context and the tein worker thread's `ThreadId` (captured
+/// during init). The thread ID is the key for `BRIDGE_CALL_CTX` lookups.
 ///
 /// Sandbox behaviour depends on `tier`:
 /// - `Sandboxed`: safe modules only, 10M step limit
@@ -283,9 +368,16 @@ fn call_tool_fn(name: String, args: Value) -> Result<String, String> {
 fn build_tein_context(
     source: String,
     tier: crate::config::SandboxTier,
-) -> io::Result<ThreadLocalContext> {
+) -> io::Result<(ThreadLocalContext, std::thread::ThreadId)> {
+    let worker_thread_id = Arc::new(std::sync::Mutex::new(None::<std::thread::ThreadId>));
+    let tid_capture = Arc::clone(&worker_thread_id);
+
     let init = move |ctx: &Context| -> tein::Result<()> {
+        // Capture the tein worker thread's ID for BRIDGE_CALL_CTX keying.
+        *tid_capture.lock().unwrap() = Some(std::thread::current().id());
         ctx.define_fn_variadic("call-tool", __tein_call_tool_fn)?;
+        ctx.define_fn_variadic("generate-id", __tein_generate_id_fn)?;
+        ctx.define_fn_variadic("current-timestamp", __tein_current_timestamp_fn)?;
         ctx.evaluate(HARNESS_PREAMBLE)?;
         ctx.register_module(HARNESS_TOOLS_MODULE)
             .map_err(|e| tein::Error::EvalError(format!("harness module: {e}")))?;
@@ -293,7 +385,7 @@ fn build_tein_context(
         Ok(())
     };
 
-    match tier {
+    let ctx = match tier {
         crate::config::SandboxTier::Sandboxed => Context::builder()
             .standard_env()
             .sandboxed(Modules::Safe)
@@ -303,7 +395,13 @@ fn build_tein_context(
             Context::builder().standard_env().build_managed(init)
         }
     }
-    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("tein init: {e}")))
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("tein init: {e}")))?;
+
+    let tid = worker_thread_id
+        .lock()
+        .unwrap()
+        .expect("init closure must have run and captured thread ID");
+    Ok((ctx, tid))
 }
 
 /// Load one or more synthesised tools from scheme source.
@@ -339,14 +437,9 @@ pub fn load_tools_from_source_with_tier(
     registry: &Arc<RwLock<ToolRegistry>>,
     tier: crate::config::SandboxTier,
 ) -> io::Result<Vec<Tool>> {
-    // stash registry in thread-local so call-tool bridge can access it
-    BRIDGE_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Some(Arc::clone(registry));
-    });
-
     let source_owned = source.to_string();
 
-    let ctx = build_tein_context(source_owned, tier)?;
+    let (ctx, worker_thread_id) = build_tein_context(source_owned, tier)?;
 
     // check if define-tool was used (%tool-registry% is non-empty list)
     let multi = ctx.evaluate("%tool-registry%").ok();
@@ -356,9 +449,9 @@ pub fn load_tools_from_source_with_tier(
     );
 
     if is_multi {
-        extract_multi_tools(ctx, vfs_path)
+        extract_multi_tools(ctx, vfs_path, registry, worker_thread_id)
     } else {
-        extract_single_tool(ctx, vfs_path).map(|t| vec![t])
+        extract_single_tool(ctx, vfs_path, registry, worker_thread_id).map(|t| vec![t])
     }
 }
 
@@ -384,7 +477,12 @@ pub fn load_tool_from_source(
 
 /// Extract a single tool from a context using the convention-based format.
 #[cfg(feature = "synthesised-tools")]
-fn extract_single_tool(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Result<Tool> {
+fn extract_single_tool(
+    ctx: ThreadLocalContext,
+    vfs_path: &VfsPath,
+    registry: &Arc<RwLock<ToolRegistry>>,
+    worker_thread_id: std::thread::ThreadId,
+) -> io::Result<Tool> {
     let name = extract_string(&ctx, "tool-name")?;
     let description = extract_string(&ctx, "tool-description")?;
     let params_val = ctx.evaluate("tool-parameters").map_err(|e| {
@@ -420,13 +518,13 @@ fn extract_single_tool(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
             vfs_path: vfs_path.clone(),
             exec_binding: "tool-execute".to_string(),
             context,
+            registry: Arc::clone(registry),
+            worker_thread_id,
         },
         category: ToolCategory::Synthesised,
     })
 }
 
-/// Extract multiple tools from a context that used `(define-tool ...)`.
-///
 /// Escape a string for safe embedding inside a Scheme string literal.
 /// Replaces `\` with `\\` and `"` with `\"`.
 #[cfg(feature = "synthesised-tools")]
@@ -437,7 +535,12 @@ fn scheme_escape_string(s: &str) -> String {
 /// Reads `%tool-registry%` (a LIFO list built via `cons`) and produces one
 /// `Tool` per entry. All tools share the same tein context via `Arc`.
 #[cfg(feature = "synthesised-tools")]
-fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Result<Vec<Tool>> {
+fn extract_multi_tools(
+    ctx: ThreadLocalContext,
+    vfs_path: &VfsPath,
+    registry: &Arc<RwLock<ToolRegistry>>,
+    worker_thread_id: std::thread::ThreadId,
+) -> io::Result<Vec<Tool>> {
     let registry_val = ctx
         .evaluate("%tool-registry%")
         .map_err(|e| io::Error::other(format!("reading %tool-registry%: {e}")))?;
@@ -524,6 +627,8 @@ fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
                 vfs_path: vfs_path.clone(),
                 exec_binding: exec_binding.clone(),
                 context: Arc::clone(&context),
+                registry: Arc::clone(registry),
+                worker_thread_id,
             },
             category: ToolCategory::Synthesised,
         });
@@ -538,15 +643,32 @@ fn extract_multi_tools(ctx: ThreadLocalContext, vfs_path: &VfsPath) -> io::Resul
 /// context, and calls it. The result is coerced to a string via
 /// `Value::as_string()` (for scheme strings) or `Display` (for other values).
 ///
-/// Sets `BRIDGE_CALL_CTX` via `CallContextGuard` before calling into scheme
-/// so that `call-tool` can access the runtime context.
+/// Sets `BRIDGE_CALL_CTX` (with the per-call registry) via `CallContextGuard`
+/// before calling into scheme so that `call-tool` can access the runtime context.
+///
+/// `%context-name%` is injected via `set!` on the top-level binding from
+/// `HARNESS_PREAMBLE`. Concurrent calls to different `ThreadLocalContext`s are
+/// safe because each context has its own `BRIDGE_CALL_CTX` slot (keyed by
+/// `worker_thread_id`). Calls to the same context are serialised by
+/// `ThreadLocalContext`'s internal mutex, so no interleaving can occur.
 #[cfg(feature = "synthesised-tools")]
 pub async fn execute_synthesised(
     context: &ThreadLocalContext,
     exec_binding: &str,
     call: &ToolCall<'_>,
+    registry: Arc<RwLock<ToolRegistry>>,
+    worker_thread_id: std::thread::ThreadId,
 ) -> io::Result<String> {
-    let _guard = CallContextGuard::set(call.context);
+    let _guard = CallContextGuard::set(call.context, registry, worker_thread_id);
+
+    // Inject per-call context name before invoking the tool handler.
+    // %context-name% mutates the top-level binding defined in HARNESS_PREAMBLE.
+    // Safe because ThreadLocalContext serialises all calls to this context.
+    let ctx_name_escaped = scheme_escape_string(call.context.context_name);
+    context
+        .evaluate(&format!("(set! %context-name% \"{ctx_name_escaped}\")"))
+        .map_err(|e| io::Error::other(format!("inject %context-name%: {e}")))?;
+
     let args_alist = json_args_to_scheme_alist(call.args)?;
     let exec_fn = context
         .evaluate(exec_binding)
@@ -567,6 +689,8 @@ pub async fn execute_synthesised(
     _context: &(),
     _exec_binding: &str,
     _call: &ToolCall<'_>,
+    _registry: std::sync::Arc<std::sync::RwLock<ToolRegistry>>,
+    _worker_thread_id: std::thread::ThreadId,
 ) -> io::Result<String> {
     unreachable!("synthesised-tools feature not enabled")
 }
@@ -1596,5 +1720,225 @@ mod tests {
         let vfs_path = VfsPath::new("/tools/shared/harness_test.scm").unwrap();
         let tool = load_tool_from_source(source, &vfs_path, &registry).unwrap();
         assert_eq!(tool.name, "harness_test");
+    }
+
+    // --- task plugin integration tests ---------------------------------------
+
+    const TASKS_PLUGIN: &str = include_str!("../../../../plugins/tasks.scm");
+
+    /// Load the tasks.scm plugin and verify all five tools are registered.
+    #[test]
+    fn test_tasks_plugin_loads() {
+        let registry = make_registry();
+        let path = VfsPath::new("/tools/shared/tasks.scm").unwrap();
+        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry).unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        for expected in &[
+            "task_create",
+            "task_update",
+            "task_view",
+            "task_list",
+            "task_delete",
+        ] {
+            assert!(
+                names.contains(expected),
+                "expected tool '{}' to be registered, got: {:?}",
+                expected,
+                names
+            );
+        }
+        assert_eq!(tools.len(), 5, "expected exactly 5 task tools");
+    }
+
+    /// Verify generate-id and current-timestamp harness helpers work.
+    #[test]
+    fn test_harness_helpers_generate_id_and_timestamp() {
+        let registry = make_registry();
+        let source = r#"
+(import (scheme base))
+(import (harness tools))
+(define tool-name "helper_test")
+(define tool-description "test generate-id and current-timestamp")
+(define tool-parameters '())
+(define (tool-execute args)
+  (string-append (generate-id) ":" (current-timestamp)))
+"#;
+        let path = VfsPath::new("/tools/shared/helper_test.scm").unwrap();
+        let tool = load_tool_from_source(source, &path, &registry).unwrap();
+        if let ToolImpl::Synthesised {
+            ref context,
+            ref exec_binding,
+            ..
+        } = tool.r#impl
+        {
+            let exec_fn = context.evaluate(exec_binding).unwrap();
+            let alist = json_args_to_scheme_alist(&serde_json::json!({})).unwrap();
+            let result = context.call(&exec_fn, &[alist]).unwrap();
+            let s = result.as_string().unwrap().to_string();
+            // format: "XXXXXXXX:YYYYMMDD-HHMMz"
+            assert!(s.contains(':'), "expected id:timestamp, got: {}", s);
+            let parts: Vec<&str> = s.splitn(2, ':').collect();
+            assert_eq!(parts[0].len(), 8, "id should be 8 hex chars: {}", parts[0]);
+            assert!(
+                parts[1].ends_with('z'),
+                "timestamp should end with 'z': {}",
+                parts[1]
+            );
+        } else {
+            panic!("expected Synthesised impl");
+        }
+    }
+
+    /// Verify %context-name% injection via execute_synthesised.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_context_name_injection() {
+        use crate::test_support::create_test_chibi;
+
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+        let source = r#"
+(import (scheme base))
+(import (harness tools))
+(define tool-name "ctx_test")
+(define tool-description "return context name")
+(define tool-parameters '())
+(define (tool-execute args) %context-name%)
+"#;
+        let path = VfsPath::new("/tools/shared/ctx_test.scm").unwrap();
+        let tools = load_tools_from_source(source, &path, &registry).unwrap();
+        {
+            let mut reg = registry.write().unwrap();
+            for t in tools {
+                reg.register(t);
+            }
+        }
+        let result = chibi
+            .execute_tool("default", "ctx_test", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            result, "default",
+            "context name should be injected as %context-name%"
+        );
+    }
+
+    /// Full CRUD integration: create → list → view → update → delete.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_task_crud_integration() {
+        use crate::test_support::create_test_chibi;
+
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+        let path = VfsPath::new("/tools/shared/tasks.scm").unwrap();
+        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry).unwrap();
+        {
+            let mut reg = registry.write().unwrap();
+            for t in tools {
+                reg.register(t);
+            }
+        }
+
+        // Create a task
+        let create_result = chibi
+            .execute_tool(
+                "default",
+                "task_create",
+                serde_json::json!({
+                    "path": "test/my-task",
+                    "body": "do the thing",
+                    "priority": "high"
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            create_result.contains("created task"),
+            "unexpected: {}",
+            create_result
+        );
+        // Extract ID from "created task XXXX at ..."
+        let id = create_result
+            .split_whitespace()
+            .nth(2)
+            .expect("expected id in create result")
+            .to_string();
+
+        // List tasks — should include our task
+        let list_result = chibi
+            .execute_tool("default", "task_list", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(
+            list_result.contains(&id),
+            "id should appear in list: {}",
+            list_result
+        );
+
+        // View the task
+        let view_result = chibi
+            .execute_tool("default", "task_view", serde_json::json!({"id": id}))
+            .await
+            .unwrap();
+        assert!(
+            view_result.contains(&id),
+            "id should appear in view: {}",
+            view_result
+        );
+        assert!(
+            view_result.contains("do the thing"),
+            "body should appear in view: {}",
+            view_result
+        );
+
+        // Update status to in-progress
+        let update_result = chibi
+            .execute_tool(
+                "default",
+                "task_update",
+                serde_json::json!({
+                    "id": id,
+                    "status": "in-progress"
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            update_result.contains("updated task"),
+            "unexpected: {}",
+            update_result
+        );
+
+        // View again — status should be in-progress
+        let view2 = chibi
+            .execute_tool("default", "task_view", serde_json::json!({"id": id}))
+            .await
+            .unwrap();
+        assert!(
+            view2.contains("in-progress"),
+            "status should be in-progress: {}",
+            view2
+        );
+
+        // Delete the task
+        let delete_result = chibi
+            .execute_tool("default", "task_delete", serde_json::json!({"id": id}))
+            .await
+            .unwrap();
+        assert!(
+            delete_result.contains("deleted task"),
+            "unexpected: {}",
+            delete_result
+        );
+
+        // List again — should be gone
+        let list2 = chibi
+            .execute_tool("default", "task_list", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(
+            !list2.contains(&id),
+            "id should be gone after delete: {}",
+            list2
+        );
     }
 }

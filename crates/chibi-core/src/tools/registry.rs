@@ -7,7 +7,7 @@ use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -68,6 +68,8 @@ pub enum ToolImpl {
     /// all tools in the same `.scm` file (Arc). `exec_binding` names the
     /// scheme binding to call: `"tool-execute"` for single-tool convention
     /// format, `"%tool-execute-{name}%"` for `define-tool` multi-tool files.
+    /// `registry` is the owning registry, passed to `execute_synthesised` so
+    /// `call-tool` uses a per-call registry instead of a global static.
     ///
     /// Mutation site: if exec_binding format changes, update `extract_single_tool`
     /// and `extract_multi_tools` in synthesised.rs.
@@ -76,6 +78,11 @@ pub enum ToolImpl {
         vfs_path: crate::vfs::VfsPath,
         exec_binding: String,
         context: std::sync::Arc<tein::ThreadLocalContext>,
+        registry: Arc<RwLock<ToolRegistry>>,
+        /// The tein worker thread's `ThreadId`, captured at context init time.
+        /// Used as the key in `BRIDGE_CALL_CTX` so concurrent synthesised tool
+        /// calls from different tein contexts never overwrite each other's entry.
+        worker_thread_id: std::thread::ThreadId,
     },
 }
 
@@ -93,10 +100,14 @@ impl Clone for ToolImpl {
                 vfs_path,
                 exec_binding,
                 context,
+                registry,
+                worker_thread_id,
             } => ToolImpl::Synthesised {
                 vfs_path: vfs_path.clone(),
                 exec_binding: exec_binding.clone(),
                 context: context.clone(),
+                registry: Arc::clone(registry),
+                worker_thread_id: *worker_thread_id,
             },
         }
     }
@@ -269,8 +280,19 @@ impl ToolRegistry {
             ToolImpl::Synthesised {
                 context,
                 exec_binding,
+                registry,
+                worker_thread_id,
                 ..
-            } => super::synthesised::execute_synthesised(&context, &exec_binding, &call).await,
+            } => {
+                super::synthesised::execute_synthesised(
+                    &context,
+                    &exec_binding,
+                    &call,
+                    registry,
+                    worker_thread_id,
+                )
+                .await
+            }
         }
     }
 

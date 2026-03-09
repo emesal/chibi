@@ -353,7 +353,7 @@ fn integration_inspect_list_includes_config_fields() {
 
     // File-based items
     assert!(stdout.contains("system_prompt"));
-    assert!(stdout.contains("todos"));
+    assert!(stdout.contains("tasks"));
     assert!(stdout.contains("goals"));
     assert!(stdout.contains("reflection"));
 

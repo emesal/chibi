@@ -1,5 +1,5 @@
 //!
-//! Memory tools: reflection, todos, goals, read_context.
+//! Memory tools: reflection, goals, read_context.
 //! These tools read and write internal context state.
 
 use super::{BuiltinToolDef, ToolPropertyDef, require_str_param, vfs_block_on};
@@ -10,11 +10,11 @@ use std::io::{self, ErrorKind};
 use std::path::Path;
 
 pub const REFLECTION_TOOL_NAME: &str = "update_reflection";
-pub const TODOS_TOOL_NAME: &str = "update_todos";
 pub const GOALS_TOOL_NAME: &str = "update_goals";
 pub const READ_CONTEXT_TOOL_NAME: &str = "read_context";
 pub const FLOCK_JOIN_TOOL_NAME: &str = "flock_join";
 pub const FLOCK_LEAVE_TOOL_NAME: &str = "flock_leave";
+pub const FLOCK_LIST_TOOL_NAME: &str = "flock_list";
 
 pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
     BuiltinToolDef {
@@ -24,18 +24,6 @@ pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
             name: "content",
             prop_type: "string",
             description: "The new reflection content. This replaces the entire previous reflection.",
-            default: None,
-        }],
-        required: &["content"],
-        summary_params: &[],
-    },
-    BuiltinToolDef {
-        name: TODOS_TOOL_NAME,
-        description: "Update the todo list for this context. Use this to track tasks you need to complete during this conversation. Todos persist across messages but are specific to this context. Format as markdown checklist.",
-        properties: &[ToolPropertyDef {
-            name: "content",
-            prop_type: "string",
-            description: "The todo list content (markdown format, e.g., '- [ ] Task 1\\n- [x] Completed task')",
             default: None,
         }],
         required: &["content"],
@@ -63,7 +51,7 @@ pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
     },
     BuiltinToolDef {
         name: READ_CONTEXT_TOOL_NAME,
-        description: "Read the state of another context (read-only). Returns summary, todos, goals, and recent messages. Useful for inspecting sub-agents or coordinating with related contexts.",
+        description: "Read the state of another context (read-only). Returns summary, tasks, goals, and recent messages. Useful for inspecting sub-agents or coordinating with related contexts.",
         properties: &[
             ToolPropertyDef {
                 name: "context_name",
@@ -110,6 +98,13 @@ pub static MEMORY_TOOL_DEFS: &[BuiltinToolDef] = &[
         }],
         required: &["flock"],
         summary_params: &["flock"],
+    },
+    BuiltinToolDef {
+        name: FLOCK_LIST_TOOL_NAME,
+        description: "List the flocks this context belongs to (excluding the site flock). Returns one flock name per line, or empty string if none.",
+        properties: &[],
+        required: &[],
+        summary_params: &[],
     },
 ];
 
@@ -159,13 +154,6 @@ pub fn execute_memory_tool(
     config: Option<&ResolvedConfig>,
 ) -> Option<io::Result<String>> {
     match name {
-        TODOS_TOOL_NAME => {
-            let content = args.get("content").and_then(|v| v.as_str())?;
-            Some(
-                app.save_todos(context_name, content)
-                    .map(|_| format!("Todos updated ({} characters).", content.len())),
-            )
-        }
         GOALS_TOOL_NAME => Some((|| {
             let flock = require_str_param(args, "flock")?;
             let content = require_str_param(args, "content")?;
@@ -205,6 +193,10 @@ pub fn execute_memory_tool(
             vfs_block_on(app.vfs.flock_leave(&flock, context_name))
                 .map(|_| format!("Left flock '{}'.", flock))
         })()),
+        FLOCK_LIST_TOOL_NAME => Some((|| {
+            let flocks = vfs_block_on(app.vfs.flock_list_for(context_name))?;
+            Ok(flocks.join("\n"))
+        })()),
         _ => None,
     }
 }
@@ -238,7 +230,7 @@ pub fn execute_reflection_tool(
 
 /// Execute read_context: read the state of another context (read-only).
 ///
-/// Returns a JSON object with the context's summary, todos, flock_goals, and
+/// Returns a JSON object with the context's summary, tasks, flock_goals, and
 /// optionally recent messages from context.jsonl.
 fn execute_read_context(
     app: &AppState,
@@ -269,8 +261,11 @@ fn execute_read_context(
     let summary = std::fs::read_to_string(app.summary_file(context_name)).unwrap_or_default();
     result.insert("summary".to_string(), serde_json::Value::String(summary));
 
-    let todos = app.load_todos_for(context_name).unwrap_or_default();
-    result.insert("todos".to_string(), serde_json::Value::String(todos));
+    let tasks = crate::state::tasks::collect_tasks(&app.vfs, context_name);
+    // execute_read_context is sync — drive the future with vfs_block_on pattern
+    let task_summary = vfs_block_on(tasks);
+    let task_table = crate::state::tasks::build_summary_table(&task_summary);
+    result.insert("tasks".to_string(), serde_json::Value::String(task_table));
 
     // Goals are flock-scoped: load all flock contexts for the target and format
     // as an attributed flock_goals array for the caller.
@@ -365,18 +360,6 @@ mod tests {
     }
 
     #[test]
-    fn test_todos_tool_api_format() {
-        let tool = get_tool_api(TODOS_TOOL_NAME);
-        assert_eq!(tool["function"]["name"], TODOS_TOOL_NAME);
-        assert!(
-            tool["function"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("todo")
-        );
-    }
-
-    #[test]
     fn test_goals_tool_api_format() {
         let tool = get_tool_api(GOALS_TOOL_NAME);
         assert_eq!(tool["function"]["name"], GOALS_TOOL_NAME);
@@ -391,7 +374,6 @@ mod tests {
     #[test]
     fn test_memory_tool_constants() {
         assert_eq!(REFLECTION_TOOL_NAME, "update_reflection");
-        assert_eq!(TODOS_TOOL_NAME, "update_todos");
         assert_eq!(GOALS_TOOL_NAME, "update_goals");
         assert_eq!(READ_CONTEXT_TOOL_NAME, "read_context");
     }

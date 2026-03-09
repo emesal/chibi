@@ -180,7 +180,7 @@ When a hook fires, registered plugins are called with:
 {
   "context_name": "default",
   "summary": "conversation summary...",
-  "todos": "current todos...",
+  "tasks": "--- tasks ---\n| id | status | ... |",
   "flock_goals": [
     {"flock": "site:<site_id>", "goals": "site-wide goals..."},
     {"flock": "myteam", "goals": "team goals..."}
@@ -205,7 +205,7 @@ Called before tools are sent to the API. Allows dynamic filtering of which tools
 {
   "context_name": "default",
   "tools": [
-    {"name": "update_todos", "type": "builtin"},
+    {"name": "update_reflection", "type": "builtin"},
     {"name": "file_head", "type": "file"},
     {"name": "my_plugin", "type": "plugin"}
   ],
@@ -215,7 +215,7 @@ Called before tools are sent to the API. Allows dynamic filtering of which tools
 ```
 
 Tool types are:
-- `builtin`: update_todos, update_goals, update_reflection, send_message
+- `builtin`: update_reflection, update_goals, read_context, flock_join, flock_leave, flock_list
 - `file`: file_head, file_tail, file_lines, file_grep, write_file
 - `agent`: spawn_agent, retrieve_content
 - `plugin`: Tools loaded from the plugins directory
@@ -230,7 +230,7 @@ Tool types are:
 Or to use allowlist mode:
 ```json
 {
-  "include": ["update_todos", "update_goals"]
+  "include": ["update_reflection", "update_goals"]
 }
 ```
 

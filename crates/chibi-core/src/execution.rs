@@ -40,7 +40,7 @@ pub enum CommandEffect {
 /// These are context-specific files that can be inspected via `-i` but are not
 /// config fields. Binaries combine this list with `ResolvedConfig::list_fields()`
 /// to produce the full inspectable items list.
-pub const INSPECTABLE_ITEMS: &[&str] = &["system_prompt", "reflection", "todos", "goals", "home"];
+pub const INSPECTABLE_ITEMS: &[&str] = &["system_prompt", "reflection", "tasks", "goals", "home"];
 
 /// Execute a command with full lifecycle management.
 ///
@@ -560,7 +560,8 @@ fn show_log(chibi: &Chibi, context: &str, count: isize, output: &dyn OutputSink)
 
 /// Inspect a context property.
 ///
-/// Renders markdown-bearing content (todos, goals) via `emit_markdown()`.
+/// Renders content via `emit_result()`. Tasks use `build_summary_table`,
+/// goals use `emit_markdown()`.
 /// Returns `Some(CommandEffect)` for config-related inspections that require
 /// binary-specific resolution (binaries may have extended config fields).
 fn inspect_context(
@@ -591,12 +592,15 @@ fn inspect_context(
             }
             Ok(None)
         }
-        Inspectable::Todos => {
-            let todos = chibi.app.load_todos_for(context)?;
-            if todos.is_empty() {
-                output.emit_result("(no todos)");
+        Inspectable::Tasks => {
+            use crate::tools::vfs_block_on;
+            let task_metas =
+                vfs_block_on(crate::state::tasks::collect_tasks(&chibi.app.vfs, context));
+            let summary = crate::state::tasks::build_summary_table(&task_metas);
+            if summary.is_empty() {
+                output.emit_result("(no tasks)");
             } else {
-                output.emit_markdown(todos.trim_end())?;
+                output.emit_result(summary.trim_end());
             }
             Ok(None)
         }

@@ -1,6 +1,6 @@
 //! System prompt and content file handling for AppState.
 //!
-//! Methods for loading/saving system prompts, todos, goals, and reflection content.
+//! Methods for loading/saving system prompts, goals, and reflection content.
 
 use crate::context::{ENTRY_TYPE_SYSTEM_PROMPT_CHANGED, TranscriptEntry, now_timestamp};
 use std::fs;
@@ -175,11 +175,6 @@ impl AppState {
         self.load_reflection_prompt()
     }
 
-    /// Load todos for a specific context (alias for load_todos)
-    pub fn load_todos_for(&self, context_name: &str) -> io::Result<String> {
-        self.load_todos(context_name)
-    }
-
     /// Load the reflection prompt from ~/.chibi/prompts/reflection.md
     /// Returns empty string if the file doesn't exist
     pub fn load_reflection_prompt(&self) -> io::Result<String> {
@@ -191,34 +186,6 @@ impl AppState {
         }
     }
 
-    // --- Todos (VFS-backed) ---
-
-    /// Load todos for a context from the VFS (`/home/<ctx>/todos.md`).
-    ///
-    /// Returns empty string if the file doesn't exist yet.
-    pub fn load_todos(&self, context_name: &str) -> io::Result<String> {
-        use crate::tools::vfs_block_on;
-        use crate::vfs::{VfsCaller, VfsPath};
-        let path = VfsPath::new(&format!("/home/{}/todos.md", context_name))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        match vfs_block_on(self.vfs.read(VfsCaller::System, &path)) {
-            Ok(data) => Ok(String::from_utf8_lossy(&data).into_owned()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Save todos for a context to the VFS (`/home/<ctx>/todos.md`).
-    pub fn save_todos(&self, context_name: &str, content: &str) -> io::Result<()> {
-        use crate::tools::vfs_block_on;
-        use crate::vfs::{VfsCaller, VfsPath};
-        let path = VfsPath::new(&format!("/home/{}/todos.md", context_name))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        vfs_block_on(self.vfs.write(VfsCaller::System, &path, content.as_bytes()))
-    }
-
-    // NOTE: load_current_todos, save_current_todos were removed in the stateless-core refactor.
-    // Use load_todos(context_name) / save_todos(context_name, content) instead.
-    //
-    // Goals are now flock-scoped. See `state::flocks::load_flock_contexts` (task 9).
+    // Goals are now flock-scoped. See `state::flocks::load_flock_contexts`.
+    // Todos replaced by structured task files — see `state::tasks`.
 }
