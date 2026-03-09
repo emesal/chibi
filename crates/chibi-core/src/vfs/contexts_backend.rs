@@ -201,9 +201,7 @@ impl ContextsBackend {
     /// Build the `/task-dirs` virtual file content as a Scheme list datum.
     fn build_task_dirs_sexp(&self, name: &str) -> io::Result<Vec<u8>> {
         let dirs = self.task_dirs_for(name)?;
-        let sexp = tein_sexp::Sexp::list(
-            dirs.into_iter().map(tein_sexp::Sexp::string).collect(),
-        );
+        let sexp = tein_sexp::Sexp::list(dirs.into_iter().map(tein_sexp::Sexp::string).collect());
         Ok(sexp.to_string().into_bytes())
     }
 
@@ -381,7 +379,9 @@ impl ReadOnlyVfsBackend for ContextsBackend {
             }
 
             match rest {
-                "" | "state.json" | "task-dirs" | "transcript" | "transcript/partitions" => Ok(true),
+                "" | "state.json" | "task-dirs" | "transcript" | "transcript/partitions" => {
+                    Ok(true)
+                }
                 "transcript/manifest.json" => {
                     Ok(self.transcript_dir(name).join("manifest.json").exists())
                 }

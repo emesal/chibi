@@ -218,16 +218,18 @@
 
 ;;; Collect all task directories visible to the current context.
 ;;; Reads /sys/contexts/<name>/task-dirs (a Scheme list datum) via VFS.
-;;; Falls back to context-local only on error.
+;;; Falls back to context-local only on error (e.g. older chibi-core without
+;;; ContextsBackend, or unit test harness with minimal VFS setup).
 (define (all-task-dirs)
-  (let ((raw (call-tool "file_head"
-               `(("path" . ,(string-append "vfs:///sys/contexts/"
-                              %context-name% "/task-dirs"))
-                 ("lines" . "1")))))
-    (if (or (string=? raw "") (string-contains? raw "Error"))
-        ;; fallback: context-local only (forward compat / graceful degradation)
-        (list (string-append "/home/" %context-name% "/tasks"))
-        (read (open-input-string raw)))))
+  (let ((fallback (list (string-append "/home/" %context-name% "/tasks"))))
+    (guard (exn (#t fallback))
+      (let ((raw (call-tool "file_head"
+                   `(("path" . ,(string-append "vfs:///sys/contexts/"
+                                  %context-name% "/task-dirs"))
+                     ("lines" . "1")))))
+        (if (or (string=? raw "") (string-contains? raw "Error"))
+            fallback
+            (read (open-input-string raw)))))))
 
 ;;; Find a .task file by ID by scanning all visible task directories.
 ;;; Returns the full VFS path (without vfs:// prefix) or #f if not found.
