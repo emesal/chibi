@@ -14,7 +14,6 @@ Chibi is a minimal, composable building block for LLM interactions — not an ag
 - Missing or incorrect documentation including code comments are critical bugs.
 - Iterate over structures to prevent code duplication.
 - Comprehensive tests including edge cases.
-- Remind user about `just pre-push` before pushing and `just merge-to-dev` when merging feature branches.
 
 ## Build
 
@@ -64,5 +63,8 @@ LLM communication is delegated to ratatoskr; `gateway.rs` bridges chibi's types 
 - Synthesised tools: `(harness tools)` module provides `call-tool` and `define-tool`. `HARNESS_PREAMBLE` defines `%tool-registry%` and `define-tool` at top level (not inside the library) so `set!` can mutate it and rust can read it post-eval.
 - `ToolImpl::Synthesised` has `exec_binding` field: `"tool-execute"` for convention format, `"%tool-execute-{name}%"` for `define-tool` multi-tool files.
 - `reload_tool_from_content` and `scan_and_register` require `&ToolsConfig` for tier resolution. Pass `&ToolsConfig::default()` when no tier overrides needed.
-- `call-tool` bridge uses two thread-locals: `BRIDGE_REGISTRY` (set at load time, retained) and `BRIDGE_CALL_CTX` (set/cleared per execute via `CallContextGuard`).
+- `call-tool` bridge uses one global mutex: `BRIDGE_CALL_CTX` (set/cleared per execute via `CallContextGuard`). Registry is embedded in `ToolImpl::Synthesised` and passed through `execute_synthesised` — no longer a separate global. Reason: tein runs scheme on a dedicated worker thread; thread-locals set on the caller thread would be invisible there.
+- `ToolImpl::Synthesised` carries `registry: Arc<RwLock<ToolRegistry>>` so `call-tool` can dispatch to any registered tool from the tein worker thread without thread-local state.
+- Harness also exposes `%context-name%` (mutable binding, injected per call), `(generate-id)` (8 hex chars, uuid v4), and `(current-timestamp)` (`YYYYMMDD-HHMMz` UTC).
+- Structured tasks replace `todos.md`. `.task` files under `/home/<ctx>/tasks/` and `/flocks/<name>/tasks/`. Parsed at each prompt by `state::tasks::collect_tasks`, ephemeral table injected before last user message. `tasks.scm` plugin in `plugins/` provides CRUD tools.
 - `Modules::Safe` allowlist (tein) includes `(scheme base)`, `(scheme write)`, `(scheme read)`, `(scheme char)`, and other pure modules. Modules with `default_safe: false` (e.g. `(scheme regex)`, `(tein modules)`) are blocked in the sandboxed tier.
