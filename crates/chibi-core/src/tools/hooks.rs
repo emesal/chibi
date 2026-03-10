@@ -703,7 +703,8 @@ echo 'OK'
         )
         .unwrap();
 
-        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+        let results =
+            execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
         assert_eq!(
             results.len(),
             0,
@@ -809,7 +810,8 @@ echo 'OK'
         .unwrap();
 
         // should not error — failed hooks are skipped silently
-        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+        let results =
+            execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -905,7 +907,8 @@ echo 'OK'
             guard.borrow_mut().insert(HookPoint::OnStart);
         });
 
-        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+        let results =
+            execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
 
         // Clean up guard state so other tests in this thread aren't affected
         TEIN_HOOK_GUARD.with(|guard| {
@@ -965,10 +968,10 @@ echo 'OK'
     /// should fail with "not found" (tool registry lookup error), NOT with
     /// "no active call context" (bridge not set). This proves the guard is live.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[cfg(all(feature = "synthesised-tools"))]
+    #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_call_tool_with_tein_ctx_sets_bridge() {
-        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
         use crate::config::ResolvedConfig;
+        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
         use crate::partition::StorageConfig;
         use crate::tools::registry::ToolRegistry;
         use crate::tools::synthesised::load_tools_from_source_with_tier;
@@ -1007,8 +1010,7 @@ echo 'OK'
             models: Default::default(),
             site: None,
         };
-        let app =
-            crate::state::AppState::from_dir(temp.path().to_path_buf(), config).unwrap();
+        let app = crate::state::AppState::from_dir(temp.path().to_path_buf(), config).unwrap();
         let resolved_config = ResolvedConfig::default();
         let project_root = temp.path();
 
@@ -1140,10 +1142,10 @@ echo 'OK'
     /// Full chain: execute_hook → CallContextGuard → tein callback → (harness io)
     /// → VFS write. Verifies io-write in a hook callback actually persists.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[cfg(all(feature = "synthesised-tools"))]
+    #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_harness_io_vfs_write() {
-        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
         use crate::config::ResolvedConfig;
+        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
         use crate::partition::StorageConfig;
         use crate::tools::registry::ToolRegistry;
         use crate::tools::synthesised::load_tools_from_source_with_tier;
@@ -1242,10 +1244,10 @@ echo 'OK'
     /// IO from a tein hook callback bypasses the tool layer, so no hooks fire
     /// from the IO write. This confirms no re-entrancy / infinite loop.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[cfg(all(feature = "synthesised-tools"))]
+    #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_io_does_not_trigger_hooks() {
-        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
         use crate::config::ResolvedConfig;
+        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
         use crate::partition::StorageConfig;
         use crate::tools::registry::ToolRegistry;
         use crate::tools::synthesised::load_tools_from_source_with_tier;
@@ -1336,11 +1338,19 @@ echo 'OK'
         // Hook returned count=1
         assert_eq!(results.len(), 1);
         let count_val = &results[0].1["count"];
-        assert_eq!(count_val.as_str(), Some("1"), "counter should be 1: {count_val:?}");
+        assert_eq!(
+            count_val.as_str(),
+            Some("1"),
+            "counter should be 1: {count_val:?}"
+        );
 
         // VFS counter file should be "1" (not "2" or higher — no re-entrancy)
         let counter_path = VfsPath::new("/shared/counter.txt").unwrap();
-        let content = app.vfs.read(VfsCaller::System, &counter_path).await.unwrap();
+        let content = app
+            .vfs
+            .read(VfsCaller::System, &counter_path)
+            .await
+            .unwrap();
         assert_eq!(
             String::from_utf8_lossy(&content),
             "1",
