@@ -1136,4 +1136,215 @@ echo 'OK'
             "expected 'no active call context' error, got: {error_msg}"
         );
     }
+
+    /// Full chain: execute_hook → CallContextGuard → tein callback → (harness io)
+    /// → VFS write. Verifies io-write in a hook callback actually persists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(all(feature = "synthesised-tools"))]
+    async fn test_tein_hook_harness_io_vfs_write() {
+        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
+        use crate::config::ResolvedConfig;
+        use crate::partition::StorageConfig;
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = Config {
+            api_key: None,
+            model: None,
+            context_window_limit: None,
+            warn_threshold_percent: 75.0,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            fuel: 0,
+            fuel_empty_response_cost: 0,
+            username: "test".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: false,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api: ApiParams::default(),
+            storage: StorageConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            tools: ToolsConfig::default(),
+            vfs: VfsConfig::default(),
+            url_policy: None,
+            subagent_cost_tier: "free".to_string(),
+            models: Default::default(),
+            site: None,
+        };
+        let app = crate::state::AppState::from_dir(temp.path().to_path_buf(), config).unwrap();
+        let resolved_config = ResolvedConfig::default();
+        let project_root = temp.path();
+
+        // A hook that uses (harness io) to write a sentinel file to VFS
+        let source = r#"
+(import (harness hooks))
+(import (harness io))
+(register-hook 'on_start
+  (lambda (payload)
+    (io-write "vfs:///shared/hook-output.txt" "hello from hook")
+    '()))
+(define tool-name "io-hook-test")
+(define tool-description "Hook that writes via io")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/io-hook-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        execute_hook(
+            &tools,
+            HookPoint::OnStart,
+            &serde_json::json!({}),
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        // Verify the VFS write happened
+        let written_path = VfsPath::new("/shared/hook-output.txt").unwrap();
+        let content = app
+            .vfs
+            .read(VfsCaller::System, &written_path)
+            .await
+            .expect("hook should have written vfs:///shared/hook-output.txt");
+        assert_eq!(
+            String::from_utf8_lossy(&content),
+            "hello from hook",
+            "io-write from hook should persist to VFS"
+        );
+    }
+
+    /// IO from a tein hook callback bypasses the tool layer, so no hooks fire
+    /// from the IO write. This confirms no re-entrancy / infinite loop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(all(feature = "synthesised-tools"))]
+    async fn test_tein_hook_io_does_not_trigger_hooks() {
+        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
+        use crate::config::ResolvedConfig;
+        use crate::partition::StorageConfig;
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = Config {
+            api_key: None,
+            model: None,
+            context_window_limit: None,
+            warn_threshold_percent: 75.0,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            fuel: 0,
+            fuel_empty_response_cost: 0,
+            username: "test".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: false,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api: ApiParams::default(),
+            storage: StorageConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            tools: ToolsConfig::default(),
+            vfs: VfsConfig::default(),
+            url_policy: None,
+            subagent_cost_tier: "free".to_string(),
+            models: Default::default(),
+            site: None,
+        };
+        let app = crate::state::AppState::from_dir(temp.path().to_path_buf(), config).unwrap();
+        let resolved_config = ResolvedConfig::default();
+        let project_root = temp.path();
+
+        // A hook that writes a counter file. If io-write triggered hooks, the
+        // on_start hook would call itself recursively. TEIN_HOOK_GUARD should
+        // prevent this; and io-write doesn't go through hook dispatch at all.
+        // We just verify: (a) the hook runs, (b) the write succeeds, (c) no panic.
+        let source = r#"
+(import (harness hooks))
+(import (harness io))
+(register-hook 'on_start
+  (lambda (payload)
+    (let ((prev (io-read "vfs:///shared/counter.txt")))
+      (let ((count (if (string? prev) (+ (string->number prev) 1) 1)))
+        (io-write "vfs:///shared/counter.txt" (number->string count))
+        (list (cons "count" (number->string count)))))))
+(define tool-name "counter-hook-test")
+(define tool-description "Hook writes counter")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/counter-hook-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        // Fire the hook once
+        let results = execute_hook(
+            &tools,
+            HookPoint::OnStart,
+            &serde_json::json!({}),
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        // Hook returned count=1
+        assert_eq!(results.len(), 1);
+        let count_val = &results[0].1["count"];
+        assert_eq!(count_val.as_str(), Some("1"), "counter should be 1: {count_val:?}");
+
+        // VFS counter file should be "1" (not "2" or higher — no re-entrancy)
+        let counter_path = VfsPath::new("/shared/counter.txt").unwrap();
+        let content = app.vfs.read(VfsCaller::System, &counter_path).await.unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&content),
+            "1",
+            "counter should be 1 — no recursive hook dispatch from io-write"
+        );
+    }
 }
