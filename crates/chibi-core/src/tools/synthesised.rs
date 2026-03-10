@@ -279,7 +279,9 @@ impl CallContextGuard {
                 registry: Arc::clone(&ctx.registry),
             },
         );
-        CallContextGuard { thread_id: worker_thread_id }
+        CallContextGuard {
+            thread_id: worker_thread_id,
+        }
     }
 }
 
@@ -516,10 +518,8 @@ fn io_list_fn(path: String) -> Result<Value, String> {
         let vfs = unsafe { &*vfs_ptr };
         match handle.block_on(vfs.list(VfsCaller::System, &vp)) {
             Ok(entries) => {
-                let names: Vec<Value> = entries
-                    .into_iter()
-                    .map(|e| Value::String(e.name))
-                    .collect();
+                let names: Vec<Value> =
+                    entries.into_iter().map(|e| Value::String(e.name)).collect();
                 Ok(Value::List(names))
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Value::List(vec![])),
@@ -558,9 +558,7 @@ fn io_exists_fn(path: String) -> Result<Value, String> {
             .map_err(|e| e.to_string())?;
         Ok(Value::Boolean(exists))
     } else {
-        let exists = handle
-            .block_on(tokio::fs::metadata(&path))
-            .is_ok();
+        let exists = handle.block_on(tokio::fs::metadata(&path)).is_ok();
         Ok(Value::Boolean(exists))
     }
 }

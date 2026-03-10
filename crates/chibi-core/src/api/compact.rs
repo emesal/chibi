@@ -108,7 +108,12 @@ pub async fn rolling_compact(
         "non_system_count": non_system_messages.len(),
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PreRollingCompact, &hook_data, None);
+    let _ = tools::execute_hook(
+        &tools,
+        tools::HookPoint::PreRollingCompact,
+        &hook_data,
+        None,
+    );
 
     // Load tasks and flock goals to guide compaction decisions.
     let task_metas = crate::state::tasks::collect_tasks(&app.vfs, context_name).await;
@@ -345,7 +350,12 @@ pub async fn rolling_compact(
         "messages_archived": archived_count,
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PostRollingCompact, &hook_data, None);
+    let _ = tools::execute_hook(
+        &tools,
+        tools::HookPoint::PostRollingCompact,
+        &hook_data,
+        None,
+    );
 
     Ok(())
 }
