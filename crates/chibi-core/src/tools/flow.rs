@@ -363,7 +363,7 @@ pub async fn spawn_agent(
         "temperature": effective_config.api.temperature,
         "max_tokens": effective_config.api.max_tokens,
     });
-    let hook_results = execute_hook(tools, HookPoint::PreSpawnAgent, &hook_data)?;
+    let hook_results = execute_hook(tools, HookPoint::PreSpawnAgent, &hook_data, None)?;
 
     for (_hook_name, result) in &hook_results {
         if let Some(response) = result.get_str("response") {
@@ -390,7 +390,7 @@ pub async fn spawn_agent(
         "model": effective_config.model,
         "response": response,
     });
-    let _ = execute_hook(tools, HookPoint::PostSpawnAgent, &post_hook_data);
+    let _ = execute_hook(tools, HookPoint::PostSpawnAgent, &post_hook_data, None);
 
     Ok(response)
 }

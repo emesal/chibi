@@ -108,7 +108,7 @@ fn check_permission(
     hook_data: &serde_json::Value,
     permission_handler: Option<&PermissionHandler>,
 ) -> io::Result<Result<(), String>> {
-    let hook_results = tools::execute_hook(tools, hook, hook_data)?;
+    let hook_results = tools::execute_hook(tools, hook, hook_data, None)?;
     evaluate_permission(&hook_results, hook_data, permission_handler)
 }
 
@@ -431,7 +431,7 @@ fn build_full_system_prompt<S: ResponseSink>(
             .collect::<Vec<_>>(),
     });
     let pre_sys_hook_results =
-        tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data)?;
+        tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data, None)?;
 
     // Build full system prompt with all components, anchoring identity first
     let mut full_system_prompt = format!(
@@ -513,6 +513,7 @@ fn build_full_system_prompt<S: ResponseSink>(
         tools,
         tools::HookPoint::PostSystemPrompt,
         &post_sys_hook_data,
+        None,
     )?;
 
     // Append any content from post_system_prompt hooks
@@ -942,7 +943,7 @@ async fn execute_tool_pure(
         "arguments": args,
     });
     let pre_hook_results =
-        tools::execute_hook(plugin_tools, tools::HookPoint::PreTool, &pre_hook_data)?;
+        tools::execute_hook(plugin_tools, tools::HookPoint::PreTool, &pre_hook_data, None)?;
 
     let pre_tool = apply_pre_tool_results(pre_hook_results, &tool_call.name, args);
     let blocked = pre_tool.blocked;
@@ -1202,6 +1203,7 @@ async fn execute_tool_pure(
         plugin_tools,
         tools::HookPoint::PreToolOutput,
         &pre_output_hook_data,
+        None,
     )?;
 
     let (tool_result, output_diagnostics) =
@@ -1222,6 +1224,7 @@ async fn execute_tool_pure(
             plugin_tools,
             tools::HookPoint::PreCacheOutput,
             &pre_cache_data,
+            None,
         )?;
         let cache_blocked = pre_cache_results
             .iter()
@@ -1276,6 +1279,7 @@ async fn execute_tool_pure(
                         plugin_tools,
                         tools::HookPoint::PostCacheOutput,
                         &post_cache_data,
+                        None,
                     );
 
                     (truncated, true)
@@ -1302,6 +1306,7 @@ async fn execute_tool_pure(
         plugin_tools,
         tools::HookPoint::PostToolOutput,
         &post_output_hook_data,
+        None,
     );
 
     Ok(ToolExecutionResult {
@@ -1397,7 +1402,7 @@ fn execute_send_message_pure(
         "context_name": context_name,
     });
     let pre_hook_results =
-        tools::execute_hook(tools, tools::HookPoint::PreSendMessage, &pre_hook_data)?;
+        tools::execute_hook(tools, tools::HookPoint::PreSendMessage, &pre_hook_data, None)?;
 
     // Check if any hook claimed delivery
     let mut delivered_via: Option<String> = None;
@@ -1437,7 +1442,7 @@ fn execute_send_message_pure(
         "context_name": context_name,
         "delivery_result": delivery_result,
     });
-    let _ = tools::execute_hook(tools, tools::HookPoint::PostSendMessage, &post_hook_data);
+    let _ = tools::execute_hook(tools, tools::HookPoint::PostSendMessage, &post_hook_data, None);
 
     Ok(delivery_result)
 }
@@ -1683,7 +1688,7 @@ async fn process_tool_calls<S: ResponseSink>(
             "result": result.original_result,
             "cached": result.was_cached,
         });
-        let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostTool, &post_hook_data);
+        let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostTool, &post_hook_data, None);
 
         // Apply handoff for parallel-executed flow control tools
         // (sequential ones already applied via execute_single_tool)
@@ -1759,7 +1764,7 @@ async fn process_tool_calls<S: ResponseSink>(
         hook_data["fuel_total"] = json!(fuel_total);
     }
     let hook_results =
-        tools::execute_hook(plugin_tools, tools::HookPoint::PostToolBatch, &hook_data)?;
+        tools::execute_hook(plugin_tools, tools::HookPoint::PostToolBatch, &hook_data, None)?;
     apply_hook_overrides(handoff, fuel_remaining, fuel_unlimited, &hook_results, sink)?;
 
     Ok(())
@@ -1809,7 +1814,7 @@ fn handle_final_response<S: ResponseSink>(
         "response": full_response,
         "context_name": context_name,
     });
-    let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostMessage, &hook_data);
+    let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostMessage, &hook_data, None);
 
     if app.should_warn(&context.messages) {
         let remaining = app.remaining_tokens(&context.messages);
@@ -1912,7 +1917,7 @@ pub async fn send_prompt<S: ResponseSink>(
             "summary": context.summary,
         });
         let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreMessage, &hook_data)?;
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreMessage, &hook_data, None)?;
         for (tool_name, result) in hook_results {
             if let Some(modified) = result.get_str("prompt") {
                 sink.handle(ResponseEvent::HookDebug {
@@ -2075,7 +2080,7 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_total"] = json!(fuel_total);
         }
         let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiTools, &hook_data)?;
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiTools, &hook_data, None)?;
         all_tools = filter_tools_from_hook_results(all_tools, &hook_results, sink)?;
 
         // === Build Request ===
@@ -2107,7 +2112,7 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_total"] = json!(fuel_total);
         }
         let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiRequest, &hook_data)?;
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiRequest, &hook_data, None)?;
         request_body = apply_request_modifications(request_body, &hook_results, sink)?;
 
         // Deserialise ChatOptions from the (potentially hook-modified) request body
@@ -2142,7 +2147,7 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_total"] = json!(fuel_total);
         }
         let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreAgenticLoop, &hook_data)?;
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreAgenticLoop, &hook_data, None)?;
         apply_hook_overrides(
             &mut handoff,
             &mut fuel_remaining,

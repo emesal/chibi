@@ -12,6 +12,8 @@ use strum::{AsRefStr, EnumString};
 use std::cell::RefCell;
 #[cfg(feature = "synthesised-tools")]
 use std::collections::HashSet;
+#[cfg(feature = "synthesised-tools")]
+use std::sync::{Arc, RwLock};
 
 // Tracks which hook points are currently being dispatched to tein callbacks.
 // Prevents re-entrancy: if a tein hook callback triggers an action that fires
@@ -59,14 +61,47 @@ pub enum HookPoint {
     PostIndexFile, // After a file is indexed (observe: path, lang, symbol_count, ref_count)
 }
 
+/// Context needed to set up `BRIDGE_CALL_CTX` during tein hook dispatch,
+/// enabling tein hook callbacks to use `call-tool` and `(harness io)`.
+///
+/// Pass `Some(...)` from async contexts that have the full app state.
+/// Pass `None` from contexts without a tokio runtime (sync lifecycle hooks)
+/// or tests — tein callbacks still dispatch but cannot use IO or `call-tool`.
+///
+/// When the `synthesised-tools` feature is disabled this is an empty struct;
+/// the 4th `execute_hook` parameter is always present so call sites compile
+/// uniformly with `, None` regardless of feature state.
+pub struct TeinHookContext<'a> {
+    #[cfg(feature = "synthesised-tools")]
+    pub app: &'a crate::state::AppState,
+    #[cfg(feature = "synthesised-tools")]
+    pub context_name: &'a str,
+    #[cfg(feature = "synthesised-tools")]
+    pub config: &'a crate::config::ResolvedConfig,
+    #[cfg(feature = "synthesised-tools")]
+    pub project_root: &'a std::path::Path,
+    #[cfg(feature = "synthesised-tools")]
+    pub vfs: &'a crate::vfs::Vfs,
+    #[cfg(feature = "synthesised-tools")]
+    pub registry: Arc<RwLock<super::registry::ToolRegistry>>,
+    /// Zero-sized phantom to keep the lifetime parameter valid when feature is off.
+    #[cfg(not(feature = "synthesised-tools"))]
+    _phantom: std::marker::PhantomData<&'a ()>,
+}
+
 /// Execute a hook on all tools that registered for it
 /// Returns a vector of (tool_name, result) for tools that returned non-empty output
 ///
 /// Hook data is passed via stdin (JSON). The CHIBI_HOOK env var identifies which hook is firing.
+///
+/// `tein_ctx` (synthesised-tools feature only): when `Some`, sets `BRIDGE_CALL_CTX` per tein tool
+/// during dispatch, enabling `call-tool` and `(harness io)` from tein hook callbacks.
+/// Pass `None` from sync contexts or tests that lack a tokio runtime.
 pub fn execute_hook(
     tools: &[Tool],
     hook: HookPoint,
     data: &serde_json::Value,
+    _tein_ctx: Option<&TeinHookContext<'_>>,
 ) -> io::Result<Vec<(String, serde_json::Value)>> {
     let mut results = Vec::new();
     let data_str = data.to_string();
@@ -303,7 +338,7 @@ mod tests {
         data: &serde_json::Value,
     ) -> io::Result<Vec<(String, serde_json::Value)>> {
         for attempt in 0..5 {
-            match execute_hook(tools, hook, data) {
+            match execute_hook(tools, hook, data, None) {
                 Ok(result) => return Ok(result),
                 Err(e) if e.to_string().contains("Text file busy") && attempt < 4 => {
                     std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1) as u64));
@@ -584,7 +619,7 @@ echo 'OK'
         .unwrap();
 
         let data = serde_json::json!({"event": "start"});
-        let results = execute_hook(&tools, HookPoint::OnStart, &data).unwrap();
+        let results = execute_hook(&tools, HookPoint::OnStart, &data, None).unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "tein-hook-test");
@@ -660,7 +695,7 @@ echo 'OK'
         )
         .unwrap();
 
-        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
         assert_eq!(
             results.len(),
             0,
@@ -700,6 +735,7 @@ echo 'OK'
             &tools,
             HookPoint::PreMessage,
             &serde_json::json!({"prompt": "hello"}),
+            None,
         )
         .unwrap();
 
@@ -734,7 +770,7 @@ echo 'OK'
         .unwrap();
 
         // fire on_end — tool is registered for on_start only
-        let results = execute_hook(&tools, HookPoint::OnEnd, &serde_json::json!({})).unwrap();
+        let results = execute_hook(&tools, HookPoint::OnEnd, &serde_json::json!({}), None).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -765,7 +801,7 @@ echo 'OK'
         .unwrap();
 
         // should not error — failed hooks are skipped silently
-        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -861,7 +897,7 @@ echo 'OK'
             guard.borrow_mut().insert(HookPoint::OnStart);
         });
 
-        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+        let results = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
 
         // Clean up guard state so other tests in this thread aren't affected
         TEIN_HOOK_GUARD.with(|guard| {
@@ -904,11 +940,11 @@ echo 'OK'
         .unwrap();
 
         // First call — fires normally
-        let r1 = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+        let r1 = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
         assert_eq!(r1.len(), 1, "first call should fire normally");
 
         // Second call on the same thread — guard must be cleared; fires again
-        let r2 = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+        let r2 = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
         assert_eq!(r2.len(), 1, "guard must be cleared; second call must fire");
     }
 }
