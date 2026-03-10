@@ -107,8 +107,9 @@ fn check_permission(
     hook: tools::HookPoint,
     hook_data: &serde_json::Value,
     permission_handler: Option<&PermissionHandler>,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<Result<(), String>> {
-    let hook_results = tools::execute_hook(tools, hook, hook_data, None)?;
+    let hook_results = tools::execute_hook(tools, hook, hook_data, tein_ctx)?;
     evaluate_permission(&hook_results, hook_data, permission_handler)
 }
 
@@ -407,6 +408,7 @@ fn build_full_system_prompt<S: ResponseSink>(
     sink: &mut S,
     home_dir: &Path,
     project_root: &Path,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<String> {
     // Load base prompts
     let system_prompt = app.load_system_prompt_for(context_name)?;
@@ -431,7 +433,7 @@ fn build_full_system_prompt<S: ResponseSink>(
             .collect::<Vec<_>>(),
     });
     let pre_sys_hook_results =
-        tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data, None)?;
+        tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data, tein_ctx)?;
 
     // Build full system prompt with all components, anchoring identity first
     let mut full_system_prompt = format!(
@@ -513,7 +515,7 @@ fn build_full_system_prompt<S: ResponseSink>(
         tools,
         tools::HookPoint::PostSystemPrompt,
         &post_sys_hook_data,
-        None,
+        tein_ctx,
     )?;
 
     // Append any content from post_system_prompt hooks
@@ -921,6 +923,7 @@ async fn execute_tool_pure(
     resolved_config: &ResolvedConfig,
     permission_handler: Option<&PermissionHandler>,
     project_root: &Path,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<ToolExecutionResult> {
     let mut args: serde_json::Value =
         serde_json::from_str(&tool_call.arguments).unwrap_or(serde_json::json!({}));
@@ -943,7 +946,7 @@ async fn execute_tool_pure(
         "arguments": args,
     });
     let pre_hook_results =
-        tools::execute_hook(plugin_tools, tools::HookPoint::PreTool, &pre_hook_data, None)?;
+        tools::execute_hook(plugin_tools, tools::HookPoint::PreTool, &pre_hook_data, tein_ctx)?;
 
     let pre_tool = apply_pre_tool_results(pre_hook_results, &tool_call.name, args);
     let blocked = pre_tool.blocked;
@@ -977,7 +980,7 @@ async fn execute_tool_pure(
     } else if tool_call.name == tools::SEND_MESSAGE_TOOL_NAME {
         // send_message is intercepted here before registry dispatch — it uses
         // plugin hooks and async inbox delivery not expressible as a plain handler.
-        execute_send_message_pure(app, context_name, plugin_tools, &args, &mut diagnostics)?
+        execute_send_message_pure(app, context_name, plugin_tools, &args, &mut diagnostics, tein_ctx)?
     } else if tool_call.name == tools::MODEL_INFO_TOOL_NAME {
         // model_info requires an async gateway call not available at registration time.
         match args.get_str("model") {
@@ -1023,6 +1026,7 @@ async fn execute_tool_pure(
                                     tools::HookPoint::PreFileRead,
                                     &hook_data,
                                     permission_handler,
+                                    tein_ctx,
                                 )?
                                 .err()
                                 .map(|r| format!("Permission denied: {r}"))
@@ -1059,6 +1063,7 @@ async fn execute_tool_pure(
                         tools::HookPoint::PreFileWrite,
                         &hook_data,
                         permission_handler,
+                        tein_ctx,
                     )?
                     .err()
                     .map(|r| format!("Permission denied: {r}"))
@@ -1074,6 +1079,7 @@ async fn execute_tool_pure(
                     tools::HookPoint::PreShellExec,
                     &hook_data,
                     permission_handler,
+                    tein_ctx,
                 )?
                 .err()
             }
@@ -1102,6 +1108,7 @@ async fn execute_tool_pure(
                         tools::HookPoint::PreFetchUrl,
                         &hook_data,
                         permission_handler,
+                        tein_ctx,
                     )?
                     .err()
                     .map(|r| format!("Permission denied: {}", r))
@@ -1144,6 +1151,7 @@ async fn execute_tool_pure(
                             tools::HookPoint::PreFetchUrl,
                             &hook_data,
                             permission_handler,
+                            tein_ctx,
                         )? {
                             Ok(()) => {}
                             Err(reason) => {
@@ -1203,7 +1211,7 @@ async fn execute_tool_pure(
         plugin_tools,
         tools::HookPoint::PreToolOutput,
         &pre_output_hook_data,
-        None,
+        tein_ctx,
     )?;
 
     let (tool_result, output_diagnostics) =
@@ -1224,7 +1232,7 @@ async fn execute_tool_pure(
             plugin_tools,
             tools::HookPoint::PreCacheOutput,
             &pre_cache_data,
-            None,
+            tein_ctx,
         )?;
         let cache_blocked = pre_cache_results
             .iter()
@@ -1279,7 +1287,7 @@ async fn execute_tool_pure(
                         plugin_tools,
                         tools::HookPoint::PostCacheOutput,
                         &post_cache_data,
-                        None,
+                        tein_ctx,
                     );
 
                     (truncated, true)
@@ -1306,7 +1314,7 @@ async fn execute_tool_pure(
         plugin_tools,
         tools::HookPoint::PostToolOutput,
         &post_output_hook_data,
-        None,
+        tein_ctx,
     );
 
     Ok(ToolExecutionResult {
@@ -1334,6 +1342,7 @@ async fn execute_single_tool<S: ResponseSink>(
     permission_handler: Option<&PermissionHandler>,
     sink: &mut S,
     project_root: &Path,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<ToolExecutionResult> {
     // Apply handoff if this is a flow control tool
     let args: serde_json::Value =
@@ -1360,6 +1369,7 @@ async fn execute_single_tool<S: ResponseSink>(
         resolved_config,
         permission_handler,
         project_root,
+        tein_ctx,
     )
     .await?;
 
@@ -1382,6 +1392,7 @@ fn execute_send_message_pure(
     tools: &[Tool],
     args: &serde_json::Value,
     diagnostics: &mut Vec<String>,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<String> {
     let to = args.get_str_or("to", "");
     let content = args.get_str_or("content", "");
@@ -1402,7 +1413,7 @@ fn execute_send_message_pure(
         "context_name": context_name,
     });
     let pre_hook_results =
-        tools::execute_hook(tools, tools::HookPoint::PreSendMessage, &pre_hook_data, None)?;
+        tools::execute_hook(tools, tools::HookPoint::PreSendMessage, &pre_hook_data, tein_ctx)?;
 
     // Check if any hook claimed delivery
     let mut delivered_via: Option<String> = None;
@@ -1442,7 +1453,7 @@ fn execute_send_message_pure(
         "context_name": context_name,
         "delivery_result": delivery_result,
     });
-    let _ = tools::execute_hook(tools, tools::HookPoint::PostSendMessage, &post_hook_data, None);
+    let _ = tools::execute_hook(tools, tools::HookPoint::PostSendMessage, &post_hook_data, tein_ctx);
 
     Ok(delivery_result)
 }
@@ -1472,6 +1483,7 @@ async fn process_tool_calls<S: ResponseSink>(
     permission_handler: Option<&PermissionHandler>,
     project_root: &Path,
     loop_detector: &mut LoopDetector,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<()> {
     // Convert tool calls to JSON format for the assistant message
     let tool_calls_json: Vec<serde_json::Value> = tool_calls
@@ -1528,6 +1540,7 @@ async fn process_tool_calls<S: ResponseSink>(
                     resolved_config,
                     permission_handler,
                     project_root,
+                    tein_ctx,
                 )
             })
             .collect();
@@ -1556,6 +1569,7 @@ async fn process_tool_calls<S: ResponseSink>(
             permission_handler,
             sink,
             project_root,
+            tein_ctx,
         )
         .await?;
         results[*idx] = Some(result);
@@ -1688,7 +1702,7 @@ async fn process_tool_calls<S: ResponseSink>(
             "result": result.original_result,
             "cached": result.was_cached,
         });
-        let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostTool, &post_hook_data, None);
+        let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostTool, &post_hook_data, tein_ctx);
 
         // Apply handoff for parallel-executed flow control tools
         // (sequential ones already applied via execute_single_tool)
@@ -1764,7 +1778,7 @@ async fn process_tool_calls<S: ResponseSink>(
         hook_data["fuel_total"] = json!(fuel_total);
     }
     let hook_results =
-        tools::execute_hook(plugin_tools, tools::HookPoint::PostToolBatch, &hook_data, None)?;
+        tools::execute_hook(plugin_tools, tools::HookPoint::PostToolBatch, &hook_data, tein_ctx)?;
     apply_hook_overrides(handoff, fuel_remaining, fuel_unlimited, &hook_results, sink)?;
 
     Ok(())
@@ -1792,6 +1806,7 @@ fn handle_final_response<S: ResponseSink>(
     plugin_tools: &[Tool],
     resolved_config: &ResolvedConfig,
     sink: &mut S,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<FinalResponseAction> {
     // Get or create context to add the message
     let mut context = app.get_or_create_context(context_name)?;
@@ -1814,7 +1829,7 @@ fn handle_final_response<S: ResponseSink>(
         "response": full_response,
         "context_name": context_name,
     });
-    let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostMessage, &hook_data, None);
+    let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostMessage, &hook_data, tein_ctx);
 
     if app.should_warn(&context.messages) {
         let remaining = app.remaining_tokens(&context.messages);
@@ -1870,6 +1885,23 @@ pub async fn send_prompt<S: ResponseSink>(
     tools::ensure_project_root_allowed(&mut resolved_config, project_root);
     let resolved_config = resolved_config; // re-bind as immutable
 
+    // Context for tein hook dispatch — enables call-tool and (harness io) from
+    // tein hook callbacks in the send path.
+    // When synthesised-tools feature is off, tein_hook_ctx_ref is always None.
+    #[cfg(feature = "synthesised-tools")]
+    let tein_hook_ctx = tools::TeinHookContext {
+        app,
+        context_name,
+        config: &resolved_config,
+        project_root,
+        vfs: &app.vfs,
+        registry: Arc::clone(&registry),
+    };
+    #[cfg(feature = "synthesised-tools")]
+    let tein_hook_ctx_ref: Option<&tools::TeinHookContext<'_>> = Some(&tein_hook_ctx);
+    #[cfg(not(feature = "synthesised-tools"))]
+    let tein_hook_ctx_ref: Option<&tools::TeinHookContext<'_>> = None;
+
     let fuel_total = resolved_config.fuel;
     let mut fuel_remaining = fuel_total;
     let fuel_unlimited = fuel_total == 0;
@@ -1917,7 +1949,7 @@ pub async fn send_prompt<S: ResponseSink>(
             "summary": context.summary,
         });
         let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreMessage, &hook_data, None)?;
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreMessage, &hook_data, tein_hook_ctx_ref)?;
         for (tool_name, result) in hook_results {
             if let Some(modified) = result.get_str("prompt") {
                 sink.handle(ResponseEvent::HookDebug {
@@ -1982,6 +2014,7 @@ pub async fn send_prompt<S: ResponseSink>(
             sink,
             home_dir,
             project_root,
+            tein_hook_ctx_ref,
         )?;
 
         // === Prepare Messages ===
@@ -2080,7 +2113,7 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_total"] = json!(fuel_total);
         }
         let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiTools, &hook_data, None)?;
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiTools, &hook_data, tein_hook_ctx_ref)?;
         all_tools = filter_tools_from_hook_results(all_tools, &hook_results, sink)?;
 
         // === Build Request ===
@@ -2112,7 +2145,7 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_total"] = json!(fuel_total);
         }
         let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiRequest, &hook_data, None)?;
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiRequest, &hook_data, tein_hook_ctx_ref)?;
         request_body = apply_request_modifications(request_body, &hook_results, sink)?;
 
         // Deserialise ChatOptions from the (potentially hook-modified) request body
@@ -2147,7 +2180,7 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_total"] = json!(fuel_total);
         }
         let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreAgenticLoop, &hook_data, None)?;
+            tools::execute_hook(&plugin_tools, tools::HookPoint::PreAgenticLoop, &hook_data, tein_hook_ctx_ref)?;
         apply_hook_overrides(
             &mut handoff,
             &mut fuel_remaining,
@@ -2201,6 +2234,7 @@ pub async fn send_prompt<S: ResponseSink>(
                     permission_handler,
                     project_root,
                     &mut loop_detector,
+                    tein_hook_ctx_ref,
                 )
                 .await?;
 
@@ -2257,6 +2291,7 @@ pub async fn send_prompt<S: ResponseSink>(
                 &plugin_tools,
                 &resolved_config,
                 sink,
+                tein_hook_ctx_ref,
             )? {
                 FinalResponseAction::ReturnToUser => return Ok(()),
                 FinalResponseAction::ContinueWithPrompt(continue_prompt) => {
@@ -2655,6 +2690,7 @@ mod tests {
             &resolved_config,
             None,
             &project_root,
+            None,
         )
         .await
         .unwrap();
@@ -2698,6 +2734,7 @@ mod tests {
             &resolved_config,
             None,
             &project_root,
+            None,
         )
         .await
         .unwrap();
