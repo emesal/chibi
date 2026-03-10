@@ -334,6 +334,47 @@ The `(harness tools)` module exposes:
 
 `call-tool` bridges synchronously into chibi's async tool dispatch. It is available in both sandboxed and unsandboxed tiers.
 
+### `(harness io)` Module — Privileged IO (Unsandboxed Only)
+
+Available at `Unsandboxed` tier only. Provides direct VFS and local filesystem IO that bypasses the tool dispatch and hook layers. Intended for builtin plugins that need IO during hook callbacks where `call-tool` would cause re-entrancy.
+
+```scheme
+(import (harness io))
+
+(io-read path)           ; → string or #f (not found)
+(io-write path data)     ; → #t, raises on error
+(io-append path data)    ; → #t, raises on error
+(io-list path)           ; → list of entry name strings, '() for nonexistent
+(io-exists? path)        ; → boolean
+```
+
+**Path dispatch:**
+
+| Prefix | Destination | Caller |
+|--------|-------------|--------|
+| `"vfs://..."` | VFS backend | `VfsCaller::System` (bypasses zone permissions) |
+| Bare absolute path | Local filesystem via `tokio::fs` | — |
+
+**Example:**
+
+```scheme
+(import (scheme base))
+(import (harness io))
+
+; Write and read a VFS file
+(io-write "vfs:///shared/notes.txt" "my note")
+(io-read  "vfs:///shared/notes.txt")  ; => "my note"
+
+; Check existence
+(io-exists? "vfs:///shared/notes.txt")  ; => #t
+(io-exists? "vfs:///shared/missing")    ; => #f
+
+; List a directory
+(io-list "vfs:///shared")  ; => ("notes.txt")
+```
+
+Normal tein tools should use `call-tool` for IO when possible — it goes through the regular tool dispatch and honours hooks. Use `(harness io)` when the tool runs *inside* a hook callback and direct VFS access is needed without triggering further hooks.
+
 ### Harness Helpers
 
 The harness also injects these foreign functions into every synthesised tool context:

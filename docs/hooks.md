@@ -151,6 +151,13 @@ Tein hooks follow the same contract as subprocess plugin hooks:
 tein callbacks are skipped on the recursive call to prevent infinite loops. Subprocess
 hooks still fire normally.
 
+**IO in hook callbacks:** Tein hook callbacks can use `(harness io)` (unsandboxed tier only)
+for direct VFS and filesystem IO without triggering hooks. This is the recommended way for
+builtin plugins to perform IO during hook execution.
+
+Using `call-tool` from hooks is also possible (when the hook is dispatched from a full async
+context) but may trigger hooks on the called tool — use with care to avoid re-entrancy.
+
 **Lifecycle:** Hook registrations are tied to the `.scm` file. When a file is hot-reloaded
 or deleted, its hooks are automatically cleared and re-evaluated from the fresh source.
 
