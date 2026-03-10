@@ -96,6 +96,22 @@ const HARNESS_TOOLS_MODULE: &str = r#"
     #t))
 "#;
 
+/// Scheme source for the `(harness io)` module (privileged IO, unsandboxed only).
+///
+/// The five `io-*` foreign functions are registered before this module so that
+/// `(import (harness io))` re-exports them cleanly. Only available when
+/// `build_tein_context` is called with `SandboxTier::Unsandboxed`.
+///
+/// Mutation site: if the exported function set changes, update `build_tein_context`
+/// registration block and `docs/plugins.md`.
+#[cfg(feature = "synthesised-tools")]
+const HARNESS_IO_MODULE: &str = r#"
+(define-library (harness io)
+  (import (scheme base))
+  (export io-read io-write io-append io-list io-exists?)
+  (begin #t))
+"#;
+
 /// Scheme source for the `(harness hooks)` module.
 ///
 /// `register-hook` is defined at top level in `HARNESS_PREAMBLE` so it can
@@ -385,6 +401,170 @@ fn current_timestamp_fn() -> String {
     format!("{:04}{:02}{:02}-{:02}{:02}z", y, mo, d, h, mi)
 }
 
+// --- harness io foreign function bridge --------------------------------------
+
+/// Helper: extract VFS handle and runtime handle from `BRIDGE_CALL_CTX` for the
+/// current thread. Returns `(runtime_handle, vfs_ptr)` after dropping the lock.
+///
+/// Called from IO FFI functions running on the tein worker thread.
+#[cfg(feature = "synthesised-tools")]
+fn io_bridge_ctx() -> Result<(tokio::runtime::Handle, *const Vfs), String> {
+    let tid = std::thread::current().id();
+    let guard = BRIDGE_CALL_CTX.lock().unwrap();
+    let active = guard.get(&tid).ok_or_else(|| {
+        "harness io: no active call context (called outside tool execute or hook dispatch?)"
+            .to_string()
+    })?;
+    let handle = active.runtime_handle.clone();
+    let vfs = active.vfs;
+    drop(guard);
+    Ok((handle, vfs))
+}
+
+/// `(io-read path)` — read a file. Returns string content or `#f` if not found.
+///
+/// Path dispatch: `"vfs://..."` → VFS with `VfsCaller::System`;
+/// bare absolute path → `tokio::fs::read_to_string`.
+#[cfg(feature = "synthesised-tools")]
+#[tein::tein_fn(name = "io-read")]
+fn io_read_fn(path: String) -> Result<Value, String> {
+    let (handle, vfs_ptr) = io_bridge_ctx()?;
+    if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
+        let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        let vfs = unsafe { &*vfs_ptr };
+        match handle.block_on(vfs.read(VfsCaller::System, &vp)) {
+            Ok(bytes) => Ok(Value::String(String::from_utf8_lossy(&bytes).into_owned())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Value::Boolean(false)),
+            Err(e) => Err(e.to_string()),
+        }
+    } else {
+        match handle.block_on(tokio::fs::read_to_string(&path)) {
+            Ok(s) => Ok(Value::String(s)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Value::Boolean(false)),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+/// `(io-write path data)` — write a file. Returns `#t` on success, raises on error.
+///
+/// VFS writes via `VfsCaller::System`. Filesystem writes create parent dirs.
+#[cfg(feature = "synthesised-tools")]
+#[tein::tein_fn(name = "io-write")]
+fn io_write_fn(path: String, data: String) -> Result<Value, String> {
+    let (handle, vfs_ptr) = io_bridge_ctx()?;
+    if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
+        let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        let vfs = unsafe { &*vfs_ptr };
+        handle
+            .block_on(vfs.write(VfsCaller::System, &vp, data.as_bytes()))
+            .map_err(|e| e.to_string())?;
+        Ok(Value::Boolean(true))
+    } else {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            handle
+                .block_on(tokio::fs::create_dir_all(parent))
+                .map_err(|e| e.to_string())?;
+        }
+        handle
+            .block_on(tokio::fs::write(&path, data.as_bytes()))
+            .map_err(|e| e.to_string())?;
+        Ok(Value::Boolean(true))
+    }
+}
+
+/// `(io-append path data)` — append to a file. Returns `#t` on success, raises on error.
+///
+/// VFS append via `VfsCaller::System`. Filesystem appends create file if missing.
+#[cfg(feature = "synthesised-tools")]
+#[tein::tein_fn(name = "io-append")]
+fn io_append_fn(path: String, data: String) -> Result<Value, String> {
+    let (handle, vfs_ptr) = io_bridge_ctx()?;
+    if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
+        let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        let vfs = unsafe { &*vfs_ptr };
+        handle
+            .block_on(vfs.append(VfsCaller::System, &vp, data.as_bytes()))
+            .map_err(|e| e.to_string())?;
+        Ok(Value::Boolean(true))
+    } else {
+        use tokio::io::AsyncWriteExt;
+        handle
+            .block_on(async {
+                let mut file = tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .await?;
+                file.write_all(data.as_bytes()).await
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Value::Boolean(true))
+    }
+}
+
+/// `(io-list path)` — list directory entries. Returns list of name strings,
+/// empty list if not found.
+///
+/// VFS list via `VfsCaller::System`. Filesystem list via `tokio::fs::read_dir`.
+#[cfg(feature = "synthesised-tools")]
+#[tein::tein_fn(name = "io-list")]
+fn io_list_fn(path: String) -> Result<Value, String> {
+    let (handle, vfs_ptr) = io_bridge_ctx()?;
+    if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
+        let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        let vfs = unsafe { &*vfs_ptr };
+        match handle.block_on(vfs.list(VfsCaller::System, &vp)) {
+            Ok(entries) => {
+                let names: Vec<Value> = entries
+                    .into_iter()
+                    .map(|e| Value::String(e.name))
+                    .collect();
+                Ok(Value::List(names))
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Value::List(vec![])),
+            Err(e) => Err(e.to_string()),
+        }
+    } else {
+        match handle.block_on(async {
+            let mut entries = Vec::new();
+            let mut dir = tokio::fs::read_dir(&path).await?;
+            while let Some(entry) = dir.next_entry().await? {
+                if let Some(name) = entry.file_name().to_str() {
+                    entries.push(Value::String(name.to_string()));
+                }
+            }
+            Ok::<_, io::Error>(entries)
+        }) {
+            Ok(entries) => Ok(Value::List(entries)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Value::List(vec![])),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+/// `(io-exists? path)` — check if a path exists. Returns `#t` or `#f`.
+///
+/// VFS check via `VfsCaller::System`. Filesystem check via `tokio::fs::metadata`.
+#[cfg(feature = "synthesised-tools")]
+#[tein::tein_fn(name = "io-exists?")]
+fn io_exists_fn(path: String) -> Result<Value, String> {
+    let (handle, vfs_ptr) = io_bridge_ctx()?;
+    if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
+        let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        let vfs = unsafe { &*vfs_ptr };
+        let exists = handle
+            .block_on(vfs.exists(VfsCaller::System, &vp))
+            .map_err(|e| e.to_string())?;
+        Ok(Value::Boolean(exists))
+    } else {
+        let exists = handle
+            .block_on(tokio::fs::metadata(&path))
+            .is_ok();
+        Ok(Value::Boolean(exists))
+    }
+}
+
 // --- loader ------------------------------------------------------------------
 
 /// Decompose Unix epoch seconds into (year, month, day, hour, minute) UTC.
@@ -439,6 +619,17 @@ fn build_tein_context(
             .map_err(|e| tein::Error::EvalError(format!("harness module: {e}")))?;
         ctx.register_module(HARNESS_HOOKS_MODULE)
             .map_err(|e| tein::Error::EvalError(format!("harness hooks module: {e}")))?;
+        // (harness io) — privileged direct IO, available at Unsandboxed tier only.
+        // Sandboxed contexts will get a module-not-found error on (import (harness io)).
+        if tier == crate::config::SandboxTier::Unsandboxed {
+            ctx.define_fn_variadic("io-read", __tein_io_read_fn)?;
+            ctx.define_fn_variadic("io-write", __tein_io_write_fn)?;
+            ctx.define_fn_variadic("io-append", __tein_io_append_fn)?;
+            ctx.define_fn_variadic("io-list", __tein_io_list_fn)?;
+            ctx.define_fn_variadic("io-exists?", __tein_io_exists_fn)?;
+            ctx.register_module(HARNESS_IO_MODULE)
+                .map_err(|e| tein::Error::EvalError(format!("harness io module: {e}")))?;
+        }
         ctx.evaluate(&source)?;
         Ok(())
     };
@@ -2178,6 +2369,315 @@ mod tests {
             tools[0]
                 .hooks
                 .contains(&crate::tools::hooks::HookPoint::OnStart)
+        );
+    }
+
+    // --- harness io tests ---
+
+    /// Build an unsandboxed tein tool with `(harness io)` and execute it via
+    /// `chibi.execute_tool`, which sets `BRIDGE_CALL_CTX` on the tein worker thread.
+    async fn run_io_tool(
+        chibi: &crate::Chibi,
+        registry: &Arc<RwLock<ToolRegistry>>,
+        source: &str,
+    ) -> String {
+        let path = VfsPath::new("/tools/shared/io_test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+        {
+            let mut reg = registry.write().unwrap();
+            for t in tools {
+                reg.register(t);
+            }
+        }
+        chibi
+            .execute_tool("default", "io_test", serde_json::json!({}))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_harness_io_vfs_read_write_roundtrip() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+
+        // write a known file into the VFS
+        let path = VfsPath::new("/shared/io-roundtrip.txt").unwrap();
+        chibi
+            .app
+            .vfs
+            .write(VfsCaller::System, &path, b"hello from io")
+            .await
+            .unwrap();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "read vfs file")
+(define tool-parameters '())
+(define (tool-execute args)
+  (let ((content (io-read "vfs:///shared/io-roundtrip.txt")))
+    (if (string? content) content "not-a-string")))
+"#;
+        let result = run_io_tool(&chibi, &registry, source).await;
+        assert_eq!(result, "hello from io");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_harness_io_vfs_write_then_read() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "write then read vfs file")
+(define tool-parameters '())
+(define (tool-execute args)
+  (io-write "vfs:///shared/written.txt" "scheme wrote this")
+  (io-read "vfs:///shared/written.txt"))
+"#;
+        let result = run_io_tool(&chibi, &registry, source).await;
+        assert_eq!(result, "scheme wrote this");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_harness_io_vfs_not_found_returns_false() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "missing file returns #f")
+(define tool-parameters '())
+(define (tool-execute args)
+  (let ((result (io-read "vfs:///shared/nonexistent-xyzzy.txt")))
+    (if (boolean? result) "got-false" "got-something-else")))
+"#;
+        let result = run_io_tool(&chibi, &registry, source).await;
+        assert_eq!(result, "got-false");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_harness_io_vfs_append() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "append to vfs file")
+(define tool-parameters '())
+(define (tool-execute args)
+  (io-write "vfs:///shared/append-test.txt" "line1\n")
+  (io-append "vfs:///shared/append-test.txt" "line2\n")
+  (io-read "vfs:///shared/append-test.txt"))
+"#;
+        let result = run_io_tool(&chibi, &registry, source).await;
+        assert_eq!(result, "line1\nline2\n");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_harness_io_vfs_exists() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+
+        let path = VfsPath::new("/shared/exists-check.txt").unwrap();
+        chibi
+            .app
+            .vfs
+            .write(VfsCaller::System, &path, b"exists")
+            .await
+            .unwrap();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "exists check")
+(define tool-parameters '())
+(define (tool-execute args)
+  (let ((e1 (io-exists? "vfs:///shared/exists-check.txt"))
+        (e2 (io-exists? "vfs:///shared/does-not-exist.txt")))
+    (if (and e1 (not e2)) "correct" "wrong")))
+"#;
+        let result = run_io_tool(&chibi, &registry, source).await;
+        assert_eq!(result, "correct");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_harness_io_vfs_list() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+
+        chibi
+            .app
+            .vfs
+            .write(
+                VfsCaller::System,
+                &VfsPath::new("/shared/list-dir/a.txt").unwrap(),
+                b"a",
+            )
+            .await
+            .unwrap();
+        chibi
+            .app
+            .vfs
+            .write(
+                VfsCaller::System,
+                &VfsPath::new("/shared/list-dir/b.txt").unwrap(),
+                b"b",
+            )
+            .await
+            .unwrap();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "list dir")
+(define tool-parameters '())
+(define (tool-execute args)
+  (let ((entries (io-list "vfs:///shared/list-dir")))
+    (number->string (length entries))))
+"#;
+        let result = run_io_tool(&chibi, &registry, source).await;
+        assert_eq!(result, "2");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_harness_io_vfs_list_nonexistent_returns_empty() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "list nonexistent")
+(define tool-parameters '())
+(define (tool-execute args)
+  (let ((entries (io-list "vfs:///shared/nonexistent-dir-xyzzy")))
+    (if (null? entries) "empty" "not-empty")))
+"#;
+        let result = run_io_tool(&chibi, &registry, source).await;
+        assert_eq!(result, "empty");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_harness_io_fs_write_read_roundtrip() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+
+        // Use a temp file path
+        let tmp_path = std::env::temp_dir().join("chibi-io-test-roundtrip.txt");
+        let path_str = tmp_path.to_str().unwrap().to_string();
+        // Cleanup before test
+        let _ = std::fs::remove_file(&tmp_path);
+
+        let source = format!(
+            r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "fs write read roundtrip")
+(define tool-parameters '())
+(define (tool-execute args)
+  (io-write "{path}" "fs content")
+  (io-read "{path}"))
+"#,
+            path = path_str
+        );
+        let result = run_io_tool(&chibi, &registry, &source).await;
+        let _ = std::fs::remove_file(&tmp_path);
+        assert_eq!(result, "fs content");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_harness_io_fs_not_found_returns_false() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "fs not found")
+(define tool-parameters '())
+(define (tool-execute args)
+  (let ((result (io-read "/tmp/chibi-io-test-nonexistent-xyzzy-9999.txt")))
+    (if (boolean? result) "got-false" "got-something-else")))
+"#;
+        let result = run_io_tool(&chibi, &registry, source).await;
+        assert_eq!(result, "got-false");
+    }
+
+    #[test]
+    fn test_harness_io_blocked_at_sandboxed_tier() {
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "blocked at sandboxed")
+(define tool-parameters '())
+(define (tool-execute args) "should not load")
+"#;
+        let vfs_path = VfsPath::new("/tools/shared/io_test.scm").unwrap();
+        let registry = make_registry();
+        let result = load_tools_from_source_with_tier(
+            source,
+            &vfs_path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        );
+        assert!(
+            result.is_err(),
+            "sandboxed tier should not have (harness io)"
+        );
+    }
+
+    #[test]
+    fn test_harness_io_available_at_unsandboxed_tier() {
+        // Just loading the source (no execution needed — import resolves at load time)
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(define tool-name "io_test")
+(define tool-description "available at unsandboxed")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let vfs_path = VfsPath::new("/tools/shared/io_test.scm").unwrap();
+        let registry = make_registry();
+        let result = load_tools_from_source_with_tier(
+            source,
+            &vfs_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        );
+        assert!(
+            result.is_ok(),
+            "unsandboxed tier should have (harness io): {:?}",
+            result.err()
         );
     }
 
