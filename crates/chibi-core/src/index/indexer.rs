@@ -261,7 +261,7 @@ pub fn update_index(
                 "symbol_count": file_symbols,
                 "ref_count": file_refs,
             });
-            let _ = execute_hook(tools, HookPoint::PostIndexFile, &hook_data);
+            let _ = execute_hook(tools, HookPoint::PostIndexFile, &hook_data, None);
         }
     }
 

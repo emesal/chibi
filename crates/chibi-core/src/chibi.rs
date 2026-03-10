@@ -319,7 +319,7 @@ impl Chibi {
             .cloned()
             .collect();
         drop(reg);
-        tools::execute_hook(&plugin_tools, tools::HookPoint::OnStart, &hook_data)
+        tools::execute_hook(&plugin_tools, tools::HookPoint::OnStart, &hook_data, None)
     }
 
     /// Shutdown the session.
@@ -339,7 +339,7 @@ impl Chibi {
             .cloned()
             .collect();
         drop(reg);
-        tools::execute_hook(&plugin_tools, tools::HookPoint::OnEnd, &hook_data)
+        tools::execute_hook(&plugin_tools, tools::HookPoint::OnEnd, &hook_data, None)
     }
 
     /// Clear a context, executing PreClear/PostClear hooks.
@@ -362,14 +362,24 @@ impl Chibi {
             .into_iter()
             .cloned()
             .collect();
-        let _ = tools::execute_hook(&plugin_tools, tools::HookPoint::PreClear, &pre_hook_data);
+        let _ = tools::execute_hook(
+            &plugin_tools,
+            tools::HookPoint::PreClear,
+            &pre_hook_data,
+            None,
+        );
 
         self.app.clear_context(context_name)?;
 
         let post_hook_data = serde_json::json!({
             "context_name": context_name,
         });
-        let _ = tools::execute_hook(&plugin_tools, tools::HookPoint::PostClear, &post_hook_data);
+        let _ = tools::execute_hook(
+            &plugin_tools,
+            tools::HookPoint::PostClear,
+            &post_hook_data,
+            None,
+        );
 
         Ok(())
     }

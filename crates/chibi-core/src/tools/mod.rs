@@ -121,7 +121,7 @@ pub fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<Str
 }
 
 // Re-export hook execution
-pub use hooks::execute_hook;
+pub use hooks::{TeinHookContext, execute_hook};
 
 // Re-export plugin functions
 pub use plugins::{execute_tool, execute_tool_by_path, load_tools};
