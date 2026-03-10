@@ -433,6 +433,10 @@ fn io_read_fn(path: String) -> Result<Value, String> {
     let (handle, vfs_ptr) = io_bridge_ctx()?;
     if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
         let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        // SAFETY: vfs_ptr comes from BRIDGE_CALL_CTX, set by CallContextGuard for the
+        // duration of execute_synthesised or hook dispatch. The Vfs lives in AppState
+        // (Arc-owned, session lifetime), so the reference is valid as long as the guard
+        // is alive.
         let vfs = unsafe { &*vfs_ptr };
         match handle.block_on(vfs.read(VfsCaller::System, &vp)) {
             Ok(bytes) => Ok(Value::String(String::from_utf8_lossy(&bytes).into_owned())),
@@ -450,26 +454,27 @@ fn io_read_fn(path: String) -> Result<Value, String> {
 
 /// `(io-write path data)` — write a file. Returns `#t` on success, raises on error.
 ///
-/// VFS writes via `VfsCaller::System`. Filesystem writes create parent dirs.
+/// VFS writes via `VfsCaller::System` (goes through `LocalBackend::write` →
+/// `safe_io::atomic_write`). Bare FS writes also use `safe_io::atomic_write`
+/// via `spawn_blocking`, matching the VFS backend's safety guarantees.
 #[cfg(feature = "synthesised-tools")]
 #[tein::tein_fn(name = "io-write")]
 fn io_write_fn(path: String, data: String) -> Result<Value, String> {
     let (handle, vfs_ptr) = io_bridge_ctx()?;
     if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
         let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        // SAFETY: see io_read_fn — same pointer provenance and lifetime contract.
         let vfs = unsafe { &*vfs_ptr };
         handle
             .block_on(vfs.write(VfsCaller::System, &vp, data.as_bytes()))
             .map_err(|e| e.to_string())?;
         Ok(Value::Boolean(true))
     } else {
-        if let Some(parent) = std::path::Path::new(&path).parent() {
-            handle
-                .block_on(tokio::fs::create_dir_all(parent))
-                .map_err(|e| e.to_string())?;
-        }
-        handle
-            .block_on(tokio::fs::write(&path, data.as_bytes()))
+        // The tein worker thread is a plain OS thread (not a tokio task), so a
+        // direct blocking call to safe_io::atomic_write is correct here.
+        // handle is only needed for VFS operations; bare FS writes are sync.
+        let _ = handle; // suppress unused warning in non-VFS branch
+        crate::safe_io::atomic_write(std::path::Path::new(&path), data.as_bytes())
             .map_err(|e| e.to_string())?;
         Ok(Value::Boolean(true))
     }
@@ -477,13 +482,16 @@ fn io_write_fn(path: String, data: String) -> Result<Value, String> {
 
 /// `(io-append path data)` — append to a file. Returns `#t` on success, raises on error.
 ///
-/// VFS append via `VfsCaller::System`. Filesystem appends create file if missing.
+/// VFS append via `VfsCaller::System`. Bare FS appends match `LocalBackend::append`:
+/// `create(true) + append(true)` — creates the file if missing, no fsync required
+/// (appends are idempotent and not crash-atomic by design, same as VFS).
 #[cfg(feature = "synthesised-tools")]
 #[tein::tein_fn(name = "io-append")]
 fn io_append_fn(path: String, data: String) -> Result<Value, String> {
     let (handle, vfs_ptr) = io_bridge_ctx()?;
     if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
         let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        // SAFETY: see io_read_fn — same pointer provenance and lifetime contract.
         let vfs = unsafe { &*vfs_ptr };
         handle
             .block_on(vfs.append(VfsCaller::System, &vp, data.as_bytes()))
@@ -505,19 +513,23 @@ fn io_append_fn(path: String, data: String) -> Result<Value, String> {
     }
 }
 
-/// `(io-list path)` — list directory entries. Returns list of name strings,
-/// empty list if not found.
+/// `(io-list path)` — list directory entries. Returns list of name strings sorted
+/// lexicographically, or empty list if path not found.
 ///
-/// VFS list via `VfsCaller::System`. Filesystem list via `tokio::fs::read_dir`.
+/// Both VFS and bare FS results are sorted to guarantee consistent ordering across
+/// backends (VFS via `LocalBackend` uses `read_dir` which is OS-order; bare FS
+/// likewise).
 #[cfg(feature = "synthesised-tools")]
 #[tein::tein_fn(name = "io-list")]
 fn io_list_fn(path: String) -> Result<Value, String> {
     let (handle, vfs_ptr) = io_bridge_ctx()?;
     if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
         let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        // SAFETY: see io_read_fn — same pointer provenance and lifetime contract.
         let vfs = unsafe { &*vfs_ptr };
         match handle.block_on(vfs.list(VfsCaller::System, &vp)) {
-            Ok(entries) => {
+            Ok(mut entries) => {
+                entries.sort_by(|a, b| a.name.cmp(&b.name));
                 let names: Vec<Value> =
                     entries.into_iter().map(|e| Value::String(e.name)).collect();
                 Ok(Value::List(names))
@@ -531,12 +543,15 @@ fn io_list_fn(path: String) -> Result<Value, String> {
             let mut dir = tokio::fs::read_dir(&path).await?;
             while let Some(entry) = dir.next_entry().await? {
                 if let Some(name) = entry.file_name().to_str() {
-                    entries.push(Value::String(name.to_string()));
+                    entries.push(name.to_string());
                 }
             }
+            entries.sort();
             Ok::<_, io::Error>(entries)
         }) {
-            Ok(entries) => Ok(Value::List(entries)),
+            Ok(entries) => Ok(Value::List(
+                entries.into_iter().map(Value::String).collect(),
+            )),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Value::List(vec![])),
             Err(e) => Err(e.to_string()),
         }
@@ -552,6 +567,7 @@ fn io_exists_fn(path: String) -> Result<Value, String> {
     let (handle, vfs_ptr) = io_bridge_ctx()?;
     if let Some(vfs_path_str) = path.strip_prefix("vfs://") {
         let vp = VfsPath::new(vfs_path_str).map_err(|e| e.to_string())?;
+        // SAFETY: see io_read_fn — same pointer provenance and lifetime contract.
         let vfs = unsafe { &*vfs_ptr };
         let exists = handle
             .block_on(vfs.exists(VfsCaller::System, &vp))

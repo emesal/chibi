@@ -100,7 +100,11 @@ pub async fn rolling_compact(
         return Ok(());
     }
 
-    // Execute pre_rolling_compact hook
+    // Execute pre_rolling_compact hook.
+    // TeinHookContext is None: compact runs from a background task that does not hold a
+    // full ToolCallContext (no per-request VFS caller or registry snapshot). Tein hook
+    // callbacks fire but cannot use call-tool or (harness io). Known limitation — promote
+    // to Some if a full async context is threaded through compact in the future.
     let tools = tools::load_tools(&app.plugins_dir)?;
     let hook_data = serde_json::json!({
         "context_name": context.name,
@@ -343,7 +347,7 @@ pub async fn rolling_compact(
         remaining: context.messages.len(),
     });
 
-    // Execute post_rolling_compact hook
+    // Execute post_rolling_compact hook. TeinHookContext: None — see PreRollingCompact above.
     let hook_data = serde_json::json!({
         "context_name": context.name,
         "message_count": context.messages.len(),
@@ -438,7 +442,9 @@ async fn compact_context_with_llm_internal(
         return Ok(());
     }
 
-    // Execute pre_compact hook
+    // Execute pre_compact hook. TeinHookContext: None — compact_context_with_llm_internal
+    // does not carry a full ToolCallContext; tein callbacks fire but cannot use call-tool
+    // or (harness io). Known limitation — see PreRollingCompact in rolling_compact.
     let tools = tools::load_tools(&app.plugins_dir)?;
     let hook_data = serde_json::json!({
         "context_name": context.name,
@@ -553,7 +559,7 @@ async fn compact_context_with_llm_internal(
         remaining: new_context.messages.len(),
     });
 
-    // Execute post_compact hook
+    // Execute post_compact hook. TeinHookContext: None — see PreCompact above.
     let hook_data = serde_json::json!({
         "context_name": new_context.name,
         "message_count": new_context.messages.len(),

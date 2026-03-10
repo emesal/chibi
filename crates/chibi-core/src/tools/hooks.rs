@@ -961,24 +961,17 @@ echo 'OK'
 
     // --- TeinHookContext / CallContextGuard in hook dispatch ---
 
-    /// Verify that when TeinHookContext is provided, BRIDGE_CALL_CTX is populated
-    /// during tein hook dispatch, enabling call-tool from hook callbacks.
+    /// Helper: build a minimal `(AppState, ResolvedConfig, TempDir)` for tein hook tests.
     ///
-    /// The hook calls `(call-tool "nonexistent-tool" '())`. With the guard set, it
-    /// should fail with "not found" (tool registry lookup error), NOT with
-    /// "no active call context" (bridge not set). This proves the guard is live.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    /// Returns `(app, resolved_config, _tmp)` — `_tmp` must outlive `app`.
     #[cfg(feature = "synthesised-tools")]
-    async fn test_tein_hook_call_tool_with_tein_ctx_sets_bridge() {
-        use crate::config::ResolvedConfig;
+    fn make_test_tein_env() -> (
+        crate::state::AppState,
+        crate::config::ResolvedConfig,
+        tempfile::TempDir,
+    ) {
         use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
         use crate::partition::StorageConfig;
-        use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
-        use crate::vfs::VfsPath;
-        use std::sync::{Arc, RwLock};
-
-        // Minimal AppState for test
         let temp = tempfile::TempDir::new().unwrap();
         let config = Config {
             api_key: None,
@@ -1011,8 +1004,25 @@ echo 'OK'
             site: None,
         };
         let app = crate::state::AppState::from_dir(temp.path().to_path_buf(), config).unwrap();
-        let resolved_config = ResolvedConfig::default();
-        let project_root = temp.path();
+        (app, crate::config::ResolvedConfig::default(), temp)
+    }
+
+    /// Verify that when TeinHookContext is provided, BRIDGE_CALL_CTX is populated
+    /// during tein hook dispatch, enabling call-tool from hook callbacks.
+    ///
+    /// The hook calls `(call-tool "nonexistent-tool" '())`. With the guard set, it
+    /// should fail with "not found" (tool registry lookup error), NOT with
+    /// "no active call context" (bridge not set). This proves the guard is live.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_tein_hook_call_tool_with_tein_ctx_sets_bridge() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
 
         // Tein tool with an on_start hook that tries call-tool.
         // Uses with-exception-handler to capture the error message string.
@@ -1144,50 +1154,14 @@ echo 'OK'
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_harness_io_vfs_write() {
-        use crate::config::ResolvedConfig;
-        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
-        use crate::partition::StorageConfig;
         use crate::tools::registry::ToolRegistry;
         use crate::tools::synthesised::load_tools_from_source_with_tier;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
-        let temp = tempfile::TempDir::new().unwrap();
-        let config = Config {
-            api_key: None,
-            model: None,
-            context_window_limit: None,
-            warn_threshold_percent: 75.0,
-            no_tool_calls: false,
-            auto_compact: false,
-            auto_compact_threshold: 80.0,
-            reflection_enabled: false,
-            reflection_character_limit: 10000,
-            fuel: 0,
-            fuel_empty_response_cost: 0,
-            username: "test".to_string(),
-            lock_heartbeat_seconds: 30,
-            rolling_compact_drop_percentage: 50.0,
-            tool_output_cache_threshold: 4000,
-            tool_cache_max_age_days: 7,
-            auto_cleanup_cache: false,
-            tool_cache_preview_chars: 500,
-            file_tools_allowed_paths: vec![],
-            api: ApiParams::default(),
-            storage: StorageConfig::default(),
-            fallback_tool: "call_user".to_string(),
-            tools: ToolsConfig::default(),
-            vfs: VfsConfig::default(),
-            url_policy: None,
-            subagent_cost_tier: "free".to_string(),
-            models: Default::default(),
-            site: None,
-        };
-        let app = crate::state::AppState::from_dir(temp.path().to_path_buf(), config).unwrap();
-        let resolved_config = ResolvedConfig::default();
-        let project_root = temp.path();
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
 
-        // A hook that uses (harness io) to write a sentinel file to VFS
         let source = r#"
 (import (harness hooks))
 (import (harness io))
@@ -1246,48 +1220,13 @@ echo 'OK'
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_io_does_not_trigger_hooks() {
-        use crate::config::ResolvedConfig;
-        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
-        use crate::partition::StorageConfig;
         use crate::tools::registry::ToolRegistry;
         use crate::tools::synthesised::load_tools_from_source_with_tier;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
-        let temp = tempfile::TempDir::new().unwrap();
-        let config = Config {
-            api_key: None,
-            model: None,
-            context_window_limit: None,
-            warn_threshold_percent: 75.0,
-            no_tool_calls: false,
-            auto_compact: false,
-            auto_compact_threshold: 80.0,
-            reflection_enabled: false,
-            reflection_character_limit: 10000,
-            fuel: 0,
-            fuel_empty_response_cost: 0,
-            username: "test".to_string(),
-            lock_heartbeat_seconds: 30,
-            rolling_compact_drop_percentage: 50.0,
-            tool_output_cache_threshold: 4000,
-            tool_cache_max_age_days: 7,
-            auto_cleanup_cache: false,
-            tool_cache_preview_chars: 500,
-            file_tools_allowed_paths: vec![],
-            api: ApiParams::default(),
-            storage: StorageConfig::default(),
-            fallback_tool: "call_user".to_string(),
-            tools: ToolsConfig::default(),
-            vfs: VfsConfig::default(),
-            url_policy: None,
-            subagent_cost_tier: "free".to_string(),
-            models: Default::default(),
-            site: None,
-        };
-        let app = crate::state::AppState::from_dir(temp.path().to_path_buf(), config).unwrap();
-        let resolved_config = ResolvedConfig::default();
-        let project_root = temp.path();
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
 
         // A hook that writes a counter file. If io-write triggered hooks, the
         // on_start hook would call itself recursively. TEIN_HOOK_GUARD should
