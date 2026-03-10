@@ -184,14 +184,22 @@ pub fn execute_hook(
                 if !tool.hooks.contains(&hook) {
                     continue;
                 }
-                let (context, hook_bindings) = match &tool.r#impl {
+                let (context, hook_bindings, worker_thread_id) = match &tool.r#impl {
                     super::ToolImpl::Synthesised {
                         context,
                         hook_bindings,
+                        worker_thread_id,
                         ..
-                    } => (context, hook_bindings),
+                    } => (context, hook_bindings, *worker_thread_id),
                     _ => continue,
                 };
+
+                // Set call context guard if tein_ctx available — enables call-tool
+                // and (harness io) from tein hook callbacks.
+                // Guard drops at end of each loop iteration, clearing the bridge context.
+                let _bridge_guard = _tein_ctx.map(|ctx| {
+                    super::synthesised::CallContextGuard::set_from_hook_ctx(ctx, worker_thread_id)
+                });
 
                 let Some(binding) = hook_bindings.get(&hook) else {
                     continue;
@@ -946,5 +954,186 @@ echo 'OK'
         // Second call on the same thread — guard must be cleared; fires again
         let r2 = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
         assert_eq!(r2.len(), 1, "guard must be cleared; second call must fire");
+    }
+
+    // --- TeinHookContext / CallContextGuard in hook dispatch ---
+
+    /// Verify that when TeinHookContext is provided, BRIDGE_CALL_CTX is populated
+    /// during tein hook dispatch, enabling call-tool from hook callbacks.
+    ///
+    /// The hook calls `(call-tool "nonexistent-tool" '())`. With the guard set, it
+    /// should fail with "not found" (tool registry lookup error), NOT with
+    /// "no active call context" (bridge not set). This proves the guard is live.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(all(feature = "synthesised-tools"))]
+    async fn test_tein_hook_call_tool_with_tein_ctx_sets_bridge() {
+        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
+        use crate::config::ResolvedConfig;
+        use crate::partition::StorageConfig;
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        // Minimal AppState for test
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = Config {
+            api_key: None,
+            model: None,
+            context_window_limit: None,
+            warn_threshold_percent: 75.0,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            fuel: 0,
+            fuel_empty_response_cost: 0,
+            username: "test".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: false,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api: ApiParams::default(),
+            storage: StorageConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            tools: ToolsConfig::default(),
+            vfs: VfsConfig::default(),
+            url_policy: None,
+            subagent_cost_tier: "free".to_string(),
+            models: Default::default(),
+            site: None,
+        };
+        let app =
+            crate::state::AppState::from_dir(temp.path().to_path_buf(), config).unwrap();
+        let resolved_config = ResolvedConfig::default();
+        let project_root = temp.path();
+
+        // Tein tool with an on_start hook that tries call-tool.
+        // Uses with-exception-handler to capture the error message string.
+        // R7RS: error-object-message works for (error ...) conditions.
+        let source = r#"
+(import (harness hooks))
+(import (harness tools))
+(register-hook 'on_start
+  (lambda (payload)
+    ;; Try to call a nonexistent tool. Capture whether it errors with "no active
+    ;; call context" (bridge not set) vs anything else (bridge set, tool not found).
+    (define result "no-error")
+    (call-with-current-continuation
+      (lambda (k)
+        (with-exception-handler
+          (lambda (exn)
+            (set! result
+              (if (error-object? exn)
+                  (error-object-message exn)
+                  "unknown-error"))
+            (k #f))
+          (lambda ()
+            (call-tool "nonexistent-tool-xyzzy" '())))))
+    (list (cons "error" result))))
+(define tool-name "bridge-test")
+(define tool-description "Tests bridge")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/bridge-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let results = execute_hook(
+            &tools,
+            HookPoint::OnStart,
+            &serde_json::json!({}),
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1, "hook must return a result");
+        let error_msg = results[0].1["error"].as_str().unwrap_or("");
+        // With bridge set: error is about tool not found, NOT about missing context
+        assert!(
+            !error_msg.contains("no active call context"),
+            "bridge should be set; got error: {error_msg}"
+        );
+        assert!(
+            !error_msg.contains("called outside tool execute"),
+            "bridge should be set; got error: {error_msg}"
+        );
+    }
+
+    /// Verify that without TeinHookContext, call-tool in a hook callback fails
+    /// with "no active call context" (bridge not set).
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_call_tool_without_tein_ctx_no_bridge() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(import (harness tools))
+(register-hook 'on_start
+  (lambda (payload)
+    (define result "no-error")
+    (call-with-current-continuation
+      (lambda (k)
+        (with-exception-handler
+          (lambda (exn)
+            (set! result
+              (if (error-object? exn)
+                  (error-object-message exn)
+                  "unknown-error"))
+            (k #f))
+          (lambda ()
+            (call-tool "any-tool" '())))))
+    (list (cons "error" result))))
+(define tool-name "no-bridge-test")
+(define tool-description "Tests no bridge")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/no-bridge-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        // No TeinHookContext → bridge not set
+        let results =
+            execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+
+        assert_eq!(results.len(), 1, "hook must return a result");
+        let error_msg = results[0].1["error"].as_str().unwrap_or("");
+        // Without bridge: must fail with "no active call context"
+        assert!(
+            error_msg.contains("no active call context")
+                || error_msg.contains("called outside tool execute"),
+            "expected 'no active call context' error, got: {error_msg}"
+        );
     }
 }

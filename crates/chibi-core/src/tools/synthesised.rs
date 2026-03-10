@@ -212,7 +212,7 @@ static BRIDGE_CALL_CTX: std::sync::LazyLock<
 /// Used in `execute_synthesised` to make the context available to the `call-tool`
 /// bridge without threading it through tein's FFI boundary.
 #[cfg(feature = "synthesised-tools")]
-struct CallContextGuard {
+pub(crate) struct CallContextGuard {
     thread_id: std::thread::ThreadId,
 }
 
@@ -240,6 +240,30 @@ impl CallContextGuard {
             },
         );
         CallContextGuard { thread_id }
+    }
+
+    /// Set from a `TeinHookContext` — used during hook dispatch to enable
+    /// `call-tool` and `(harness io)` from tein hook callbacks.
+    ///
+    /// Must be called from a tokio thread (uses `Handle::current()`).
+    pub(crate) fn set_from_hook_ctx(
+        ctx: &crate::tools::hooks::TeinHookContext<'_>,
+        worker_thread_id: std::thread::ThreadId,
+    ) -> Self {
+        BRIDGE_CALL_CTX.lock().unwrap().insert(
+            worker_thread_id,
+            ActiveCallContext {
+                app: ctx.app as *const _,
+                context_name: ctx.context_name.to_string(),
+                config: ctx.config as *const _,
+                project_root: ctx.project_root.to_path_buf(),
+                vfs: ctx.vfs as *const _,
+                vfs_caller_context: String::new(), // System caller for hook dispatch
+                runtime_handle: tokio::runtime::Handle::current(),
+                registry: Arc::clone(&ctx.registry),
+            },
+        );
+        CallContextGuard { thread_id: worker_thread_id }
     }
 }
 
