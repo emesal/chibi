@@ -135,6 +135,7 @@ pub enum ToolCategory {
     Plugin,
     Mcp,
     Synthesised,
+    Eval,
 }
 
 impl ToolCategory {
@@ -152,6 +153,7 @@ impl ToolCategory {
             ToolCategory::Plugin => "plugin",
             ToolCategory::Mcp => "mcp",
             ToolCategory::Synthesised => "synthesised",
+            ToolCategory::Eval => "eval",
         }
     }
 }
@@ -357,6 +359,7 @@ mod tests {
             ToolCategory::Plugin,
             ToolCategory::Mcp,
             ToolCategory::Synthesised,
+            ToolCategory::Eval,
         ];
         for cat in &cats {
             let _ = format!("{cat:?}");
