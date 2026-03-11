@@ -83,6 +83,14 @@ for operations not covered by existing tools:
 
 all dedicated tools also bypass file hooks.
 
+### dotfile hiding
+
+`vfs_list` filters out entries whose names begin with `.` (e.g. `.chibi/`). this keeps internal metadata directories invisible to agents using directory listings.
+
+- direct addressing (`file_head`, `io-read`, `file_grep`) is unaffected — dotfiles remain readable if you know the path.
+- `io-list` (privileged harness function) is also unaffected — it returns all entries including dotfiles.
+- `vfs_list` is the only layer that hides dotfiles.
+
 ### examples
 
 ```json
