@@ -250,6 +250,7 @@ impl Chibi {
                 &registry,
                 &app.config.tools,
             ))?;
+            crate::tools::register_eval_tools(&registry);
         }
 
         #[cfg(feature = "synthesised-tools")]

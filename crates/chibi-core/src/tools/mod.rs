@@ -15,6 +15,7 @@
 //! - URL and file path security policies
 //! - Hook system for plugin lifecycle events
 
+mod eval;
 mod flow;
 mod fs_read;
 mod fs_write;
@@ -173,6 +174,9 @@ pub use index::{
 // Re-export VFS tool registry functions and execution
 pub use vfs_tools::{execute_vfs_tool, register_vfs_tools};
 
+// Re-export eval tool constants and registration
+pub use eval::{EVAL_TOOL_DEFS, SCHEME_EVAL_TOOL_NAME, register_eval_tools};
+
 // Re-export security utilities
 pub use security::{
     FilePathAccess, UrlAction, UrlCategory, UrlPolicy, UrlRule, UrlSafety, classify_file_path,
@@ -298,6 +302,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         .chain(index::INDEX_TOOL_DEFS.iter())
         .chain(flow::FLOW_TOOL_DEFS.iter())
         .chain(vfs_tools::VFS_TOOL_DEFS.iter())
+        .chain(eval::EVAL_TOOL_DEFS.iter())
         .map(|def| def.name)
         .collect()
 }
@@ -327,6 +332,7 @@ fn builtin_summary_params(name: &str) -> &'static [&'static str] {
         .chain(network::NETWORK_TOOL_DEFS.iter())
         .chain(index::INDEX_TOOL_DEFS.iter())
         .chain(vfs_tools::VFS_TOOL_DEFS.iter())
+        .chain(eval::EVAL_TOOL_DEFS.iter())
         .find(|def| def.name == name)
         .map(|def| def.summary_params)
         .unwrap_or(&[])
@@ -594,7 +600,7 @@ mod tests {
         assert!(names.contains(&"file_edit")); // coding tool
         assert!(names.contains(&"vfs_list")); // vfs tool
 
-        // Should be: memory + flow + fs_read + fs_write + shell + network + index + vfs
+        // Should be: memory + flow + fs_read + fs_write + shell + network + index + vfs + eval
         let expected_count = memory::MEMORY_TOOL_DEFS.len()
             + flow::FLOW_TOOL_DEFS.len()
             + fs_read::FS_READ_TOOL_DEFS.len()
@@ -602,8 +608,10 @@ mod tests {
             + shell::SHELL_TOOL_DEFS.len()
             + network::NETWORK_TOOL_DEFS.len()
             + index::INDEX_TOOL_DEFS.len()
-            + vfs_tools::VFS_TOOL_DEFS.len();
+            + vfs_tools::VFS_TOOL_DEFS.len()
+            + eval::EVAL_TOOL_DEFS.len();
         assert_eq!(names.len(), expected_count);
+        assert!(names.contains(&"scheme_eval")); // eval tool
     }
 
     #[test]

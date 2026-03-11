@@ -558,9 +558,9 @@ mod tests {
     #[test]
     fn test_register_all_builtins() {
         use super::super::{
-            register_flow_tools, register_fs_read_tools, register_fs_write_tools,
-            register_index_tools, register_memory_tools, register_network_tools,
-            register_shell_tools, register_vfs_tools,
+            register_eval_tools, register_flow_tools, register_fs_read_tools,
+            register_fs_write_tools, register_index_tools, register_memory_tools,
+            register_network_tools, register_shell_tools, register_vfs_tools,
         };
 
         let mut reg = ToolRegistry::new();
@@ -572,6 +572,10 @@ mod tests {
         register_index_tools(&mut reg);
         register_flow_tools(&mut reg);
         register_vfs_tools(&mut reg);
+
+        let reg_arc = std::sync::Arc::new(std::sync::RwLock::new(reg));
+        register_eval_tools(&reg_arc);
+        let reg = reg_arc.read().unwrap();
 
         let total = reg.all().count();
         assert!(total > 20, "expected 20+ builtin tools, got {total}");
@@ -588,6 +592,11 @@ mod tests {
         assert_eq!(
             reg.get("update_reflection").unwrap().category,
             ToolCategory::Memory
+        );
+        assert_eq!(reg.get("scheme_eval").unwrap().category, ToolCategory::Eval);
+        assert!(
+            !reg.get("scheme_eval").unwrap().metadata.parallel,
+            "scheme_eval must not be parallel"
         );
     }
 }

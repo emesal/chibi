@@ -704,9 +704,8 @@ fn build_tein_context(
 /// tools but manages its own prelude and persistence. Passes an empty source so
 /// the caller can call `ctx.evaluate(prelude)` after receiving the context.
 #[cfg(feature = "synthesised-tools")]
-#[allow(dead_code)] // used by eval.rs once wired in
-pub(crate) fn build_sandboxed_harness_context(
-) -> io::Result<(ThreadLocalContext, std::thread::ThreadId)> {
+pub(crate) fn build_sandboxed_harness_context()
+-> io::Result<(ThreadLocalContext, std::thread::ThreadId)> {
     build_tein_context(String::new(), crate::config::SandboxTier::Sandboxed)
 }
 
