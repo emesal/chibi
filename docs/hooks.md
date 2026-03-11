@@ -93,6 +93,13 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 |------|------|------------|
 | `post_index_file` | After a file is indexed by the code indexer | No |
 
+### VFS Write Lifecycle
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_vfs_write` | Before a VFS file write (advisory, non-blocking) | No |
+| `post_vfs_write` | After a successful VFS file write | No |
+
 ### Context Lifecycle
 
 | Hook | When | Can Modify |
@@ -717,6 +724,37 @@ Fired after a file is successfully indexed by the code indexer. Observe only.
   "lang": "rust",
   "symbol_count": 42,
   "ref_count": 17
+}
+```
+
+### pre_vfs_write
+
+Fired before a VFS file write (via `write_file` or `file_edit`). Advisory and non-blocking — cannot prevent the write. Intended for observe-and-snapshot use cases (e.g. the file history plugin).
+
+> **Note:** Only fires for writes initiated via tool dispatch (i.e. context-initiated writes). Writes from `VfsCaller::System` and `(harness io)` bypass `send.rs` entirely and do not trigger this hook.
+
+```json
+{
+  "tool_name": "write_file",
+  "path": "vfs:///shared/tool.scm",
+  "content": "new content here",
+  "caller": "my-context"
+}
+```
+
+The `content` field is `null` for `file_edit` calls (which use `operation`/`old`/`new` params rather than a full content replacement).
+
+### post_vfs_write
+
+Fired after a VFS file write completes successfully. Observe only.
+
+> **Note:** Same caller restriction as `pre_vfs_write` — only fires for context-initiated writes via tool dispatch.
+
+```json
+{
+  "tool_name": "write_file",
+  "path": "vfs:///shared/tool.scm",
+  "caller": "my-context"
 }
 ```
 

@@ -1054,10 +1054,24 @@ async fn execute_tool_pure(
                 }
             }
             ToolCategory::FsWrite => {
-                // VFS paths handled inside the handler; OS paths need PreFileWrite gate.
+                // VFS paths: fire PreVfsWrite hook (advisory, non-blocking).
+                // Zone-based permissions are enforced inside the handler.
+                // OS paths go through the PreFileWrite permission gate.
                 let raw_path = args.get_str("path").unwrap_or("");
                 if VfsPath::is_vfs_uri(raw_path) {
-                    None // bypass: let registry dispatch handle it
+                    let hook_data = serde_json::json!({
+                        "tool_name": tool_call.name,
+                        "path": raw_path,
+                        "content": args.get_str("content"),
+                        "caller": context_name,
+                    });
+                    let _ = tools::execute_hook(
+                        plugin_tools,
+                        tools::HookPoint::PreVfsWrite,
+                        &hook_data,
+                        tein_ctx,
+                    );
+                    None // never blocks — VFS zone permissions enforced in handler
                 } else {
                     let hook_data = if tool_call.name == tools::FILE_EDIT_TOOL_NAME {
                         serde_json::json!({
@@ -1732,6 +1746,33 @@ async fn process_tool_calls<S: ResponseSink>(
             &post_hook_data,
             tein_ctx,
         );
+
+        // Fire PostVfsWrite for successful VFS writes (advisory, non-blocking).
+        {
+            let raw_path = args.get_str("path").unwrap_or("");
+            let is_vfs_write = {
+                let reg = registry.read().unwrap();
+                reg.get(&tc.name)
+                    .map(|t| t.category == tools::ToolCategory::FsWrite)
+                    .unwrap_or(false)
+            };
+            if is_vfs_write
+                && VfsPath::is_vfs_uri(raw_path)
+                && !result.original_result.starts_with("Error")
+            {
+                let vfs_post_hook_data = serde_json::json!({
+                    "tool_name": tc.name,
+                    "path": raw_path,
+                    "caller": context_name,
+                });
+                let _ = tools::execute_hook(
+                    plugin_tools,
+                    tools::HookPoint::PostVfsWrite,
+                    &vfs_post_hook_data,
+                    tein_ctx,
+                );
+            }
+        }
 
         // Apply handoff for parallel-executed flow control tools
         // (sequential ones already applied via execute_single_tool)

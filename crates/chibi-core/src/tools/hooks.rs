@@ -58,7 +58,9 @@ pub enum HookPoint {
     PreFetchUrl, // Before fetching a sensitive URL (can approve/deny, fail-safe deny)
     PreSpawnAgent, // Before sub-agent call (can intercept/replace with {"response": "..."} or block)
     PostSpawnAgent, // After sub-agent call (observe only)
-    PostIndexFile, // After a file is indexed (observe: path, lang, symbol_count, ref_count)
+    PostIndexFile,  // After a file is indexed (observe: path, lang, symbol_count, ref_count)
+    PreVfsWrite,    // Before a VFS file write (advisory, non-blocking; observe-and-snapshot)
+    PostVfsWrite,   // After a successful VFS file write (observe only)
 }
 
 /// Context needed to set up `BRIDGE_CALL_CTX` during tein hook dispatch,
@@ -302,6 +304,8 @@ mod tests {
         ("pre_spawn_agent", HookPoint::PreSpawnAgent),
         ("post_spawn_agent", HookPoint::PostSpawnAgent),
         ("post_index_file", HookPoint::PostIndexFile),
+        ("pre_vfs_write", HookPoint::PreVfsWrite),
+        ("post_vfs_write", HookPoint::PostVfsWrite),
     ];
 
     #[test]
