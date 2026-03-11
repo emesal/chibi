@@ -456,6 +456,9 @@ mod tests {
             .unwrap();
 
         assert!(result.contains("tool.scm"), "regular file should appear");
-        assert!(!result.contains(".chibi"), "dotfile directory should be hidden");
+        assert!(
+            !result.contains(".chibi"),
+            "dotfile directory should be hidden"
+        );
     }
 }
