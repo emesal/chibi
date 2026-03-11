@@ -2198,7 +2198,10 @@ mod tests {
                 false
             }
         });
-        assert!(has_hook, "history plugin should register pre_vfs_write hook");
+        assert!(
+            has_hook,
+            "history plugin should register pre_vfs_write hook"
+        );
     }
 
     /// Verify generate-id and current-timestamp harness helpers work.
