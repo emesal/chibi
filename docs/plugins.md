@@ -414,6 +414,44 @@ Or copy to `/tools/shared/tasks.scm` in your VFS root directly.
 
 Tasks are automatically summarised and injected as ephemeral context before each prompt. See [vfs.md](vfs.md) for the `.task` file format.
 
+### File History Plugin
+
+The bundled history plugin (`plugins/history.scm`) automatically snapshots VFS files before each write and exposes tools for browsing, diffing, and reverting to prior revisions.
+
+**Install:**
+
+```bash
+chibi -P write_file '{"path": "vfs:///tools/shared/history.scm", "content": "<paste file contents>"}'
+```
+
+The plugin auto-configures to `unsandboxed` tier when installed at `vfs:///tools/shared/history.scm` (see `BUILTIN_UNSANDBOXED` in `config.rs`). No `[tools.tiers]` entry required.
+
+**How it works:**
+
+Registers a `pre_vfs_write` hook that reads the current file content and writes it as a numbered revision before each overwrite. Hook is best-effort — errors are silently swallowed to avoid blocking writes.
+
+**Storage layout:**
+
+```
+<file-dir>/.chibi/history/<filename>/<N>   — revision N (full content)
+<file-dir>/.chibi/history/<filename>/meta  — alist: ((next . N))
+```
+
+Revisions are kept under the same VFS directory as the file itself. The `.chibi/` prefix ensures they are hidden from `vfs_list` output. `io-list` and direct addressing still reach them.
+
+At most 10 revisions are kept (`%history-keep%`); oldest are pruned automatically.
+
+**Tools:**
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `file_history_log` | `path` | List revision numbers for a VFS file (newest first) |
+| `file_history_show` | `path`, `revision` | Show full file content at a specific revision |
+| `file_history_diff` | `path`, `revision` (optional) | Unified diff between a revision and current content |
+| `file_history_revert` | `path`, `revision` | Restore file to a previous revision (fires hook so revert itself is snapshotted) |
+
+**Requires:** `(harness io)` and `(chibi diff)` — unsandboxed tier only.
+
 ### Sandbox Tiers
 
 Tools run in one of two tiers, configured per-path in `[tools.tiers]` (see [configuration.md](configuration.md)):

@@ -558,29 +558,40 @@ impl ToolsConfig {
     /// (longest) matching prefix wins. Absent entry or unknown tier → sandboxed.
     #[cfg(feature = "synthesised-tools")]
     pub fn resolve_tier(&self, vfs_path: &str) -> SandboxTier {
-        let tiers = match &self.tiers {
-            Some(t) => t,
-            None => return SandboxTier::Sandboxed,
-        };
-        // find the most specific (longest) matching prefix
-        let mut best: Option<(&str, u8)> = None;
-        for (pattern, tier) in tiers {
-            if vfs_path.starts_with(pattern.as_str()) {
-                match best {
-                    None => best = Some((pattern, *tier)),
-                    Some((prev, _)) if pattern.len() > prev.len() => {
-                        best = Some((pattern, *tier));
+        // User config takes precedence (longest prefix match).
+        if let Some(tiers) = &self.tiers {
+            let mut best: Option<(&str, u8)> = None;
+            for (pattern, tier) in tiers {
+                if vfs_path.starts_with(pattern.as_str()) {
+                    match best {
+                        None => best = Some((pattern, *tier)),
+                        Some((prev, _)) if pattern.len() > prev.len() => {
+                            best = Some((pattern, *tier));
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
+            if let Some((_, tier)) = best {
+                return match tier {
+                    2 => SandboxTier::Unsandboxed,
+                    _ => SandboxTier::Sandboxed,
+                };
+            }
         }
-        match best {
-            Some((_, 2)) => SandboxTier::Unsandboxed,
-            _ => SandboxTier::Sandboxed,
+        // Builtin defaults: known plugins that require unsandboxed tier.
+        if BUILTIN_UNSANDBOXED.contains(&vfs_path) {
+            return SandboxTier::Unsandboxed;
         }
+        SandboxTier::Sandboxed
     }
 }
+
+/// Known builtin plugin paths that default to unsandboxed tier.
+///
+/// User config always takes precedence — these only apply when no
+/// matching entry exists in `ToolsConfig::tiers`.
+const BUILTIN_UNSANDBOXED: &[&str] = &["/tools/shared/history.scm"];
 
 // ============================================================================
 // Default Values
@@ -1519,6 +1530,33 @@ mod tests {
         assert_eq!(
             config.resolve_tier("/tools/shared/foo.scm"),
             SandboxTier::Sandboxed
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_builtin_plugin_default_tier() {
+        let config = ToolsConfig::default();
+        assert_eq!(
+            config.resolve_tier("/tools/shared/history.scm"),
+            SandboxTier::Unsandboxed,
+            "builtin history.scm should default to unsandboxed"
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_user_tier_overrides_builtin_default() {
+        let mut tiers = std::collections::HashMap::new();
+        tiers.insert("/tools/shared/history.scm".to_string(), 1u8); // user forces sandboxed
+        let config = ToolsConfig {
+            tiers: Some(tiers),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.resolve_tier("/tools/shared/history.scm"),
+            SandboxTier::Sandboxed,
+            "user config should override builtin default"
         );
     }
 

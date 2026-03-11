@@ -59,6 +59,8 @@ pub enum HookPoint {
     PreSpawnAgent, // Before sub-agent call (can intercept/replace with {"response": "..."} or block)
     PostSpawnAgent, // After sub-agent call (observe only)
     PostIndexFile, // After a file is indexed (observe: path, lang, symbol_count, ref_count)
+    PreVfsWrite,   // Before a VFS file write (advisory, non-blocking; observe-and-snapshot)
+    PostVfsWrite,  // After a successful VFS file write (observe only)
 }
 
 /// Context needed to set up `BRIDGE_CALL_CTX` during tein hook dispatch,
@@ -180,6 +182,12 @@ pub fn execute_hook(
                 guard.borrow_mut().insert(hook);
             });
 
+            // Deduplicate: tools from the same .scm file share a tein context
+            // and produce the same (worker_thread_id, binding) pair. Only fire
+            // each unique (context instance, binding) once per hook event.
+            let mut dispatched: std::collections::HashSet<(std::thread::ThreadId, String)> =
+                std::collections::HashSet::new();
+
             for tool in tools {
                 if !tool.hooks.contains(&hook) {
                     continue;
@@ -204,6 +212,11 @@ pub fn execute_hook(
                 let Some(binding) = hook_bindings.get(&hook) else {
                     continue;
                 };
+
+                // Skip if this (context, binding) was already dispatched this event.
+                if !dispatched.insert((worker_thread_id, binding.clone())) {
+                    continue;
+                }
 
                 let payload = match super::synthesised::json_args_to_scheme_alist(data) {
                     Ok(v) => v,
@@ -302,6 +315,8 @@ mod tests {
         ("pre_spawn_agent", HookPoint::PreSpawnAgent),
         ("post_spawn_agent", HookPoint::PostSpawnAgent),
         ("post_index_file", HookPoint::PostIndexFile),
+        ("pre_vfs_write", HookPoint::PreVfsWrite),
+        ("post_vfs_write", HookPoint::PostVfsWrite),
     ];
 
     #[test]
@@ -1294,6 +1309,303 @@ echo 'OK'
             String::from_utf8_lossy(&content),
             "1",
             "counter should be 1 — no recursive hook dispatch from io-write"
+        );
+    }
+
+    // --- history.scm integration tests ---
+
+    const HISTORY_PLUGIN: &str = include_str!("../../../../plugins/history.scm");
+
+    /// Sanity check: a bare pre_vfs_write hook that writes a file works.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_pre_vfs_write_hook_io_write_works() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(import (harness hooks))
+(import (harness tools))
+(register-hook 'pre_vfs_write
+  (lambda (payload)
+    (io-write "vfs:///shared/hook-fired.txt" "hook ran")
+    '()))
+(define tool-name "dummy")
+(define tool-description "dummy")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/test.txt",
+            "content": "new",
+        });
+        let _ = execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
+
+        let fired_path = VfsPath::new("/shared/hook-fired.txt").unwrap();
+        let content = app.vfs.read(VfsCaller::System, &fired_path).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&content), "hook ran");
+    }
+
+    /// Full flow: write a file, fire pre_vfs_write hook, verify snapshot created.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_snapshot_on_write() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        // Write initial file content
+        let path = VfsPath::new("/shared/test.txt").unwrap();
+        app.vfs
+            .write(VfsCaller::System, &path, b"version 1")
+            .await
+            .unwrap();
+
+        // Load history plugin
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        // Fire pre_vfs_write hook (simulates what send.rs does before a write)
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/test.txt",
+            "content": "version 2",
+            "caller": "test-ctx",
+        });
+        let _ = execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
+
+        // Snapshot should exist at revision 1
+        let snapshot_path = VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
+        let snapshot = app
+            .vfs
+            .read(VfsCaller::System, &snapshot_path)
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&snapshot),
+            "version 1",
+            "snapshot should contain pre-write content"
+        );
+
+        // Meta should exist and contain 'next'
+        let meta_path = VfsPath::new("/shared/.chibi/history/test.txt/meta").unwrap();
+        let meta = app.vfs.read(VfsCaller::System, &meta_path).await.unwrap();
+        let meta_str = String::from_utf8_lossy(&meta);
+        assert!(meta_str.contains("next"), "meta should contain next field");
+    }
+
+    /// Pruning: fire hook 12 times, verify only 10 most recent snapshots remain.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_pruning() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let path = VfsPath::new("/shared/prune-test.txt").unwrap();
+
+        // Fire hook 12 times, updating file content before each hook
+        for i in 1u32..=12 {
+            let content = format!("v{}", i - 1);
+            app.vfs
+                .write(VfsCaller::System, &path, content.as_bytes())
+                .await
+                .unwrap();
+
+            let hook_data = serde_json::json!({
+                "path": "vfs:///shared/prune-test.txt",
+                "content": format!("v{}", i),
+                "caller": "test-ctx",
+            });
+            let _ =
+                execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
+        }
+
+        // Should have exactly 10 revisions (3..=12), not 12
+        let history_dir = VfsPath::new("/shared/.chibi/history/prune-test.txt").unwrap();
+        let entries = app.vfs.list(VfsCaller::System, &history_dir).await.unwrap();
+        let rev_count = entries.iter().filter(|e| e.name != "meta").count();
+        assert_eq!(rev_count, 10, "should prune to keep=10 revisions");
+
+        // Oldest remaining should be revision 3 (revisions 1 and 2 pruned)
+        let oldest = VfsPath::new("/shared/.chibi/history/prune-test.txt/3").unwrap();
+        assert!(
+            app.vfs.exists(VfsCaller::System, &oldest).await.unwrap(),
+            "revision 3 should exist"
+        );
+
+        let pruned = VfsPath::new("/shared/.chibi/history/prune-test.txt/1").unwrap();
+        assert!(
+            !app.vfs.exists(VfsCaller::System, &pruned).await.unwrap(),
+            "revision 1 should be pruned"
+        );
+    }
+
+    /// Integration: file_history_diff shows correct unified diff output.
+    ///
+    /// Fires PreVfsWrite to snapshot the original content, updates the file,
+    /// then calls the diff tool and asserts the output reflects the change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_diff_tool() {
+        use crate::tools::registry::{ToolCallContext, ToolRegistry};
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        // Write initial file content
+        let path = VfsPath::new("/shared/diff-test.txt").unwrap();
+        app.vfs
+            .write(VfsCaller::System, &path, b"line1\nline2\nline3\n")
+            .await
+            .unwrap();
+
+        // Load history plugin
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        // Register tools so dispatch_impl can find them
+        {
+            let mut reg = registry.write().unwrap();
+            for t in &tools {
+                reg.register(t.clone());
+            }
+        }
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        // Fire pre_vfs_write hook — snapshots "line1\nline2\nline3\n" as revision 1
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/diff-test.txt",
+            "content": "line1\nmodified\nline3\n",
+            "caller": "test-ctx",
+        });
+        execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
+
+        // Update file to the modified version
+        app.vfs
+            .write(VfsCaller::System, &path, b"line1\nmodified\nline3\n")
+            .await
+            .unwrap();
+
+        // Execute file_history_diff via dispatch_impl
+        let diff_tool_impl = {
+            let reg = registry.read().unwrap();
+            reg.get("file_history_diff").map(|t| t.r#impl.clone())
+        }
+        .expect("file_history_diff should be registered");
+
+        let call_ctx = ToolCallContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            vfs_caller: crate::vfs::VfsCaller::Context("test-ctx"),
+        };
+
+        let args = serde_json::json!({
+            "path": "vfs:///shared/diff-test.txt",
+            "revision": 1,
+        });
+        let result =
+            ToolRegistry::dispatch_impl(diff_tool_impl, "file_history_diff", &args, &call_ctx)
+                .await
+                .unwrap();
+
+        // Diff output should mention the changed line
+        assert!(
+            result.contains("line2") || result.contains("-line2"),
+            "diff should show removed 'line2': {result}"
+        );
+        assert!(
+            result.contains("modified") || result.contains("+modified"),
+            "diff should show added 'modified': {result}"
         );
     }
 }
