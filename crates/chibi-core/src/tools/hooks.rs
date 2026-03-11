@@ -1862,4 +1862,103 @@ echo 'OK'
             "revision 1 should be pruned"
         );
     }
+
+    /// Integration: file_history_diff shows correct unified diff output.
+    ///
+    /// Fires PreVfsWrite to snapshot the original content, updates the file,
+    /// then calls the diff tool and asserts the output reflects the change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_diff_tool() {
+        use crate::tools::registry::{ToolCallContext, ToolRegistry};
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        // Write initial file content
+        let path = VfsPath::new("/shared/diff-test.txt").unwrap();
+        app.vfs
+            .write(VfsCaller::System, &path, b"line1\nline2\nline3\n")
+            .await
+            .unwrap();
+
+        // Load history plugin
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        // Register tools so dispatch_impl can find them
+        {
+            let mut reg = registry.write().unwrap();
+            for t in &tools {
+                reg.register(t.clone());
+            }
+        }
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        // Fire pre_vfs_write hook — snapshots "line1\nline2\nline3\n" as revision 1
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/diff-test.txt",
+            "content": "line1\nmodified\nline3\n",
+            "caller": "test-ctx",
+        });
+        execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
+
+        // Update file to the modified version
+        app.vfs
+            .write(VfsCaller::System, &path, b"line1\nmodified\nline3\n")
+            .await
+            .unwrap();
+
+        // Execute file_history_diff via dispatch_impl
+        let diff_tool_impl = {
+            let reg = registry.read().unwrap();
+            reg.get("file_history_diff").map(|t| t.r#impl.clone())
+        }
+        .expect("file_history_diff should be registered");
+
+        let call_ctx = ToolCallContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            vfs_caller: crate::vfs::VfsCaller::Context("test-ctx"),
+        };
+
+        let args = serde_json::json!({
+            "path": "vfs:///shared/diff-test.txt",
+            "revision": 1,
+        });
+        let result = ToolRegistry::dispatch_impl(diff_tool_impl, "file_history_diff", &args, &call_ctx)
+            .await
+            .unwrap();
+
+        // Diff output should mention the changed line
+        assert!(
+            result.contains("line2") || result.contains("-line2"),
+            "diff should show removed 'line2': {result}"
+        );
+        assert!(
+            result.contains("modified") || result.contains("+modified"),
+            "diff should show added 'modified': {result}"
+        );
+    }
 }
