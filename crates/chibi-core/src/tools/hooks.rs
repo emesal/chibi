@@ -1314,8 +1314,7 @@ echo 'OK'
 
     // --- history.scm integration tests ---
 
-    const HISTORY_PLUGIN: &str =
-        include_str!("../../../../plugins/history.scm");
+    const HISTORY_PLUGIN: &str = include_str!("../../../../plugins/history.scm");
 
     /// Unit: minimal history-like hook logic (no guard) verifies snapshot + meta write.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1397,13 +1396,7 @@ echo 'OK'
             "path": "vfs:///shared/test.txt",
             "content": "version 2",
         });
-        let _ = execute_hook(
-            &tools,
-            HookPoint::PreVfsWrite,
-            &hook_data,
-            Some(&tein_ctx),
-        )
-        .unwrap();
+        let _ = execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
 
         let snap = VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
         let content = app.vfs.read(VfsCaller::System, &snap).await.unwrap();
@@ -1524,13 +1517,8 @@ echo 'OK'
             "content": "version 2",
             "caller": "test-ctx",
         });
-        let results = execute_hook(
-            &tools,
-            HookPoint::PreVfsWrite,
-            &hook_data,
-            Some(&tein_ctx),
-        )
-        .unwrap();
+        let results =
+            execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
 
         eprintln!("hook results: {:?}", results);
 
@@ -1607,21 +1595,11 @@ echo 'OK'
             "content": "version 2",
             "caller": "test-ctx",
         });
-        let _ = execute_hook(
-            &tools,
-            HookPoint::PreVfsWrite,
-            &hook_data,
-            Some(&tein_ctx),
-        )
-        .unwrap();
+        let _ = execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
 
         // Check for captured error
         let snap = VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
-        let exists = app
-            .vfs
-            .exists(VfsCaller::System, &snap)
-            .await
-            .unwrap();
+        let exists = app.vfs.exists(VfsCaller::System, &snap).await.unwrap();
         if !exists {
             // Check captured error
             panic!("snapshot not created; check captured-error via a print in the hook source");
@@ -1679,20 +1657,10 @@ echo 'OK'
             "path": "vfs:///shared/test.txt",
             "content": "new",
         });
-        let _ = execute_hook(
-            &tools,
-            HookPoint::PreVfsWrite,
-            &hook_data,
-            Some(&tein_ctx),
-        )
-        .unwrap();
+        let _ = execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
 
         let fired_path = VfsPath::new("/shared/hook-fired.txt").unwrap();
-        let content = app
-            .vfs
-            .read(VfsCaller::System, &fired_path)
-            .await
-            .unwrap();
+        let content = app.vfs.read(VfsCaller::System, &fired_path).await.unwrap();
         assert_eq!(String::from_utf8_lossy(&content), "hook ran");
     }
 
@@ -1741,17 +1709,10 @@ echo 'OK'
             "content": "version 2",
             "caller": "test-ctx",
         });
-        let _ = execute_hook(
-            &tools,
-            HookPoint::PreVfsWrite,
-            &hook_data,
-            Some(&tein_ctx),
-        )
-        .unwrap();
+        let _ = execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
 
         // Snapshot should exist at revision 1
-        let snapshot_path =
-            VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
+        let snapshot_path = VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
         let snapshot = app
             .vfs
             .read(VfsCaller::System, &snapshot_path)
@@ -1764,13 +1725,8 @@ echo 'OK'
         );
 
         // Meta should exist and contain 'next'
-        let meta_path =
-            VfsPath::new("/shared/.chibi/history/test.txt/meta").unwrap();
-        let meta = app
-            .vfs
-            .read(VfsCaller::System, &meta_path)
-            .await
-            .unwrap();
+        let meta_path = VfsPath::new("/shared/.chibi/history/test.txt/meta").unwrap();
+        let meta = app.vfs.read(VfsCaller::System, &meta_path).await.unwrap();
         let meta_str = String::from_utf8_lossy(&meta);
         assert!(meta_str.contains("next"), "meta should contain next field");
     }
@@ -1821,44 +1777,26 @@ echo 'OK'
                 "content": format!("v{}", i),
                 "caller": "test-ctx",
             });
-            let _ = execute_hook(
-                &tools,
-                HookPoint::PreVfsWrite,
-                &hook_data,
-                Some(&tein_ctx),
-            )
-            .unwrap();
+            let _ =
+                execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
         }
 
         // Should have exactly 10 revisions (3..=12), not 12
-        let history_dir =
-            VfsPath::new("/shared/.chibi/history/prune-test.txt").unwrap();
-        let entries = app
-            .vfs
-            .list(VfsCaller::System, &history_dir)
-            .await
-            .unwrap();
+        let history_dir = VfsPath::new("/shared/.chibi/history/prune-test.txt").unwrap();
+        let entries = app.vfs.list(VfsCaller::System, &history_dir).await.unwrap();
         let rev_count = entries.iter().filter(|e| e.name != "meta").count();
         assert_eq!(rev_count, 10, "should prune to keep=10 revisions");
 
         // Oldest remaining should be revision 3 (revisions 1 and 2 pruned)
-        let oldest =
-            VfsPath::new("/shared/.chibi/history/prune-test.txt/3").unwrap();
+        let oldest = VfsPath::new("/shared/.chibi/history/prune-test.txt/3").unwrap();
         assert!(
-            app.vfs
-                .exists(VfsCaller::System, &oldest)
-                .await
-                .unwrap(),
+            app.vfs.exists(VfsCaller::System, &oldest).await.unwrap(),
             "revision 3 should exist"
         );
 
-        let pruned =
-            VfsPath::new("/shared/.chibi/history/prune-test.txt/1").unwrap();
+        let pruned = VfsPath::new("/shared/.chibi/history/prune-test.txt/1").unwrap();
         assert!(
-            !app.vfs
-                .exists(VfsCaller::System, &pruned)
-                .await
-                .unwrap(),
+            !app.vfs.exists(VfsCaller::System, &pruned).await.unwrap(),
             "revision 1 should be pruned"
         );
     }
@@ -1947,9 +1885,10 @@ echo 'OK'
             "path": "vfs:///shared/diff-test.txt",
             "revision": 1,
         });
-        let result = ToolRegistry::dispatch_impl(diff_tool_impl, "file_history_diff", &args, &call_ctx)
-            .await
-            .unwrap();
+        let result =
+            ToolRegistry::dispatch_impl(diff_tool_impl, "file_history_diff", &args, &call_ctx)
+                .await
+                .unwrap();
 
         // Diff output should mention the changed line
         assert!(
