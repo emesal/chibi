@@ -86,7 +86,7 @@ use crate::vfs::{Vfs, VfsCaller, VfsEntryKind, VfsPath}; // Vfs+VfsCaller used i
 ///
 /// Mutation site: if `call-tool` signature changes, update `call_tool_bridge`.
 #[cfg(feature = "synthesised-tools")]
-const HARNESS_TOOLS_MODULE: &str = r#"
+pub(crate) const HARNESS_TOOLS_MODULE: &str = r#"
 (define-library (harness tools)
   (import (scheme base))
   (export call-tool)
@@ -120,7 +120,7 @@ const HARNESS_IO_MODULE: &str = r#"
 /// Mutation site: if `register-hook` signature changes, update
 /// `extract_hook_registrations` which reads `%hook-registry%` entries.
 #[cfg(feature = "synthesised-tools")]
-const HARNESS_HOOKS_MODULE: &str = r#"
+pub(crate) const HARNESS_HOOKS_MODULE: &str = r#"
 (define-library (harness hooks)
   (import (scheme base))
   (export register-hook)
@@ -143,7 +143,7 @@ const HARNESS_HOOKS_MODULE: &str = r#"
 /// Mutation site: if `define-tool` syntax changes, update `extract_multi_tools`
 /// which parses `%tool-registry%` entries.
 #[cfg(feature = "synthesised-tools")]
-const HARNESS_PREAMBLE: &str = r#"
+pub(crate) const HARNESS_PREAMBLE: &str = r#"
 (import (scheme base))
 
 ;; accumulates define-tool entries. each entry is a list:
@@ -234,7 +234,7 @@ pub(crate) struct CallContextGuard {
 
 #[cfg(feature = "synthesised-tools")]
 impl CallContextGuard {
-    fn set(
+    pub(crate) fn set(
         ctx: &crate::tools::registry::ToolCallContext<'_>,
         registry: Arc<RwLock<ToolRegistry>>,
         thread_id: std::thread::ThreadId,
@@ -698,6 +698,18 @@ fn build_tein_context(
     Ok((ctx, tid))
 }
 
+/// Build a sandboxed tein harness context with no user source.
+///
+/// Exposed for `eval.rs` which needs the same FFI/harness setup as synthesised
+/// tools but manages its own prelude and persistence. Passes an empty source so
+/// the caller can call `ctx.evaluate(prelude)` after receiving the context.
+#[cfg(feature = "synthesised-tools")]
+#[allow(dead_code)] // used by eval.rs once wired in
+pub(crate) fn build_sandboxed_harness_context(
+) -> io::Result<(ThreadLocalContext, std::thread::ThreadId)> {
+    build_tein_context(String::new(), crate::config::SandboxTier::Sandboxed)
+}
+
 /// Load one or more synthesised tools from scheme source.
 ///
 /// If the source uses `(define-tool ...)` macro, returns all defined tools.
@@ -824,7 +836,7 @@ fn extract_single_tool(
 /// Escape a string for safe embedding inside a Scheme string literal.
 /// Replaces `\` with `\\` and `"` with `\"`.
 #[cfg(feature = "synthesised-tools")]
-fn scheme_escape_string(s: &str) -> String {
+pub(crate) fn scheme_escape_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
