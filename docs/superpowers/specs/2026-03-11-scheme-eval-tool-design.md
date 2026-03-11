@@ -53,7 +53,7 @@ The LLM can `(import ...)` any other module in the `Modules::Safe` allowlist.
 
 ## Persistence Model
 
-- Tein contexts stored in a process-global `LazyLock<Mutex<HashMap<String, (ThreadLocalContext, ThreadId)>>>`, keyed by context name.
+- Tein contexts stored in a process-global `LazyLock<Mutex<HashMap<String, (Arc<ThreadLocalContext>, ThreadId)>>>`, keyed by context name. `ThreadLocalContext` is not `Clone` — `Arc` provides cheap sharing.
 - Created on first `scheme_eval` call for a given context.
 - Lives until process exit.
 - Each context gets its own independent environment (no cross-context state leakage).
