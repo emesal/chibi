@@ -134,6 +134,7 @@ pub async fn execute_vfs_list(
     }
     let lines: Vec<String> = entries
         .iter()
+        .filter(|e| !e.name.starts_with('.'))
         .map(|e| {
             let kind = match e.kind {
                 VfsEntryKind::File => "file",
@@ -426,5 +427,35 @@ mod tests {
                 def.name
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_vfs_list_hides_dotfiles() {
+        let (_dir, vfs) = setup_vfs();
+
+        // Use System caller to bypass zone restrictions for setup.
+        // Write a regular file and a dotfile directory in /shared/.
+        vfs.write(
+            VfsCaller::System,
+            &VfsPath::new("/shared/tool.scm").unwrap(),
+            b"content",
+        )
+        .await
+        .unwrap();
+        vfs.write(
+            VfsCaller::System,
+            &VfsPath::new("/shared/.chibi/history/tool.scm/meta").unwrap(),
+            b"meta",
+        )
+        .await
+        .unwrap();
+
+        let args = serde_json::json!({"path": "vfs:///shared"});
+        let result = execute_vfs_list(&vfs, VfsCaller::System, &args)
+            .await
+            .unwrap();
+
+        assert!(result.contains("tool.scm"), "regular file should appear");
+        assert!(!result.contains(".chibi"), "dotfile directory should be hidden");
     }
 }
