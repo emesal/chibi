@@ -680,7 +680,13 @@ fn build_tein_context(
             .step_limit(10_000_000)
             .build_managed(init),
         crate::config::SandboxTier::Unsandboxed => {
-            Context::builder().standard_env().build_managed(init)
+            // with_vfs_shadows() enables shadow modules (e.g. scheme/process-context,
+            // scheme/file) in non-sandboxed contexts. Required for (chibi diff) and
+            // other library modules that depend on scheme/process-context.
+            Context::builder()
+                .standard_env()
+                .with_vfs_shadows()
+                .build_managed(init)
         }
     }
     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("tein init: {e}")))?;
@@ -2130,6 +2136,69 @@ mod tests {
             );
         }
         assert_eq!(tools.len(), 5, "expected exactly 5 task tools");
+    }
+
+    const HISTORY_PLUGIN: &str = include_str!("../../../../plugins/history.scm");
+
+    /// Load history.scm and verify all four tools are registered.
+    #[test]
+    fn test_history_plugin_loads() {
+        let registry = make_registry();
+        let path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            names.contains(&"file_history_log"),
+            "missing file_history_log: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"file_history_show"),
+            "missing file_history_show: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"file_history_diff"),
+            "missing file_history_diff: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"file_history_revert"),
+            "missing file_history_revert: {:?}",
+            names
+        );
+        assert_eq!(tools.len(), 4, "expected exactly 4 tools: {:?}", names);
+    }
+
+    /// Verify history.scm registers the pre_vfs_write hook binding.
+    #[test]
+    fn test_history_plugin_registers_hook() {
+        let registry = make_registry();
+        let path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        // At least one tool should carry the pre_vfs_write hook binding.
+        let has_hook = tools.iter().any(|t| {
+            if let ToolImpl::Synthesised { hook_bindings, .. } = &t.r#impl {
+                hook_bindings.contains_key(&crate::tools::hooks::HookPoint::PreVfsWrite)
+            } else {
+                false
+            }
+        });
+        assert!(has_hook, "history plugin should register pre_vfs_write hook");
     }
 
     /// Verify generate-id and current-timestamp harness helpers work.
