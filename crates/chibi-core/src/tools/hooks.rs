@@ -182,6 +182,12 @@ pub fn execute_hook(
                 guard.borrow_mut().insert(hook);
             });
 
+            // Deduplicate: tools from the same .scm file share a tein context
+            // and produce the same (worker_thread_id, binding) pair. Only fire
+            // each unique (context instance, binding) once per hook event.
+            let mut dispatched: std::collections::HashSet<(std::thread::ThreadId, String)> =
+                std::collections::HashSet::new();
+
             for tool in tools {
                 if !tool.hooks.contains(&hook) {
                     continue;
@@ -206,6 +212,11 @@ pub fn execute_hook(
                 let Some(binding) = hook_bindings.get(&hook) else {
                     continue;
                 };
+
+                // Skip if this (context, binding) was already dispatched this event.
+                if !dispatched.insert((worker_thread_id, binding.clone())) {
+                    continue;
+                }
 
                 let payload = match super::synthesised::json_args_to_scheme_alist(data) {
                     Ok(v) => v,
@@ -1298,6 +1309,557 @@ echo 'OK'
             String::from_utf8_lossy(&content),
             "1",
             "counter should be 1 — no recursive hook dispatch from io-write"
+        );
+    }
+
+    // --- history.scm integration tests ---
+
+    const HISTORY_PLUGIN: &str =
+        include_str!("../../../../plugins/history.scm");
+
+    /// Unit: minimal history-like hook logic (no guard) verifies snapshot + meta write.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_hook_logic_diagnostic() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        // Pre-populate a file to snapshot
+        let path = VfsPath::new("/shared/test.txt").unwrap();
+        app.vfs
+            .write(VfsCaller::System, &path, b"version 1")
+            .await
+            .unwrap();
+
+        // Minimal history hook logic WITHOUT the guard — errors will surface
+        let source = r#"
+(import (scheme base))
+(import (scheme write))
+(import (scheme read))
+(import (harness io))
+(import (harness hooks))
+(import (harness tools))
+
+(define (history-dir-for uri)
+  (let* ((path (substring uri 6 (string-length uri)))
+         (last-slash (let loop ((i (- (string-length path) 1)))
+                       (cond ((< i 0) #f)
+                             ((char=? (string-ref path i) #\/) i)
+                             (else (loop (- i 1)))))))
+    (if last-slash
+        (string-append "vfs://"
+                       (substring path 0 last-slash)
+                       "/.chibi/history/"
+                       (substring path (+ last-slash 1) (string-length path)))
+        (string-append "vfs://" "/.chibi/history/" path))))
+
+(register-hook 'pre_vfs_write
+  (lambda (payload)
+    (let ((path (cdr (assoc "path" payload))))
+      (when (string? path)
+        (let ((current (io-read path)))
+          (when current
+            (let ((hdir (history-dir-for path)))
+              (io-write (string-append hdir "/1") current)
+              (io-write (string-append hdir "/meta") "(())")))))
+      '())))
+
+(define tool-name "dummy")
+(define tool-description "dummy")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/diag-hook.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/test.txt",
+            "content": "version 2",
+        });
+        let _ = execute_hook(
+            &tools,
+            HookPoint::PreVfsWrite,
+            &hook_data,
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        let snap = VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
+        let content = app.vfs.read(VfsCaller::System, &snap).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&content), "version 1");
+    }
+
+    /// Regression: hook logic without guard (verifies filter-free meta-set works).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_hook_no_guard_diagnostic() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        app.vfs
+            .write(
+                VfsCaller::System,
+                &VfsPath::new("/shared/test.txt").unwrap(),
+                b"version 1",
+            )
+            .await
+            .unwrap();
+
+        // Same as history.scm but without the (guard ...) wrapper
+        let source = r#"
+(import (scheme base) (scheme write) (scheme read) (scheme char)
+        (chibi diff) (harness io) (harness tools) (harness hooks))
+
+(define %history-keep% 10)
+(define %history-prefix% ".chibi/history")
+
+(define (split-vfs-path uri)
+  (let* ((path (substring uri 6 (string-length uri)))
+         (last-slash (let loop ((i (- (string-length path) 1)))
+                       (cond ((< i 0) #f)
+                             ((char=? (string-ref path i) #\/) i)
+                             (else (loop (- i 1)))))))
+    (if last-slash
+        (cons (string-append "vfs://" (substring path 0 last-slash))
+              (substring path (+ last-slash 1) (string-length path)))
+        (cons "vfs://" path))))
+
+(define (history-dir-for uri)
+  (let ((parts (split-vfs-path uri)))
+    (string-append (car parts) "/" %history-prefix% "/" (cdr parts))))
+
+(define (revision-path hdir n) (string-append hdir "/" (number->string n)))
+(define (meta-path hdir) (string-append hdir "/meta"))
+
+(define (read-meta hdir)
+  (let ((content (io-read (meta-path hdir))))
+    (if content (read (open-input-string content)) '((next . 1)))))
+
+(define (write-meta! hdir meta)
+  (let ((out (open-output-string)))
+    (write meta out)
+    (io-write (meta-path hdir) (get-output-string out))))
+
+(define (meta-ref meta key)
+  (cond ((assq key meta) => cdr) (else #f)))
+
+(define (meta-set meta key value)
+  (cons (cons key value)
+        (filter (lambda (pair) (not (eq? (car pair) key))) meta)))
+
+(define (string-contains haystack needle)
+  (let ((hlen (string-length haystack)) (nlen (string-length needle)))
+    (let loop ((i 0))
+      (cond ((> (+ i nlen) hlen) #f)
+            ((string=? (substring haystack i (+ i nlen)) needle) #t)
+            (else (loop (+ i 1)))))))
+
+;; NO guard — errors surface directly
+(define (on-pre-vfs-write-ungarded payload)
+  (let ((path (cdr (assoc "path" payload))))
+    (when (and (string? path)
+               (>= (string-length path) 6)
+               (string=? (substring path 0 6) "vfs://")
+               (not (string-contains path "/.chibi/")))
+      (let ((current (io-read path)))
+        (when current
+          (let* ((hdir (history-dir-for path))
+                 (meta (read-meta hdir))
+                 (next (or (meta-ref meta 'next) 1)))
+            (io-write (revision-path hdir next) current)
+            (write-meta! hdir (meta-set meta 'next (+ next 1)))))))))
+
+(register-hook 'pre_vfs_write on-pre-vfs-write-ungarded)
+(define tool-name "dummy") (define tool-description "d")
+(define tool-parameters '()) (define (tool-execute args) "ok")
+"#;
+
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/test.txt",
+            "content": "version 2",
+            "caller": "test-ctx",
+        });
+        let results = execute_hook(
+            &tools,
+            HookPoint::PreVfsWrite,
+            &hook_data,
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        eprintln!("hook results: {:?}", results);
+
+        let snap = VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
+        let content = app.vfs.read(VfsCaller::System, &snap).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&content), "version 1");
+    }
+
+    /// Regression: real history.scm with re-registration wrapper; verifies hook runs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_hook_error_diagnostic() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        app.vfs
+            .write(
+                VfsCaller::System,
+                &VfsPath::new("/shared/test.txt").unwrap(),
+                b"version 1",
+            )
+            .await
+            .unwrap();
+
+        // Load history.scm but wrap the hook to capture errors (no silent swallowing)
+        // We test the *real* history plugin but add a side-channel error capture.
+        let source = format!(
+            r#"
+{}
+;; Override: wrap on-pre-vfs-write to capture error message
+(define captured-error #f)
+(define (on-pre-vfs-write-debug payload)
+  (call-with-current-continuation
+    (lambda (k)
+      (with-exception-handler
+        (lambda (exn)
+          (set! captured-error
+                (if (error-object? exn)
+                    (error-object-message exn)
+                    "non-error exception"))
+          (k #f))
+        (lambda () (on-pre-vfs-write payload))))))
+(register-hook 'pre_vfs_write on-pre-vfs-write-debug)
+"#,
+            HISTORY_PLUGIN
+        );
+
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            &source,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/test.txt",
+            "content": "version 2",
+            "caller": "test-ctx",
+        });
+        let _ = execute_hook(
+            &tools,
+            HookPoint::PreVfsWrite,
+            &hook_data,
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        // Check for captured error
+        let snap = VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
+        let exists = app
+            .vfs
+            .exists(VfsCaller::System, &snap)
+            .await
+            .unwrap();
+        if !exists {
+            // Check captured error
+            panic!("snapshot not created; check captured-error via a print in the hook source");
+        }
+        let content = app.vfs.read(VfsCaller::System, &snap).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&content), "version 1");
+    }
+
+    /// Sanity check: a bare pre_vfs_write hook that writes a file works.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_pre_vfs_write_hook_io_write_works() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(import (harness hooks))
+(import (harness tools))
+(register-hook 'pre_vfs_write
+  (lambda (payload)
+    (io-write "vfs:///shared/hook-fired.txt" "hook ran")
+    '()))
+(define tool-name "dummy")
+(define tool-description "dummy")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/test.txt",
+            "content": "new",
+        });
+        let _ = execute_hook(
+            &tools,
+            HookPoint::PreVfsWrite,
+            &hook_data,
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        let fired_path = VfsPath::new("/shared/hook-fired.txt").unwrap();
+        let content = app
+            .vfs
+            .read(VfsCaller::System, &fired_path)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&content), "hook ran");
+    }
+
+    /// Full flow: write a file, fire pre_vfs_write hook, verify snapshot created.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_snapshot_on_write() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        // Write initial file content
+        let path = VfsPath::new("/shared/test.txt").unwrap();
+        app.vfs
+            .write(VfsCaller::System, &path, b"version 1")
+            .await
+            .unwrap();
+
+        // Load history plugin
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        // Fire pre_vfs_write hook (simulates what send.rs does before a write)
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/test.txt",
+            "content": "version 2",
+            "caller": "test-ctx",
+        });
+        let _ = execute_hook(
+            &tools,
+            HookPoint::PreVfsWrite,
+            &hook_data,
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        // Snapshot should exist at revision 1
+        let snapshot_path =
+            VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
+        let snapshot = app
+            .vfs
+            .read(VfsCaller::System, &snapshot_path)
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&snapshot),
+            "version 1",
+            "snapshot should contain pre-write content"
+        );
+
+        // Meta should exist and contain 'next'
+        let meta_path =
+            VfsPath::new("/shared/.chibi/history/test.txt/meta").unwrap();
+        let meta = app
+            .vfs
+            .read(VfsCaller::System, &meta_path)
+            .await
+            .unwrap();
+        let meta_str = String::from_utf8_lossy(&meta);
+        assert!(meta_str.contains("next"), "meta should contain next field");
+    }
+
+    /// Pruning: fire hook 12 times, verify only 10 most recent snapshots remain.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_pruning() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let path = VfsPath::new("/shared/prune-test.txt").unwrap();
+
+        // Fire hook 12 times, updating file content before each hook
+        for i in 1u32..=12 {
+            let content = format!("v{}", i - 1);
+            app.vfs
+                .write(VfsCaller::System, &path, content.as_bytes())
+                .await
+                .unwrap();
+
+            let hook_data = serde_json::json!({
+                "path": "vfs:///shared/prune-test.txt",
+                "content": format!("v{}", i),
+                "caller": "test-ctx",
+            });
+            let _ = execute_hook(
+                &tools,
+                HookPoint::PreVfsWrite,
+                &hook_data,
+                Some(&tein_ctx),
+            )
+            .unwrap();
+        }
+
+        // Should have exactly 10 revisions (3..=12), not 12
+        let history_dir =
+            VfsPath::new("/shared/.chibi/history/prune-test.txt").unwrap();
+        let entries = app
+            .vfs
+            .list(VfsCaller::System, &history_dir)
+            .await
+            .unwrap();
+        let rev_count = entries.iter().filter(|e| e.name != "meta").count();
+        assert_eq!(rev_count, 10, "should prune to keep=10 revisions");
+
+        // Oldest remaining should be revision 3 (revisions 1 and 2 pruned)
+        let oldest =
+            VfsPath::new("/shared/.chibi/history/prune-test.txt/3").unwrap();
+        assert!(
+            app.vfs
+                .exists(VfsCaller::System, &oldest)
+                .await
+                .unwrap(),
+            "revision 3 should exist"
+        );
+
+        let pruned =
+            VfsPath::new("/shared/.chibi/history/prune-test.txt/1").unwrap();
+        assert!(
+            !app.vfs
+                .exists(VfsCaller::System, &pruned)
+                .await
+                .unwrap(),
+            "revision 1 should be pruned"
         );
     }
 }

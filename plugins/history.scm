@@ -73,9 +73,14 @@
         (else #f)))
 
 ;;; Set a field in meta alist (functional update).
+;;; Note: avoids (scheme base)'s `filter` which may not be available
+;;; in all hook callback environments.
 (define (meta-set meta key value)
-  (cons (cons key value)
-        (filter (lambda (pair) (not (eq? (car pair) key))) meta)))
+  (define (remove-key lst)
+    (cond ((null? lst) '())
+          ((eq? (car (car lst)) key) (remove-key (cdr lst)))
+          (else (cons (car lst) (remove-key (cdr lst))))))
+  (cons (cons key value) (remove-key meta)))
 
 ;; --- revision enumeration ---
 
@@ -139,8 +144,9 @@
 
 ;;; pre_vfs_write hook: snapshot current file content before overwrite.
 ;;; Best-effort: errors are caught and silently ignored (advisory, not a gate).
+;;; Always returns '() — hook results are observe-only, not used for side effects.
 (define (on-pre-vfs-write payload)
-  (guard (exn (#t #f))  ;; catch all errors, return #f (no-op)
+  (guard (exn (#t '()))  ;; catch all errors, return '() (no-op)
     (let ((path (cdr (assoc "path" payload))))
       ;; Skip non-VFS paths and our own metadata writes
       (when (and (string? path)
@@ -158,7 +164,8 @@
               ;; Update meta
               (write-meta! hdir (meta-set meta 'next (+ next 1)))
               ;; Prune old revisions
-              (prune-revisions! hdir %history-keep%))))))))
+              (prune-revisions! hdir %history-keep%))))))
+    '()))  ;; always return empty list
 
 ;; Register the hook
 (register-hook 'pre_vfs_write on-pre-vfs-write)
