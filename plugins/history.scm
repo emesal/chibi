@@ -27,6 +27,7 @@
 
 ;;; Split a VFS URI into (parent-dir . filename).
 ;;; "vfs:///shared/tool.scm" → ("vfs:///shared" . "tool.scm")
+;;; "vfs:///tool.scm"        → ("vfs://"        . "tool.scm")  (root-level file)
 (define (split-vfs-path uri)
   (let* ((path (substring uri 6 (string-length uri)))  ;; strip "vfs://"
          (last-slash (let loop ((i (- (string-length path) 1)))

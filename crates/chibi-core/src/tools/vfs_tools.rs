@@ -129,9 +129,6 @@ pub async fn execute_vfs_list(
 ) -> io::Result<String> {
     let path = require_vfs_path(args, "path")?;
     let entries = vfs.list(caller, &path).await?;
-    if entries.is_empty() {
-        return Ok("No entries found.".to_string());
-    }
     let lines: Vec<String> = entries
         .iter()
         .filter(|e| !e.name.starts_with('.'))
@@ -143,6 +140,9 @@ pub async fn execute_vfs_list(
             format!("{} ({})", e.name, kind)
         })
         .collect();
+    if lines.is_empty() {
+        return Ok("No entries found.".to_string());
+    }
     Ok(lines.join("\n"))
 }
 
@@ -459,6 +459,31 @@ mod tests {
         assert!(
             !result.contains(".chibi"),
             "dotfile directory should be hidden"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_vfs_list_all_dotfiles_returns_not_found() {
+        let (_dir, vfs) = setup_vfs();
+
+        // A directory containing only dotfiles should report "No entries found."
+        // rather than returning an empty string (regression: filter applied after guard).
+        vfs.write(
+            VfsCaller::System,
+            &VfsPath::new("/shared/.chibi/history/tool.scm/meta").unwrap(),
+            b"meta",
+        )
+        .await
+        .unwrap();
+
+        let args = serde_json::json!({"path": "vfs:///shared"});
+        let result = execute_vfs_list(&vfs, VfsCaller::System, &args)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result, "No entries found.",
+            "all-dotfile dir should report empty"
         );
     }
 }
