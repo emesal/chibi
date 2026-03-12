@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.10.3] - 2026-03-12
+## [0.10.4] - 2026-03-12
 
 ### Bug Fixes
 
@@ -166,6 +166,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Scheme_eval builtin tool design spec ([`5c2172f`](https://github.com/emesal/chibi/commit/5c2172f3c5cc24f5c6c25f0342d4f81f514f88dd))
 
 - Scheme_eval implementation plan + spec Arc fix ([`238964f`](https://github.com/emesal/chibi/commit/238964f91b790e984bf9c26dbd63bcf9adacd4d5))
+
+- Update CHANGELOG for v0.10.3 ([`5e4f45a`](https://github.com/emesal/chibi/commit/5e4f45a48b1a5cdcbb5174f98f84707a193c7999))
 
 
 ### Features
