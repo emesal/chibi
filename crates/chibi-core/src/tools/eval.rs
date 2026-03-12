@@ -28,6 +28,8 @@ const EVAL_PRELUDE: &str = r#"
         (scheme case-lambda)
         (tein json)
         (tein safe-regexp)
+        (tein docs)
+        (tein introspect)
         (srfi 1)
         (srfi 130)
         (chibi match)
@@ -51,8 +53,14 @@ pub static EVAL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
     name: SCHEME_EVAL_TOOL_NAME,
     description: "Evaluate a Scheme (R7RS) expression in a persistent sandboxed environment. \
                   State persists across calls — define variables, build data structures, compose \
-                  computations. Returns the result of the last expression. Additional safe modules \
-                  can be imported with (import ...).",
+                  computations. Returns the result of the last expression. Pre-imported: \
+                  (scheme base), (scheme write), (scheme read), (scheme char), (scheme case-lambda), \
+                  (tein json) for json-parse/json-stringify, (tein safe-regexp) for regex, \
+                  (tein docs) for module-docs/describe, \
+                  (tein introspect) for available-modules/module-exports/binding-info/env-bindings, \
+                  (srfi 1) for list operations, (srfi 130) for string cursors, \
+                  (chibi match) for pattern matching, and (harness tools) for call-tool. \
+                  Additional safe modules can be imported with (import ...).",
     properties: &[ToolPropertyDef {
         name: "code",
         prop_type: "string",
@@ -244,6 +252,26 @@ mod tests {
             .evaluate("(match '(1 2 3) ((a b c) (+ a b c)))")
             .expect("chibi match");
         assert_eq!(result.to_string(), "6");
+    }
+
+    #[test]
+    fn test_prelude_tein_docs() {
+        let (ctx, _) = super::build_eval_context().expect("context should build");
+        // module-docs returns doc pairs from an alist — just verify the binding exists
+        let result = ctx
+            .evaluate("(procedure? module-docs)")
+            .expect("module-docs from tein docs");
+        assert_eq!(result.to_string(), "#t");
+    }
+
+    #[test]
+    fn test_prelude_tein_introspect() {
+        let (ctx, _) = super::build_eval_context().expect("context should build");
+        // available-modules returns a list of importable modules
+        let result = ctx
+            .evaluate("(list? (available-modules))")
+            .expect("available-modules from tein introspect");
+        assert_eq!(result.to_string(), "#t");
     }
 
     #[test]
