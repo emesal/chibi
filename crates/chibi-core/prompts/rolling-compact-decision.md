@@ -3,13 +3,13 @@ You are deciding which conversation messages to archive during context compactio
 CURRENT MESSAGES (oldest first):
 {MESSAGES}
 
-{GOALS}{TODOS}EXISTING SUMMARY:
+{GOALS}{TASKS}EXISTING SUMMARY:
 {SUMMARY}
 
 Your task: Select approximately {TARGET_COUNT} messages to archive (move to summary).
 
-Use the goals and todos above as your primary relevance criterion — messages that
-directly serve active goals or todos should be kept; messages that are superseded,
+Use the goals and tasks above as your primary relevance criterion — messages that
+directly serve active goals or tasks should be kept; messages that are superseded,
 tangential, or no longer actionable are good candidates for archival.
 
 Also consider:

@@ -12,11 +12,10 @@ The LLM always has access to these tools (no setup required):
 |------|-------------|
 | `call_user` | End the turn and return control to the user |
 | `call_agent` | Continue the agentic loop with a new prompt |
-| `update_todos` | Track tasks for the current conversation |
 | `update_goals` | Set high-level objectives |
 | `update_reflection` | Update persistent memory (when reflection is enabled) |
 | `send_message` | Send messages to other contexts |
-| `read_context` | Read another context's state (summary, todos, goals, messages) |
+| `read_context` | Read another context's state (summary, goals, messages) |
 | `model_info` | Look up model metadata (context window, pricing, capabilities, parameters) |
 
 ### File
@@ -106,30 +105,40 @@ TCP. Chibi starts it automatically when MCP servers are configured.
 
 See [mcp.md](mcp.md) for setup and configuration.
 
-## Todos and Goals
+## Tasks and Goals
 
-Each context can have its own todos and goals stored in markdown files:
+### Structured Tasks
 
-- **Todos** (`~/.chibi/contexts/<name>/todos.md`) - Short-term tasks
-- **Goals** (`~/.chibi/contexts/<name>/goals.md`) - Long-term objectives
+Tasks are per-context `.task` files stored in the VFS under `/home/<ctx>/tasks/` (context-local) or `/flocks/<name>/tasks/` (flock-shared). Install the task plugin to get CRUD tools:
 
-These are automatically included in the system prompt, so the LLM always knows what it's working toward.
+```bash
+# copy plugins/tasks.scm to /tools/shared/ in your VFS root
+```
+
+The LLM uses `task_create`, `task_update`, `task_view`, `task_list`, and `task_delete`. A compact summary table is injected as ephemeral context before each prompt — the LLM always sees current task state without manual tracking.
+
+```
+--- tasks ---
+id     status      priority  path              summary
+a3f2   in-progress high      epic/login        implement the auth flow
+--- 1 active, 0 done ---
+```
+
+See [vfs.md](vfs.md) for file format and storage layout, and [plugins.md](plugins.md) for task tool reference.
+
+### Goals
+
+Each context can have goals stored in markdown:
+
+- **Goals** (`~/.chibi/contexts/<name>/goals.md`) - Long-term objectives per flock
+
+Goals are automatically included in the system prompt. The LLM calls `update_goals` to update them.
 
 ### Viewing
 
 ```bash
-chibi -n todos    # View current todos
 chibi -n goals    # View current goals
-```
-
-### How It Works
-
-The LLM can call `update_todos` or `update_goals` with new markdown content. The content completely replaces the existing file (it's not appended).
-
-Example LLM behavior:
-```
-LLM: "Let me update my task list."
-     [calls update_todos with content: "- [x] Read the config file\n- [ ] Analyse the structure\n- [ ] Write report"]
+chibi -n tasks    # View task summary
 ```
 
 ## Reflection (Persistent Memory)
@@ -339,7 +348,7 @@ When auto-compaction is enabled and context size exceeds the threshold, rolling 
 
 1. LLM analyses all messages
 2. Decides which to archive based on:
-   - Current goals and todos (keeps relevant messages)
+   - Current goals and tasks (keeps relevant messages)
    - Message recency (prefers keeping recent context)
    - Content importance (preserves key decisions)
 3. Selected messages are archived and summarised
@@ -373,18 +382,19 @@ User: "Research quantum computing and write a summary report"
 
 Round 1:
 LLM: Sets goals: "Research quantum computing, write summary report"
-     Sets todos: "- [ ] Search for introductory materials"
+     [calls task_create: path="research/search", body="Find quantum computing basics"]
      [calls spawn_agent: system_prompt="You are a researcher", input="Find quantum computing basics"]
      [calls call_agent: "Check research results and continue"]
 
 Round 2:
 LLM: [calls read_context: "research"]
-     Updates todos: "- [x] Search for materials\n- [ ] Synthesise findings"
+     [calls task_update: id="a3f2", status="done"]
+     [calls task_create: path="research/synthesise", body="Synthesise findings into report"]
      [calls call_agent: "Write the summary"]
 
 Round 3:
 LLM: Writes summary report
-     Updates todos: "- [x] Search\n- [x] Synthesise\n- [x] Write report"
+     [calls task_update: id="b7e1", status="done"]
      Clears goals
      Returns final response to user
 ```
@@ -484,7 +494,7 @@ See [configuration.md](configuration.md) for full fuel settings.
 ## Best Practices
 
 1. **Clear Goals** - Help the LLM stay focused by encouraging goal-setting
-2. **Incremental Todos** - Breaking work into small tasks helps track progress
+2. **Incremental Tasks** - Breaking work into `task_create`/`task_update` calls helps track progress
 3. **Reasonable Recursion Limits** - Balance autonomy vs. runaway loops
 4. **Use Reflection Wisely** - Store genuinely useful long-term knowledge
 5. **Monitor with Verbose Mode** - Use `-v` to see what the agent is doing

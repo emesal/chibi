@@ -93,6 +93,13 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 |------|------|------------|
 | `post_index_file` | After a file is indexed by the code indexer | No |
 
+### VFS Write Lifecycle
+
+| Hook | When | Can Modify |
+|------|------|------------|
+| `pre_vfs_write` | Before a VFS file write (advisory, non-blocking) | No |
+| `post_vfs_write` | After a successful VFS file write | No |
+
 ### Context Lifecycle
 
 | Hook | When | Can Modify |
@@ -119,6 +126,47 @@ Plugins register for hooks via their `--schema` JSON output:
   "hooks": ["on_start", "pre_message", "post_message"]
 }
 ```
+
+## Tein Hook Registration
+
+Synthesised tools (`.scm` files) can register for hooks using the `(harness hooks)` module:
+
+```scheme
+(import (harness hooks))
+
+(register-hook 'pre_message
+  (lambda (payload)
+    ;; payload is an alist parsed from the hook's JSON data.
+    ;; return an alist to modify behaviour, or '() for no-op.
+    (list (cons "prompt" "modified prompt"))))
+
+(define tool-name "my-tool")
+(define tool-description "A tool that also hooks into pre_message")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+```
+
+Tein hooks follow the same contract as subprocess plugin hooks:
+- They receive the hook payload converted from JSON to a scheme alist.
+- They return a scheme alist (converted back to JSON), or `'()` (empty list) for no-op.
+- Errors in callbacks are caught and skipped silently (same as subprocess hook failures).
+- `register-hook` takes a symbol for the hook point name and a one-argument procedure.
+
+**Ordering:** subprocess plugin hooks fire first, then tein hooks, in registration order.
+
+**Re-entrancy:** If a tein hook callback triggers an action that fires the same hook point,
+tein callbacks are skipped on the recursive call to prevent infinite loops. Subprocess
+hooks still fire normally.
+
+**IO in hook callbacks:** Tein hook callbacks can use `(harness io)` (unsandboxed tier only)
+for direct VFS and filesystem IO without triggering hooks. This is the recommended way for
+builtin plugins to perform IO during hook execution.
+
+Using `call-tool` from hooks is also possible (when the hook is dispatched from a full async
+context) but may trigger hooks on the called tool — use with care to avoid re-entrancy.
+
+**Lifecycle:** Hook registrations are tied to the `.scm` file. When a file is hot-reloaded
+or deleted, its hooks are automatically cleared and re-evaluated from the fresh source.
 
 ## Hook Execution
 
@@ -180,7 +228,6 @@ When a hook fires, registered plugins are called with:
 {
   "context_name": "default",
   "summary": "conversation summary...",
-  "todos": "current todos...",
   "flock_goals": [
     {"flock": "site:<site_id>", "goals": "site-wide goals..."},
     {"flock": "myteam", "goals": "team goals..."}
@@ -188,7 +235,7 @@ When a hook fires, registered plugins are called with:
 }
 ```
 
-> **Breaking change:** the `goals` field was replaced by `flock_goals` (array) in the flocks migration. each entry is `{"flock": "<name>", "goals": "<content>"}`. the array is empty if no flocks have goals set.
+> **Breaking changes:** the `goals` field was replaced by `flock_goals` (array) in the flocks migration. each entry is `{"flock": "<name>", "goals": "<content>"}`. the array is empty if no flocks have goals set. the `todos` field was removed in the structured-tasks migration (#186); tasks are now VFS-backed `.task` files injected ephemerally into the message stream rather than exposed via hook payloads.
 
 **Can return:**
 ```json
@@ -205,7 +252,7 @@ Called before tools are sent to the API. Allows dynamic filtering of which tools
 {
   "context_name": "default",
   "tools": [
-    {"name": "update_todos", "type": "builtin"},
+    {"name": "update_reflection", "type": "builtin"},
     {"name": "file_head", "type": "file"},
     {"name": "my_plugin", "type": "plugin"}
   ],
@@ -215,7 +262,7 @@ Called before tools are sent to the API. Allows dynamic filtering of which tools
 ```
 
 Tool types are:
-- `builtin`: update_todos, update_goals, update_reflection, send_message
+- `builtin`: update_reflection, update_goals, read_context, flock_join, flock_leave, flock_list
 - `file`: file_head, file_tail, file_lines, file_grep, write_file
 - `agent`: spawn_agent, retrieve_content
 - `plugin`: Tools loaded from the plugins directory
@@ -230,7 +277,7 @@ Tool types are:
 Or to use allowlist mode:
 ```json
 {
-  "include": ["update_todos", "update_goals"]
+  "include": ["update_reflection", "update_goals"]
 }
 ```
 
@@ -317,7 +364,7 @@ Called after processing a batch of tool calls, before deciding whether to contin
   "current_fallback": "call_agent",
   "tool_calls": [
     {"name": "file_head", "arguments": {"path": "Cargo.toml"}},
-    {"name": "update_todos", "arguments": {"content": "..."}}
+    {"name": "update_goals", "arguments": {"content": "..."}}
   ]
 }
 ```
@@ -680,6 +727,37 @@ Fired after a file is successfully indexed by the code indexer. Observe only.
 }
 ```
 
+### pre_vfs_write
+
+Fired before a VFS file write (via `write_file` or `file_edit`). Advisory and non-blocking — cannot prevent the write. Intended for observe-and-snapshot use cases (e.g. the file history plugin).
+
+> **Note:** Only fires for writes initiated via tool dispatch (i.e. context-initiated writes). Writes from `VfsCaller::System` and `(harness io)` bypass `send.rs` entirely and do not trigger this hook.
+
+```json
+{
+  "tool_name": "write_file",
+  "path": "vfs:///shared/tool.scm",
+  "content": "new content here",
+  "caller": "my-context"
+}
+```
+
+The `content` field is `null` for `file_edit` calls (which use `operation`/`old`/`new` params rather than a full content replacement).
+
+### post_vfs_write
+
+Fired after a VFS file write completes successfully. Observe only.
+
+> **Note:** Same caller restriction as `pre_vfs_write` — only fires for context-initiated writes via tool dispatch.
+
+```json
+{
+  "tool_name": "write_file",
+  "path": "vfs:///shared/tool.scm",
+  "caller": "my-context"
+}
+```
+
 ## Example Hook Plugin
 
 A minimal hook plugin that logs events:
@@ -815,7 +893,7 @@ if [[ "$CHIBI_HOOK" == "pre_api_tools" ]]; then
 
   # Restrict tools in "safe" context
   if [[ "$context" == "safe" ]]; then
-    echo '{"include": ["update_todos", "update_goals"]}'
+    echo '{"include": ["update_goals", "update_reflection"]}'
     exit 0
   fi
 

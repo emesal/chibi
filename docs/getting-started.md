@@ -70,7 +70,7 @@ Explain the following concepts:
 
 ## Managing Contexts
 
-Contexts are separate conversations. Each context maintains its own message history, todos, goals, and optionally its own system prompt and configuration.
+Contexts are separate conversations. Each context maintains its own message history, tasks, goals, and optionally its own system prompt and configuration.
 
 ```bash
 # Switch to a context (creates if needed)

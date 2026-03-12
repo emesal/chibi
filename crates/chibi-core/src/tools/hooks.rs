@@ -8,6 +8,22 @@ use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use strum::{AsRefStr, EnumString};
 
+#[cfg(feature = "synthesised-tools")]
+use std::cell::RefCell;
+#[cfg(feature = "synthesised-tools")]
+use std::collections::HashSet;
+#[cfg(feature = "synthesised-tools")]
+use std::sync::{Arc, RwLock};
+
+// Tracks which hook points are currently being dispatched to tein callbacks.
+// Prevents re-entrancy: if a tein hook callback triggers an action that fires
+// the same hook point, tein callbacks are skipped on the recursive call.
+// Subprocess hooks still fire normally regardless.
+#[cfg(feature = "synthesised-tools")]
+thread_local! {
+    static TEIN_HOOK_GUARD: RefCell<HashSet<HookPoint>> = RefCell::new(HashSet::new());
+}
+
 /// Hook points where tools can register to be called
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, AsRefStr)]
 #[strum(serialize_all = "snake_case")]
@@ -43,16 +59,51 @@ pub enum HookPoint {
     PreSpawnAgent, // Before sub-agent call (can intercept/replace with {"response": "..."} or block)
     PostSpawnAgent, // After sub-agent call (observe only)
     PostIndexFile, // After a file is indexed (observe: path, lang, symbol_count, ref_count)
+    PreVfsWrite,   // Before a VFS file write (advisory, non-blocking; observe-and-snapshot)
+    PostVfsWrite,  // After a successful VFS file write (observe only)
+}
+
+/// Context needed to set up `BRIDGE_CALL_CTX` during tein hook dispatch,
+/// enabling tein hook callbacks to use `call-tool` and `(harness io)`.
+///
+/// Pass `Some(...)` from async contexts that have the full app state.
+/// Pass `None` from contexts without a tokio runtime (sync lifecycle hooks)
+/// or tests — tein callbacks still dispatch but cannot use IO or `call-tool`.
+///
+/// When the `synthesised-tools` feature is disabled this is an empty struct;
+/// the 4th `execute_hook` parameter is always present so call sites compile
+/// uniformly with `, None` regardless of feature state.
+pub struct TeinHookContext<'a> {
+    #[cfg(feature = "synthesised-tools")]
+    pub app: &'a crate::state::AppState,
+    #[cfg(feature = "synthesised-tools")]
+    pub context_name: &'a str,
+    #[cfg(feature = "synthesised-tools")]
+    pub config: &'a crate::config::ResolvedConfig,
+    #[cfg(feature = "synthesised-tools")]
+    pub project_root: &'a std::path::Path,
+    #[cfg(feature = "synthesised-tools")]
+    pub vfs: &'a crate::vfs::Vfs,
+    #[cfg(feature = "synthesised-tools")]
+    pub registry: Arc<RwLock<super::registry::ToolRegistry>>,
+    /// Zero-sized phantom to keep the lifetime parameter valid when feature is off.
+    #[cfg(not(feature = "synthesised-tools"))]
+    _phantom: std::marker::PhantomData<&'a ()>,
 }
 
 /// Execute a hook on all tools that registered for it
 /// Returns a vector of (tool_name, result) for tools that returned non-empty output
 ///
 /// Hook data is passed via stdin (JSON). The CHIBI_HOOK env var identifies which hook is firing.
+///
+/// `tein_ctx` (synthesised-tools feature only): when `Some`, sets `BRIDGE_CALL_CTX` per tein tool
+/// during dispatch, enabling `call-tool` and `(harness io)` from tein hook callbacks.
+/// Pass `None` from sync contexts or tests that lack a tokio runtime.
 pub fn execute_hook(
     tools: &[Tool],
     hook: HookPoint,
     data: &serde_json::Value,
+    _tein_ctx: Option<&TeinHookContext<'_>>,
 ) -> io::Result<Vec<(String, serde_json::Value)>> {
     let mut results = Vec::new();
     let data_str = data.to_string();
@@ -121,6 +172,109 @@ pub fn execute_hook(
         results.push((tool.name.clone(), value));
     }
 
+    // --- synthesised tein hooks ---
+    #[cfg(feature = "synthesised-tools")]
+    {
+        let should_dispatch = TEIN_HOOK_GUARD.with(|guard| !guard.borrow().contains(&hook));
+
+        if should_dispatch {
+            TEIN_HOOK_GUARD.with(|guard| {
+                guard.borrow_mut().insert(hook);
+            });
+
+            // Deduplicate: tools from the same .scm file share a tein context
+            // and produce the same (worker_thread_id, binding) pair. Only fire
+            // each unique (context instance, binding) once per hook event.
+            let mut dispatched: std::collections::HashSet<(std::thread::ThreadId, String)> =
+                std::collections::HashSet::new();
+
+            for tool in tools {
+                if !tool.hooks.contains(&hook) {
+                    continue;
+                }
+                let (context, hook_bindings, worker_thread_id) = match &tool.r#impl {
+                    super::ToolImpl::Synthesised {
+                        context,
+                        hook_bindings,
+                        worker_thread_id,
+                        ..
+                    } => (context, hook_bindings, *worker_thread_id),
+                    _ => continue,
+                };
+
+                // Set call context guard if tein_ctx available — enables call-tool
+                // and (harness io) from tein hook callbacks.
+                // Guard drops at end of each loop iteration, clearing the bridge context.
+                let _bridge_guard = _tein_ctx.map(|ctx| {
+                    super::synthesised::CallContextGuard::set_from_hook_ctx(ctx, worker_thread_id)
+                });
+
+                let Some(binding) = hook_bindings.get(&hook) else {
+                    continue;
+                };
+
+                // Skip if this (context, binding) was already dispatched this event.
+                if !dispatched.insert((worker_thread_id, binding.clone())) {
+                    continue;
+                }
+
+                let payload = match super::synthesised::json_args_to_scheme_alist(data) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] tein hook {}: payload conversion: {e}",
+                            hook.as_ref()
+                        );
+                        continue;
+                    }
+                };
+
+                let hook_fn = match context.evaluate(binding) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] tein hook {} on {}: resolve {binding}: {e}",
+                            hook.as_ref(),
+                            tool.name
+                        );
+                        continue;
+                    }
+                };
+
+                let result = match context.call(&hook_fn, &[payload]) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("[WARN] tein hook {} on {}: {e}", hook.as_ref(), tool.name);
+                        continue;
+                    }
+                };
+
+                // empty list or nil → no-op, don't push a result
+                if result.is_nil() {
+                    continue;
+                }
+                if matches!(&result, tein::Value::List(items) if items.is_empty()) {
+                    continue;
+                }
+
+                match super::synthesised::scheme_value_to_json(&result) {
+                    Ok(value) => results.push((tool.name.clone(), value)),
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] tein hook {} on {}: result conversion: {e}",
+                            hook.as_ref(),
+                            tool.name
+                        );
+                    }
+                }
+            }
+
+            TEIN_HOOK_GUARD.with(|guard| {
+                guard.borrow_mut().remove(&hook);
+            });
+        }
+    }
+
     Ok(results)
 }
 
@@ -161,6 +315,8 @@ mod tests {
         ("pre_spawn_agent", HookPoint::PreSpawnAgent),
         ("post_spawn_agent", HookPoint::PostSpawnAgent),
         ("post_index_file", HookPoint::PostIndexFile),
+        ("pre_vfs_write", HookPoint::PreVfsWrite),
+        ("post_vfs_write", HookPoint::PostVfsWrite),
     ];
 
     #[test]
@@ -205,7 +361,7 @@ mod tests {
         data: &serde_json::Value,
     ) -> io::Result<Vec<(String, serde_json::Value)>> {
         for attempt in 0..5 {
-            match execute_hook(tools, hook, data) {
+            match execute_hook(tools, hook, data, None) {
                 Ok(result) => return Ok(result),
                 Err(e) if e.to_string().contains("Text file busy") && attempt < 4 => {
                     std::thread::sleep(std::time::Duration::from_millis(10 * (attempt + 1) as u64));
@@ -457,6 +613,43 @@ echo 'OK'
     }
 
     #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_execute_hook_dispatches_to_synthesised() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start
+  (lambda (payload)
+    (list (cons "saw_event" (cdr (assoc "event" payload))))))
+
+(define tool-name "tein-hook-test")
+(define tool-description "Hook tester")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        let data = serde_json::json!({"event": "start"});
+        let results = execute_hook(&tools, HookPoint::OnStart, &data, None).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "tein-hook-test");
+        assert_eq!(results[0].1["saw_event"], "start");
+    }
+
+    #[test]
     #[cfg(unix)]
     fn test_execute_hook_ordering() {
         // Results must arrive in tool registration order
@@ -495,5 +688,924 @@ echo 'OK'
             assert_eq!(*name, format!("hook{}", i + 1));
             assert_eq!(value["order"], (i + 1) as u64);
         }
+    }
+
+    // --- tein (synthesised) hook dispatch tests ---
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_empty_list_return_is_noop() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) '()))
+(define tool-name "noop-hook")
+(define tool-description "Returns empty list")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/noop.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        let results =
+            execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+        assert_eq!(
+            results.len(),
+            0,
+            "empty list return should be treated as no-op"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_json_object_return() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'pre_message
+  (lambda (payload)
+    (list (cons "prompt" "modified prompt"))))
+(define tool-name "modify-hook")
+(define tool-description "Modifies prompt")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/modify.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        let results = execute_hook(
+            &tools,
+            HookPoint::PreMessage,
+            &serde_json::json!({"prompt": "hello"}),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1["prompt"], "modified prompt");
+    }
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_skips_unregistered_hook_point() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) (list (cons "fired" #t))))
+(define tool-name "selective-hook")
+(define tool-description "Only fires on on_start")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/selective.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        // fire on_end — tool is registered for on_start only
+        let results = execute_hook(&tools, HookPoint::OnEnd, &serde_json::json!({}), None).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_error_in_callback_skipped() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) (error "boom")))
+(define tool-name "error-hook")
+(define tool-description "Errors in hook")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/error.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        // should not error — failed hooks are skipped silently
+        let results =
+            execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    #[cfg(all(feature = "synthesised-tools", unix))]
+    fn test_mixed_plugin_and_tein_hooks() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        // subprocess plugin hook
+        let dir = tempfile::tempdir().unwrap();
+        let script = create_test_script(
+            dir.path(),
+            "plugin.sh",
+            b"#!/bin/bash\ncat > /dev/null\necho '{\"from\": \"plugin\"}'",
+        );
+        let plugin_tool = Tool {
+            name: "plugin-hook".to_string(),
+            description: "Plugin".to_string(),
+            parameters: serde_json::json!({}),
+            hooks: vec![HookPoint::OnStart],
+            metadata: ToolMetadata::new(),
+            summary_params: vec![],
+            r#impl: crate::tools::ToolImpl::Plugin(script),
+            category: crate::tools::ToolCategory::Plugin,
+        };
+
+        // tein synthesised hook
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start
+  (lambda (payload) (list (cons "from" "tein"))))
+(define tool-name "tein-hook")
+(define tool-description "Tein hook")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/tein.scm").unwrap();
+        let mut tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        tools.insert(0, plugin_tool);
+
+        let results =
+            execute_hook_with_retry(&tools, HookPoint::OnStart, &serde_json::json!({})).unwrap();
+
+        // plugin first (subprocess loop), then tein (synthesised loop)
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].1["from"], "plugin");
+        assert_eq!(results[1].1["from"], "tein");
+    }
+
+    // --- re-entrancy guard tests ---
+
+    /// Verify that when a hook point is already in TEIN_HOOK_GUARD (simulating
+    /// a recursive call from within a tein hook callback), tein callbacks are
+    /// skipped entirely while the guard is held.
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_reentrancy_guard_skips_tein_callbacks() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) (list (cons "fired" #t))))
+(define tool-name "reentrancy-guard-test")
+(define tool-description "Should be skipped under guard")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/reentrancy.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        // Simulate re-entrancy: mark on_start as already-in-progress
+        TEIN_HOOK_GUARD.with(|guard| {
+            guard.borrow_mut().insert(HookPoint::OnStart);
+        });
+
+        let results =
+            execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+
+        // Clean up guard state so other tests in this thread aren't affected
+        TEIN_HOOK_GUARD.with(|guard| {
+            guard.borrow_mut().remove(&HookPoint::OnStart);
+        });
+
+        assert_eq!(
+            results.len(),
+            0,
+            "tein callbacks must be skipped when guard is held (re-entrancy)"
+        );
+    }
+
+    /// Verify that the guard is cleared after execute_hook completes, so
+    /// a subsequent call on the same thread dispatches normally.
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_reentrancy_guard_cleared_after_dispatch() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(register-hook 'on_start (lambda (payload) (list (cons "fired" #t))))
+(define tool-name "guard-cleanup-test")
+(define tool-description "Checks guard is cleared post-dispatch")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/guard-cleanup.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+
+        // First call — fires normally
+        let r1 = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+        assert_eq!(r1.len(), 1, "first call should fire normally");
+
+        // Second call on the same thread — guard must be cleared; fires again
+        let r2 = execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+        assert_eq!(r2.len(), 1, "guard must be cleared; second call must fire");
+    }
+
+    // --- TeinHookContext / CallContextGuard in hook dispatch ---
+
+    /// Helper: build a minimal `(AppState, ResolvedConfig, TempDir)` for tein hook tests.
+    ///
+    /// Returns `(app, resolved_config, _tmp)` — `_tmp` must outlive `app`.
+    #[cfg(feature = "synthesised-tools")]
+    fn make_test_tein_env() -> (
+        crate::state::AppState,
+        crate::config::ResolvedConfig,
+        tempfile::TempDir,
+    ) {
+        use crate::config::{ApiParams, Config, ToolsConfig, VfsConfig};
+        use crate::partition::StorageConfig;
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = Config {
+            api_key: None,
+            model: None,
+            context_window_limit: None,
+            warn_threshold_percent: 75.0,
+            no_tool_calls: false,
+            auto_compact: false,
+            auto_compact_threshold: 80.0,
+            reflection_enabled: false,
+            reflection_character_limit: 10000,
+            fuel: 0,
+            fuel_empty_response_cost: 0,
+            username: "test".to_string(),
+            lock_heartbeat_seconds: 30,
+            rolling_compact_drop_percentage: 50.0,
+            tool_output_cache_threshold: 4000,
+            tool_cache_max_age_days: 7,
+            auto_cleanup_cache: false,
+            tool_cache_preview_chars: 500,
+            file_tools_allowed_paths: vec![],
+            api: ApiParams::default(),
+            storage: StorageConfig::default(),
+            fallback_tool: "call_user".to_string(),
+            tools: ToolsConfig::default(),
+            vfs: VfsConfig::default(),
+            url_policy: None,
+            subagent_cost_tier: "free".to_string(),
+            models: Default::default(),
+            site: None,
+        };
+        let app = crate::state::AppState::from_dir(temp.path().to_path_buf(), config).unwrap();
+        (app, crate::config::ResolvedConfig::default(), temp)
+    }
+
+    /// Verify that when TeinHookContext is provided, BRIDGE_CALL_CTX is populated
+    /// during tein hook dispatch, enabling call-tool from hook callbacks.
+    ///
+    /// The hook calls `(call-tool "nonexistent-tool" '())`. With the guard set, it
+    /// should fail with "not found" (tool registry lookup error), NOT with
+    /// "no active call context" (bridge not set). This proves the guard is live.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_tein_hook_call_tool_with_tein_ctx_sets_bridge() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        // Tein tool with an on_start hook that tries call-tool.
+        // Uses with-exception-handler to capture the error message string.
+        // R7RS: error-object-message works for (error ...) conditions.
+        let source = r#"
+(import (harness hooks))
+(import (harness tools))
+(register-hook 'on_start
+  (lambda (payload)
+    ;; Try to call a nonexistent tool. Capture whether it errors with "no active
+    ;; call context" (bridge not set) vs anything else (bridge set, tool not found).
+    (define result "no-error")
+    (call-with-current-continuation
+      (lambda (k)
+        (with-exception-handler
+          (lambda (exn)
+            (set! result
+              (if (error-object? exn)
+                  (error-object-message exn)
+                  "unknown-error"))
+            (k #f))
+          (lambda ()
+            (call-tool "nonexistent-tool-xyzzy" '())))))
+    (list (cons "error" result))))
+(define tool-name "bridge-test")
+(define tool-description "Tests bridge")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/bridge-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let results = execute_hook(
+            &tools,
+            HookPoint::OnStart,
+            &serde_json::json!({}),
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1, "hook must return a result");
+        let error_msg = results[0].1["error"].as_str().unwrap_or("");
+        // With bridge set: error is about tool not found, NOT about missing context
+        assert!(
+            !error_msg.contains("no active call context"),
+            "bridge should be set; got error: {error_msg}"
+        );
+        assert!(
+            !error_msg.contains("called outside tool execute"),
+            "bridge should be set; got error: {error_msg}"
+        );
+    }
+
+    /// Verify that without TeinHookContext, call-tool in a hook callback fails
+    /// with "no active call context" (bridge not set).
+    #[test]
+    #[cfg(feature = "synthesised-tools")]
+    fn test_tein_hook_call_tool_without_tein_ctx_no_bridge() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::VfsPath;
+        use std::sync::{Arc, RwLock};
+
+        let source = r#"
+(import (harness hooks))
+(import (harness tools))
+(register-hook 'on_start
+  (lambda (payload)
+    (define result "no-error")
+    (call-with-current-continuation
+      (lambda (k)
+        (with-exception-handler
+          (lambda (exn)
+            (set! result
+              (if (error-object? exn)
+                  (error-object-message exn)
+                  "unknown-error"))
+            (k #f))
+          (lambda ()
+            (call-tool "any-tool" '())))))
+    (list (cons "error" result))))
+(define tool-name "no-bridge-test")
+(define tool-description "Tests no bridge")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/no-bridge-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        // No TeinHookContext → bridge not set
+        let results =
+            execute_hook(&tools, HookPoint::OnStart, &serde_json::json!({}), None).unwrap();
+
+        assert_eq!(results.len(), 1, "hook must return a result");
+        let error_msg = results[0].1["error"].as_str().unwrap_or("");
+        // Without bridge: must fail with "no active call context"
+        assert!(
+            error_msg.contains("no active call context")
+                || error_msg.contains("called outside tool execute"),
+            "expected 'no active call context' error, got: {error_msg}"
+        );
+    }
+
+    /// Full chain: execute_hook → CallContextGuard → tein callback → (harness io)
+    /// → VFS write. Verifies io-write in a hook callback actually persists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_tein_hook_harness_io_vfs_write() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        let source = r#"
+(import (harness hooks))
+(import (harness io))
+(register-hook 'on_start
+  (lambda (payload)
+    (io-write "vfs:///shared/hook-output.txt" "hello from hook")
+    '()))
+(define tool-name "io-hook-test")
+(define tool-description "Hook that writes via io")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/io-hook-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        execute_hook(
+            &tools,
+            HookPoint::OnStart,
+            &serde_json::json!({}),
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        // Verify the VFS write happened
+        let written_path = VfsPath::new("/shared/hook-output.txt").unwrap();
+        let content = app
+            .vfs
+            .read(VfsCaller::System, &written_path)
+            .await
+            .expect("hook should have written vfs:///shared/hook-output.txt");
+        assert_eq!(
+            String::from_utf8_lossy(&content),
+            "hello from hook",
+            "io-write from hook should persist to VFS"
+        );
+    }
+
+    /// IO from a tein hook callback bypasses the tool layer, so no hooks fire
+    /// from the IO write. This confirms no re-entrancy / infinite loop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_tein_hook_io_does_not_trigger_hooks() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        // A hook that writes a counter file. If io-write triggered hooks, the
+        // on_start hook would call itself recursively. TEIN_HOOK_GUARD should
+        // prevent this; and io-write doesn't go through hook dispatch at all.
+        // We just verify: (a) the hook runs, (b) the write succeeds, (c) no panic.
+        let source = r#"
+(import (harness hooks))
+(import (harness io))
+(register-hook 'on_start
+  (lambda (payload)
+    (let ((prev (io-read "vfs:///shared/counter.txt")))
+      (let ((count (if (string? prev) (+ (string->number prev) 1) 1)))
+        (io-write "vfs:///shared/counter.txt" (number->string count))
+        (list (cons "count" (number->string count)))))))
+(define tool-name "counter-hook-test")
+(define tool-description "Hook writes counter")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let path = VfsPath::new("/tools/shared/counter-hook-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        // Fire the hook once
+        let results = execute_hook(
+            &tools,
+            HookPoint::OnStart,
+            &serde_json::json!({}),
+            Some(&tein_ctx),
+        )
+        .unwrap();
+
+        // Hook returned count=1
+        assert_eq!(results.len(), 1);
+        let count_val = &results[0].1["count"];
+        assert_eq!(
+            count_val.as_str(),
+            Some("1"),
+            "counter should be 1: {count_val:?}"
+        );
+
+        // VFS counter file should be "1" (not "2" or higher — no re-entrancy)
+        let counter_path = VfsPath::new("/shared/counter.txt").unwrap();
+        let content = app
+            .vfs
+            .read(VfsCaller::System, &counter_path)
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&content),
+            "1",
+            "counter should be 1 — no recursive hook dispatch from io-write"
+        );
+    }
+
+    // --- history.scm integration tests ---
+
+    const HISTORY_PLUGIN: &str = include_str!("../../../../plugins/history.scm");
+
+    /// Sanity check: a bare pre_vfs_write hook that writes a file works.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_pre_vfs_write_hook_io_write_works() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        let source = r#"
+(import (scheme base))
+(import (harness io))
+(import (harness hooks))
+(import (harness tools))
+(register-hook 'pre_vfs_write
+  (lambda (payload)
+    (io-write "vfs:///shared/hook-fired.txt" "hook ran")
+    '()))
+(define tool-name "dummy")
+(define tool-description "dummy")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/test.txt",
+            "content": "new",
+        });
+        let _ = execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
+
+        let fired_path = VfsPath::new("/shared/hook-fired.txt").unwrap();
+        let content = app.vfs.read(VfsCaller::System, &fired_path).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&content), "hook ran");
+    }
+
+    /// Full flow: write a file, fire pre_vfs_write hook, verify snapshot created.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_snapshot_on_write() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        // Write initial file content
+        let path = VfsPath::new("/shared/test.txt").unwrap();
+        app.vfs
+            .write(VfsCaller::System, &path, b"version 1")
+            .await
+            .unwrap();
+
+        // Load history plugin
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        // Fire pre_vfs_write hook (simulates what send.rs does before a write)
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/test.txt",
+            "content": "version 2",
+            "caller": "test-ctx",
+        });
+        let _ = execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
+
+        // Snapshot should exist at revision 1
+        let snapshot_path = VfsPath::new("/shared/.chibi/history/test.txt/1").unwrap();
+        let snapshot = app
+            .vfs
+            .read(VfsCaller::System, &snapshot_path)
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&snapshot),
+            "version 1",
+            "snapshot should contain pre-write content"
+        );
+
+        // Meta should exist and contain 'next'
+        let meta_path = VfsPath::new("/shared/.chibi/history/test.txt/meta").unwrap();
+        let meta = app.vfs.read(VfsCaller::System, &meta_path).await.unwrap();
+        let meta_str = String::from_utf8_lossy(&meta);
+        assert!(meta_str.contains("next"), "meta should contain next field");
+    }
+
+    /// Pruning: fire hook 12 times, verify only 10 most recent snapshots remain.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_pruning() {
+        use crate::tools::registry::ToolRegistry;
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        let path = VfsPath::new("/shared/prune-test.txt").unwrap();
+
+        // Fire hook 12 times, updating file content before each hook
+        for i in 1u32..=12 {
+            let content = format!("v{}", i - 1);
+            app.vfs
+                .write(VfsCaller::System, &path, content.as_bytes())
+                .await
+                .unwrap();
+
+            let hook_data = serde_json::json!({
+                "path": "vfs:///shared/prune-test.txt",
+                "content": format!("v{}", i),
+                "caller": "test-ctx",
+            });
+            let _ =
+                execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
+        }
+
+        // Should have exactly 10 revisions (3..=12), not 12
+        let history_dir = VfsPath::new("/shared/.chibi/history/prune-test.txt").unwrap();
+        let entries = app.vfs.list(VfsCaller::System, &history_dir).await.unwrap();
+        let rev_count = entries.iter().filter(|e| e.name != "meta").count();
+        assert_eq!(rev_count, 10, "should prune to keep=10 revisions");
+
+        // Oldest remaining should be revision 3 (revisions 1 and 2 pruned)
+        let oldest = VfsPath::new("/shared/.chibi/history/prune-test.txt/3").unwrap();
+        assert!(
+            app.vfs.exists(VfsCaller::System, &oldest).await.unwrap(),
+            "revision 3 should exist"
+        );
+
+        let pruned = VfsPath::new("/shared/.chibi/history/prune-test.txt/1").unwrap();
+        assert!(
+            !app.vfs.exists(VfsCaller::System, &pruned).await.unwrap(),
+            "revision 1 should be pruned"
+        );
+    }
+
+    /// Integration: file_history_diff shows correct unified diff output.
+    ///
+    /// Fires PreVfsWrite to snapshot the original content, updates the file,
+    /// then calls the diff tool and asserts the output reflects the change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(feature = "synthesised-tools")]
+    async fn test_history_diff_tool() {
+        use crate::tools::registry::{ToolCallContext, ToolRegistry};
+        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::vfs::{VfsCaller, VfsPath};
+        use std::sync::{Arc, RwLock};
+
+        let (app, resolved_config, _tmp) = make_test_tein_env();
+        let project_root = _tmp.path();
+
+        // Write initial file content
+        let path = VfsPath::new("/shared/diff-test.txt").unwrap();
+        app.vfs
+            .write(VfsCaller::System, &path, b"line1\nline2\nline3\n")
+            .await
+            .unwrap();
+
+        // Load history plugin
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
+        let tools = load_tools_from_source_with_tier(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            crate::config::SandboxTier::Unsandboxed,
+        )
+        .unwrap();
+
+        // Register tools so dispatch_impl can find them
+        {
+            let mut reg = registry.write().unwrap();
+            for t in &tools {
+                reg.register(t.clone());
+            }
+        }
+
+        let tein_ctx = TeinHookContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            registry: Arc::clone(&registry),
+        };
+
+        // Fire pre_vfs_write hook — snapshots "line1\nline2\nline3\n" as revision 1
+        let hook_data = serde_json::json!({
+            "path": "vfs:///shared/diff-test.txt",
+            "content": "line1\nmodified\nline3\n",
+            "caller": "test-ctx",
+        });
+        execute_hook(&tools, HookPoint::PreVfsWrite, &hook_data, Some(&tein_ctx)).unwrap();
+
+        // Update file to the modified version
+        app.vfs
+            .write(VfsCaller::System, &path, b"line1\nmodified\nline3\n")
+            .await
+            .unwrap();
+
+        // Execute file_history_diff via dispatch_impl
+        let diff_tool_impl = {
+            let reg = registry.read().unwrap();
+            reg.get("file_history_diff").map(|t| t.r#impl.clone())
+        }
+        .expect("file_history_diff should be registered");
+
+        let call_ctx = ToolCallContext {
+            app: &app,
+            context_name: "test-ctx",
+            config: &resolved_config,
+            project_root,
+            vfs: &app.vfs,
+            vfs_caller: crate::vfs::VfsCaller::Context("test-ctx"),
+        };
+
+        let args = serde_json::json!({
+            "path": "vfs:///shared/diff-test.txt",
+            "revision": 1,
+        });
+        let result =
+            ToolRegistry::dispatch_impl(diff_tool_impl, "file_history_diff", &args, &call_ctx)
+                .await
+                .unwrap();
+
+        // Diff output should mention the changed line
+        assert!(
+            result.contains("line2") || result.contains("-line2"),
+            "diff should show removed 'line2': {result}"
+        );
+        assert!(
+            result.contains("modified") || result.contains("+modified"),
+            "diff should show added 'modified': {result}"
+        );
     }
 }

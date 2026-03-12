@@ -79,7 +79,7 @@ pub(crate) fn filter_messages(
 
 /// Rolling compaction: strips messages and integrates them into the summary
 /// This is triggered automatically when context exceeds threshold
-/// The LLM decides which messages to drop based on goals/todos, with fallback to percentage
+/// The LLM decides which messages to drop based on goals/tasks, with fallback to percentage
 pub async fn rolling_compact(
     app: &AppState,
     context_name: &str,
@@ -100,7 +100,11 @@ pub async fn rolling_compact(
         return Ok(());
     }
 
-    // Execute pre_rolling_compact hook
+    // Execute pre_rolling_compact hook.
+    // TeinHookContext is None: compact runs from a background task that does not hold a
+    // full ToolCallContext (no per-request VFS caller or registry snapshot). Tein hook
+    // callbacks fire but cannot use call-tool or (harness io). Known limitation — promote
+    // to Some if a full async context is threaded through compact in the future.
     let tools = tools::load_tools(&app.plugins_dir)?;
     let hook_data = serde_json::json!({
         "context_name": context.name,
@@ -108,10 +112,16 @@ pub async fn rolling_compact(
         "non_system_count": non_system_messages.len(),
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PreRollingCompact, &hook_data);
+    let _ = tools::execute_hook(
+        &tools,
+        tools::HookPoint::PreRollingCompact,
+        &hook_data,
+        None,
+    );
 
-    // Load todos and flock goals to guide compaction decisions.
-    let todos = app.load_todos(context_name)?;
+    // Load tasks and flock goals to guide compaction decisions.
+    let task_metas = crate::state::tasks::collect_tasks(&app.vfs, context_name).await;
+    let task_table = crate::state::tasks::build_summary_table(&task_metas);
     let flock_contexts = load_flock_contexts(&app.vfs, context_name).unwrap_or_default();
     let goals = format_flock_sections(&flock_contexts);
 
@@ -151,7 +161,7 @@ pub async fn rolling_compact(
     let target_drop_count = drop_count(non_system_messages.len(), drop_percentage);
 
     // Ask LLM which messages to drop.
-    // {GOALS} and {TODOS} expand to a labelled section or empty string — the
+    // {GOALS} and {TASKS} expand to a labelled section or empty string — the
     // adjacent placeholders in the template collapse cleanly when both are absent.
     let decision_prompt = ROLLING_COMPACT_DECISION_TEMPLATE
         .replace(
@@ -167,11 +177,11 @@ pub async fn rolling_compact(
             },
         )
         .replace(
-            "{TODOS}",
-            &if todos.is_empty() {
+            "{TASKS}",
+            &if task_table.is_empty() {
                 String::new()
             } else {
-                format!("CURRENT TODOS:\n{}\n\n", todos)
+                format!("CURRENT TASKS:\n{}\n\n", task_table)
             },
         )
         .replace(
@@ -272,7 +282,7 @@ pub async fn rolling_compact(
     let drop_tool_call_ids = collect_tool_call_ids(&dropped_msgs);
 
     // Second LLM call: update summary with dropped content.
-    // {GOALS} and {TODOS} expand to a labelled section or empty string — the
+    // {GOALS} and {TASKS} expand to a labelled section or empty string — the
     // adjacent placeholders in the template collapse cleanly when both are absent.
     let update_prompt = ROLLING_COMPACT_UPDATE_TEMPLATE
         .replace(
@@ -293,11 +303,11 @@ pub async fn rolling_compact(
             },
         )
         .replace(
-            "{TODOS}",
-            &if todos.is_empty() {
+            "{TASKS}",
+            &if task_table.is_empty() {
                 String::new()
             } else {
-                format!("\nCURRENT TODOS:\n{}\n", todos)
+                format!("\nCURRENT TASKS:\n{}\n", task_table)
             },
         );
 
@@ -337,14 +347,19 @@ pub async fn rolling_compact(
         remaining: context.messages.len(),
     });
 
-    // Execute post_rolling_compact hook
+    // Execute post_rolling_compact hook. TeinHookContext: None — see PreRollingCompact above.
     let hook_data = serde_json::json!({
         "context_name": context.name,
         "message_count": context.messages.len(),
         "messages_archived": archived_count,
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PostRollingCompact, &hook_data);
+    let _ = tools::execute_hook(
+        &tools,
+        tools::HookPoint::PostRollingCompact,
+        &hook_data,
+        None,
+    );
 
     Ok(())
 }
@@ -427,14 +442,16 @@ async fn compact_context_with_llm_internal(
         return Ok(());
     }
 
-    // Execute pre_compact hook
+    // Execute pre_compact hook. TeinHookContext: None — compact_context_with_llm_internal
+    // does not carry a full ToolCallContext; tein callbacks fire but cannot use call-tool
+    // or (harness io). Known limitation — see PreRollingCompact in rolling_compact.
     let tools = tools::load_tools(&app.plugins_dir)?;
     let hook_data = serde_json::json!({
         "context_name": context.name,
         "message_count": context.messages.len(),
         "summary": context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PreCompact, &hook_data);
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PreCompact, &hook_data, None);
 
     sink.emit_event(CommandEvent::CompactionStarted {
         context: context_name.to_string(),
@@ -542,13 +559,13 @@ async fn compact_context_with_llm_internal(
         remaining: new_context.messages.len(),
     });
 
-    // Execute post_compact hook
+    // Execute post_compact hook. TeinHookContext: None — see PreCompact above.
     let hook_data = serde_json::json!({
         "context_name": new_context.name,
         "message_count": new_context.messages.len(),
         "summary": new_context.summary,
     });
-    let _ = tools::execute_hook(&tools, tools::HookPoint::PostCompact, &hook_data);
+    let _ = tools::execute_hook(&tools, tools::HookPoint::PostCompact, &hook_data, None);
 
     Ok(())
 }

@@ -322,7 +322,7 @@ pub struct ContextMeta {
     /// Tracks mtime of system_prompt.md to detect external edits
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt_md_mtime: Option<u64>,
-    /// The full combined prompt last sent to API (raw + hook injections + todos/goals/etc)
+    /// The full combined prompt last sent to API (raw + hook injections + tasks/goals/etc)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_combined_prompt: Option<String>,
 }

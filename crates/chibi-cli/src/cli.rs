@@ -30,7 +30,7 @@ impl InspectableExt for Inspectable {
             // File-based items
             "system_prompt" | "prompt" => Some(Inspectable::SystemPrompt),
             "reflection" => Some(Inspectable::Reflection),
-            "todos" => Some(Inspectable::Todos),
+            "todos" | "tasks" => Some(Inspectable::Tasks),
             "goals" => Some(Inspectable::Goals),
             // Global items
             "home" => Some(Inspectable::Home),
@@ -50,7 +50,7 @@ impl InspectableExt for Inspectable {
         let mut names = vec![
             "system_prompt",
             "reflection",
-            "todos",
+            "tasks",
             "goals",
             "home",
             "list",
@@ -213,7 +213,7 @@ pub struct Cli {
     #[arg(short = 'G', long = "show-log", value_names = ["CTX", "N"], num_args = 2, allow_hyphen_values = true)]
     pub show_log: Option<Vec<String>>,
 
-    /// Inspect current context (system_prompt, reflection, todos, goals, list)
+    /// Inspect current context (system_prompt, reflection, tasks, goals, list)
     #[arg(short = 'n', long = "inspect-current", value_name = "THING")]
     pub inspect_current: Option<String>,
 
@@ -1319,7 +1319,7 @@ mod tests {
         let input = parse_input("-N other todos").unwrap();
         assert!(
             matches!(input.command, Command::Inspect { ref context, ref thing }
-            if *context == Some("other".to_string()) && *thing == Inspectable::Todos)
+            if *context == Some("other".to_string()) && *thing == Inspectable::Tasks)
         );
         assert!(input.flags.force_call_user);
     }
@@ -1389,10 +1389,10 @@ mod tests {
     #[test]
     fn test_call_tool_short() {
         // -P now requires exactly 2 args: TOOL and JSON (use {} for no args)
-        let input = parse_input("-P update_todos \"{}\"").unwrap();
+        let input = parse_input("-P update_goals \"{}\"").unwrap();
         assert!(
             matches!(input.command, Command::CallTool { ref name, ref args }
-            if name == "update_todos" && args == &["{}"])
+            if name == "update_goals" && args == &["{}"])
         );
         assert!(input.flags.force_call_user);
     }
@@ -1738,7 +1738,8 @@ mod tests {
             Inspectable::from_str_cli("reflection"),
             Some(Inspectable::Reflection)
         );
-        assert_eq!(Inspectable::from_str_cli("todos"), Some(Inspectable::Todos));
+        assert_eq!(Inspectable::from_str_cli("todos"), Some(Inspectable::Tasks));
+        assert_eq!(Inspectable::from_str_cli("tasks"), Some(Inspectable::Tasks));
         assert_eq!(Inspectable::from_str_cli("goals"), Some(Inspectable::Goals));
         assert_eq!(Inspectable::from_str_cli("list"), Some(Inspectable::List));
         assert_eq!(Inspectable::from_str_cli("unknown"), None);
@@ -1750,7 +1751,7 @@ mod tests {
         let names = Inspectable::all_names_cli();
         assert!(names.contains(&"system_prompt"));
         assert!(names.contains(&"reflection"));
-        assert!(names.contains(&"todos"));
+        assert!(names.contains(&"tasks"));
         assert!(names.contains(&"goals"));
         assert!(names.contains(&"list"));
     }

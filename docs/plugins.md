@@ -144,7 +144,7 @@ Users can run plugins directly without the LLM using `-p` (plugin) or `-P` (call
 chibi -p myplugin "arg1 arg2"        # Run a plugin with args (shell-style split)
 chibi -p myplugin "'with spaces'"    # Args with spaces need inner quotes
 chibi -p myplugin ""                 # No args (empty string required)
-chibi -P update_todos '{}'           # Call tool with empty JSON
+chibi -P update_goals '{}'           # Call tool with empty JSON
 chibi -P send '{"to":"x"}'           # Call tool with JSON args
 ```
 
@@ -248,7 +248,6 @@ echo '{}' | CHIBI_HOOK="on_start" ./my_plugin
 Chibi provides built-in tools that don't require plugins:
 
 **Agentic tools:**
-- `update_todos` - Manage per-context todo list
 - `update_goals` - Manage per-context goals
 - `update_reflection` - Update LLM's persistent memory
 - `send_message` - Send messages between contexts
@@ -334,6 +333,124 @@ The `(harness tools)` module exposes:
 - **`call-tool`** — procedure `(call-tool name args)` for calling other registered tools from within a tool's `execute` body. `args` is an alist of `("key" . value)` pairs. Returns the tool's string output.
 
 `call-tool` bridges synchronously into chibi's async tool dispatch. It is available in both sandboxed and unsandboxed tiers.
+
+### `(harness io)` Module — Privileged IO (Unsandboxed Only)
+
+Available at `Unsandboxed` tier only. Provides direct VFS and local filesystem IO that bypasses the tool dispatch and hook layers. Intended for builtin plugins that need IO during hook callbacks where `call-tool` would cause re-entrancy.
+
+```scheme
+(import (harness io))
+
+(io-read path)           ; → string or #f (not found)
+(io-write path data)     ; → #t, raises on error
+(io-append path data)    ; → #t, raises on error
+(io-list path)           ; → list of entry name strings, '() for nonexistent
+(io-exists? path)        ; → boolean
+```
+
+**Path dispatch:**
+
+| Prefix | Destination | Caller |
+|--------|-------------|--------|
+| `"vfs://..."` | VFS backend | `VfsCaller::System` (bypasses zone permissions) |
+| Bare absolute path | Local filesystem via `tokio::fs` | — |
+
+**Example:**
+
+```scheme
+(import (scheme base))
+(import (harness io))
+
+; Write and read a VFS file
+(io-write "vfs:///shared/notes.txt" "my note")
+(io-read  "vfs:///shared/notes.txt")  ; => "my note"
+
+; Check existence
+(io-exists? "vfs:///shared/notes.txt")  ; => #t
+(io-exists? "vfs:///shared/missing")    ; => #f
+
+; List a directory
+(io-list "vfs:///shared")  ; => ("notes.txt")
+```
+
+Normal tein tools should use `call-tool` for IO when possible — it goes through the regular tool dispatch and honours hooks. Use `(harness io)` when the tool runs *inside* a hook callback and direct VFS access is needed without triggering further hooks.
+
+### Harness Helpers
+
+The harness also injects these foreign functions into every synthesised tool context:
+
+| Procedure | Returns | Description |
+|-----------|---------|-------------|
+| `(generate-id)` | `"a3f2b1c9"` (8 hex chars) | Short unique ID from uuid v4 |
+| `(current-timestamp)` | `"20260308-1423z"` | Current UTC time as `YYYYMMDD-HHMMz` |
+| `%context-name%` | `"alice"` | Mutable binding holding the calling context's name; updated before each call |
+
+Use `%context-name%` to resolve VFS paths relative to the calling context's home directory (e.g. `(string-append "/home/" %context-name% "/tasks")`).
+
+### Task Plugin
+
+The bundled task plugin (`plugins/tasks.scm` in the repo) provides structured task management. Install it to the VFS:
+
+```bash
+# install globally (visible to all contexts)
+chibi -P write_file '{"path": "vfs:///tools/shared/tasks.scm", "content": "<paste file contents>"}'
+```
+
+Or copy to `/tools/shared/tasks.scm` in your VFS root directly.
+
+**Tools:**
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `task_create` | `path`, `body`, `priority`, `assigned-to`, `depends-on` | Create a task; returns id and VFS path |
+| `task_update` | `id`, `status`, `priority`, `body`, `assigned-to` | Update task fields by ID |
+| `task_view` | `id` | Read full task metadata and body |
+| `task_list` | `status`, `priority`, `assigned-to` (optional filters) | List tasks |
+| `task_delete` | `id` | Remove a task file |
+
+**Path conventions:**
+- `auth/login` → `/home/<ctx>/tasks/auth/login.task`
+- `flock:infra/deploy` → `/flocks/infra/tasks/deploy.task`
+
+Tasks are automatically summarised and injected as ephemeral context before each prompt. See [vfs.md](vfs.md) for the `.task` file format.
+
+### File History Plugin
+
+The bundled history plugin (`plugins/history.scm`) automatically snapshots VFS files before each write and exposes tools for browsing, diffing, and reverting to prior revisions.
+
+**Install:**
+
+```bash
+chibi -P write_file '{"path": "vfs:///tools/shared/history.scm", "content": "<paste file contents>"}'
+```
+
+The plugin auto-configures to `unsandboxed` tier when installed at `vfs:///tools/shared/history.scm` (see `BUILTIN_UNSANDBOXED` in `config.rs`). No `[tools.tiers]` entry required.
+
+**How it works:**
+
+Registers a `pre_vfs_write` hook that reads the current file content and writes it as a numbered revision before each overwrite. Hook is best-effort — errors are silently swallowed to avoid blocking writes.
+
+**Storage layout:**
+
+```
+<file-dir>/.chibi/history/<filename>/<N>   — revision N (full content)
+<file-dir>/.chibi/history/<filename>/meta  — alist: ((next . N))
+```
+
+Revisions are kept under the same VFS directory as the file itself. The `.chibi/` prefix ensures they are hidden from `vfs_list` output. `io-list` and direct addressing still reach them.
+
+At most 10 revisions are kept (`%history-keep%`); oldest are pruned automatically.
+
+**Tools:**
+
+| Tool | Parameters | Description |
+|------|------------|-------------|
+| `file_history_log` | `path` | List revision numbers for a VFS file (newest first) |
+| `file_history_show` | `path`, `revision` | Show full file content at a specific revision |
+| `file_history_diff` | `path`, `revision` (optional) | Unified diff between a revision and current content |
+| `file_history_revert` | `path`, `revision` | Restore file to a previous revision (fires hook so revert itself is snapshotted) |
+
+**Requires:** `(harness io)` and `(chibi diff)` — unsandboxed tier only.
 
 ### Sandbox Tiers
 

@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.10.2] - 2026-03-08
+## [0.10.3] - 2026-03-12
 
 ### Bug Fixes
 
@@ -35,6 +35,36 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - **tein:** Post-review fixes for synthesised tool layer ([`2016b19`](https://github.com/emesal/chibi/commit/2016b1937005dc9a48a274924b0a6e1bee9c03ed))
 
+- Task_update timestamp replace_string includes closing paren ([`d43362a`](https://github.com/emesal/chibi/commit/d43362a5b37d11256103070e1d7630d7a0095180))
+
+- Find-task-by-id and task_list scan flock task directories ([`a54c23e`](https://github.com/emesal/chibi/commit/a54c23ee51b1b555091367618b385c174b774cb8))
+
+- Use char-indexed truncation in task summary table ([`264043f`](https://github.com/emesal/chibi/commit/264043f5ba93815f24f9d1ef232d3f477eda3d04))
+
+- BRIDGE_CALL_CTX uses thread-ID-keyed map for concurrency safety ([`5a3af22`](https://github.com/emesal/chibi/commit/5a3af22afef085191189cb2131b1afb47daee3a4))
+
+- Use uuid v4 for generate-id (B4) ([`c9c019b`](https://github.com/emesal/chibi/commit/c9c019b75a7eb4880c77aa2680d1368ef896925a))
+
+- Task_update uses extract-string-field for timestamp find (B1) ([`79b2080`](https://github.com/emesal/chibi/commit/79b20802cb97b4d41f2f22410f08ba6eee8abe57))
+
+- Task_update re-reads content after each mutation (B1, B8) ([`3be1f20`](https://github.com/emesal/chibi/commit/3be1f200efe9dec4cc195ea6ccd5d811278fb735))
+
+- Add flock_list tool, rewrite all-task-dirs (B2, B3) ([`707e046`](https://github.com/emesal/chibi/commit/707e04644cd5684d9ce003e6e9d6e1a972ab8a49))
+
+- Find-task-by-id compares parsed id field, not substring (B6) ([`9ce16e8`](https://github.com/emesal/chibi/commit/9ce16e839958a575819c151b83b11aa3a28720bc))
+
+- ContextPaths.todos -> tasks, point to tasks directory (D6) ([`32b2b59`](https://github.com/emesal/chibi/commit/32b2b59032143219eb16ddb64ab34db926895687))
+
+- Correct docs and guard empty path in task_create ([`7b34912`](https://github.com/emesal/chibi/commit/7b34912b93f8fe2defa7042672a9219275a18d1e))
+
+- **tasks.scm:** Guard call-tool exception in all-task-dirs for graceful fallback ([`2b53bf5`](https://github.com/emesal/chibi/commit/2b53bf5d53caab4ab4fd692d3aba3509f62790e0))
+
+- **loop-detector:** Detect loops in cached tool calls (#207) ([`665a5f8`](https://github.com/emesal/chibi/commit/665a5f8bef2c2a557656424540916d4773caa6c9))
+
+- **loop-detector:** Detect loops in cached tool calls (#207) (#218) ([`f68a9b0`](https://github.com/emesal/chibi/commit/f68a9b06a58ed784c6be6f48ac26fcddab1757e1))
+
+- **hooks:** Address code review issues in tein hook registration ([`6200db9`](https://github.com/emesal/chibi/commit/6200db968e5b9326dd89f96ff1fe2f374a367b2b))
+
 
 ### Chores
 
@@ -53,6 +83,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Collect AGENTS.md notes, mark plan complete ([`2e1e5c7`](https://github.com/emesal/chibi/commit/2e1e5c72b6320289dbc346e64b4095a8a7fbac6e))
 
 - Lint fixes for tein integration (#193) ([`843e664`](https://github.com/emesal/chibi/commit/843e6645ae5e0086bfaf4469646d59d0ee9e438e))
+
+- Lint and cleanup ([`cc9fcdc`](https://github.com/emesal/chibi/commit/cc9fcdca9e30cd58efc737c9c0baa8e6729350d7))
+
+- Sync AGENTS.md with dev (drop just pre-push reminder) ([`49a6906`](https://github.com/emesal/chibi/commit/49a6906e49d93da24e8eba10fc6cbe1fa3054790))
+
+- Note task-dirs virtual file in AGENTS.md quirks ([`3cb77a2`](https://github.com/emesal/chibi/commit/3cb77a262ddb1fd4b781405ea55e010ded4d5d45))
+
+- Fix clippy non_minimal_cfg warnings in hooks.rs ([`399a4c8`](https://github.com/emesal/chibi/commit/399a4c8b41d0d455da1ec975d3685ffdde008bd7))
 
 
 ### Documentation
@@ -98,6 +136,36 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Implementation plan for tein integration (#193) ([`1759403`](https://github.com/emesal/chibi/commit/1759403b16c752d86303a3273b6c4155804b4f98))
 
 - Document harness tools module, tiers, and VFS tool zones (#193) ([`8dc7be8`](https://github.com/emesal/chibi/commit/8dc7be8ef3f89c0f3e9cb1a7695180de86553a76))
+
+- Update CHANGELOG for v0.10.2 ([`dc6ed46`](https://github.com/emesal/chibi/commit/dc6ed463e2d342ba51363b3e86cdb084a14111cc))
+
+- Document structured task system (#186) ([`807beda`](https://github.com/emesal/chibi/commit/807beda9f7ba4b9db3dcd0bf752f59c90c436620))
+
+- Explain block_on choice in call_tool_fn (B7) ([`f4f83c9`](https://github.com/emesal/chibi/commit/f4f83c9967e52ca2124a81488fcc4dfe5149392b))
+
+- Replace stale "todos" references in rust code (D4,D5,D7,D8,D9) ([`3776edc`](https://github.com/emesal/chibi/commit/3776edcead8ea39c68bdfde3a1b71b3d88383f71))
+
+- Update paths.rs module comment to reference tasks (D11) ([`ad3487f`](https://github.com/emesal/chibi/commit/ad3487fdffea9152013433ecad99d27a03e03d5e))
+
+- Update hooks.md, architecture.md, contexts.md for tasks (D1,D2) ([`5c5343c`](https://github.com/emesal/chibi/commit/5c5343c9d6a91f5f2f649bc2a2f9925da57b95a0))
+
+- Mark structured-tasks plan as completed (D10) ([`35cbe71`](https://github.com/emesal/chibi/commit/35cbe71b6242bb355234ac36bca20e217397e63f))
+
+- Purge stale todos/update_todos references, update tool categories ([`dd049da`](https://github.com/emesal/chibi/commit/dd049da0046efb1148579d3a38d4b9b09b599cef))
+
+- Document /sys/contexts/<name>/task-dirs virtual file ([`1bd1985`](https://github.com/emesal/chibi/commit/1bd19852f8c5c5073ca4e54132a819ead9b71c9b))
+
+- Design + implementation plan for tein hook registration (#220) ([`6e5a84e`](https://github.com/emesal/chibi/commit/6e5a84ee80a89a4ee3d7e306e017d1a73ae4c112))
+
+- Document tein hook registration in hooks.md and AGENTS.md ([`1a7f579`](https://github.com/emesal/chibi/commit/1a7f579f5c072610695e51ffcc66b2e0eec4df10))
+
+- Document (harness io) module and hook IO patterns ([`6ec8d40`](https://github.com/emesal/chibi/commit/6ec8d40b8a00a2ee04cf54dc9b6867325ccd3f10))
+
+- Document file history plugin, dotfile hiding, VFS write hooks ([`135c3d9`](https://github.com/emesal/chibi/commit/135c3d9c2638cfc10acaad95a0558fdd6029fc27))
+
+- Scheme_eval builtin tool design spec ([`5c2172f`](https://github.com/emesal/chibi/commit/5c2172f3c5cc24f5c6c25f0342d4f81f514f88dd))
+
+- Scheme_eval implementation plan + spec Arc fix ([`238964f`](https://github.com/emesal/chibi/commit/238964f91b790e984bf9c26dbd63bcf9adacd4d5))
 
 
 ### Features
@@ -164,6 +232,48 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - **tein:** Call-tool bridge, multi-zone scan, define-tool macro (#193) ([`7cd92df`](https://github.com/emesal/chibi/commit/7cd92df659318b856f98371d86b47589a77944b9))
 
+- **deps:** Add tein-sexp for s-expression parsing (#186) ([`99397bc`](https://github.com/emesal/chibi/commit/99397bccf147f04def3fc7c65429515ff4befb78))
+
+- Task metadata parser and summary table builder (#186) ([`c316dce`](https://github.com/emesal/chibi/commit/c316dce0e71aba7346f89a2fbd13ee1d524ea71a))
+
+- Ephemeral task injection in prompt (#186) ([`532d69b`](https://github.com/emesal/chibi/commit/532d69b8ef162ea28cb52447bd2450b464cda5d2))
+
+- Tein task plugin with CRUD tools (#186) ([`c00bd65`](https://github.com/emesal/chibi/commit/c00bd656014bfbd4caca96f387f468bd80387804))
+
+- **vfs:** Add /sys/contexts/<name>/task-dirs virtual file ([`58e0e89`](https://github.com/emesal/chibi/commit/58e0e899d5614515f8a1a1031273b8b50824d3da))
+
+- **hooks:** Add hook_bindings field to ToolImpl::Synthesised ([`11e0294`](https://github.com/emesal/chibi/commit/11e02948b4afdd01ab4bd89a1881cc0c14a7cc3b))
+
+- **hooks:** Add register-hook and (harness hooks) module ([`8f3c52e`](https://github.com/emesal/chibi/commit/8f3c52e84cbb2c59d964a4f861b2c330fcdd3ba3))
+
+- **hooks:** Extract hook registrations from %hook-registry% into Tool.hooks ([`a5d5bb6`](https://github.com/emesal/chibi/commit/a5d5bb6b54b354319c44c8447b661d6fe02369c3))
+
+- **hooks:** Dispatch tein callbacks in execute_hook with re-entrancy guard ([`22241e5`](https://github.com/emesal/chibi/commit/22241e5425619691f69d80bf6a42c221966bc93f))
+
+- **hooks:** Add TeinHookContext parameter to execute_hook ([`e83b3bf`](https://github.com/emesal/chibi/commit/e83b3bfff9fa795ce4ffbd18ec7d48e5ddfc6a1a))
+
+- **hooks:** Set CallContextGuard during tein hook dispatch ([`c81235e`](https://github.com/emesal/chibi/commit/c81235ed9af8579c7ee778efc6175025833b67d9))
+
+- **hooks:** Wire TeinHookContext in send.rs hook dispatch ([`fc1d598`](https://github.com/emesal/chibi/commit/fc1d59885f6bd60b2e34d6075e0a09d0e76ddf93))
+
+- **tein:** Implement (harness io) module with IO FFI functions ([`bd542c7`](https://github.com/emesal/chibi/commit/bd542c7f65e247eb880466c4028920ef542ccfae))
+
+- **vfs:** Hide dotfile entries in vfs_list tool output ([`82588d0`](https://github.com/emesal/chibi/commit/82588d07730512add33c56d708f2899217287672))
+
+- **hooks:** Add pre_vfs_write / post_vfs_write hook points ([`dee2fd8`](https://github.com/emesal/chibi/commit/dee2fd8a84765a429429e435702e8ce44eb2ca95))
+
+- **tein:** Add io-delete to (harness io) module ([`0c7c1e9`](https://github.com/emesal/chibi/commit/0c7c1e986b805ebdabc3e3b9a13e75305144e0dc))
+
+- **config:** Builtin tier defaults for known plugins ([`e6f3684`](https://github.com/emesal/chibi/commit/e6f3684362d37786f8aa91ac82e018f95ddaf2b4))
+
+- **tein:** Add history.scm — VFS file revision history plugin ([`e87be63`](https://github.com/emesal/chibi/commit/e87be63f4e6b8f177ba750fb4acee329111db8ef))
+
+- VFS file history plugin with dotfile hiding ([`9f46e2c`](https://github.com/emesal/chibi/commit/9f46e2c2175188d048d95eb4b88bb5a313034361))
+
+- Add ToolCategory::Eval variant ([`4e4daa5`](https://github.com/emesal/chibi/commit/4e4daa500707a4d4ab4a9750e133ce85b610031e))
+
+- **eval:** Scheme_eval builtin tool with persistent sandboxed tein environments ([`9cf303e`](https://github.com/emesal/chibi/commit/9cf303e5eddc0ca065797a73a61a94c79b922ca4))
+
 
 ### Refactoring
 
@@ -205,6 +315,22 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - **state:** Wrap ContextState in Arc<RwLock> for shared access ([`372dac4`](https://github.com/emesal/chibi/commit/372dac410738780be97ba1bc138bed6989a8316a))
 
+- Remove flat todos.md system (#186) ([`e523e3b`](https://github.com/emesal/chibi/commit/e523e3b2939d329c8dd496514a6d1c9ae10f75be))
+
+- Extract inject_before_last_user from send.rs (A2) ([`5dc8bca`](https://github.com/emesal/chibi/commit/5dc8bca7de3a3dcaf4d763cbc01465a261a50719))
+
+- Rename Inspectable::Todos to Tasks, accept both aliases (D3) ([`9387a25`](https://github.com/emesal/chibi/commit/9387a25fbe4b8b6b9fa7fd25feb25e7bef4dd9ab))
+
+- Extract flocks_for_context in ContextsBackend ([`f08261d`](https://github.com/emesal/chibi/commit/f08261d54a9f3b341bce7a5b3c0e035417822ef1))
+
+- **tasks.scm:** Read task dirs from VFS virtual file ([`cd931a0`](https://github.com/emesal/chibi/commit/cd931a081f464c3794a353da79b7f917b2fd64de))
+
+- Make tein harness internals pub(crate) for eval tool ([`dbb5cfb`](https://github.com/emesal/chibi/commit/dbb5cfb9ea55190126e88d3714b8cfd63e3cae1b))
+
+- **eval:** Spawn_blocking for scheme execution to avoid stalling tokio ([`c206e28`](https://github.com/emesal/chibi/commit/c206e28a380b1263579bb4d216b39f3ebe701db9))
+
+- **eval:** Spawn_blocking for scheme execution to avoid stalling tokio ([`ee1ff8e`](https://github.com/emesal/chibi/commit/ee1ff8e85c8505e619fdc69ac7ea49ab5398ecdb))
+
 
 ### Tests
 
@@ -225,6 +351,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **compaction:** Large transcript stress test — repeated rolling compaction, #174 ([`24f7ed1`](https://github.com/emesal/chibi/commit/24f7ed121afad71aeb4398b273adf129e8f7208b))
 
 - **tein:** Tier sandbox boundary + harness integration tests ([`683069f`](https://github.com/emesal/chibi/commit/683069f6f1dfc513840e83258fadd64b195d8a41))
+
+- **hooks:** Comprehensive tests for tein hook dispatch ([`dfafcf0`](https://github.com/emesal/chibi/commit/dfafcf0915671807f3508ff8aab24cd14d774caa))
+
+- **tein:** Integration tests for (harness io) in hook callbacks ([`1ddd3d9`](https://github.com/emesal/chibi/commit/1ddd3d91ceaa35178e687ae1e23f9c782924ab4b))
+
+- **tein:** Verify history.scm plugin loads with 4 tools + hook ([`9bcb76b`](https://github.com/emesal/chibi/commit/9bcb76bbbf3c5f8e925d125be80492ae35adce52))
+
+- **history:** Integration tests for snapshot, pruning, and hook dispatch ([`38c4a03`](https://github.com/emesal/chibi/commit/38c4a037d4a4f6f603856282aaf9c1af29e0c2dc))
+
+- **history:** Integration test for file_history_diff ([`3e9f844`](https://github.com/emesal/chibi/commit/3e9f8448c6d9161709c023a7de6aa1412b28bb0b))
 
 
 ## [0.8.10] - 2026-02-22

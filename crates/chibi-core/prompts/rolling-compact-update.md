@@ -6,10 +6,10 @@ EXISTING SUMMARY:
 CONTENT BEING ARCHIVED:
 {ARCHIVED}
 
-{GOALS}{TODOS}Create an updated summary that:
+{GOALS}{TASKS}Create an updated summary that:
 1. Preserves important information from the existing summary
 2. Integrates key points from the archived content
-3. Keeps information relevant to the goals and todos
+3. Keeps information relevant to the goals and tasks
 4. Is concise but comprehensive
 5. Maintains chronological awareness (what happened earlier vs later)
 

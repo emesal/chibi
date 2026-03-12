@@ -188,7 +188,7 @@ tool_cache_preview_chars = 500
 # =============================================================================
 
 # [tools]
-# include = ["update_todos", "shell_exec"]  # allowlist (local overrides entirely)
+# include = ["update_reflection", "shell_exec"]  # allowlist (local overrides entirely)
 # exclude = ["file_grep"]                    # blocklist (local appends)
 # exclude_categories = ["agent"]             # category blocklist (local appends)
 
@@ -339,7 +339,7 @@ effort = "high"
 # Tool filtering (merges with global [tools] config)
 [tools]
 # Allowlist mode - only these tools are available (overrides global include)
-# include = ["update_todos", "update_goals", "send_message"]
+# include = ["update_goals", "update_reflection", "send_message"]
 
 # Blocklist mode - these tools are excluded (appends to global exclude)
 exclude = ["file_grep"]
@@ -616,27 +616,31 @@ Control which tools are available to the LLM. Tool filtering can be configured g
 [tools]
 # Allowlist mode - only these tools are available
 # When set, only listed tools can be used
-include = ["update_todos", "update_goals", "update_reflection"]
+include = ["update_goals", "update_reflection", "send_message"]
 
 # OR blocklist mode - these tools are excluded
 # When set, listed tools are removed from available tools
 # exclude = ["file_grep", "file_head", "file_tail"]
 
 # Exclude entire tool categories
-# exclude_categories = ["coding", "agent"]
+# exclude_categories = ["shell", "network"]
 ```
 
 **Tool Categories:**
 
 | Category | Tools |
 |----------|-------|
-| `builtin` | update_todos, update_goals, update_reflection, send_message, call_agent, call_user, model_info, read_context |
-| `file` | file_head, file_tail, file_lines, file_grep, write_file |
-| `agent` | spawn_agent, summarize_content |
-| `coding` | shell_exec, dir_list, glob_files, grep_files, file_edit, fetch_url, index_update, index_query, index_status |
+| `memory` | update_reflection, update_goals, read_context, flock_join, flock_leave, flock_list |
+| `flow` | send_message, call_user, model_info, spawn_agent, summarize_content |
+| `fs_read` | file_head, file_tail, file_lines, file_grep, dir_list, glob_files, grep_files |
+| `fs_write` | write_file, file_edit |
+| `shell` | shell_exec |
+| `network` | fetch_url |
+| `index` | index_update, index_query, index_status |
 | `vfs` | vfs_list, vfs_info, vfs_copy, vfs_move, vfs_mkdir, vfs_delete |
-| `mcp` | MCP tools loaded from the bridge (named `<server>_<tool>`) |
+| `synthesised` | Tools defined via `.scm` files in the VFS |
 | `plugin` | Tools loaded from the plugins directory |
+| `mcp` | MCP tools loaded from the bridge (named `<server>_<tool>`) |
 
 **Global vs. per-context:**
 

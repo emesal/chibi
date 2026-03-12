@@ -283,27 +283,9 @@ fn test_should_warn() {
     assert!(app.should_warn(&large_messages));
 }
 
-// === Todos/Goals tests ===
-
-#[test]
-fn test_todos_save_and_load() {
-    let (app, _temp) = create_test_app();
-
-    app.save_todos("default", "- [ ] Task 1\n- [x] Task 2")
-        .unwrap();
-    let loaded = app.load_todos("default").unwrap();
-    assert_eq!(loaded, "- [ ] Task 1\n- [x] Task 2");
-}
-
-#[test]
-fn test_todos_empty_returns_empty_string() {
-    let (app, _temp) = create_test_app();
-    let loaded = app.load_todos("nonexistent").unwrap();
-    assert_eq!(loaded, "");
-}
-
 // Goals are now flock-scoped (removed save_goals/load_goals in task 7).
 // Flock goal tests are in state/flocks.rs (task 9).
+// Todos replaced by structured task files — see state/tasks.rs.
 
 // === Local config tests ===
 

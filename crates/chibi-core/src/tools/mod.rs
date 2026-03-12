@@ -4,7 +4,7 @@
 //! - Plugin loading and execution from the plugins directory
 //! - MCP bridge client for tools from remote MCP servers
 //! - Built-in tools organised by permission/capability group:
-//!   - `memory`: reflection, todos, goals, read_context
+//!   - `memory`: reflection, goals, flock_list, read_context
 //!   - `fs_read`: read-only file and directory access
 //!   - `fs_write`: file write and edit (triggers PreFileWrite hooks)
 //!   - `shell`: OS command execution (triggers PreShellExec hooks)
@@ -15,6 +15,7 @@
 //! - URL and file path security policies
 //! - Hook system for plugin lifecycle events
 
+mod eval;
 mod flow;
 mod fs_read;
 mod fs_write;
@@ -121,7 +122,7 @@ pub fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<Str
 }
 
 // Re-export hook execution
-pub use hooks::execute_hook;
+pub use hooks::{TeinHookContext, execute_hook};
 
 // Re-export plugin functions
 pub use plugins::{execute_tool, execute_tool_by_path, load_tools};
@@ -129,7 +130,7 @@ pub use plugins::{execute_tool, execute_tool_by_path, load_tools};
 // Re-export memory tool constants and functions
 pub use memory::{
     GOALS_TOOL_NAME, MEMORY_TOOL_DEFS, READ_CONTEXT_TOOL_NAME, REFLECTION_TOOL_NAME,
-    TODOS_TOOL_NAME, execute_memory_tool, register_memory_tools,
+    execute_memory_tool, register_memory_tools,
 };
 
 // Re-export flow tool constants, types and functions
@@ -172,6 +173,9 @@ pub use index::{
 
 // Re-export VFS tool registry functions and execution
 pub use vfs_tools::{execute_vfs_tool, register_vfs_tools};
+
+// Re-export eval tool constants and registration
+pub use eval::{EVAL_TOOL_DEFS, SCHEME_EVAL_TOOL_NAME, register_eval_tools};
 
 // Re-export security utilities
 pub use security::{
@@ -252,6 +256,17 @@ impl Tool {
         })
     }
 
+    /// Returns `true` if this tool can participate in hook dispatch.
+    ///
+    /// Plugin tools always register hooks via their `--schema` output.
+    /// Synthesised tools participate only when they called `register-hook`.
+    /// All other categories (builtin, MCP) never register hooks.
+    pub fn is_hook_eligible(&self) -> bool {
+        use registry::ToolCategory;
+        self.category == ToolCategory::Plugin
+            || (self.category == ToolCategory::Synthesised && !self.hooks.is_empty())
+    }
+
     /// Construct a Tool from a `BuiltinToolDef`, a shared handler, and a category.
     ///
     /// Reduces boilerplate in the `register_*_tools()` functions across all modules.
@@ -287,6 +302,7 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         .chain(index::INDEX_TOOL_DEFS.iter())
         .chain(flow::FLOW_TOOL_DEFS.iter())
         .chain(vfs_tools::VFS_TOOL_DEFS.iter())
+        .chain(eval::EVAL_TOOL_DEFS.iter())
         .map(|def| def.name)
         .collect()
 }
@@ -316,6 +332,7 @@ fn builtin_summary_params(name: &str) -> &'static [&'static str] {
         .chain(network::NETWORK_TOOL_DEFS.iter())
         .chain(index::INDEX_TOOL_DEFS.iter())
         .chain(vfs_tools::VFS_TOOL_DEFS.iter())
+        .chain(eval::EVAL_TOOL_DEFS.iter())
         .find(|def| def.name == name)
         .map(|def| def.summary_params)
         .unwrap_or(&[])
@@ -583,7 +600,7 @@ mod tests {
         assert!(names.contains(&"file_edit")); // coding tool
         assert!(names.contains(&"vfs_list")); // vfs tool
 
-        // Should be: memory + flow + fs_read + fs_write + shell + network + index + vfs
+        // Should be: memory + flow + fs_read + fs_write + shell + network + index + vfs + eval
         let expected_count = memory::MEMORY_TOOL_DEFS.len()
             + flow::FLOW_TOOL_DEFS.len()
             + fs_read::FS_READ_TOOL_DEFS.len()
@@ -591,8 +608,10 @@ mod tests {
             + shell::SHELL_TOOL_DEFS.len()
             + network::NETWORK_TOOL_DEFS.len()
             + index::INDEX_TOOL_DEFS.len()
-            + vfs_tools::VFS_TOOL_DEFS.len();
+            + vfs_tools::VFS_TOOL_DEFS.len()
+            + eval::EVAL_TOOL_DEFS.len();
         assert_eq!(names.len(), expected_count);
+        assert!(names.contains(&"scheme_eval")); // eval tool
     }
 
     #[test]

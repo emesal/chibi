@@ -250,6 +250,7 @@ impl Chibi {
                 &registry,
                 &app.config.tools,
             ))?;
+            crate::tools::register_eval_tools(&registry);
         }
 
         #[cfg(feature = "synthesised-tools")]
@@ -314,12 +315,12 @@ impl Chibi {
             "tool_count": reg.all().count(),
         });
         let plugin_tools: Vec<Tool> = reg
-            .filter(|t| t.category == ToolCategory::Plugin)
+            .filter(|t| t.is_hook_eligible())
             .into_iter()
             .cloned()
             .collect();
         drop(reg);
-        tools::execute_hook(&plugin_tools, tools::HookPoint::OnStart, &hook_data)
+        tools::execute_hook(&plugin_tools, tools::HookPoint::OnStart, &hook_data, None)
     }
 
     /// Shutdown the session.
@@ -334,12 +335,12 @@ impl Chibi {
             "tool_count": reg.all().count(),
         });
         let plugin_tools: Vec<Tool> = reg
-            .filter(|t| t.category == ToolCategory::Plugin)
+            .filter(|t| t.is_hook_eligible())
             .into_iter()
             .cloned()
             .collect();
         drop(reg);
-        tools::execute_hook(&plugin_tools, tools::HookPoint::OnEnd, &hook_data)
+        tools::execute_hook(&plugin_tools, tools::HookPoint::OnEnd, &hook_data, None)
     }
 
     /// Clear a context, executing PreClear/PostClear hooks.
@@ -358,18 +359,28 @@ impl Chibi {
             .registry
             .read()
             .unwrap()
-            .filter(|t| t.category == ToolCategory::Plugin)
+            .filter(|t| t.is_hook_eligible())
             .into_iter()
             .cloned()
             .collect();
-        let _ = tools::execute_hook(&plugin_tools, tools::HookPoint::PreClear, &pre_hook_data);
+        let _ = tools::execute_hook(
+            &plugin_tools,
+            tools::HookPoint::PreClear,
+            &pre_hook_data,
+            None,
+        );
 
         self.app.clear_context(context_name)?;
 
         let post_hook_data = serde_json::json!({
             "context_name": context_name,
         });
-        let _ = tools::execute_hook(&plugin_tools, tools::HookPoint::PostClear, &post_hook_data);
+        let _ = tools::execute_hook(
+            &plugin_tools,
+            tools::HookPoint::PostClear,
+            &post_hook_data,
+            None,
+        );
 
         Ok(())
     }
@@ -828,11 +839,11 @@ mod tests {
         let result = chibi
             .execute_tool(
                 "default",
-                "update_todos",
-                serde_json::json!({"content": "- [ ] write tests"}),
+                "update_reflection",
+                serde_json::json!({"content": "I prefer concise answers."}),
             )
             .await;
         let output = result.unwrap();
-        assert!(output.contains("Todos updated"));
+        assert!(output.contains("Reflection updated"));
     }
 }

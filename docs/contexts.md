@@ -3,7 +3,7 @@
 Contexts are separate conversations. Each context maintains its own:
 - Message history
 - Summary (from compaction)
-- Todos (stored in VFS at `/home/<name>/todos.md`)
+- Tasks (stored in VFS at `/home/<name>/tasks/`)
 - System prompt (optional override)
 - Configuration (optional override via `local.toml`)
 
@@ -103,7 +103,7 @@ chibi -L
 ```
 
 ```bash
-# Show current context info (name, message count, todos, goals)
+# Show current context info (name, message count, tasks, goals)
 chibi -l
 ```
 
@@ -251,12 +251,12 @@ Each context can override global settings. See [configuration.md](configuration.
 # Inspect current context
 chibi -n system_prompt   # View system prompt
 chibi -n reflection      # View reflection (global)
-chibi -n todos           # View todos (VFS-backed)
+chibi -n tasks           # View tasks
 chibi -n home            # View chibi home directory
 chibi -n list            # List what can be inspected
 
 # Inspect a specific context
-chibi -N research todos
+chibi -N research tasks
 chibi -N coding system_prompt
 ```
 
@@ -281,7 +281,7 @@ chibi -g -5  # First 5 entries
 ├── session.json                 # CLI session state (implied_context, previous_context)
 ├── vfs/
 │   ├── home/<name>/
-│   │   └── todos.md             # Context todos (VFS-managed)
+│   │   └── tasks/              # Structured tasks (.task files)
 │   ├── site/                    # Site-wide flock data
 │   │   ├── goals.md
 │   │   └── prompt.md

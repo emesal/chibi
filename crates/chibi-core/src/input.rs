@@ -14,7 +14,7 @@ pub enum Inspectable {
     // File-based items (context-specific)
     SystemPrompt,
     Reflection,
-    Todos,
+    Tasks,
     Goals,
     // Global items
     Home,
@@ -351,11 +351,11 @@ mod tests {
     fn test_command_inspect() {
         let cmd = Command::Inspect {
             context: None,
-            thing: Inspectable::Todos,
+            thing: Inspectable::Tasks,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("inspect"));
-        assert!(json.contains("todos"));
+        assert!(json.contains("tasks"));
     }
 
     #[test]
@@ -385,12 +385,12 @@ mod tests {
     #[test]
     fn test_command_call_tool() {
         let cmd = Command::CallTool {
-            name: "update_todos".to_string(),
+            name: "update_goals".to_string(),
             args: vec![],
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("call_tool"));
-        assert!(json.contains("update_todos"));
+        assert!(json.contains("update_goals"));
     }
 
     #[test]

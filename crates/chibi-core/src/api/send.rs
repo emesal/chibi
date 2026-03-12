@@ -107,8 +107,9 @@ fn check_permission(
     hook: tools::HookPoint,
     hook_data: &serde_json::Value,
     permission_handler: Option<&PermissionHandler>,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<Result<(), String>> {
-    let hook_results = tools::execute_hook(tools, hook, hook_data)?;
+    let hook_results = tools::execute_hook(tools, hook, hook_data, tein_ctx)?;
     evaluate_permission(&hook_results, hook_data, permission_handler)
 }
 
@@ -394,7 +395,7 @@ fn apply_hook_overrides<S: ResponseSink>(
 
 /// Build the full system prompt with all components.
 ///
-/// Handles: loading base prompt, todos, goals, summary, reflection prompt,
+/// Handles: loading base prompt, goals, summary, reflection prompt,
 /// pre/post system_prompt hooks, and username injection.
 #[allow(clippy::too_many_arguments)]
 fn build_full_system_prompt<S: ResponseSink>(
@@ -407,6 +408,7 @@ fn build_full_system_prompt<S: ResponseSink>(
     sink: &mut S,
     home_dir: &Path,
     project_root: &Path,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<String> {
     // Load base prompts
     let system_prompt = app.load_system_prompt_for(context_name)?;
@@ -417,14 +419,12 @@ fn build_full_system_prompt<S: ResponseSink>(
     };
 
     // Load context-specific state
-    let todos = app.load_todos(context_name)?;
     let flock_contexts = load_flock_contexts(&app.vfs, context_name)?;
 
     // Execute pre_system_prompt hook - can inject content before system prompt sections
     let pre_sys_hook_data = serde_json::json!({
         "context_name": context_name,
         "summary": summary,
-        "todos": todos,
         "flock_goals": flock_contexts.iter()
             .filter_map(|fc| fc.goals.as_ref().map(|g| serde_json::json!({
                 "flock": fc.flock_name,
@@ -432,8 +432,12 @@ fn build_full_system_prompt<S: ResponseSink>(
             })))
             .collect::<Vec<_>>(),
     });
-    let pre_sys_hook_results =
-        tools::execute_hook(tools, tools::HookPoint::PreSystemPrompt, &pre_sys_hook_data)?;
+    let pre_sys_hook_results = tools::execute_hook(
+        tools,
+        tools::HookPoint::PreSystemPrompt,
+        &pre_sys_hook_data,
+        tein_ctx,
+    )?;
 
     // Build full system prompt with all components, anchoring identity first
     let mut full_system_prompt = format!(
@@ -489,12 +493,6 @@ fn build_full_system_prompt<S: ResponseSink>(
         full_system_prompt.push_str(&flock_sections);
     }
 
-    // Add todos if present
-    if !todos.is_empty() {
-        full_system_prompt.push_str("\n\n--- CURRENT TODOS ---\n");
-        full_system_prompt.push_str(&todos);
-    }
-
     // Add fuel notice when operating under a fuel budget
     if resolved_config.fuel > 0 {
         full_system_prompt.push_str("\n\nUse call_user to return control to the user. You operate within a fuel budget. When fuel runs out control is returned automatically. Fuel refills with each prompt.");
@@ -510,7 +508,6 @@ fn build_full_system_prompt<S: ResponseSink>(
     let post_sys_hook_data = serde_json::json!({
         "context_name": context_name,
         "summary": summary,
-        "todos": todos,
         "flock_goals": flock_contexts.iter()
             .filter_map(|fc| fc.goals.as_ref().map(|g| serde_json::json!({
                 "flock": fc.flock_name,
@@ -522,6 +519,7 @@ fn build_full_system_prompt<S: ResponseSink>(
         tools,
         tools::HookPoint::PostSystemPrompt,
         &post_sys_hook_data,
+        tein_ctx,
     )?;
 
     // Append any content from post_system_prompt hooks
@@ -703,7 +701,9 @@ struct LoopDetector {
     last_tool_name: String,
     last_args: String,
     last_result: String,
-    /// How many times this exact (tool, args, result) triple has appeared in a row.
+    /// Whether the last recorded call had a cached result.
+    last_was_cached: bool,
+    /// How many times this call has repeated consecutively.
     /// Starts at 0 (no previous call). Becomes 1 on first call, 2 on first repeat, etc.
     pub consecutive_count: u32,
 }
@@ -714,21 +714,39 @@ impl LoopDetector {
             last_tool_name: String::new(),
             last_args: String::new(),
             last_result: String::new(),
+            last_was_cached: false,
             consecutive_count: 0,
         }
     }
 
     /// Record a tool call result. Returns `true` if this is a duplicate (loop detected).
-    /// Resets the counter whenever the (tool, args, result) triple changes.
-    fn check_and_update(&mut self, tool_name: &str, args: &str, result: &str) -> bool {
-        if tool_name == self.last_tool_name && args == self.last_args && result == self.last_result
-        {
+    ///
+    /// When both the current and previous calls were cached, compares `(tool_name, args)`
+    /// only — cached stubs contain timestamp-based VFS URIs that differ every time,
+    /// defeating result-based comparison (#207).
+    fn check_and_update(
+        &mut self,
+        tool_name: &str,
+        args: &str,
+        result: &str,
+        was_cached: bool,
+    ) -> bool {
+        let is_repeat = tool_name == self.last_tool_name
+            && args == self.last_args
+            && if was_cached && self.last_was_cached {
+                true // both cached: (tool, args) match is sufficient
+            } else {
+                result == self.last_result
+            };
+
+        if is_repeat {
             self.consecutive_count += 1;
             true
         } else {
             self.last_tool_name = tool_name.to_string();
             self.last_args = args.to_string();
             self.last_result = result.to_string();
+            self.last_was_cached = was_cached;
             self.consecutive_count = 1;
             false
         }
@@ -742,47 +760,77 @@ mod loop_detector_tests {
     #[test]
     fn test_no_loop_on_first_call() {
         let mut d = LoopDetector::new();
-        assert!(!d.check_and_update("grep", r#"{"path":"x"}"#, "result"));
+        assert!(!d.check_and_update("grep", r#"{"path":"x"}"#, "result", false));
     }
 
     #[test]
     fn test_no_loop_on_different_args() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", r#"{"path":"a"}"#, "result");
-        assert!(!d.check_and_update("grep", r#"{"path":"b"}"#, "result"));
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result", false);
+        assert!(!d.check_and_update("grep", r#"{"path":"b"}"#, "result", false));
     }
 
     #[test]
     fn test_no_loop_on_different_result() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", r#"{"path":"a"}"#, "result1");
-        assert!(!d.check_and_update("grep", r#"{"path":"a"}"#, "result2"));
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result1", false);
+        assert!(!d.check_and_update("grep", r#"{"path":"a"}"#, "result2", false));
     }
 
     #[test]
     fn test_loop_detected_on_second_identical_call() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", r#"{"path":"a"}"#, "result");
-        assert!(d.check_and_update("grep", r#"{"path":"a"}"#, "result"));
+        d.check_and_update("grep", r#"{"path":"a"}"#, "result", false);
+        assert!(d.check_and_update("grep", r#"{"path":"a"}"#, "result", false));
     }
 
     #[test]
     fn test_loop_count_increments() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", "args", "res");
-        d.check_and_update("grep", "args", "res"); // count=2, loop
-        d.check_and_update("grep", "args", "res"); // count=3, loop
+        d.check_and_update("grep", "args", "res", false);
+        d.check_and_update("grep", "args", "res", false); // count=2, loop
+        d.check_and_update("grep", "args", "res", false); // count=3, loop
         assert_eq!(d.consecutive_count, 3);
     }
 
     #[test]
     fn test_loop_resets_on_different_call() {
         let mut d = LoopDetector::new();
-        d.check_and_update("grep", "args", "res");
-        d.check_and_update("grep", "args", "res"); // loop detected
-        d.check_and_update("ls", "{}", "files"); // resets
+        d.check_and_update("grep", "args", "res", false);
+        d.check_and_update("grep", "args", "res", false); // loop detected
+        d.check_and_update("ls", "{}", "files", false); // resets
         assert_eq!(d.consecutive_count, 1);
-        assert!(!d.check_and_update("ls", "{}", "files2")); // different result → no loop
+        assert!(!d.check_and_update("ls", "{}", "files2", false)); // different result → no loop
+    }
+
+    #[test]
+    fn test_cached_loop_detected_despite_different_stubs() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("web_fetch", r#"{"url":"x"}"#, "stub_ts1", true);
+        assert!(d.check_and_update("web_fetch", r#"{"url":"x"}"#, "stub_ts2", true));
+    }
+
+    #[test]
+    fn test_cached_then_uncached_no_loop() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", "args", "stub_cached", true);
+        assert!(!d.check_and_update("grep", "args", "real_result", false));
+    }
+
+    #[test]
+    fn test_uncached_then_cached_no_loop() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("grep", "args", "real_result", false);
+        assert!(!d.check_and_update("grep", "args", "stub_cached", true));
+    }
+
+    #[test]
+    fn test_cached_loop_count_increments() {
+        let mut d = LoopDetector::new();
+        d.check_and_update("fetch", "args", "stub1", true);
+        d.check_and_update("fetch", "args", "stub2", true);
+        d.check_and_update("fetch", "args", "stub3", true);
+        assert_eq!(d.consecutive_count, 3);
     }
 }
 
@@ -879,6 +927,7 @@ async fn execute_tool_pure(
     resolved_config: &ResolvedConfig,
     permission_handler: Option<&PermissionHandler>,
     project_root: &Path,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<ToolExecutionResult> {
     let mut args: serde_json::Value =
         serde_json::from_str(&tool_call.arguments).unwrap_or(serde_json::json!({}));
@@ -900,8 +949,12 @@ async fn execute_tool_pure(
         "tool_name": tool_call.name,
         "arguments": args,
     });
-    let pre_hook_results =
-        tools::execute_hook(plugin_tools, tools::HookPoint::PreTool, &pre_hook_data)?;
+    let pre_hook_results = tools::execute_hook(
+        plugin_tools,
+        tools::HookPoint::PreTool,
+        &pre_hook_data,
+        tein_ctx,
+    )?;
 
     let pre_tool = apply_pre_tool_results(pre_hook_results, &tool_call.name, args);
     let blocked = pre_tool.blocked;
@@ -935,7 +988,14 @@ async fn execute_tool_pure(
     } else if tool_call.name == tools::SEND_MESSAGE_TOOL_NAME {
         // send_message is intercepted here before registry dispatch — it uses
         // plugin hooks and async inbox delivery not expressible as a plain handler.
-        execute_send_message_pure(app, context_name, plugin_tools, &args, &mut diagnostics)?
+        execute_send_message_pure(
+            app,
+            context_name,
+            plugin_tools,
+            &args,
+            &mut diagnostics,
+            tein_ctx,
+        )?
     } else if tool_call.name == tools::MODEL_INFO_TOOL_NAME {
         // model_info requires an async gateway call not available at registration time.
         match args.get_str("model") {
@@ -981,6 +1041,7 @@ async fn execute_tool_pure(
                                     tools::HookPoint::PreFileRead,
                                     &hook_data,
                                     permission_handler,
+                                    tein_ctx,
                                 )?
                                 .err()
                                 .map(|r| format!("Permission denied: {r}"))
@@ -993,10 +1054,24 @@ async fn execute_tool_pure(
                 }
             }
             ToolCategory::FsWrite => {
-                // VFS paths handled inside the handler; OS paths need PreFileWrite gate.
+                // VFS paths: fire PreVfsWrite hook (advisory, non-blocking).
+                // Zone-based permissions are enforced inside the handler.
+                // OS paths go through the PreFileWrite permission gate.
                 let raw_path = args.get_str("path").unwrap_or("");
                 if VfsPath::is_vfs_uri(raw_path) {
-                    None // bypass: let registry dispatch handle it
+                    let hook_data = serde_json::json!({
+                        "tool_name": tool_call.name,
+                        "path": raw_path,
+                        "content": args.get_str("content"),
+                        "caller": context_name,
+                    });
+                    let _ = tools::execute_hook(
+                        plugin_tools,
+                        tools::HookPoint::PreVfsWrite,
+                        &hook_data,
+                        tein_ctx,
+                    );
+                    None // never blocks — VFS zone permissions enforced in handler
                 } else {
                     let hook_data = if tool_call.name == tools::FILE_EDIT_TOOL_NAME {
                         serde_json::json!({
@@ -1017,6 +1092,7 @@ async fn execute_tool_pure(
                         tools::HookPoint::PreFileWrite,
                         &hook_data,
                         permission_handler,
+                        tein_ctx,
                     )?
                     .err()
                     .map(|r| format!("Permission denied: {r}"))
@@ -1032,6 +1108,7 @@ async fn execute_tool_pure(
                     tools::HookPoint::PreShellExec,
                     &hook_data,
                     permission_handler,
+                    tein_ctx,
                 )?
                 .err()
             }
@@ -1060,6 +1137,7 @@ async fn execute_tool_pure(
                         tools::HookPoint::PreFetchUrl,
                         &hook_data,
                         permission_handler,
+                        tein_ctx,
                     )?
                     .err()
                     .map(|r| format!("Permission denied: {}", r))
@@ -1102,6 +1180,7 @@ async fn execute_tool_pure(
                             tools::HookPoint::PreFetchUrl,
                             &hook_data,
                             permission_handler,
+                            tein_ctx,
                         )? {
                             Ok(()) => {}
                             Err(reason) => {
@@ -1161,6 +1240,7 @@ async fn execute_tool_pure(
         plugin_tools,
         tools::HookPoint::PreToolOutput,
         &pre_output_hook_data,
+        tein_ctx,
     )?;
 
     let (tool_result, output_diagnostics) =
@@ -1181,6 +1261,7 @@ async fn execute_tool_pure(
             plugin_tools,
             tools::HookPoint::PreCacheOutput,
             &pre_cache_data,
+            tein_ctx,
         )?;
         let cache_blocked = pre_cache_results
             .iter()
@@ -1235,6 +1316,7 @@ async fn execute_tool_pure(
                         plugin_tools,
                         tools::HookPoint::PostCacheOutput,
                         &post_cache_data,
+                        tein_ctx,
                     );
 
                     (truncated, true)
@@ -1261,6 +1343,7 @@ async fn execute_tool_pure(
         plugin_tools,
         tools::HookPoint::PostToolOutput,
         &post_output_hook_data,
+        tein_ctx,
     );
 
     Ok(ToolExecutionResult {
@@ -1288,6 +1371,7 @@ async fn execute_single_tool<S: ResponseSink>(
     permission_handler: Option<&PermissionHandler>,
     sink: &mut S,
     project_root: &Path,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<ToolExecutionResult> {
     // Apply handoff if this is a flow control tool
     let args: serde_json::Value =
@@ -1314,6 +1398,7 @@ async fn execute_single_tool<S: ResponseSink>(
         resolved_config,
         permission_handler,
         project_root,
+        tein_ctx,
     )
     .await?;
 
@@ -1336,6 +1421,7 @@ fn execute_send_message_pure(
     tools: &[Tool],
     args: &serde_json::Value,
     diagnostics: &mut Vec<String>,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<String> {
     let to = args.get_str_or("to", "");
     let content = args.get_str_or("content", "");
@@ -1355,8 +1441,12 @@ fn execute_send_message_pure(
         "content": content,
         "context_name": context_name,
     });
-    let pre_hook_results =
-        tools::execute_hook(tools, tools::HookPoint::PreSendMessage, &pre_hook_data)?;
+    let pre_hook_results = tools::execute_hook(
+        tools,
+        tools::HookPoint::PreSendMessage,
+        &pre_hook_data,
+        tein_ctx,
+    )?;
 
     // Check if any hook claimed delivery
     let mut delivered_via: Option<String> = None;
@@ -1396,7 +1486,12 @@ fn execute_send_message_pure(
         "context_name": context_name,
         "delivery_result": delivery_result,
     });
-    let _ = tools::execute_hook(tools, tools::HookPoint::PostSendMessage, &post_hook_data);
+    let _ = tools::execute_hook(
+        tools,
+        tools::HookPoint::PostSendMessage,
+        &post_hook_data,
+        tein_ctx,
+    );
 
     Ok(delivery_result)
 }
@@ -1426,6 +1521,7 @@ async fn process_tool_calls<S: ResponseSink>(
     permission_handler: Option<&PermissionHandler>,
     project_root: &Path,
     loop_detector: &mut LoopDetector,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<()> {
     // Convert tool calls to JSON format for the assistant message
     let tool_calls_json: Vec<serde_json::Value> = tool_calls
@@ -1482,6 +1578,7 @@ async fn process_tool_calls<S: ResponseSink>(
                     resolved_config,
                     permission_handler,
                     project_root,
+                    tein_ctx,
                 )
             })
             .collect();
@@ -1510,6 +1607,7 @@ async fn process_tool_calls<S: ResponseSink>(
             permission_handler,
             sink,
             project_root,
+            tein_ctx,
         )
         .await?;
         results[*idx] = Some(result);
@@ -1622,8 +1720,8 @@ async fn process_tool_calls<S: ResponseSink>(
             cached: result.was_cached,
         })?;
 
-        // Show full content of todos/goals updates
-        if matches!(tc.name.as_str(), "update_todos" | "update_goals")
+        // Show full content of goals updates
+        if matches!(tc.name.as_str(), "update_goals")
             && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments)
             && let Some(content) = args["content"].as_str()
         {
@@ -1642,7 +1740,39 @@ async fn process_tool_calls<S: ResponseSink>(
             "result": result.original_result,
             "cached": result.was_cached,
         });
-        let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostTool, &post_hook_data);
+        let _ = tools::execute_hook(
+            plugin_tools,
+            tools::HookPoint::PostTool,
+            &post_hook_data,
+            tein_ctx,
+        );
+
+        // Fire PostVfsWrite for successful VFS writes (advisory, non-blocking).
+        {
+            let raw_path = args.get_str("path").unwrap_or("");
+            let is_vfs_write = {
+                let reg = registry.read().unwrap();
+                reg.get(&tc.name)
+                    .map(|t| t.category == tools::ToolCategory::FsWrite)
+                    .unwrap_or(false)
+            };
+            if is_vfs_write
+                && VfsPath::is_vfs_uri(raw_path)
+                && !result.original_result.starts_with("Error")
+            {
+                let vfs_post_hook_data = serde_json::json!({
+                    "tool_name": tc.name,
+                    "path": raw_path,
+                    "caller": context_name,
+                });
+                let _ = tools::execute_hook(
+                    plugin_tools,
+                    tools::HookPoint::PostVfsWrite,
+                    &vfs_post_hook_data,
+                    tein_ctx,
+                );
+            }
+        }
 
         // Apply handoff for parallel-executed flow control tools
         // (sequential ones already applied via execute_single_tool)
@@ -1657,7 +1787,12 @@ async fn process_tool_calls<S: ResponseSink>(
         }
 
         // Loop detection: warn and charge fuel if same (tool, args, result) repeats.
-        let is_loop = loop_detector.check_and_update(&tc.name, &tc.arguments, &result.final_result);
+        let is_loop = loop_detector.check_and_update(
+            &tc.name,
+            &tc.arguments,
+            &result.final_result,
+            result.was_cached,
+        );
 
         messages.push(serde_json::json!({
             "role": "tool",
@@ -1712,8 +1847,12 @@ async fn process_tool_calls<S: ResponseSink>(
         hook_data["fuel_remaining"] = json!(*fuel_remaining);
         hook_data["fuel_total"] = json!(fuel_total);
     }
-    let hook_results =
-        tools::execute_hook(plugin_tools, tools::HookPoint::PostToolBatch, &hook_data)?;
+    let hook_results = tools::execute_hook(
+        plugin_tools,
+        tools::HookPoint::PostToolBatch,
+        &hook_data,
+        tein_ctx,
+    )?;
     apply_hook_overrides(handoff, fuel_remaining, fuel_unlimited, &hook_results, sink)?;
 
     Ok(())
@@ -1741,6 +1880,7 @@ fn handle_final_response<S: ResponseSink>(
     plugin_tools: &[Tool],
     resolved_config: &ResolvedConfig,
     sink: &mut S,
+    tein_ctx: Option<&tools::TeinHookContext<'_>>,
 ) -> io::Result<FinalResponseAction> {
     // Get or create context to add the message
     let mut context = app.get_or_create_context(context_name)?;
@@ -1763,7 +1903,12 @@ fn handle_final_response<S: ResponseSink>(
         "response": full_response,
         "context_name": context_name,
     });
-    let _ = tools::execute_hook(plugin_tools, tools::HookPoint::PostMessage, &hook_data);
+    let _ = tools::execute_hook(
+        plugin_tools,
+        tools::HookPoint::PostMessage,
+        &hook_data,
+        tein_ctx,
+    );
 
     if app.should_warn(&context.messages) {
         let remaining = app.remaining_tokens(&context.messages);
@@ -1819,17 +1964,33 @@ pub async fn send_prompt<S: ResponseSink>(
     tools::ensure_project_root_allowed(&mut resolved_config, project_root);
     let resolved_config = resolved_config; // re-bind as immutable
 
+    // Context for tein hook dispatch — enables call-tool and (harness io) from
+    // tein hook callbacks in the send path.
+    // When synthesised-tools feature is off, tein_hook_ctx_ref is always None.
+    #[cfg(feature = "synthesised-tools")]
+    let tein_hook_ctx = tools::TeinHookContext {
+        app,
+        context_name,
+        config: &resolved_config,
+        project_root,
+        vfs: &app.vfs,
+        registry: Arc::clone(&registry),
+    };
+    #[cfg(feature = "synthesised-tools")]
+    let tein_hook_ctx_ref: Option<&tools::TeinHookContext<'_>> = Some(&tein_hook_ctx);
+    #[cfg(not(feature = "synthesised-tools"))]
+    let tein_hook_ctx_ref: Option<&tools::TeinHookContext<'_>> = None;
+
     let fuel_total = resolved_config.fuel;
     let mut fuel_remaining = fuel_total;
     let fuel_unlimited = fuel_total == 0;
     let mut current_prompt = initial_prompt;
 
-    // Plugin tools: used for hook execution throughout this call.
-    // Builtins don't have hooks; only plugin tools register hook scripts.
+    // Tools eligible for hook dispatch: see Tool::is_hook_eligible.
     let plugin_tools: Vec<Tool> = registry
         .read()
         .unwrap()
-        .filter(|t| t.category == ToolCategory::Plugin)
+        .filter(|t| t.is_hook_eligible())
         .into_iter()
         .cloned()
         .collect();
@@ -1866,8 +2027,12 @@ pub async fn send_prompt<S: ResponseSink>(
             "context_name": context.name,
             "summary": context.summary,
         });
-        let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreMessage, &hook_data)?;
+        let hook_results = tools::execute_hook(
+            &plugin_tools,
+            tools::HookPoint::PreMessage,
+            &hook_data,
+            tein_hook_ctx_ref,
+        )?;
         for (tool_name, result) in hook_results {
             if let Some(modified) = result.get_str("prompt") {
                 sink.handle(ResponseEvent::HookDebug {
@@ -1932,6 +2097,7 @@ pub async fn send_prompt<S: ResponseSink>(
             sink,
             home_dir,
             project_root,
+            tein_hook_ctx_ref,
         )?;
 
         // === Prepare Messages ===
@@ -1955,6 +2121,16 @@ pub async fn send_prompt<S: ResponseSink>(
                 obj.remove("_id");
             }
             messages.push(msg);
+        }
+
+        // === Ephemeral Task Injection ===
+        // Collect task metadata from VFS at request time and inject a summary
+        // table as a system message before the current user turn. Never persisted
+        // to transcript — cache-friendly.
+        {
+            let tasks = crate::state::tasks::collect_tasks(&app.vfs, context_name).await;
+            let summary = crate::state::tasks::build_summary_table(&tasks);
+            crate::state::tasks::inject_before_last_user(&mut messages, summary);
         }
 
         // === Prepare Tools ===
@@ -2019,8 +2195,12 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_remaining"] = json!(fuel_remaining);
             hook_data["fuel_total"] = json!(fuel_total);
         }
-        let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiTools, &hook_data)?;
+        let hook_results = tools::execute_hook(
+            &plugin_tools,
+            tools::HookPoint::PreApiTools,
+            &hook_data,
+            tein_hook_ctx_ref,
+        )?;
         all_tools = filter_tools_from_hook_results(all_tools, &hook_results, sink)?;
 
         // === Build Request ===
@@ -2051,8 +2231,12 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_remaining"] = json!(fuel_remaining);
             hook_data["fuel_total"] = json!(fuel_total);
         }
-        let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreApiRequest, &hook_data)?;
+        let hook_results = tools::execute_hook(
+            &plugin_tools,
+            tools::HookPoint::PreApiRequest,
+            &hook_data,
+            tein_hook_ctx_ref,
+        )?;
         request_body = apply_request_modifications(request_body, &hook_results, sink)?;
 
         // Deserialise ChatOptions from the (potentially hook-modified) request body
@@ -2086,8 +2270,12 @@ pub async fn send_prompt<S: ResponseSink>(
             hook_data["fuel_remaining"] = json!(fuel_remaining);
             hook_data["fuel_total"] = json!(fuel_total);
         }
-        let hook_results =
-            tools::execute_hook(&plugin_tools, tools::HookPoint::PreAgenticLoop, &hook_data)?;
+        let hook_results = tools::execute_hook(
+            &plugin_tools,
+            tools::HookPoint::PreAgenticLoop,
+            &hook_data,
+            tein_hook_ctx_ref,
+        )?;
         apply_hook_overrides(
             &mut handoff,
             &mut fuel_remaining,
@@ -2141,6 +2329,7 @@ pub async fn send_prompt<S: ResponseSink>(
                     permission_handler,
                     project_root,
                     &mut loop_detector,
+                    tein_hook_ctx_ref,
                 )
                 .await?;
 
@@ -2197,6 +2386,7 @@ pub async fn send_prompt<S: ResponseSink>(
                 &plugin_tools,
                 &resolved_config,
                 sink,
+                tein_hook_ctx_ref,
             )? {
                 FinalResponseAction::ReturnToUser => return Ok(()),
                 FinalResponseAction::ContinueWithPrompt(continue_prompt) => {
@@ -2317,7 +2507,7 @@ mod tests {
             json!({"function": {"name": "shell_exec"}}),
             json!({"function": {"name": "dir_list"}}),
             json!({"function": {"name": "file_head"}}),
-            json!({"function": {"name": "update_todos"}}),
+            json!({"function": {"name": "update_reflection"}}),
             json!({"function": {"name": "spawn_agent"}}),
         ];
         let config = ToolsConfig {
@@ -2338,7 +2528,10 @@ mod tests {
         );
         assert!(names.contains(&"dir_list"), "fs_read tool should remain");
         assert!(names.contains(&"file_head"), "fs_read tool should remain");
-        assert!(names.contains(&"update_todos"), "memory tool should remain");
+        assert!(
+            names.contains(&"update_reflection"),
+            "memory tool should remain"
+        );
         assert!(names.contains(&"spawn_agent"), "flow tool should remain");
     }
 
@@ -2348,7 +2541,7 @@ mod tests {
             json!({"function": {"name": "shell_exec"}}),
             json!({"function": {"name": "file_head"}}),
             json!({"function": {"name": "spawn_agent"}}),
-            json!({"function": {"name": "update_todos"}}),
+            json!({"function": {"name": "update_reflection"}}),
         ];
         let config = ToolsConfig {
             include: None,
@@ -2362,7 +2555,7 @@ mod tests {
             .iter()
             .filter_map(|t| t.get("function")?.get("name")?.as_str())
             .collect();
-        assert_eq!(names, vec!["file_head", "update_todos"]);
+        assert_eq!(names, vec!["file_head", "update_reflection"]);
     }
 
     #[test]
@@ -2592,6 +2785,7 @@ mod tests {
             &resolved_config,
             None,
             &project_root,
+            None,
         )
         .await
         .unwrap();
@@ -2635,6 +2829,7 @@ mod tests {
             &resolved_config,
             None,
             &project_root,
+            None,
         )
         .await
         .unwrap();
