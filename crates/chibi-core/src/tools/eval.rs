@@ -76,52 +76,38 @@ fn build_eval_context() -> io::Result<(Arc<ThreadLocalContext>, std::thread::Thr
     Ok((Arc::new(ctx), tid))
 }
 
-/// Execute a `scheme_eval` tool call.
+/// Run scheme code in the persistent tein context. Called on a blocking thread.
 ///
-/// Retrieves or creates a persistent tein context for the calling chibi context,
-/// sets `CallContextGuard` for `call-tool` support, injects `%context-name%`,
-/// evaluates the code, and returns the display representation.
+/// Injects `%context-name%`, evaluates user code. Scheme errors are returned as
+/// `Ok("error: ...")` — they do not abort the prompt cycle.
 ///
-/// Errors from scheme evaluation are returned as `Ok("error: ...")` —
-/// they do not abort the prompt cycle.
+/// The caller must hold a `CallContextGuard` for the duration so that `call-tool`
+/// bridge lookups resolve correctly from the tein worker thread.
 #[cfg(feature = "synthesised-tools")]
-fn execute_scheme_eval(
-    context_name: &str,
-    code: &str,
-    call_ctx: &super::registry::ToolCallContext<'_>,
-    registry: Arc<std::sync::RwLock<ToolRegistry>>,
-) -> io::Result<String> {
-    use super::synthesised::CallContextGuard;
-
-    if code.is_empty() {
-        return Ok(String::new());
-    }
-
-    // Get or create the persistent tein context for this chibi context.
-    let (tein_ctx, worker_tid) = {
-        let mut contexts = EVAL_CONTEXTS.lock().unwrap();
-        if let Some(entry) = contexts.get(context_name) {
-            (Arc::clone(&entry.0), entry.1)
-        } else {
-            let (ctx, tid) = build_eval_context()?;
-            contexts.insert(context_name.to_string(), (Arc::clone(&ctx), tid));
-            (ctx, tid)
-        }
-    };
-
-    // Set the call-tool bridge context for this evaluation.
-    let _guard = CallContextGuard::set(call_ctx, registry, worker_tid);
-
-    // Inject %context-name% so call-tool resolves VFS paths correctly.
+fn run_scheme(tein_ctx: &ThreadLocalContext, context_name: &str, code: &str) -> io::Result<String> {
     let ctx_name_escaped = super::synthesised::scheme_escape_string(context_name);
     tein_ctx
         .evaluate(&format!("(set! %context-name% \"{ctx_name_escaped}\")"))
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("context-name: {e}")))?;
 
-    // Evaluate the user's code. Scheme errors are returned as Ok("error: ...").
     match tein_ctx.evaluate(code) {
         Ok(val) => Ok(val.to_string()),
         Err(e) => Ok(format!("error: {e}")),
+    }
+}
+
+/// Get or create the persistent tein context for a chibi context name.
+#[cfg(feature = "synthesised-tools")]
+fn get_or_create_context(
+    context_name: &str,
+) -> io::Result<(Arc<ThreadLocalContext>, std::thread::ThreadId)> {
+    let mut contexts = EVAL_CONTEXTS.lock().unwrap();
+    if let Some(entry) = contexts.get(context_name) {
+        Ok((Arc::clone(&entry.0), entry.1))
+    } else {
+        let (ctx, tid) = build_eval_context()?;
+        contexts.insert(context_name.to_string(), (Arc::clone(&ctx), tid));
+        Ok((ctx, tid))
     }
 }
 
@@ -130,8 +116,18 @@ fn execute_scheme_eval(
 /// Takes `&Arc<RwLock<ToolRegistry>>` (not `&mut ToolRegistry`) because the
 /// handler closure needs to capture an `Arc` clone for `CallContextGuard`.
 /// Must be called after the registry `Arc` is created in `chibi.rs`.
+///
+/// Two-phase execution avoids blocking a tokio worker thread:
+///
+/// 1. **Setup** (sync, tokio thread): extract owned args, get/create tein
+///    context, `CallContextGuard::set` snapshots `&ToolCallContext` into
+///    `BRIDGE_CALL_CTX`. This is the only step needing the borrowed lifetime.
+/// 2. **Eval** (`spawn_blocking`): guard + context + owned args move to a
+///    blocking thread. Scheme runs there; guard drops and cleans up on return.
 #[cfg(feature = "synthesised-tools")]
 pub fn register_eval_tools(registry: &Arc<std::sync::RwLock<ToolRegistry>>) {
+    use super::synthesised::CallContextGuard;
+
     let registry_for_handler = Arc::clone(registry);
     let handler: super::registry::ToolHandler = Arc::new(move |call| {
         let context_name = call.context.context_name.to_string();
@@ -141,8 +137,31 @@ pub fn register_eval_tools(registry: &Arc<std::sync::RwLock<ToolRegistry>>) {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+
+        if code.is_empty() {
+            return Box::pin(async { Ok(String::new()) });
+        }
+
+        // Phase 1 (tokio thread): setup while borrowed ToolCallContext is valid.
         let reg = Arc::clone(&registry_for_handler);
-        Box::pin(async move { execute_scheme_eval(&context_name, &code, call.context, reg) })
+        let setup = (|| -> io::Result<_> {
+            let (tein_ctx, worker_tid) = get_or_create_context(&context_name)?;
+            let guard = CallContextGuard::set(call.context, reg, worker_tid);
+            Ok((tein_ctx, guard))
+        })();
+
+        // Phase 2 (blocking thread): scheme code runs off the tokio pool.
+        Box::pin(async move {
+            let (tein_ctx, guard) = setup?;
+            tokio::task::spawn_blocking(move || {
+                let _guard = guard;
+                run_scheme(&tein_ctx, &context_name, &code)
+            })
+            .await
+            .map_err(|e| {
+                io::Error::new(io::ErrorKind::Other, format!("scheme_eval panicked: {e}"))
+            })?
+        })
     });
 
     let mut tool = Tool::from_builtin_def(&EVAL_TOOL_DEFS[0], handler, ToolCategory::Eval);
