@@ -18,10 +18,21 @@
   - time (tein time)
   - file (tein file) ; R7RS file operations (permissions-checked via harness)
   - regexp (tein fast-regexp)
+  - scheme env introspection (tein introspect)
+    - introspect-docs ; an alist that documents the introspect module
+    - (available-modules) ; all importable modules
+    - (imported-modules) ; already imported
+    - (module-export mod-path) ; list symbols exported by module
+    - (procedure-arity proc) ; return (min . max) where max is #f if variadic
+    - (env-bindings) ; alist of (name . kind) for all bindings in current env
+    - (env-bindings prefix-string) ; filter by symbol name prefix
+    - (binding-info sym) ; alist with details about binding, #f if undefined
+    - (describe-environment) ; structured alist describing full env
+    - (describe-environment/text) ; LLM-friendly list (full inventory of environemtn! very useful)
   - builtin docs for tein modules (tein docs)
-    - (describe mymod-docs) ; full docs for mymod
-    - (module-doc mymod-docs 'mymod-procedure) ; docs for specific procedure
-    - (module-docs mymod-docs) ; same data as describe but raw alist
+    - (describe teinmod-docs) ; full docs for teinmod
+    - (module-doc teinmod-docs 'teinmod-procedure) ; docs for specific procedure
+    - (module-docs teinmod-docs) ; same data as describe but raw alist
   - introspectable foreign types:
     - (foreign-types) ; all type names in this context
     - (foreign-methods "counter") ; method names for a specific type
