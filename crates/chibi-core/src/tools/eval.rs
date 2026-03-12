@@ -158,9 +158,7 @@ pub fn register_eval_tools(registry: &Arc<std::sync::RwLock<ToolRegistry>>) {
                 run_scheme(&tein_ctx, &context_name, &code)
             })
             .await
-            .map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("scheme_eval panicked: {e}"))
-            })?
+            .map_err(|e| io::Error::other(format!("scheme_eval panicked: {e}")))?
         })
     });
 
