@@ -11,9 +11,6 @@ use std::io;
 #[cfg(feature = "synthesised-tools")]
 use std::sync::{Arc, LazyLock, Mutex};
 
-#[cfg(feature = "synthesised-tools")]
-use tein::ThreadLocalContext;
-
 use super::registry::{ToolCategory, ToolRegistry};
 use super::{BuiltinToolDef, Tool, ToolPropertyDef};
 
@@ -36,13 +33,14 @@ const EVAL_PRELUDE: &str = r#"
         (harness tools))
 "#;
 
-/// Process-global store of persistent tein contexts, keyed by chibi context name.
-/// Each entry is `(Arc<ThreadLocalContext>, worker_thread_id)`.
-/// `ThreadLocalContext` is not Clone — Arc provides cheap sharing.
+/// Process-global store of persistent tein sessions, keyed by chibi context name.
+/// Each entry is `(Arc<TeinSession>, worker_thread_id)`.
+/// `TeinSession` wraps `ThreadLocalContext` with stdout/stderr capture.
 ///
 /// Contexts are never evicted (process lifetime). Access serialised via Mutex.
 #[cfg(feature = "synthesised-tools")]
-type EvalContextMap = Mutex<HashMap<String, (Arc<ThreadLocalContext>, std::thread::ThreadId)>>;
+type EvalContextMap =
+    Mutex<HashMap<String, (Arc<super::synthesised::TeinSession>, std::thread::ThreadId)>>;
 
 #[cfg(feature = "synthesised-tools")]
 static EVAL_CONTEXTS: LazyLock<EvalContextMap> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -51,9 +49,10 @@ pub const SCHEME_EVAL_TOOL_NAME: &str = "scheme_eval";
 
 pub static EVAL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
     name: SCHEME_EVAL_TOOL_NAME,
-    description: "Evaluate a Scheme (R7RS) expression in a persistent sandboxed environment. \
-                  State persists across calls — define variables, build data structures, compose \
-                  computations. Returns the result of the last expression. Pre-imported: \
+    description: "Evaluate Scheme (R7RS) expression(s) in a persistent sandboxed environment. \
+                  State persists across calls -- define variables, build data structures, compose \
+                  computations. Returns the result of the last expression along with any stdout \
+                  and stderr output (e.g. from display, write). Pre-imported: \
                   (scheme base), (scheme write), (scheme read), (scheme char), (scheme case-lambda), \
                   (tein json) for json-parse/json-stringify, (tein safe-regexp) for regex, \
                   (tein docs) for module-docs/describe, \
@@ -71,17 +70,19 @@ pub static EVAL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
     summary_params: &["code"],
 }];
 
-/// Build a sandboxed tein context for `scheme_eval`.
+/// Build a sandboxed tein session for `scheme_eval`.
 ///
 /// Delegates to `synthesised::build_sandboxed_harness_context` for the FFI
 /// bridge setup, then evaluates `EVAL_PRELUDE` to pre-import standard modules.
-/// Returns `(Arc<ThreadLocalContext>, worker_thread_id)`.
+/// Returns `(Arc<TeinSession>, worker_thread_id)`.
 #[cfg(feature = "synthesised-tools")]
-fn build_eval_context() -> io::Result<(Arc<ThreadLocalContext>, std::thread::ThreadId)> {
-    let (ctx, tid) = super::synthesised::build_sandboxed_harness_context()?;
-    ctx.evaluate(EVAL_PRELUDE)
+fn build_eval_context() -> io::Result<(Arc<super::synthesised::TeinSession>, std::thread::ThreadId)>
+{
+    let (session, tid) = super::synthesised::build_sandboxed_harness_context()?;
+    session
+        .evaluate(EVAL_PRELUDE)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("eval prelude: {e}")))?;
-    Ok((Arc::new(ctx), tid))
+    Ok((Arc::new(session), tid))
 }
 
 /// Run scheme code in the persistent tein context. Called on a blocking thread.
@@ -92,30 +93,32 @@ fn build_eval_context() -> io::Result<(Arc<ThreadLocalContext>, std::thread::Thr
 /// The caller must hold a `CallContextGuard` for the duration so that `call-tool`
 /// bridge lookups resolve correctly from the tein worker thread.
 #[cfg(feature = "synthesised-tools")]
-fn run_scheme(tein_ctx: &ThreadLocalContext, context_name: &str, code: &str) -> io::Result<String> {
+fn run_scheme(
+    session: &super::synthesised::TeinSession,
+    context_name: &str,
+    code: &str,
+) -> io::Result<String> {
     let ctx_name_escaped = super::synthesised::scheme_escape_string(context_name);
-    tein_ctx
+    session
         .evaluate(&format!("(set! %context-name% \"{ctx_name_escaped}\")"))
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("context-name: {e}")))?;
 
-    match tein_ctx.evaluate(code) {
-        Ok(val) => Ok(val.to_string()),
-        Err(e) => Ok(format!("error: {e}")),
-    }
+    let captured = session.with_capture(|ctx| ctx.evaluate(code));
+    Ok(captured.format_eval())
 }
 
 /// Get or create the persistent tein context for a chibi context name.
 #[cfg(feature = "synthesised-tools")]
 fn get_or_create_context(
     context_name: &str,
-) -> io::Result<(Arc<ThreadLocalContext>, std::thread::ThreadId)> {
+) -> io::Result<(Arc<super::synthesised::TeinSession>, std::thread::ThreadId)> {
     let mut contexts = EVAL_CONTEXTS.lock().unwrap();
     if let Some(entry) = contexts.get(context_name) {
         Ok((Arc::clone(&entry.0), entry.1))
     } else {
-        let (ctx, tid) = build_eval_context()?;
-        contexts.insert(context_name.to_string(), (Arc::clone(&ctx), tid));
-        Ok((ctx, tid))
+        let (session, tid) = build_eval_context()?;
+        contexts.insert(context_name.to_string(), (Arc::clone(&session), tid));
+        Ok((session, tid))
     }
 }
 
@@ -153,17 +156,17 @@ pub fn register_eval_tools(registry: &Arc<std::sync::RwLock<ToolRegistry>>) {
         // Phase 1 (tokio thread): setup while borrowed ToolCallContext is valid.
         let reg = Arc::clone(&registry_for_handler);
         let setup = (|| -> io::Result<_> {
-            let (tein_ctx, worker_tid) = get_or_create_context(&context_name)?;
+            let (session, worker_tid) = get_or_create_context(&context_name)?;
             let guard = CallContextGuard::set(call.context, reg, worker_tid);
-            Ok((tein_ctx, guard))
+            Ok((session, guard))
         })();
 
         // Phase 2 (blocking thread): scheme code runs off the tokio pool.
         Box::pin(async move {
-            let (tein_ctx, guard) = setup?;
+            let (session, guard) = setup?;
             tokio::task::spawn_blocking(move || {
                 let _guard = guard;
-                run_scheme(&tein_ctx, &context_name, &code)
+                run_scheme(&session, &context_name, &code)
             })
             .await
             .map_err(|e| io::Error::other(format!("scheme_eval panicked: {e}")))?
@@ -190,8 +193,8 @@ mod tests {
 
     #[test]
     fn test_build_context_basic() {
-        let (ctx, tid) = super::build_eval_context().expect("context should build");
-        let result = ctx.evaluate("(+ 1 2)").expect("eval should succeed");
+        let (session, tid) = super::build_eval_context().expect("context should build");
+        let result = session.evaluate("(+ 1 2)").expect("eval should succeed");
         assert_eq!(result.to_string(), "3");
         // Worker thread should differ from test thread
         assert_ne!(tid, std::thread::current().id());
@@ -199,16 +202,18 @@ mod tests {
 
     #[test]
     fn test_context_persistence() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        ctx.evaluate("(define x 42)").expect("define should work");
-        let result = ctx.evaluate("x").expect("x should be defined");
+        let (session, _) = super::build_eval_context().expect("context should build");
+        session
+            .evaluate("(define x 42)")
+            .expect("define should work");
+        let result = session.evaluate("x").expect("x should be defined");
         assert_eq!(result.to_string(), "42");
     }
 
     #[test]
     fn test_prelude_srfi_1() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate("(fold + 0 '(1 2 3 4 5))")
             .expect("fold from srfi-1");
         assert_eq!(result.to_string(), "15");
@@ -216,8 +221,8 @@ mod tests {
 
     #[test]
     fn test_prelude_srfi_130() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate(r#"(string-contains "hello world" "world")"#)
             .expect("string-contains from srfi-130");
         // Returns cursor index, not #f
@@ -227,8 +232,8 @@ mod tests {
     #[test]
     fn test_prelude_tein_json() {
         // (tein json) exports json-parse and json-stringify
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate(r#"(json-parse "{\"a\":1}")"#)
             .expect("json-parse from tein json");
         assert!(result.to_string().contains("a"));
@@ -238,8 +243,8 @@ mod tests {
     fn test_prelude_safe_regexp() {
         // (tein safe-regexp) exports regexp, regexp-search, regexp-matches?, etc.
         // regexp-search returns a vector of match vectors on success, #f on no match.
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate(r#"(vector? (regexp-search "hello" "hello world"))"#)
             .expect("regexp-search should work");
         assert_eq!(result.to_string(), "#t");
@@ -247,8 +252,8 @@ mod tests {
 
     #[test]
     fn test_prelude_chibi_match() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate("(match '(1 2 3) ((a b c) (+ a b c)))")
             .expect("chibi match");
         assert_eq!(result.to_string(), "6");
@@ -256,9 +261,9 @@ mod tests {
 
     #[test]
     fn test_prelude_tein_docs() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
+        let (session, _) = super::build_eval_context().expect("context should build");
         // module-docs returns doc pairs from an alist — just verify the binding exists
-        let result = ctx
+        let result = session
             .evaluate("(procedure? module-docs)")
             .expect("module-docs from tein docs");
         assert_eq!(result.to_string(), "#t");
@@ -266,9 +271,9 @@ mod tests {
 
     #[test]
     fn test_prelude_tein_introspect() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
+        let (session, _) = super::build_eval_context().expect("context should build");
         // available-modules returns a list of importable modules
-        let result = ctx
+        let result = session
             .evaluate("(list? (available-modules))")
             .expect("available-modules from tein introspect");
         assert_eq!(result.to_string(), "#t");
@@ -276,19 +281,95 @@ mod tests {
 
     #[test]
     fn test_error_reporting() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx.evaluate("undefined-var");
-        assert!(result.is_err());
+        let (session, _) = super::build_eval_context().expect("context should build");
+        // errors are captured in structured output, not propagated as Err
+        let result = super::run_scheme(&session, "test", "undefined-var").unwrap();
+        assert!(
+            result.contains("result: error:"),
+            "should contain error: {result}"
+        );
     }
 
     #[test]
     fn test_contexts_isolation() {
         // Two contexts should have independent state.
-        let (ctx_a, _) = super::build_eval_context().expect("build a");
-        let (ctx_b, _) = super::build_eval_context().expect("build b");
-        ctx_a.evaluate("(define x 1)").unwrap();
-        ctx_b.evaluate("(define x 2)").unwrap();
-        assert_eq!(ctx_a.evaluate("x").unwrap().to_string(), "1");
-        assert_eq!(ctx_b.evaluate("x").unwrap().to_string(), "2");
+        let (session_a, _) = super::build_eval_context().expect("build a");
+        let (session_b, _) = super::build_eval_context().expect("build b");
+        session_a.evaluate("(define x 1)").unwrap();
+        session_b.evaluate("(define x 2)").unwrap();
+        assert_eq!(session_a.evaluate("x").unwrap().to_string(), "1");
+        assert_eq!(session_b.evaluate("x").unwrap().to_string(), "2");
+    }
+
+    #[test]
+    fn test_stdout_capture() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = super::run_scheme(&session, "test", "(display 42)").unwrap();
+        assert!(
+            result.contains("result: #<unspecified>"),
+            "display returns unspecified: {result}"
+        );
+        assert!(
+            result.contains("stdout: 42"),
+            "stdout should contain displayed value: {result}"
+        );
+        assert!(
+            result.contains("stderr: (empty)"),
+            "stderr should be empty: {result}"
+        );
+    }
+
+    #[test]
+    fn test_stderr_capture() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result =
+            super::run_scheme(&session, "test", r#"(display "oops" (current-error-port))"#)
+                .unwrap();
+        assert!(
+            result.contains("stdout: (empty)"),
+            "stdout should be empty: {result}"
+        );
+        assert!(
+            result.contains("stderr: oops"),
+            "stderr should contain error output: {result}"
+        );
+    }
+
+    #[test]
+    fn test_value_with_stdout() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result =
+            super::run_scheme(&session, "test", r#"(begin (display "hello") (+ 1 2))"#).unwrap();
+        assert!(result.contains("result: 3"), "value should be 3: {result}");
+        assert!(
+            result.contains("stdout: hello"),
+            "stdout should contain display output: {result}"
+        );
+    }
+
+    #[test]
+    fn test_no_stdout_bleed_between_calls() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r1 = super::run_scheme(&session, "test", r#"(display "first")"#).unwrap();
+        assert!(r1.contains("stdout: first"), "first call: {r1}");
+        let r2 = super::run_scheme(&session, "test", "(+ 1 2)").unwrap();
+        assert!(
+            r2.contains("stdout: (empty)"),
+            "second call should have no stdout: {r2}"
+        );
+    }
+
+    #[test]
+    fn test_error_in_captured_output() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = super::run_scheme(&session, "test", "undefined-var").unwrap();
+        assert!(
+            result.contains("result: error:"),
+            "should contain error: {result}"
+        );
+        assert!(
+            result.contains("stdout: (empty)"),
+            "stdout should be empty on error: {result}"
+        );
     }
 }
