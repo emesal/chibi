@@ -11,7 +11,6 @@ use std::io;
 #[cfg(feature = "synthesised-tools")]
 use std::sync::{Arc, LazyLock, Mutex};
 
-
 use super::registry::{ToolCategory, ToolRegistry};
 use super::{BuiltinToolDef, Tool, ToolPropertyDef};
 
@@ -40,7 +39,8 @@ const EVAL_PRELUDE: &str = r#"
 ///
 /// Contexts are never evicted (process lifetime). Access serialised via Mutex.
 #[cfg(feature = "synthesised-tools")]
-type EvalContextMap = Mutex<HashMap<String, (Arc<super::synthesised::TeinSession>, std::thread::ThreadId)>>;
+type EvalContextMap =
+    Mutex<HashMap<String, (Arc<super::synthesised::TeinSession>, std::thread::ThreadId)>>;
 
 #[cfg(feature = "synthesised-tools")]
 static EVAL_CONTEXTS: LazyLock<EvalContextMap> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -76,9 +76,11 @@ pub static EVAL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
 /// bridge setup, then evaluates `EVAL_PRELUDE` to pre-import standard modules.
 /// Returns `(Arc<TeinSession>, worker_thread_id)`.
 #[cfg(feature = "synthesised-tools")]
-fn build_eval_context() -> io::Result<(Arc<super::synthesised::TeinSession>, std::thread::ThreadId)> {
+fn build_eval_context() -> io::Result<(Arc<super::synthesised::TeinSession>, std::thread::ThreadId)>
+{
     let (session, tid) = super::synthesised::build_sandboxed_harness_context()?;
-    session.evaluate(EVAL_PRELUDE)
+    session
+        .evaluate(EVAL_PRELUDE)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("eval prelude: {e}")))?;
     Ok((Arc::new(session), tid))
 }
@@ -91,7 +93,11 @@ fn build_eval_context() -> io::Result<(Arc<super::synthesised::TeinSession>, std
 /// The caller must hold a `CallContextGuard` for the duration so that `call-tool`
 /// bridge lookups resolve correctly from the tein worker thread.
 #[cfg(feature = "synthesised-tools")]
-fn run_scheme(session: &super::synthesised::TeinSession, context_name: &str, code: &str) -> io::Result<String> {
+fn run_scheme(
+    session: &super::synthesised::TeinSession,
+    context_name: &str,
+    code: &str,
+) -> io::Result<String> {
     let ctx_name_escaped = super::synthesised::scheme_escape_string(context_name);
     session
         .evaluate(&format!("(set! %context-name% \"{ctx_name_escaped}\")"))
@@ -197,7 +203,9 @@ mod tests {
     #[test]
     fn test_context_persistence() {
         let (session, _) = super::build_eval_context().expect("context should build");
-        session.evaluate("(define x 42)").expect("define should work");
+        session
+            .evaluate("(define x 42)")
+            .expect("define should work");
         let result = session.evaluate("x").expect("x should be defined");
         assert_eq!(result.to_string(), "42");
     }
@@ -276,7 +284,10 @@ mod tests {
         let (session, _) = super::build_eval_context().expect("context should build");
         // errors are captured in structured output, not propagated as Err
         let result = super::run_scheme(&session, "test", "undefined-var").unwrap();
-        assert!(result.contains("result: error:"), "should contain error: {result}");
+        assert!(
+            result.contains("result: error:"),
+            "should contain error: {result}"
+        );
     }
 
     #[test]
@@ -294,31 +305,46 @@ mod tests {
     fn test_stdout_capture() {
         let (session, _) = super::build_eval_context().expect("context should build");
         let result = super::run_scheme(&session, "test", "(display 42)").unwrap();
-        assert!(result.contains("result: #<unspecified>"), "display returns unspecified: {result}");
-        assert!(result.contains("stdout: 42"), "stdout should contain displayed value: {result}");
-        assert!(result.contains("stderr: (empty)"), "stderr should be empty: {result}");
+        assert!(
+            result.contains("result: #<unspecified>"),
+            "display returns unspecified: {result}"
+        );
+        assert!(
+            result.contains("stdout: 42"),
+            "stdout should contain displayed value: {result}"
+        );
+        assert!(
+            result.contains("stderr: (empty)"),
+            "stderr should be empty: {result}"
+        );
     }
 
     #[test]
     fn test_stderr_capture() {
         let (session, _) = super::build_eval_context().expect("context should build");
-        let result = super::run_scheme(
-            &session, "test",
-            r#"(display "oops" (current-error-port))"#,
-        ).unwrap();
-        assert!(result.contains("stdout: (empty)"), "stdout should be empty: {result}");
-        assert!(result.contains("stderr: oops"), "stderr should contain error output: {result}");
+        let result =
+            super::run_scheme(&session, "test", r#"(display "oops" (current-error-port))"#)
+                .unwrap();
+        assert!(
+            result.contains("stdout: (empty)"),
+            "stdout should be empty: {result}"
+        );
+        assert!(
+            result.contains("stderr: oops"),
+            "stderr should contain error output: {result}"
+        );
     }
 
     #[test]
     fn test_value_with_stdout() {
         let (session, _) = super::build_eval_context().expect("context should build");
-        let result = super::run_scheme(
-            &session, "test",
-            r#"(begin (display "hello") (+ 1 2))"#,
-        ).unwrap();
+        let result =
+            super::run_scheme(&session, "test", r#"(begin (display "hello") (+ 1 2))"#).unwrap();
         assert!(result.contains("result: 3"), "value should be 3: {result}");
-        assert!(result.contains("stdout: hello"), "stdout should contain display output: {result}");
+        assert!(
+            result.contains("stdout: hello"),
+            "stdout should contain display output: {result}"
+        );
     }
 
     #[test]
@@ -327,14 +353,23 @@ mod tests {
         let r1 = super::run_scheme(&session, "test", r#"(display "first")"#).unwrap();
         assert!(r1.contains("stdout: first"), "first call: {r1}");
         let r2 = super::run_scheme(&session, "test", "(+ 1 2)").unwrap();
-        assert!(r2.contains("stdout: (empty)"), "second call should have no stdout: {r2}");
+        assert!(
+            r2.contains("stdout: (empty)"),
+            "second call should have no stdout: {r2}"
+        );
     }
 
     #[test]
     fn test_error_in_captured_output() {
         let (session, _) = super::build_eval_context().expect("context should build");
         let result = super::run_scheme(&session, "test", "undefined-var").unwrap();
-        assert!(result.contains("result: error:"), "should contain error: {result}");
-        assert!(result.contains("stdout: (empty)"), "stdout should be empty on error: {result}");
+        assert!(
+            result.contains("result: error:"),
+            "should contain error: {result}"
+        );
+        assert!(
+            result.contains("stdout: (empty)"),
+            "stdout should be empty on error: {result}"
+        );
     }
 }

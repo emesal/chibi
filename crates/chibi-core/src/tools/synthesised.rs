@@ -124,8 +124,16 @@ impl CapturedOutput {
         format!(
             "result: {}\nstdout: {}\nstderr: {}",
             value_str,
-            if self.stdout.is_empty() { "(empty)" } else { &self.stdout },
-            if self.stderr.is_empty() { "(empty)" } else { &self.stderr },
+            if self.stdout.is_empty() {
+                "(empty)"
+            } else {
+                &self.stdout
+            },
+            if self.stderr.is_empty() {
+                "(empty)"
+            } else {
+                &self.stderr
+            },
         )
     }
 
@@ -145,8 +153,16 @@ impl CapturedOutput {
         format!(
             "result: {}\nstdout: {}\nstderr: {}",
             value_str,
-            if self.stdout.is_empty() { "(empty)" } else { &self.stdout },
-            if self.stderr.is_empty() { "(empty)" } else { &self.stderr },
+            if self.stdout.is_empty() {
+                "(empty)"
+            } else {
+                &self.stdout
+            },
+            if self.stderr.is_empty() {
+                "(empty)"
+            } else {
+                &self.stderr
+            },
         )
     }
 }
@@ -187,8 +203,12 @@ impl TeinSession {
         //    the capture window starts clean — no bleed from previous calls.
         //    flush-output-port is R7RS (scheme base); flush-output is chibi-only and
         //    unavailable in sandboxed contexts.
-        let _ = self.ctx.evaluate("(flush-output-port (current-output-port))");
-        let _ = self.ctx.evaluate("(flush-output-port (current-error-port))");
+        let _ = self
+            .ctx
+            .evaluate("(flush-output-port (current-output-port))");
+        let _ = self
+            .ctx
+            .evaluate("(flush-output-port (current-error-port))");
         self.stdout_buf.lock().unwrap().clear();
         self.stderr_buf.lock().unwrap().clear();
 
@@ -196,14 +216,22 @@ impl TeinSession {
         let value = f(&self.ctx);
 
         // 3. flush -- push any remaining buffered output into SharedWriter
-        let _ = self.ctx.evaluate("(flush-output-port (current-output-port))");
-        let _ = self.ctx.evaluate("(flush-output-port (current-error-port))");
+        let _ = self
+            .ctx
+            .evaluate("(flush-output-port (current-output-port))");
+        let _ = self
+            .ctx
+            .evaluate("(flush-output-port (current-error-port))");
 
         // 4. read
         let stdout = String::from_utf8_lossy(&self.stdout_buf.lock().unwrap()).to_string();
         let stderr = String::from_utf8_lossy(&self.stderr_buf.lock().unwrap()).to_string();
 
-        CapturedOutput { value, stdout, stderr }
+        CapturedOutput {
+            value,
+            stdout,
+            stderr,
+        }
     }
 
     /// Delegate to inner context for internal calls (e.g. setting `%context-name%`,
@@ -863,7 +891,11 @@ fn build_tein_context(
         .unwrap()
         .expect("init closure must have run and captured thread ID");
 
-    let session = TeinSession { ctx, stdout_buf, stderr_buf };
+    let session = TeinSession {
+        ctx,
+        stdout_buf,
+        stderr_buf,
+    };
     Ok((session, tid))
 }
 
@@ -873,8 +905,8 @@ fn build_tein_context(
 /// tools but manages its own prelude and persistence. Passes an empty source so
 /// the caller can call `ctx.evaluate(prelude)` after receiving the context.
 #[cfg(feature = "synthesised-tools")]
-pub(crate) fn build_sandboxed_harness_context()
--> io::Result<(TeinSession, std::thread::ThreadId)> {
+pub(crate) fn build_sandboxed_harness_context() -> io::Result<(TeinSession, std::thread::ThreadId)>
+{
     build_tein_context(String::new(), crate::config::SandboxTier::Sandboxed)
 }
 
@@ -1410,15 +1442,16 @@ fn extract_hook_registrations(
         // look up handler from %hook-registry% by name (first match in LIFO list = newest).
         // when the same hook point is registered multiple times, `define` overwrites on
         // each iteration (oldest-first), so the last-defined handler wins.
-        session.evaluate(&format!(
-            "(define {binding} \
+        session
+            .evaluate(&format!(
+                "(define {binding} \
              (cadr \
                (let loop ((reg %hook-registry%)) \
                  (if (string=? (car (car reg)) \"{hook_name_escaped}\") \
                      (car reg) \
                      (loop (cdr reg))))))"
-        ))
-        .map_err(|e| io::Error::other(format!("binding {binding}: {e}")))?;
+            ))
+            .map_err(|e| io::Error::other(format!("binding {binding}: {e}")))?;
 
         // deduplicate hook points: only push to `hooks` once per hook point.
         // the binding name is the same regardless (`%hook-{hook_name}%`), so
@@ -1644,11 +1677,18 @@ mod tests {
     #[test]
     fn test_tein_session_stdout_capture() {
         // Direct TeinSession capture test — verifies both tiers.
-        for tier in [crate::config::SandboxTier::Unsandboxed, crate::config::SandboxTier::Sandboxed] {
-            let (session, _) = build_tein_context(String::new(), tier)
-                .expect("session should build");
+        for tier in [
+            crate::config::SandboxTier::Unsandboxed,
+            crate::config::SandboxTier::Sandboxed,
+        ] {
+            let (session, _) =
+                build_tein_context(String::new(), tier).expect("session should build");
             let cap = session.with_capture(|ctx| ctx.evaluate("(display 42)"));
-            assert!(cap.value.is_ok(), "display should not error ({tier:?}): {:?}", cap.value);
+            assert!(
+                cap.value.is_ok(),
+                "display should not error ({tier:?}): {:?}",
+                cap.value
+            );
             assert_eq!(cap.stdout, "42", "stdout should be 42 ({tier:?})");
             assert!(cap.stderr.is_empty(), "stderr should be empty ({tier:?})");
         }
@@ -2461,9 +2501,10 @@ mod tests {
             .execute_tool("default", "ctx_test", serde_json::json!({}))
             .await
             .unwrap();
+        let ctx_name = extract_result_field(&result);
         assert_eq!(
-            result, "default",
-            "context name should be injected as %context-name%"
+            ctx_name, "default",
+            "context name should be injected as %%context-name%%: {result}"
         );
     }
 
@@ -2496,13 +2537,13 @@ mod tests {
             )
             .await
             .unwrap();
+        let create_body = extract_result_field(&create_result);
         assert!(
-            create_result.contains("created task"),
-            "unexpected: {}",
-            create_result
+            create_body.contains("created task"),
+            "unexpected: {create_result}"
         );
         // Extract ID from "created task XXXX at ..."
-        let id = create_result
+        let id = create_body
             .split_whitespace()
             .nth(2)
             .expect("expected id in create result")
@@ -2513,10 +2554,10 @@ mod tests {
             .execute_tool("default", "task_list", serde_json::json!({}))
             .await
             .unwrap();
+        let list_body = extract_result_field(&list_result);
         assert!(
-            list_result.contains(&id),
-            "id should appear in list: {}",
-            list_result
+            list_body.contains(&id),
+            "id should appear in list: {list_result}"
         );
 
         // View the task
@@ -2524,15 +2565,14 @@ mod tests {
             .execute_tool("default", "task_view", serde_json::json!({"id": id}))
             .await
             .unwrap();
+        let view_body = extract_result_field(&view_result);
         assert!(
-            view_result.contains(&id),
-            "id should appear in view: {}",
-            view_result
+            view_body.contains(&id),
+            "id should appear in view: {view_result}"
         );
         assert!(
-            view_result.contains("do the thing"),
-            "body should appear in view: {}",
-            view_result
+            view_body.contains("do the thing"),
+            "body should appear in view: {view_result}"
         );
 
         // Update status to in-progress
@@ -2547,10 +2587,10 @@ mod tests {
             )
             .await
             .unwrap();
+        let update_body = extract_result_field(&update_result);
         assert!(
-            update_result.contains("updated task"),
-            "unexpected: {}",
-            update_result
+            update_body.contains("updated task"),
+            "unexpected: {update_result}"
         );
 
         // View again — status should be in-progress
@@ -2558,10 +2598,10 @@ mod tests {
             .execute_tool("default", "task_view", serde_json::json!({"id": id}))
             .await
             .unwrap();
+        let view2_body = extract_result_field(&view2);
         assert!(
-            view2.contains("in-progress"),
-            "status should be in-progress: {}",
-            view2
+            view2_body.contains("in-progress"),
+            "status should be in-progress: {view2}"
         );
 
         // Delete the task
@@ -2569,10 +2609,10 @@ mod tests {
             .execute_tool("default", "task_delete", serde_json::json!({"id": id}))
             .await
             .unwrap();
+        let delete_body = extract_result_field(&delete_result);
         assert!(
-            delete_result.contains("deleted task"),
-            "unexpected: {}",
-            delete_result
+            delete_body.contains("deleted task"),
+            "unexpected: {delete_result}"
         );
 
         // List again — should be gone
@@ -2580,10 +2620,10 @@ mod tests {
             .execute_tool("default", "task_list", serde_json::json!({}))
             .await
             .unwrap();
+        let list2_body = extract_result_field(&list2);
         assert!(
-            !list2.contains(&id),
-            "id should be gone after delete: {}",
-            list2
+            !list2_body.contains(&id),
+            "id should be gone after delete: {list2}"
         );
     }
 
@@ -2674,10 +2714,58 @@ mod tests {
         );
     }
 
+    // --- structured output tests ---
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_synthesised_tool_error_captured() {
+        use crate::test_support::create_test_chibi;
+        let (chibi, _tmp) = create_test_chibi();
+        let registry = chibi.registry.clone();
+        let source = r#"
+(import (scheme base))
+(define tool-name "error_test")
+(define tool-description "tool that errors")
+(define tool-parameters '())
+(define (tool-execute args) (error "intentional boom"))
+"#;
+        let path = VfsPath::new("/tools/shared/error_test.scm").unwrap();
+        let tools = load_tools_from_source(source, &path, &registry).unwrap();
+        {
+            let mut reg = registry.write().unwrap();
+            for t in tools {
+                reg.register(t);
+            }
+        }
+        let result = chibi
+            .execute_tool("default", "error_test", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(
+            result.contains("result: error:"),
+            "scheme error should appear in result field: {result}"
+        );
+        assert!(
+            result.contains("intentional boom"),
+            "error message should be preserved: {result}"
+        );
+    }
+
     // --- harness io tests ---
+
+    /// Extract the `result: ` field from structured output.
+    /// Structured format: "result: <value>\nstdout: ...\nstderr: ..."
+    /// The result value may itself contain newlines, so we split on "\nstdout: ".
+    fn extract_result_field(output: &str) -> &str {
+        output
+            .strip_prefix("result: ")
+            .and_then(|s| s.split_once("\nstdout: "))
+            .map(|(result, _)| result)
+            .unwrap_or(output)
+    }
 
     /// Build an unsandboxed tein tool with `(harness io)` and execute it via
     /// `chibi.execute_tool`, which sets `BRIDGE_CALL_CTX` on the tein worker thread.
+    /// Returns only the `result:` field from structured output.
     async fn run_io_tool(
         chibi: &crate::Chibi,
         registry: &Arc<RwLock<ToolRegistry>>,
@@ -2697,10 +2785,11 @@ mod tests {
                 reg.register(t);
             }
         }
-        chibi
+        let raw = chibi
             .execute_tool("default", "io_test", serde_json::json!({}))
             .await
-            .unwrap()
+            .unwrap();
+        extract_result_field(&raw).to_string()
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
