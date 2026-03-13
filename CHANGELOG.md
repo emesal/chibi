@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.10.4] - 2026-03-12
+## [0.10.5] - 2026-03-13
 
 ### Bug Fixes
 
@@ -169,6 +169,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Update CHANGELOG for v0.10.3 ([`5e4f45a`](https://github.com/emesal/chibi/commit/5e4f45a48b1a5cdcbb5174f98f84707a193c7999))
 
+- Update CHANGELOG for v0.10.4 ([`3be856c`](https://github.com/emesal/chibi/commit/3be856cff545df1e2cd76ad7944b5e76d8cc872c))
+
+- Spec for tein stdout/stderr capture in scheme_eval and synthesised tools ([`a1a78e6`](https://github.com/emesal/chibi/commit/a1a78e67e703ad0cea5f4b7527ba78a88bf45e41))
+
+- Implementation plan for tein stdout/stderr capture ([`c174693`](https://github.com/emesal/chibi/commit/c174693cc42c9988c6347994eb41067efbaa977e))
+
+- Add structured output format quirk for scheme_eval and synthesised tools ([`99a8c95`](https://github.com/emesal/chibi/commit/99a8c95f385efa062712f7891c4ef1da8b8f391a))
+
 
 ### Features
 
@@ -276,6 +284,10 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - **eval:** Scheme_eval builtin tool with persistent sandboxed tein environments ([`9cf303e`](https://github.com/emesal/chibi/commit/9cf303e5eddc0ca065797a73a61a94c79b922ca4))
 
+- Tein stdout/stderr capture via TeinSession and with_capture ([`9b1becf`](https://github.com/emesal/chibi/commit/9b1becf4f26c571343e0662bb82b7aea56e1bc15))
+
+- Update eval tests for structured output, add capture tests ([`5cbb2ed`](https://github.com/emesal/chibi/commit/5cbb2ed041304de0ed3490c589aceec91878af77))
+
 
 ### Refactoring
 
@@ -333,6 +345,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - **eval:** Spawn_blocking for scheme execution to avoid stalling tokio ([`ee1ff8e`](https://github.com/emesal/chibi/commit/ee1ff8e85c8505e619fdc69ac7ea49ab5398ecdb))
 
+- Address code review feedback on stdout/stderr capture ([`04488be`](https://github.com/emesal/chibi/commit/04488befd32a39fb895ab56be06a93e692f12988))
+
 
 ### Tests
 
@@ -363,6 +377,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **history:** Integration tests for snapshot, pruning, and hook dispatch ([`38c4a03`](https://github.com/emesal/chibi/commit/38c4a037d4a4f6f603856282aaf9c1af29e0c2dc))
 
 - **history:** Integration test for file_history_diff ([`3e9f844`](https://github.com/emesal/chibi/commit/3e9f8448c6d9161709c023a7de6aa1412b28bb0b))
+
+- Update synthesised tool tests for structured output format ([`68ec04e`](https://github.com/emesal/chibi/commit/68ec04ed0b340ed2d709a08f60e588e75322631a))
 
 
 ## [0.8.10] - 2026-02-22
