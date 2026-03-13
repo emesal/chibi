@@ -77,7 +77,7 @@ pub enum ToolImpl {
     Synthesised {
         vfs_path: crate::vfs::VfsPath,
         exec_binding: String,
-        context: std::sync::Arc<tein::ThreadLocalContext>,
+        context: std::sync::Arc<super::synthesised::TeinSession>,
         registry: Arc<RwLock<ToolRegistry>>,
         /// The tein worker thread's `ThreadId`, captured at context init time.
         /// Used as the key in `BRIDGE_CALL_CTX` so concurrent synthesised tool
@@ -292,7 +292,7 @@ impl ToolRegistry {
                 ..
             } => {
                 super::synthesised::execute_synthesised(
-                    &context,
+                    context.as_ref(),
                     &exec_binding,
                     &call,
                     registry,

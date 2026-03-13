@@ -60,7 +60,7 @@
 //! which is `Send + Sync`.
 
 #[cfg(feature = "synthesised-tools")]
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 #[cfg(feature = "synthesised-tools")]
 use tein::{Context, ThreadLocalContext, Value, sandbox::Modules};
@@ -70,6 +70,152 @@ use std::io;
 use crate::tools::registry::{ToolCall, ToolRegistry};
 use crate::tools::{Tool, ToolCategory, ToolImpl, ToolMetadata};
 use crate::vfs::{Vfs, VfsCaller, VfsEntryKind, VfsPath}; // Vfs+VfsCaller used in scan_and_register
+
+// --- output capture types ----------------------------------------------------
+
+/// Shared write buffer for capturing scheme output port data.
+/// Cloned `Arc` handles go into tein's custom output ports; the same
+/// `Arc` is held by `TeinSession` for reading after evaluation.
+#[cfg(feature = "synthesised-tools")]
+struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+#[cfg(feature = "synthesised-tools")]
+impl std::io::Write for SharedWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Result of a scheme evaluation with captured output streams.
+///
+/// Holds the raw `Result<Value>` so callers can stringify as needed.
+/// `format_eval()` uses `to_string()` (for scheme_eval).
+/// `format_tool()` uses `as_string()` unwrap (for synthesised tools that
+/// conventionally return scheme strings).
+///
+/// Both format methods produce:
+/// ```text
+/// result: <value or "error: ...">
+/// stdout: <captured stdout or "(empty)">
+/// stderr: <captured stderr or "(empty)">
+/// ```
+#[cfg(feature = "synthesised-tools")]
+pub(crate) struct CapturedOutput {
+    pub value: tein::Result<tein::Value>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[cfg(feature = "synthesised-tools")]
+impl CapturedOutput {
+    /// Format for `scheme_eval` -- stringifies value with `to_string()`.
+    ///
+    /// NOTE: similar formatting exists in `format_tool()`.
+    /// Changes here may need to be assessed for that method too.
+    pub fn format_eval(&self) -> String {
+        let value_str = match &self.value {
+            Ok(val) => val.to_string(),
+            Err(e) => format!("error: {e}"),
+        };
+        format!(
+            "result: {}\nstdout: {}\nstderr: {}",
+            value_str,
+            if self.stdout.is_empty() { "(empty)" } else { &self.stdout },
+            if self.stderr.is_empty() { "(empty)" } else { &self.stderr },
+        )
+    }
+
+    /// Format for synthesised tools -- unwraps scheme strings via `as_string()`,
+    /// falling back to `to_string()` for non-string values.
+    ///
+    /// NOTE: similar formatting exists in `format_eval()`.
+    /// Changes here may need to be assessed for that method too.
+    pub fn format_tool(&self) -> String {
+        let value_str = match &self.value {
+            Ok(val) => match val.as_string() {
+                Some(s) => s.to_string(),
+                None => val.to_string(),
+            },
+            Err(e) => format!("error: {e}"),
+        };
+        format!(
+            "result: {}\nstdout: {}\nstderr: {}",
+            value_str,
+            if self.stdout.is_empty() { "(empty)" } else { &self.stdout },
+            if self.stderr.is_empty() { "(empty)" } else { &self.stderr },
+        )
+    }
+}
+
+/// Wrapper around `ThreadLocalContext` that captures stdout/stderr output.
+///
+/// Created by `build_tein_context`. The init closure wires `SharedWriter`-backed
+/// output ports as `current-output-port` and `current-error-port`. The ports
+/// survive across evaluations (tein's `set_current_output_port` persists).
+///
+/// Thread safety: `ThreadLocalContext` serialises all calls via its internal
+/// channel mutex, so no interleaving is possible between drain and read in
+/// `with_capture`.
+#[cfg(feature = "synthesised-tools")]
+pub struct TeinSession {
+    ctx: ThreadLocalContext,
+    stdout_buf: Arc<Mutex<Vec<u8>>>,
+    stderr_buf: Arc<Mutex<Vec<u8>>>,
+}
+
+#[cfg(feature = "synthesised-tools")]
+impl TeinSession {
+    /// Run a closure with stdout/stderr capture.
+    ///
+    /// Drain-eval-flush-read cycle:
+    /// 1. Clear buffers (drain stale output from prior calls)
+    /// 2. Run the closure (evaluate or call)
+    /// 3. Flush scheme ports to ensure buffers are complete
+    /// 4. Read captured output
+    ///
+    /// The closure receives `&ThreadLocalContext` for `evaluate` or `call`.
+    pub(crate) fn with_capture<F>(&self, f: F) -> CapturedOutput
+    where
+        F: FnOnce(&ThreadLocalContext) -> tein::Result<tein::Value>,
+    {
+        // 1. drain
+        self.stdout_buf.lock().unwrap().clear();
+        self.stderr_buf.lock().unwrap().clear();
+
+        // 2. run
+        let value = f(&self.ctx);
+
+        // 3. flush -- ignore errors (port should always be valid)
+        let _ = self.ctx.evaluate("(flush-output (current-output-port))");
+        let _ = self.ctx.evaluate("(flush-output (current-error-port))");
+
+        // 4. read
+        let stdout = String::from_utf8_lossy(&self.stdout_buf.lock().unwrap()).to_string();
+        let stderr = String::from_utf8_lossy(&self.stderr_buf.lock().unwrap()).to_string();
+
+        CapturedOutput { value, stdout, stderr }
+    }
+
+    /// Delegate to inner context for internal calls (e.g. setting `%context-name%`,
+    /// resolving bindings) that don't need output capture.
+    pub(crate) fn evaluate(&self, code: &str) -> tein::Result<tein::Value> {
+        self.ctx.evaluate(code)
+    }
+
+    /// Delegate to inner context for calling procedures without capture.
+    /// Used by hook dispatch (`hooks.rs`) which doesn't need stdout/stderr capture.
+    pub(crate) fn call(
+        &self,
+        proc: &tein::Value,
+        args: &[tein::Value],
+    ) -> tein::Result<tein::Value> {
+        self.ctx.call(proc, args)
+    }
+}
 
 // --- (harness tools) module source -------------------------------------------
 
@@ -629,10 +775,10 @@ fn secs_to_ymdhmz(mut s: u64) -> (u32, u32, u32, u32, u32) {
     (y, mo, d, h, mi)
 }
 
-/// Build a tein `ThreadLocalContext` for a synthesised tool, registering
+/// Build a `TeinSession` for a synthesised tool, registering
 /// `call-tool`, the harness preamble, and `(harness tools)` module.
 ///
-/// Returns the context and the tein worker thread's `ThreadId` (captured
+/// Returns the session and the tein worker thread's `ThreadId` (captured
 /// during init). The thread ID is the key for `BRIDGE_CALL_CTX` lookups.
 ///
 /// Sandbox behaviour depends on `tier`:
@@ -642,9 +788,16 @@ fn secs_to_ymdhmz(mut s: u64) -> (u32, u32, u32, u32, u32) {
 fn build_tein_context(
     source: String,
     tier: crate::config::SandboxTier,
-) -> io::Result<(ThreadLocalContext, std::thread::ThreadId)> {
+) -> io::Result<(TeinSession, std::thread::ThreadId)> {
     let worker_thread_id = Arc::new(std::sync::Mutex::new(None::<std::thread::ThreadId>));
     let tid_capture = Arc::clone(&worker_thread_id);
+
+    // Shared buffers for stdout/stderr capture. Arc clones go into the init
+    // closure (for wiring output ports) and into TeinSession (for reading).
+    let stdout_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let stdout_for_init = Arc::clone(&stdout_buf);
+    let stderr_for_init = Arc::clone(&stderr_buf);
 
     let init = move |ctx: &Context| -> tein::Result<()> {
         // Capture the tein worker thread's ID for BRIDGE_CALL_CTX keying.
@@ -669,6 +822,14 @@ fn build_tein_context(
             ctx.register_module(HARNESS_IO_MODULE)
                 .map_err(|e| tein::Error::EvalError(format!("harness io module: {e}")))?;
         }
+        // Wire stdout/stderr capture ports. The SharedWriter clones share the
+        // same Arc buffers that TeinSession reads from. Ports persist across
+        // evaluations (confirmed by tein test suite).
+        let out_port = ctx.open_output_port(SharedWriter(stdout_for_init.clone()))?;
+        ctx.set_current_output_port(&out_port)?;
+        let err_port = ctx.open_output_port(SharedWriter(stderr_for_init.clone()))?;
+        ctx.set_current_error_port(&err_port)?;
+
         ctx.evaluate(&source)?;
         Ok(())
     };
@@ -695,7 +856,9 @@ fn build_tein_context(
         .lock()
         .unwrap()
         .expect("init closure must have run and captured thread ID");
-    Ok((ctx, tid))
+
+    let session = TeinSession { ctx, stdout_buf, stderr_buf };
+    Ok((session, tid))
 }
 
 /// Build a sandboxed tein harness context with no user source.
@@ -705,7 +868,7 @@ fn build_tein_context(
 /// the caller can call `ctx.evaluate(prelude)` after receiving the context.
 #[cfg(feature = "synthesised-tools")]
 pub(crate) fn build_sandboxed_harness_context()
--> io::Result<(ThreadLocalContext, std::thread::ThreadId)> {
+-> io::Result<(TeinSession, std::thread::ThreadId)> {
     build_tein_context(String::new(), crate::config::SandboxTier::Sandboxed)
 }
 
@@ -744,19 +907,19 @@ pub fn load_tools_from_source_with_tier(
 ) -> io::Result<Vec<Tool>> {
     let source_owned = source.to_string();
 
-    let (ctx, worker_thread_id) = build_tein_context(source_owned, tier)?;
+    let (session, worker_thread_id) = build_tein_context(source_owned, tier)?;
 
     // check if define-tool was used (%tool-registry% is non-empty list)
-    let multi = ctx.evaluate("%tool-registry%").ok();
+    let multi = session.evaluate("%tool-registry%").ok();
     let is_multi = matches!(
         &multi,
         Some(Value::List(items)) if !items.is_empty()
     );
 
     if is_multi {
-        extract_multi_tools(ctx, vfs_path, registry, worker_thread_id)
+        extract_multi_tools(session, vfs_path, registry, worker_thread_id)
     } else {
-        extract_single_tool(ctx, vfs_path, registry, worker_thread_id).map(|t| vec![t])
+        extract_single_tool(session, vfs_path, registry, worker_thread_id).map(|t| vec![t])
     }
 }
 
@@ -783,14 +946,14 @@ pub fn load_tool_from_source(
 /// Extract a single tool from a context using the convention-based format.
 #[cfg(feature = "synthesised-tools")]
 fn extract_single_tool(
-    ctx: ThreadLocalContext,
+    session: TeinSession,
     vfs_path: &VfsPath,
     registry: &Arc<RwLock<ToolRegistry>>,
     worker_thread_id: std::thread::ThreadId,
 ) -> io::Result<Tool> {
-    let name = extract_string(&ctx, "tool-name")?;
-    let description = extract_string(&ctx, "tool-description")?;
-    let params_val = ctx.evaluate("tool-parameters").map_err(|e| {
+    let name = extract_string(&session, "tool-name")?;
+    let description = extract_string(&session, "tool-description")?;
+    let params_val = session.evaluate("tool-parameters").map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("missing tool-parameters: {e}"),
@@ -798,7 +961,7 @@ fn extract_single_tool(
     })?;
     let parameters = params_alist_to_json_schema(&params_val)?;
 
-    let exec_val = ctx.evaluate("tool-execute").map_err(|e| {
+    let exec_val = session.evaluate("tool-execute").map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("missing tool-execute: {e}"),
@@ -811,8 +974,8 @@ fn extract_single_tool(
         ));
     }
 
-    let (hooks, hook_bindings) = extract_hook_registrations(&ctx)?;
-    let context = Arc::new(ctx);
+    let (hooks, hook_bindings) = extract_hook_registrations(&session)?;
+    let context = Arc::new(session);
     Ok(Tool {
         name,
         description,
@@ -843,12 +1006,12 @@ pub(crate) fn scheme_escape_string(s: &str) -> String {
 /// `Tool` per entry. All tools share the same tein context via `Arc`.
 #[cfg(feature = "synthesised-tools")]
 fn extract_multi_tools(
-    ctx: ThreadLocalContext,
+    session: TeinSession,
     vfs_path: &VfsPath,
     registry: &Arc<RwLock<ToolRegistry>>,
     worker_thread_id: std::thread::ThreadId,
 ) -> io::Result<Vec<Tool>> {
-    let registry_val = ctx
+    let registry_val = session
         .evaluate("%tool-registry%")
         .map_err(|e| io::Error::other(format!("reading %tool-registry%: {e}")))?;
 
@@ -861,8 +1024,8 @@ fn extract_multi_tools(
         }
     };
 
-    let (hooks, hook_bindings) = extract_hook_registrations(&ctx)?;
-    let context = Arc::new(ctx);
+    let (hooks, hook_bindings) = extract_hook_registrations(&session)?;
+    let context = Arc::new(session);
     let mut tools = Vec::with_capacity(entries.len());
 
     // entries are in LIFO order (built via cons); reverse to get definition order
@@ -949,20 +1112,20 @@ fn extract_multi_tools(
 /// Execute a synthesised tool by calling its bound execute procedure.
 ///
 /// Converts JSON args to a scheme alist, resolves the `exec_binding` in the
-/// context, and calls it. The result is coerced to a string via
-/// `Value::as_string()` (for scheme strings) or `Display` (for other values).
+/// session, and calls it with stdout/stderr capture. Returns structured output:
+/// `"result: <value>\nstdout: <output>\nstderr: <output>"`.
 ///
 /// Sets `BRIDGE_CALL_CTX` (with the per-call registry) via `CallContextGuard`
 /// before calling into scheme so that `call-tool` can access the runtime context.
 ///
 /// `%context-name%` is injected via `set!` on the top-level binding from
-/// `HARNESS_PREAMBLE`. Concurrent calls to different `ThreadLocalContext`s are
-/// safe because each context has its own `BRIDGE_CALL_CTX` slot (keyed by
-/// `worker_thread_id`). Calls to the same context are serialised by
+/// `HARNESS_PREAMBLE`. Concurrent calls to different `TeinSession`s are
+/// safe because each session has its own `BRIDGE_CALL_CTX` slot (keyed by
+/// `worker_thread_id`). Calls to the same session are serialised by
 /// `ThreadLocalContext`'s internal mutex, so no interleaving can occur.
 #[cfg(feature = "synthesised-tools")]
 pub async fn execute_synthesised(
-    context: &ThreadLocalContext,
+    session: &TeinSession,
     exec_binding: &str,
     call: &ToolCall<'_>,
     registry: Arc<RwLock<ToolRegistry>>,
@@ -974,28 +1137,26 @@ pub async fn execute_synthesised(
     // %context-name% mutates the top-level binding defined in HARNESS_PREAMBLE.
     // Safe because ThreadLocalContext serialises all calls to this context.
     let ctx_name_escaped = scheme_escape_string(call.context.context_name);
-    context
+    session
         .evaluate(&format!("(set! %context-name% \"{ctx_name_escaped}\")"))
         .map_err(|e| io::Error::other(format!("inject %context-name%: {e}")))?;
 
     let args_alist = json_args_to_scheme_alist(call.args)?;
-    let exec_fn = context
+    let exec_fn = session
         .evaluate(exec_binding)
         .map_err(|e| io::Error::other(format!("resolve {exec_binding}: {e}")))?;
-    let result = context
-        .call(&exec_fn, &[args_alist])
-        .map_err(|e| io::Error::other(format!("tool execution: {e}")))?;
-    match result.as_string() {
-        Some(s) => Ok(s.to_string()),
-        None => Ok(result.to_string()),
-    }
+
+    // NOTE: similar capture pattern exists in run_scheme (eval.rs).
+    // Changes here may need to be assessed for that callsite too.
+    let captured = session.with_capture(|ctx| ctx.call(&exec_fn, &[args_alist]));
+    Ok(captured.format_tool())
 }
 
 /// No-op stub so the module compiles without the feature. Unreachable at
 /// runtime since `ToolImpl::Synthesised` only exists behind the same cfg.
 #[cfg(not(feature = "synthesised-tools"))]
 pub async fn execute_synthesised(
-    _context: &(),
+    _session: &(),
     _exec_binding: &str,
     _call: &ToolCall<'_>,
     _registry: std::sync::Arc<std::sync::RwLock<ToolRegistry>>,
@@ -1161,10 +1322,10 @@ pub fn unregister_tool_at_path(registry: &Arc<RwLock<ToolRegistry>>, path: &VfsP
 
 // --- helpers -----------------------------------------------------------------
 
-/// Extract a scheme string binding from a `ThreadLocalContext`.
+/// Extract a scheme string binding from a `TeinSession`.
 #[cfg(feature = "synthesised-tools")]
-fn extract_string(ctx: &ThreadLocalContext, name: &str) -> io::Result<String> {
-    let val = ctx
+fn extract_string(session: &TeinSession, name: &str) -> io::Result<String> {
+    let val = session
         .evaluate(name)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("missing {name}: {e}")))?;
     val.as_string().map(str::to_string).ok_or_else(|| {
@@ -1189,12 +1350,12 @@ fn extract_string(ctx: &ThreadLocalContext, name: &str) -> io::Result<String> {
 /// and `HARNESS_PREAMBLE` accordingly.
 #[cfg(feature = "synthesised-tools")]
 fn extract_hook_registrations(
-    ctx: &ThreadLocalContext,
+    session: &TeinSession,
 ) -> io::Result<(
     Vec<super::hooks::HookPoint>,
     std::collections::HashMap<super::hooks::HookPoint, String>,
 )> {
-    let registry_val = ctx
+    let registry_val = session
         .evaluate("%hook-registry%")
         .map_err(|e| io::Error::other(format!("reading %hook-registry%: {e}")))?;
 
@@ -1243,7 +1404,7 @@ fn extract_hook_registrations(
         // look up handler from %hook-registry% by name (first match in LIFO list = newest).
         // when the same hook point is registered multiple times, `define` overwrites on
         // each iteration (oldest-first), so the last-defined handler wins.
-        ctx.evaluate(&format!(
+        session.evaluate(&format!(
             "(define {binding} \
              (cadr \
                (let loop ((reg %hook-registry%)) \

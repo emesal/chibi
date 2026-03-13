@@ -11,8 +11,6 @@ use std::io;
 #[cfg(feature = "synthesised-tools")]
 use std::sync::{Arc, LazyLock, Mutex};
 
-#[cfg(feature = "synthesised-tools")]
-use tein::ThreadLocalContext;
 
 use super::registry::{ToolCategory, ToolRegistry};
 use super::{BuiltinToolDef, Tool, ToolPropertyDef};
@@ -36,13 +34,13 @@ const EVAL_PRELUDE: &str = r#"
         (harness tools))
 "#;
 
-/// Process-global store of persistent tein contexts, keyed by chibi context name.
-/// Each entry is `(Arc<ThreadLocalContext>, worker_thread_id)`.
-/// `ThreadLocalContext` is not Clone — Arc provides cheap sharing.
+/// Process-global store of persistent tein sessions, keyed by chibi context name.
+/// Each entry is `(Arc<TeinSession>, worker_thread_id)`.
+/// `TeinSession` wraps `ThreadLocalContext` with stdout/stderr capture.
 ///
 /// Contexts are never evicted (process lifetime). Access serialised via Mutex.
 #[cfg(feature = "synthesised-tools")]
-type EvalContextMap = Mutex<HashMap<String, (Arc<ThreadLocalContext>, std::thread::ThreadId)>>;
+type EvalContextMap = Mutex<HashMap<String, (Arc<super::synthesised::TeinSession>, std::thread::ThreadId)>>;
 
 #[cfg(feature = "synthesised-tools")]
 static EVAL_CONTEXTS: LazyLock<EvalContextMap> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -51,9 +49,10 @@ pub const SCHEME_EVAL_TOOL_NAME: &str = "scheme_eval";
 
 pub static EVAL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
     name: SCHEME_EVAL_TOOL_NAME,
-    description: "Evaluate a Scheme (R7RS) expression in a persistent sandboxed environment. \
-                  State persists across calls — define variables, build data structures, compose \
-                  computations. Returns the result of the last expression. Pre-imported: \
+    description: "Evaluate Scheme (R7RS) expression(s) in a persistent sandboxed environment. \
+                  State persists across calls -- define variables, build data structures, compose \
+                  computations. Returns the result of the last expression along with any stdout \
+                  and stderr output (e.g. from display, write). Pre-imported: \
                   (scheme base), (scheme write), (scheme read), (scheme char), (scheme case-lambda), \
                   (tein json) for json-parse/json-stringify, (tein safe-regexp) for regex, \
                   (tein docs) for module-docs/describe, \
@@ -71,17 +70,17 @@ pub static EVAL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
     summary_params: &["code"],
 }];
 
-/// Build a sandboxed tein context for `scheme_eval`.
+/// Build a sandboxed tein session for `scheme_eval`.
 ///
 /// Delegates to `synthesised::build_sandboxed_harness_context` for the FFI
 /// bridge setup, then evaluates `EVAL_PRELUDE` to pre-import standard modules.
-/// Returns `(Arc<ThreadLocalContext>, worker_thread_id)`.
+/// Returns `(Arc<TeinSession>, worker_thread_id)`.
 #[cfg(feature = "synthesised-tools")]
-fn build_eval_context() -> io::Result<(Arc<ThreadLocalContext>, std::thread::ThreadId)> {
-    let (ctx, tid) = super::synthesised::build_sandboxed_harness_context()?;
-    ctx.evaluate(EVAL_PRELUDE)
+fn build_eval_context() -> io::Result<(Arc<super::synthesised::TeinSession>, std::thread::ThreadId)> {
+    let (session, tid) = super::synthesised::build_sandboxed_harness_context()?;
+    session.evaluate(EVAL_PRELUDE)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("eval prelude: {e}")))?;
-    Ok((Arc::new(ctx), tid))
+    Ok((Arc::new(session), tid))
 }
 
 /// Run scheme code in the persistent tein context. Called on a blocking thread.
@@ -92,30 +91,28 @@ fn build_eval_context() -> io::Result<(Arc<ThreadLocalContext>, std::thread::Thr
 /// The caller must hold a `CallContextGuard` for the duration so that `call-tool`
 /// bridge lookups resolve correctly from the tein worker thread.
 #[cfg(feature = "synthesised-tools")]
-fn run_scheme(tein_ctx: &ThreadLocalContext, context_name: &str, code: &str) -> io::Result<String> {
+fn run_scheme(session: &super::synthesised::TeinSession, context_name: &str, code: &str) -> io::Result<String> {
     let ctx_name_escaped = super::synthesised::scheme_escape_string(context_name);
-    tein_ctx
+    session
         .evaluate(&format!("(set! %context-name% \"{ctx_name_escaped}\")"))
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("context-name: {e}")))?;
 
-    match tein_ctx.evaluate(code) {
-        Ok(val) => Ok(val.to_string()),
-        Err(e) => Ok(format!("error: {e}")),
-    }
+    let captured = session.with_capture(|ctx| ctx.evaluate(code));
+    Ok(captured.format_eval())
 }
 
 /// Get or create the persistent tein context for a chibi context name.
 #[cfg(feature = "synthesised-tools")]
 fn get_or_create_context(
     context_name: &str,
-) -> io::Result<(Arc<ThreadLocalContext>, std::thread::ThreadId)> {
+) -> io::Result<(Arc<super::synthesised::TeinSession>, std::thread::ThreadId)> {
     let mut contexts = EVAL_CONTEXTS.lock().unwrap();
     if let Some(entry) = contexts.get(context_name) {
         Ok((Arc::clone(&entry.0), entry.1))
     } else {
-        let (ctx, tid) = build_eval_context()?;
-        contexts.insert(context_name.to_string(), (Arc::clone(&ctx), tid));
-        Ok((ctx, tid))
+        let (session, tid) = build_eval_context()?;
+        contexts.insert(context_name.to_string(), (Arc::clone(&session), tid));
+        Ok((session, tid))
     }
 }
 
@@ -153,17 +150,17 @@ pub fn register_eval_tools(registry: &Arc<std::sync::RwLock<ToolRegistry>>) {
         // Phase 1 (tokio thread): setup while borrowed ToolCallContext is valid.
         let reg = Arc::clone(&registry_for_handler);
         let setup = (|| -> io::Result<_> {
-            let (tein_ctx, worker_tid) = get_or_create_context(&context_name)?;
+            let (session, worker_tid) = get_or_create_context(&context_name)?;
             let guard = CallContextGuard::set(call.context, reg, worker_tid);
-            Ok((tein_ctx, guard))
+            Ok((session, guard))
         })();
 
         // Phase 2 (blocking thread): scheme code runs off the tokio pool.
         Box::pin(async move {
-            let (tein_ctx, guard) = setup?;
+            let (session, guard) = setup?;
             tokio::task::spawn_blocking(move || {
                 let _guard = guard;
-                run_scheme(&tein_ctx, &context_name, &code)
+                run_scheme(&session, &context_name, &code)
             })
             .await
             .map_err(|e| io::Error::other(format!("scheme_eval panicked: {e}")))?
