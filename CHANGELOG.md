@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.10.6] - 2026-03-13
+## [0.10.7] - 2026-03-13
 
 ### Bug Fixes
 
@@ -178,6 +178,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Add structured output format quirk for scheme_eval and synthesised tools ([`99a8c95`](https://github.com/emesal/chibi/commit/99a8c95f385efa062712f7891c4ef1da8b8f391a))
 
 - Update CHANGELOG for v0.10.5 ([`aa1856e`](https://github.com/emesal/chibi/commit/aa1856edd14dd14812063827f5b2d1fbb42364d2))
+
+- Update CHANGELOG for v0.10.6 ([`55a254e`](https://github.com/emesal/chibi/commit/55a254e1e11f0aab4e0b6167256fab3c8f5d9872))
 
 
 ### Features
