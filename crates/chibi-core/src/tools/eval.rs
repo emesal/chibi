@@ -187,8 +187,8 @@ mod tests {
 
     #[test]
     fn test_build_context_basic() {
-        let (ctx, tid) = super::build_eval_context().expect("context should build");
-        let result = ctx.evaluate("(+ 1 2)").expect("eval should succeed");
+        let (session, tid) = super::build_eval_context().expect("context should build");
+        let result = session.evaluate("(+ 1 2)").expect("eval should succeed");
         assert_eq!(result.to_string(), "3");
         // Worker thread should differ from test thread
         assert_ne!(tid, std::thread::current().id());
@@ -196,16 +196,16 @@ mod tests {
 
     #[test]
     fn test_context_persistence() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        ctx.evaluate("(define x 42)").expect("define should work");
-        let result = ctx.evaluate("x").expect("x should be defined");
+        let (session, _) = super::build_eval_context().expect("context should build");
+        session.evaluate("(define x 42)").expect("define should work");
+        let result = session.evaluate("x").expect("x should be defined");
         assert_eq!(result.to_string(), "42");
     }
 
     #[test]
     fn test_prelude_srfi_1() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate("(fold + 0 '(1 2 3 4 5))")
             .expect("fold from srfi-1");
         assert_eq!(result.to_string(), "15");
@@ -213,8 +213,8 @@ mod tests {
 
     #[test]
     fn test_prelude_srfi_130() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate(r#"(string-contains "hello world" "world")"#)
             .expect("string-contains from srfi-130");
         // Returns cursor index, not #f
@@ -224,8 +224,8 @@ mod tests {
     #[test]
     fn test_prelude_tein_json() {
         // (tein json) exports json-parse and json-stringify
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate(r#"(json-parse "{\"a\":1}")"#)
             .expect("json-parse from tein json");
         assert!(result.to_string().contains("a"));
@@ -235,8 +235,8 @@ mod tests {
     fn test_prelude_safe_regexp() {
         // (tein safe-regexp) exports regexp, regexp-search, regexp-matches?, etc.
         // regexp-search returns a vector of match vectors on success, #f on no match.
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate(r#"(vector? (regexp-search "hello" "hello world"))"#)
             .expect("regexp-search should work");
         assert_eq!(result.to_string(), "#t");
@@ -244,8 +244,8 @@ mod tests {
 
     #[test]
     fn test_prelude_chibi_match() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = session
             .evaluate("(match '(1 2 3) ((a b c) (+ a b c)))")
             .expect("chibi match");
         assert_eq!(result.to_string(), "6");
@@ -253,9 +253,9 @@ mod tests {
 
     #[test]
     fn test_prelude_tein_docs() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
+        let (session, _) = super::build_eval_context().expect("context should build");
         // module-docs returns doc pairs from an alist — just verify the binding exists
-        let result = ctx
+        let result = session
             .evaluate("(procedure? module-docs)")
             .expect("module-docs from tein docs");
         assert_eq!(result.to_string(), "#t");
@@ -263,9 +263,9 @@ mod tests {
 
     #[test]
     fn test_prelude_tein_introspect() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
+        let (session, _) = super::build_eval_context().expect("context should build");
         // available-modules returns a list of importable modules
-        let result = ctx
+        let result = session
             .evaluate("(list? (available-modules))")
             .expect("available-modules from tein introspect");
         assert_eq!(result.to_string(), "#t");
@@ -273,19 +273,68 @@ mod tests {
 
     #[test]
     fn test_error_reporting() {
-        let (ctx, _) = super::build_eval_context().expect("context should build");
-        let result = ctx.evaluate("undefined-var");
-        assert!(result.is_err());
+        let (session, _) = super::build_eval_context().expect("context should build");
+        // errors are captured in structured output, not propagated as Err
+        let result = super::run_scheme(&session, "test", "undefined-var").unwrap();
+        assert!(result.contains("result: error:"), "should contain error: {result}");
     }
 
     #[test]
     fn test_contexts_isolation() {
         // Two contexts should have independent state.
-        let (ctx_a, _) = super::build_eval_context().expect("build a");
-        let (ctx_b, _) = super::build_eval_context().expect("build b");
-        ctx_a.evaluate("(define x 1)").unwrap();
-        ctx_b.evaluate("(define x 2)").unwrap();
-        assert_eq!(ctx_a.evaluate("x").unwrap().to_string(), "1");
-        assert_eq!(ctx_b.evaluate("x").unwrap().to_string(), "2");
+        let (session_a, _) = super::build_eval_context().expect("build a");
+        let (session_b, _) = super::build_eval_context().expect("build b");
+        session_a.evaluate("(define x 1)").unwrap();
+        session_b.evaluate("(define x 2)").unwrap();
+        assert_eq!(session_a.evaluate("x").unwrap().to_string(), "1");
+        assert_eq!(session_b.evaluate("x").unwrap().to_string(), "2");
+    }
+
+    #[test]
+    fn test_stdout_capture() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = super::run_scheme(&session, "test", "(display 42)").unwrap();
+        assert!(result.contains("result: #<unspecified>"), "display returns unspecified: {result}");
+        assert!(result.contains("stdout: 42"), "stdout should contain displayed value: {result}");
+        assert!(result.contains("stderr: (empty)"), "stderr should be empty: {result}");
+    }
+
+    #[test]
+    fn test_stderr_capture() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = super::run_scheme(
+            &session, "test",
+            r#"(display "oops" (current-error-port))"#,
+        ).unwrap();
+        assert!(result.contains("stdout: (empty)"), "stdout should be empty: {result}");
+        assert!(result.contains("stderr: oops"), "stderr should contain error output: {result}");
+    }
+
+    #[test]
+    fn test_value_with_stdout() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = super::run_scheme(
+            &session, "test",
+            r#"(begin (display "hello") (+ 1 2))"#,
+        ).unwrap();
+        assert!(result.contains("result: 3"), "value should be 3: {result}");
+        assert!(result.contains("stdout: hello"), "stdout should contain display output: {result}");
+    }
+
+    #[test]
+    fn test_no_stdout_bleed_between_calls() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r1 = super::run_scheme(&session, "test", r#"(display "first")"#).unwrap();
+        assert!(r1.contains("stdout: first"), "first call: {r1}");
+        let r2 = super::run_scheme(&session, "test", "(+ 1 2)").unwrap();
+        assert!(r2.contains("stdout: (empty)"), "second call should have no stdout: {r2}");
+    }
+
+    #[test]
+    fn test_error_in_captured_output() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let result = super::run_scheme(&session, "test", "undefined-var").unwrap();
+        assert!(result.contains("result: error:"), "should contain error: {result}");
+        assert!(result.contains("stdout: (empty)"), "stdout should be empty on error: {result}");
     }
 }

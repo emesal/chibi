@@ -182,16 +182,22 @@ impl TeinSession {
     where
         F: FnOnce(&ThreadLocalContext) -> tein::Result<tein::Value>,
     {
-        // 1. drain
+        // 1. flush-then-drain: flush chibi's internal port buffers first (emitting
+        //    any stale buffered data into SharedWriter), then discard. This ensures
+        //    the capture window starts clean — no bleed from previous calls.
+        //    flush-output-port is R7RS (scheme base); flush-output is chibi-only and
+        //    unavailable in sandboxed contexts.
+        let _ = self.ctx.evaluate("(flush-output-port (current-output-port))");
+        let _ = self.ctx.evaluate("(flush-output-port (current-error-port))");
         self.stdout_buf.lock().unwrap().clear();
         self.stderr_buf.lock().unwrap().clear();
 
         // 2. run
         let value = f(&self.ctx);
 
-        // 3. flush -- ignore errors (port should always be valid)
-        let _ = self.ctx.evaluate("(flush-output (current-output-port))");
-        let _ = self.ctx.evaluate("(flush-output (current-error-port))");
+        // 3. flush -- push any remaining buffered output into SharedWriter
+        let _ = self.ctx.evaluate("(flush-output-port (current-output-port))");
+        let _ = self.ctx.evaluate("(flush-output-port (current-error-port))");
 
         // 4. read
         let stdout = String::from_utf8_lossy(&self.stdout_buf.lock().unwrap()).to_string();
@@ -1633,6 +1639,19 @@ mod tests {
         let backend = LocalBackend::new(dir.path().to_path_buf());
         let vfs = Vfs::new(Box::new(backend), "test-site-0000");
         (dir, vfs)
+    }
+
+    #[test]
+    fn test_tein_session_stdout_capture() {
+        // Direct TeinSession capture test — verifies both tiers.
+        for tier in [crate::config::SandboxTier::Unsandboxed, crate::config::SandboxTier::Sandboxed] {
+            let (session, _) = build_tein_context(String::new(), tier)
+                .expect("session should build");
+            let cap = session.with_capture(|ctx| ctx.evaluate("(display 42)"));
+            assert!(cap.value.is_ok(), "display should not error ({tier:?}): {:?}", cap.value);
+            assert_eq!(cap.stdout, "42", "stdout should be 42 ({tier:?})");
+            assert!(cap.stderr.is_empty(), "stderr should be empty ({tier:?})");
+        }
     }
 
     fn make_registry() -> Arc<RwLock<ToolRegistry>> {
