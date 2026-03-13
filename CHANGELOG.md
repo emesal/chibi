@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.10.5] - 2026-03-13
+## [0.10.6] - 2026-03-13
 
 ### Bug Fixes
 
@@ -176,6 +176,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Implementation plan for tein stdout/stderr capture ([`c174693`](https://github.com/emesal/chibi/commit/c174693cc42c9988c6347994eb41067efbaa977e))
 
 - Add structured output format quirk for scheme_eval and synthesised tools ([`99a8c95`](https://github.com/emesal/chibi/commit/99a8c95f385efa062712f7891c4ef1da8b8f391a))
+
+- Update CHANGELOG for v0.10.5 ([`aa1856e`](https://github.com/emesal/chibi/commit/aa1856edd14dd14812063827f5b2d1fbb42364d2))
 
 
 ### Features
