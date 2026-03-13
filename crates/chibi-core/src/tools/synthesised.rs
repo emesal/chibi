@@ -105,43 +105,36 @@ impl std::io::Write for SharedWriter {
 /// ```
 #[cfg(feature = "synthesised-tools")]
 pub(crate) struct CapturedOutput {
-    pub value: tein::Result<tein::Value>,
+    value: tein::Result<tein::Value>,
     pub stdout: String,
     pub stderr: String,
+}
+
+/// Shared formatting for structured output. Produces:
+/// `"result: <value_str>\nstdout: <stdout or "(empty)">\nstderr: <stderr or "(empty)">"`
+#[cfg(feature = "synthesised-tools")]
+fn format_output(value_str: &str, stdout: &str, stderr: &str) -> String {
+    format!(
+        "result: {}\nstdout: {}\nstderr: {}",
+        value_str,
+        if stdout.is_empty() { "(empty)" } else { stdout },
+        if stderr.is_empty() { "(empty)" } else { stderr },
+    )
 }
 
 #[cfg(feature = "synthesised-tools")]
 impl CapturedOutput {
     /// Format for `scheme_eval` -- stringifies value with `to_string()`.
-    ///
-    /// NOTE: similar formatting exists in `format_tool()`.
-    /// Changes here may need to be assessed for that method too.
     pub fn format_eval(&self) -> String {
         let value_str = match &self.value {
             Ok(val) => val.to_string(),
             Err(e) => format!("error: {e}"),
         };
-        format!(
-            "result: {}\nstdout: {}\nstderr: {}",
-            value_str,
-            if self.stdout.is_empty() {
-                "(empty)"
-            } else {
-                &self.stdout
-            },
-            if self.stderr.is_empty() {
-                "(empty)"
-            } else {
-                &self.stderr
-            },
-        )
+        format_output(&value_str, &self.stdout, &self.stderr)
     }
 
     /// Format for synthesised tools -- unwraps scheme strings via `as_string()`,
     /// falling back to `to_string()` for non-string values.
-    ///
-    /// NOTE: similar formatting exists in `format_eval()`.
-    /// Changes here may need to be assessed for that method too.
     pub fn format_tool(&self) -> String {
         let value_str = match &self.value {
             Ok(val) => match val.as_string() {
@@ -150,20 +143,7 @@ impl CapturedOutput {
             },
             Err(e) => format!("error: {e}"),
         };
-        format!(
-            "result: {}\nstdout: {}\nstderr: {}",
-            value_str,
-            if self.stdout.is_empty() {
-                "(empty)"
-            } else {
-                &self.stdout
-            },
-            if self.stderr.is_empty() {
-                "(empty)"
-            } else {
-                &self.stderr
-            },
-        )
+        format_output(&value_str, &self.stdout, &self.stderr)
     }
 }
 
@@ -203,6 +183,9 @@ impl TeinSession {
         //    the capture window starts clean — no bleed from previous calls.
         //    flush-output-port is R7RS (scheme base); flush-output is chibi-only and
         //    unavailable in sandboxed contexts.
+        //    Flush errors are non-fatal but mean the drain may be incomplete; stale
+        //    output could bleed into this call's capture. No tracing dep is available,
+        //    so errors are silently discarded — investigate if bleed is observed.
         let _ = self
             .ctx
             .evaluate("(flush-output-port (current-output-port))");
@@ -215,7 +198,8 @@ impl TeinSession {
         // 2. run
         let value = f(&self.ctx);
 
-        // 3. flush -- push any remaining buffered output into SharedWriter
+        // 3. flush -- push any remaining buffered output into SharedWriter.
+        //    Same caveat: flush errors mean captured output may be truncated.
         let _ = self
             .ctx
             .evaluate("(flush-output-port (current-output-port))");
@@ -241,7 +225,8 @@ impl TeinSession {
     }
 
     /// Delegate to inner context for calling procedures without capture.
-    /// Used by hook dispatch (`hooks.rs`) which doesn't need stdout/stderr capture.
+    /// Use when stdout/stderr output is not needed (e.g. internal resolution,
+    /// hook dispatch where only the return value matters).
     pub(crate) fn call(
         &self,
         proc: &tein::Value,
