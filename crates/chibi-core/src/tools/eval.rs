@@ -23,12 +23,21 @@ const EVAL_PRELUDE: &str = r#"
         (scheme read)
         (scheme char)
         (scheme case-lambda)
+        (scheme inexact)
+        (scheme complex)
         (tein json)
         (tein safe-regexp)
         (tein docs)
         (tein introspect)
         (srfi 1)
+        (srfi 27)
+        (srfi 69)
+        (srfi 95)
+        (srfi 125)
+        (srfi 128)
         (srfi 130)
+        (srfi 132)
+        (srfi 133)
         (chibi match)
         (harness tools))
 "#;
@@ -54,10 +63,15 @@ pub static EVAL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
                   computations. Returns the result of the last expression along with any stdout \
                   and stderr output (e.g. from display, write). Pre-imported: \
                   (scheme base), (scheme write), (scheme read), (scheme char), (scheme case-lambda), \
+                  (scheme inexact) for sin/cos/atan/sqrt/exp/log/finite?/nan?, \
+                  (scheme complex) for make-polar/magnitude/angle/real-part/imag-part, \
                   (tein json) for json-parse/json-stringify, (tein safe-regexp) for regex, \
                   (tein docs) for module-docs/describe, \
                   (tein introspect) for available-modules/module-exports/binding-info/env-bindings, \
-                  (srfi 1) for list operations, (srfi 130) for string cursors, \
+                  (srfi 1) for list operations, (srfi 27) for random-integer/random-real, \
+                  (srfi 69) for basic hash tables, (srfi 95) for sort/merge, \
+                  (srfi 125) for comprehensive hash tables, (srfi 128) for comparators, (srfi 130) for string cursors, \
+                  (srfi 132) for comprehensive sorting, (srfi 133) for vector operations, \
                   (chibi match) for pattern matching, and (harness tools) for call-tool. \
                   Additional safe modules can be imported with (import ...).",
     properties: &[ToolPropertyDef {
@@ -371,5 +385,109 @@ mod tests {
             result.contains("stdout: (empty)"),
             "stdout should be empty on error: {result}"
         );
+    }
+
+    #[test]
+    fn test_prelude_scheme_inexact() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        // atan, sin, cos, sqrt, exp, log, finite?, nan? all from (scheme inexact)
+        let r = session.evaluate("(atan 1.0)").expect("atan");
+        assert!(r.to_string().starts_with("0.785"), "atan(1) ≈ π/4: {r}");
+        let r = session.evaluate("(finite? 1.0)").expect("finite?");
+        assert_eq!(r.to_string(), "#t");
+        let r = session.evaluate("(nan? +nan.0)").expect("nan?");
+        assert_eq!(r.to_string(), "#t");
+    }
+
+    #[test]
+    fn test_prelude_scheme_complex() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r = session
+            .evaluate("(magnitude (make-rectangular 3.0 4.0))")
+            .expect("magnitude");
+        // magnitude of 3+4i = 5; chibi may return exact 5 or inexact 5.0
+        assert!(
+            r.to_string() == "5" || r.to_string() == "5.0",
+            "magnitude should be 5: {r}"
+        );
+        let r = session
+            .evaluate("(real-part (make-rectangular 3.0 4.0))")
+            .expect("real-part");
+        // real-part may return exact or inexact depending on input exactness
+        assert!(
+            r.to_string() == "3" || r.to_string() == "3.0",
+            "real-part should be 3: {r}"
+        );
+    }
+
+    #[test]
+    fn test_prelude_srfi_27() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        // random-integer returns an exact integer in [0, n)
+        let r = session
+            .evaluate("(integer? (random-integer 100))")
+            .expect("random-integer");
+        assert_eq!(r.to_string(), "#t");
+        let r = session
+            .evaluate("(let ((x (random-real))) (and (>= x 0.0) (< x 1.0)))")
+            .expect("random-real");
+        assert_eq!(r.to_string(), "#t");
+    }
+
+    #[test]
+    fn test_prelude_srfi_69() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r = session
+            .evaluate(
+                "(let ((h (make-hash-table equal?))) \
+                   (hash-table-set! h 'key 42) \
+                   (hash-table-ref h 'key (lambda () #f)))",
+            )
+            .expect("srfi-69 hash table");
+        assert_eq!(r.to_string(), "42");
+    }
+
+    #[test]
+    fn test_prelude_srfi_95() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r = session
+            .evaluate("(sort '(3 1 4 1 5 9 2 6) <)")
+            .expect("srfi-95 sort");
+        assert_eq!(r.to_string(), "(1 1 2 3 4 5 6 9)");
+    }
+
+    #[test]
+    fn test_prelude_srfi_125() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        // srfi/125 + srfi/128: make-hash-table with make-default-comparator
+        let r = session
+            .evaluate(
+                "(let ((h (make-hash-table (make-default-comparator)))) \
+                   (hash-table-set! h 'a 1) \
+                   (hash-table-set! h 'b 2) \
+                   (hash-table-ref h 'b))",
+            )
+            .expect("srfi-125 hash-table");
+        assert_eq!(r.to_string(), "2");
+    }
+
+    #[test]
+    fn test_prelude_srfi_132() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        // list-sort from srfi/132
+        let r = session
+            .evaluate("(list-sort < '(5 2 8 1 3))")
+            .expect("srfi-132 list-sort");
+        assert_eq!(r.to_string(), "(1 2 3 5 8)");
+    }
+
+    #[test]
+    fn test_prelude_srfi_133() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        // vector-map and vector-fold from srfi/133
+        let r = session
+            .evaluate("(vector-map + #(1 2 3) #(4 5 6))")
+            .expect("srfi-133 vector-map");
+        assert_eq!(r.to_string(), "#(5 7 9)");
     }
 }
