@@ -40,6 +40,10 @@ const EVAL_PRELUDE: &str = r#"
         (srfi 133)
         (chibi match)
         (harness tools))
+
+;; R5RS aliases — LLMs reach for these instinctively
+(define exact->inexact inexact)
+(define inexact->exact exact)
 "#;
 
 /// Process-global store of persistent tein sessions, keyed by chibi context name.
