@@ -175,7 +175,7 @@ pub use index::{
 pub use vfs_tools::{execute_vfs_tool, register_vfs_tools};
 
 // Re-export eval tool constants and registration
-pub use eval::{EVAL_TOOL_DEFS, SCHEME_EVAL_TOOL_NAME, register_eval_tools};
+pub use eval::{EVAL_TOOL_DEFS, SCHEME_EVAL_TOOL_NAME, evict_eval_context, register_eval_tools};
 
 // Re-export security utilities
 pub use security::{

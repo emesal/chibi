@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.10.7] - 2026-03-13
+## [0.10.8] - 2026-03-14
 
 ### Bug Fixes
 
@@ -180,6 +180,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Update CHANGELOG for v0.10.5 ([`aa1856e`](https://github.com/emesal/chibi/commit/aa1856edd14dd14812063827f5b2d1fbb42364d2))
 
 - Update CHANGELOG for v0.10.6 ([`55a254e`](https://github.com/emesal/chibi/commit/55a254e1e11f0aab4e0b6167256fab3c8f5d9872))
+
+- Update CHANGELOG for v0.10.7 ([`739b809`](https://github.com/emesal/chibi/commit/739b809c50ed9aaacef1cdfc51f2a370d74e167b))
 
 
 ### Features

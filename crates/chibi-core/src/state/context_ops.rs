@@ -99,6 +99,11 @@ impl AppState {
         let new_context = Context::new(context_name.to_string());
         self.save_context(&new_context)?;
 
+        // Evict cached scheme_eval tein session so the next eval call gets a
+        // fresh interpreter with the current prelude (prevents stale C-level
+        // state from surviving across context clears).
+        crate::tools::evict_eval_context(context_name);
+
         // Invalidate active state cache after all writes are complete,
         // so the next append re-scans fresh state from disk
         self.active_state_cache.borrow_mut().remove(&context.name);
@@ -119,6 +124,9 @@ impl AppState {
 
         // Remove the directory
         fs::remove_dir_all(&dir)?;
+
+        // Evict cached scheme_eval tein session (see clear_context).
+        crate::tools::evict_eval_context(name);
 
         // Invalidate active state cache for the destroyed context
         self.active_state_cache.borrow_mut().remove(name);
@@ -155,6 +163,10 @@ impl AppState {
 
         // Rename the directory (context name is derived from directory, no file updates needed)
         fs::rename(&old_dir, &new_dir)?;
+
+        // Evict cached scheme_eval tein session for old name (see clear_context).
+        // Don't insert under new name — let it lazily recreate on next eval.
+        crate::tools::evict_eval_context(old_name);
 
         // Update state: preserve created_at from old entry.
         // Drop write guard before file I/O (atomic_write_json) to avoid
