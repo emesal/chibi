@@ -23,12 +23,21 @@ const EVAL_PRELUDE: &str = r#"
         (scheme read)
         (scheme char)
         (scheme case-lambda)
+        (scheme inexact)
+        (scheme complex)
         (tein json)
         (tein safe-regexp)
         (tein docs)
         (tein introspect)
         (srfi 1)
+        (srfi 27)
+        (srfi 69)
+        (srfi 95)
+        (srfi 125)
+        (srfi 128)
         (srfi 130)
+        (srfi 132)
+        (srfi 133)
         (chibi match)
         (harness tools))
 "#;
@@ -37,13 +46,33 @@ const EVAL_PRELUDE: &str = r#"
 /// Each entry is `(Arc<TeinSession>, worker_thread_id)`.
 /// `TeinSession` wraps `ThreadLocalContext` with stdout/stderr capture.
 ///
-/// Contexts are never evicted (process lifetime). Access serialised via Mutex.
+/// Entries are evicted on context clear/destroy/rename via [`evict_eval_context`]
+/// so the next `scheme_eval` call gets a fresh session with the current prelude.
+/// Without eviction, stale sessions can accumulate corrupted C-level state in
+/// chibi-scheme's heap, leading to segfaults.
 #[cfg(feature = "synthesised-tools")]
 type EvalContextMap =
     Mutex<HashMap<String, (Arc<super::synthesised::TeinSession>, std::thread::ThreadId)>>;
 
 #[cfg(feature = "synthesised-tools")]
 static EVAL_CONTEXTS: LazyLock<EvalContextMap> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Remove the cached tein session for a context name.
+///
+/// Called from context lifecycle operations (clear, destroy, rename) so the
+/// next `scheme_eval` call creates a fresh session. This prevents:
+/// - stale interpreter state carrying over after context archive/clear
+/// - C-level heap corruption from accumulated bad state in long-lived sessions
+///
+/// No-op if the context has no cached session (e.g. `scheme_eval` was never
+/// called for this context, or the feature is disabled).
+pub fn evict_eval_context(name: &str) {
+    #[cfg(feature = "synthesised-tools")]
+    {
+        EVAL_CONTEXTS.lock().unwrap().remove(name);
+    }
+    let _ = name; // suppress unused warning when feature disabled
+}
 
 pub const SCHEME_EVAL_TOOL_NAME: &str = "scheme_eval";
 
@@ -54,10 +83,16 @@ pub static EVAL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
                   computations. Returns the result of the last expression along with any stdout \
                   and stderr output (e.g. from display, write). Pre-imported: \
                   (scheme base), (scheme write), (scheme read), (scheme char), (scheme case-lambda), \
+                  (scheme inexact) for sin/cos/atan/sqrt/exp/log/finite?/nan?, \
+                  (scheme complex) for make-polar/magnitude/angle/real-part/imag-part, \
                   (tein json) for json-parse/json-stringify, (tein safe-regexp) for regex, \
                   (tein docs) for module-docs/describe, \
                   (tein introspect) for available-modules/module-exports/binding-info/env-bindings, \
-                  (srfi 1) for list operations, (srfi 130) for string cursors, \
+                  (srfi 1) for list operations, (srfi 27) for random-integer/random-real, \
+                  (srfi 69) for basic hash tables, (srfi 95) for sort/merge, \
+                  (srfi 125) for comprehensive hash tables, (srfi 128) for comparators, \
+                  (srfi 130) for string cursors, \
+                  (srfi 132) for comprehensive sorting, (srfi 133) for vector operations, \
                   (chibi match) for pattern matching, and (harness tools) for call-tool. \
                   Additional safe modules can be imported with (import ...).",
     properties: &[ToolPropertyDef {
@@ -370,6 +405,95 @@ mod tests {
         assert!(
             result.contains("stdout: (empty)"),
             "stdout should be empty on error: {result}"
+        );
+    }
+
+    #[test]
+    fn test_prelude_scheme_inexact() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        // atan, sin, cos, sqrt, exp, log, finite?, nan? all from (scheme inexact)
+        let r = session.evaluate("(atan 1.0)").expect("atan");
+        assert!(r.to_string().starts_with("0.785"), "atan(1) ≈ π/4: {r}");
+        let r = session.evaluate("(finite? 1.0)").expect("finite?");
+        assert_eq!(r.to_string(), "#t");
+        let r = session.evaluate("(nan? +nan.0)").expect("nan?");
+        assert_eq!(r.to_string(), "#t");
+    }
+
+    #[test]
+    fn test_prelude_scheme_complex() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r = session
+            .evaluate("(magnitude (make-rectangular 3.0 4.0))")
+            .expect("magnitude");
+        // magnitude of 3+4i = 5; chibi may return exact 5 or inexact 5.0
+        assert!(
+            r.to_string() == "5" || r.to_string() == "5.0",
+            "magnitude of 3+4i = 5: {r}"
+        );
+    }
+
+    #[test]
+    fn test_prelude_srfi_27() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r = session
+            .evaluate("(number? (random-integer 100))")
+            .expect("random-integer");
+        assert_eq!(r.to_string(), "#t");
+    }
+
+    #[test]
+    fn test_prelude_srfi_69() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r = session
+            .evaluate("(let ((ht (make-hash-table equal?))) (hash-table-set! ht 'a 1) (hash-table-ref ht 'a #f))")
+            .expect("srfi-69 hash-table");
+        assert_eq!(r.to_string(), "1");
+    }
+
+    #[test]
+    fn test_prelude_srfi_95() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r = session.evaluate("(sort '(3 1 2) <)").expect("srfi-95 sort");
+        assert_eq!(r.to_string(), "(1 2 3)");
+    }
+
+    #[test]
+    fn test_prelude_srfi_132() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r = session
+            .evaluate("(list-sort < '(3 1 2))")
+            .expect("srfi-132 list-sort");
+        assert_eq!(r.to_string(), "(1 2 3)");
+    }
+
+    #[test]
+    fn test_prelude_srfi_133() {
+        let (session, _) = super::build_eval_context().expect("context should build");
+        let r = session
+            .evaluate("(vector->list (vector-map + #(1 2 3) #(10 20 30)))")
+            .expect("srfi-133 vector-map");
+        assert_eq!(r.to_string(), "(11 22 33)");
+    }
+
+    #[test]
+    fn test_evict_eval_context() {
+        // Insert a context, evict it, verify it's gone and a fresh one is created.
+        let name = "evict-test";
+        let (session, _) = super::get_or_create_context(name).expect("create");
+        session.evaluate("(define evict-marker 99)").unwrap();
+        assert_eq!(session.evaluate("evict-marker").unwrap().to_string(), "99");
+
+        super::evict_eval_context(name);
+
+        let (session2, _) = super::get_or_create_context(name).expect("recreate");
+        let r = session2.evaluate("(+ 1 1)").expect("basic eval");
+        assert_eq!(r.to_string(), "2");
+        // The old binding should be gone in the new session.
+        let r = super::run_scheme(&session2, name, "evict-marker").unwrap();
+        assert!(
+            r.contains("error:"),
+            "old binding should not survive eviction: {r}"
         );
     }
 }
