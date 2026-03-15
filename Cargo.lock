@@ -4953,8 +4953,8 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tein"
-version = "0.2.4"
-source = "git+https://github.com/emesal/tein?branch=main#313f3be1619fa0ecc93ae69bdfb44291f91b9353"
+version = "0.2.5"
+source = "git+https://github.com/emesal/tein?branch=main#70539929a5327008bb11eb99fca850f0421c0b0f"
 dependencies = [
  "blake3",
  "cc",
@@ -4973,13 +4973,13 @@ dependencies = [
 
 [[package]]
 name = "tein-ext"
-version = "0.2.4"
-source = "git+https://github.com/emesal/tein?branch=main#313f3be1619fa0ecc93ae69bdfb44291f91b9353"
+version = "0.2.5"
+source = "git+https://github.com/emesal/tein?branch=main#70539929a5327008bb11eb99fca850f0421c0b0f"
 
 [[package]]
 name = "tein-macros"
-version = "0.2.4"
-source = "git+https://github.com/emesal/tein?branch=main#313f3be1619fa0ecc93ae69bdfb44291f91b9353"
+version = "0.2.5"
+source = "git+https://github.com/emesal/tein?branch=main#70539929a5327008bb11eb99fca850f0421c0b0f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4988,8 +4988,8 @@ dependencies = [
 
 [[package]]
 name = "tein-sexp"
-version = "0.2.4"
-source = "git+https://github.com/emesal/tein?branch=main#313f3be1619fa0ecc93ae69bdfb44291f91b9353"
+version = "0.2.5"
+source = "git+https://github.com/emesal/tein?branch=main#70539929a5327008bb11eb99fca850f0421c0b0f"
 dependencies = [
  "serde",
 ]
