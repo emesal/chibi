@@ -446,6 +446,137 @@ mod tests {
     }
 
     #[test]
+    fn test_harness_tools_docs_is_alist() {
+        // harness-tools-docs must be a non-empty pair in every scheme_eval context
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(pair? harness-tools-docs)")
+            .expect("evaluate");
+        assert_eq!(result, tein::Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_harness_tools_docs_has_define_tool_entry() {
+        // must have a 'define-tool key with a non-empty string doc
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(let ((e (assq 'define-tool harness-tools-docs))) (and (pair? e) (string? (cdr e)) (not (string=? \"\" (cdr e)))))")
+            .expect("evaluate");
+        assert_eq!(result, tein::Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_harness_tools_docs_has_call_tool_entry() {
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(let ((e (assq 'call-tool harness-tools-docs))) (and (pair? e) (string? (cdr e))))")
+            .expect("evaluate");
+        assert_eq!(result, tein::Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_harness_tools_docs_has_register_hook_entry() {
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(let ((e (assq 'register-hook harness-tools-docs))) (and (pair? e) (string? (cdr e))))")
+            .expect("evaluate");
+        assert_eq!(result, tein::Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_harness_tools_docs_has_generate_id_entry() {
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(let ((e (assq 'generate-id harness-tools-docs))) (and (pair? e) (string? (cdr e))))")
+            .expect("evaluate");
+        assert_eq!(result, tein::Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_harness_tools_docs_has_current_timestamp_entry() {
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(let ((e (assq 'current-timestamp harness-tools-docs))) (and (pair? e) (string? (cdr e))))")
+            .expect("evaluate");
+        assert_eq!(result, tein::Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_module_doc_harness_tools_docs_define_tool() {
+        // (module-doc harness-tools-docs 'define-tool) must return the doc string
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(module-doc harness-tools-docs 'define-tool)")
+            .expect("evaluate");
+        match result {
+            tein::Value::String(s) => assert!(
+                s.contains("macro") && s.contains("define-tool"),
+                "expected define-tool doc string, got: {s}"
+            ),
+            other => panic!("expected string, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_describe_harness_tools_docs_mentions_define_tool() {
+        // (describe harness-tools-docs) must return a string mentioning define-tool
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(describe harness-tools-docs)")
+            .expect("evaluate");
+        match result {
+            tein::Value::String(s) => assert!(
+                s.contains("define-tool"),
+                "expected define-tool in describe output, got: {s}"
+            ),
+            other => panic!("expected string, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_describe_symbol_gives_helpful_error() {
+        // Before fix: (describe 'define-tool) crashes with "car: not a pair"
+        // After fix: must return a helpful string, not raise an exception
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(describe 'define-tool)")
+            .expect("evaluate");
+        match result {
+            tein::Value::String(s) => {
+                assert!(
+                    s.contains("alist") || s.contains("harness-tools-docs"),
+                    "expected helpful guidance mentioning alist or harness-tools-docs, got: {s}"
+                );
+            }
+            other => panic!("expected string result from describe, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_describe_number_gives_helpful_error() {
+        // non-symbol non-pair input must also be handled gracefully
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session.evaluate("(describe 42)").expect("evaluate");
+        match result {
+            tein::Value::String(s) => assert!(
+                s.contains("alist") || s.contains("non-list"),
+                "expected helpful guidance, got: {s}"
+            ),
+            other => panic!("expected string, got: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_evict_eval_context() {
         // Insert a context, evict it, verify it's gone and a fresh one is created.
         let name = "evict-test";

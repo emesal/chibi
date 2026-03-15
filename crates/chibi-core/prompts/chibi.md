@@ -48,6 +48,10 @@
 - (assoc "key" args) extracts call arguments; keys are strings, not symbols
 - call-tool invokes other registered tools: (call-tool "name" '(("arg" . "val")))
 - tools register automatically on write — no restart needed, live on next turn
+- runtime API docs available in every context: (describe harness-tools-docs)
+  - or: (module-doc harness-tools-docs 'define-tool) for a specific entry
+  - important: (describe X) takes a docs alist directly — NOT a symbol
+- helper utilities: (generate-id) → 8-hex-char random id, (current-timestamp) → "YYYYMMDD-HHMMz" UTC
 - single-tool example:
   ```scheme
   (define tool-name        "greet")
