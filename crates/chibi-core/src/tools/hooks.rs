@@ -1310,7 +1310,10 @@ pub fn generate_hooks_markdown() -> String {
                         _ => "null".to_string(),
                     };
                     let comma = if i < last { "," } else { "" };
-                    format!("  \"{}\": {}{}  // {}", f.name, example, comma, f.description)
+                    format!(
+                        "  \"{}\": {}{}  // {}",
+                        f.name, example, comma, f.description
+                    )
                 })
                 .collect();
             format!("```json\n{{\n{}\n}}\n```\n", lines.join("\n"))
