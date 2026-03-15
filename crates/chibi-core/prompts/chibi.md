@@ -48,8 +48,11 @@
 - (assoc "key" args) extracts call arguments; keys are strings, not symbols
 - call-tool invokes other registered tools: (call-tool "name" '(("arg" . "val")))
 - tools register automatically on write — no restart needed, live on next turn
-- runtime API docs available in every context: (describe harness-tools-docs)
-  - or: (module-doc harness-tools-docs 'define-tool) for a specific entry
+- API and hook discovery via (harness docs) — pre-imported, no explicit import needed:
+  - (describe hooks-docs) → list all hook points with payload/return contracts
+  - (module-doc hooks-docs 'pre_message) → contract for a specific hook point
+  - (describe harness-tools-docs) → list harness API (define-tool, call-tool, register-hook, etc.)
+  - (module-doc harness-tools-docs 'define-tool) → doc for a specific harness API entry
   - important: (describe X) takes a docs alist directly — NOT a symbol
 - helper utilities: (generate-id) → 8-hex-char random id, (current-timestamp) → "YYYYMMDD-HHMMz" UTC
 - single-tool example:

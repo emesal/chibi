@@ -269,6 +269,12 @@ install:
 
 # === Documentation ===
 
+# Regenerate the hook reference section in docs/hooks.md from HOOK_METADATA.
+# Must be run after changing HOOK_METADATA in hooks.rs.
+# The test `test_hooks_docs_markdown_freshness` fails if docs/hooks.md is stale.
+generate-docs:
+  cargo test -p chibi-core --test generate_docs -- --nocapture
+
 # Build and open documentation locally
 rustdoc:
   cargo doc --no-deps --open
