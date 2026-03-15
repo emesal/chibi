@@ -448,8 +448,8 @@ mod tests {
     #[test]
     fn test_harness_tools_docs_is_alist() {
         // harness-tools-docs must be a non-empty pair in every scheme_eval context
-        let (session, _tid) = crate::tools::synthesised::build_sandboxed_harness_context()
-            .expect("build context");
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
         let result = session
             .evaluate("(pair? harness-tools-docs)")
             .expect("evaluate");
@@ -459,8 +459,8 @@ mod tests {
     #[test]
     fn test_harness_tools_docs_has_define_tool_entry() {
         // must have a 'define-tool key with a non-empty string doc
-        let (session, _tid) = crate::tools::synthesised::build_sandboxed_harness_context()
-            .expect("build context");
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
         let result = session
             .evaluate("(let ((e (assq 'define-tool harness-tools-docs))) (and (pair? e) (string? (cdr e)) (not (string=? \"\" (cdr e)))))")
             .expect("evaluate");
@@ -469,8 +469,8 @@ mod tests {
 
     #[test]
     fn test_harness_tools_docs_has_call_tool_entry() {
-        let (session, _tid) = crate::tools::synthesised::build_sandboxed_harness_context()
-            .expect("build context");
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
         let result = session
             .evaluate("(let ((e (assq 'call-tool harness-tools-docs))) (and (pair? e) (string? (cdr e))))")
             .expect("evaluate");
@@ -480,8 +480,8 @@ mod tests {
     #[test]
     fn test_describe_harness_tools_docs_mentions_define_tool() {
         // (describe harness-tools-docs) must return a string mentioning define-tool
-        let (session, _tid) = crate::tools::synthesised::build_sandboxed_harness_context()
-            .expect("build context");
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
         let result = session
             .evaluate("(describe harness-tools-docs)")
             .expect("evaluate");
@@ -498,9 +498,11 @@ mod tests {
     fn test_describe_symbol_gives_helpful_error() {
         // Before fix: (describe 'define-tool) crashes with "car: not a pair"
         // After fix: must return a helpful string, not raise an exception
-        let (session, _tid) = crate::tools::synthesised::build_sandboxed_harness_context()
-            .expect("build context");
-        let result = session.evaluate("(describe 'define-tool)").expect("evaluate");
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(describe 'define-tool)")
+            .expect("evaluate");
         match result {
             tein::Value::String(s) => {
                 assert!(
@@ -515,8 +517,8 @@ mod tests {
     #[test]
     fn test_describe_number_gives_helpful_error() {
         // non-symbol non-pair input must also be handled gracefully
-        let (session, _tid) = crate::tools::synthesised::build_sandboxed_harness_context()
-            .expect("build context");
+        let (session, _tid) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
         let result = session.evaluate("(describe 42)").expect("evaluate");
         match result {
             tein::Value::String(s) => assert!(
