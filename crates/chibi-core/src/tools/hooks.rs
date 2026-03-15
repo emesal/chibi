@@ -1290,48 +1290,42 @@ pub fn generate_hooks_markdown() -> String {
         out.push('\n');
         out.push_str(&format!("### {key}\n\n"));
 
+        // Emit a JSON block for a slice of FieldMeta entries.
+        // Commas appear after the value (before the // comment) so the output
+        // is syntactically valid JSON once comments are stripped. The last
+        // field has no comma. String fields use "..." as a placeholder;
+        // the description comment provides the semantic context.
+        fn json_block(fields: &[FieldMeta]) -> String {
+            let last = fields.len().saturating_sub(1);
+            let lines: Vec<String> = fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    let example = match f.typ {
+                        "string" => "\"...\"".to_string(),
+                        "number" => "0".to_string(),
+                        "bool" => "false".to_string(),
+                        "array" => "[]".to_string(),
+                        "object" => "{}".to_string(),
+                        _ => "null".to_string(),
+                    };
+                    let comma = if i < last { "," } else { "" };
+                    format!("  \"{}\": {}{}  // {}", f.name, example, comma, f.description)
+                })
+                .collect();
+            format!("```json\n{{\n{}\n}}\n```\n", lines.join("\n"))
+        }
+
         // Payload JSON block
         if meta.payload_fields.is_empty() {
             out.push_str("Payload: (empty)\n");
         } else {
-            out.push_str("```json\n{\n");
-            for f in meta.payload_fields {
-                let example = match f.typ {
-                    "string" => format!(
-                        "\"{}\"",
-                        f.description.split_once(' ').map(|x| x.0).unwrap_or(f.name)
-                    ),
-                    "number" => "0".to_string(),
-                    "bool" => "false".to_string(),
-                    "array" => "[]".to_string(),
-                    "object" => "{}".to_string(),
-                    _ => "null".to_string(),
-                };
-                out.push_str(&format!(
-                    "  \"{}\": {}  // {}\n",
-                    f.name, example, f.description
-                ));
-            }
-            out.push_str("}\n```\n");
+            out.push_str(&json_block(meta.payload_fields));
         }
 
         if !meta.return_fields.is_empty() {
-            out.push_str("\n**Can return:**\n```json\n{\n");
-            for f in meta.return_fields {
-                let example = match f.typ {
-                    "string" => "\"...\"".to_string(),
-                    "number" => "0".to_string(),
-                    "bool" => "true".to_string(),
-                    "array" => "[]".to_string(),
-                    "object" => "{}".to_string(),
-                    _ => "null".to_string(),
-                };
-                out.push_str(&format!(
-                    "  \"{}\": {}  // {}\n",
-                    f.name, example, f.description
-                ));
-            }
-            out.push_str("}\n```\n");
+            out.push_str("\n**Can return:**\n");
+            out.push_str(&json_block(meta.return_fields));
         }
 
         if !meta.notes.is_empty() {
@@ -1657,6 +1651,41 @@ mod tests {
             HOOK_METADATA.len(),
             HookPoint::iter().count(),
             "HOOK_METADATA has duplicate entries or wrong count"
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_hook_metadata_categories_valid() {
+        // Every HOOK_METADATA entry's category must appear in generate_hooks_markdown's
+        // category_order. Without this, a mismatched category string is silently
+        // dropped from the generated markdown.
+        let category_order = [
+            "session",
+            "message",
+            "system_prompt",
+            "tool",
+            "api",
+            "agentic",
+            "file_permission",
+            "url_security",
+            "agent",
+            "cache",
+            "message_delivery",
+            "index",
+            "vfs_write",
+            "context",
+        ];
+        let valid: std::collections::HashSet<&str> = category_order.iter().copied().collect();
+        let mut bad = Vec::new();
+        for meta in HOOK_METADATA {
+            if !valid.contains(meta.category) {
+                bad.push(format!("{}: {:?}", meta.point.as_ref(), meta.category));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "HOOK_METADATA entries with unknown category (will be silently dropped from generated docs): {bad:?}"
         );
     }
 

@@ -114,8 +114,8 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 
 ```json
 {
-  "chibi_home": "chibi"  // chibi home directory path
-  "project_root": "project"  // project root directory path
+  "chibi_home": "...",  // chibi home directory path
+  "project_root": "...",  // project root directory path
   "tool_count": 0  // number of loaded tools
 }
 ```
@@ -130,9 +130,9 @@ Payload: (empty)
 
 ```json
 {
-  "prompt": "the"  // the user's prompt
-  "context_name": "active"  // active context name
-  "summary": "conversation"  // conversation summary
+  "prompt": "...",  // the user's prompt
+  "context_name": "...",  // active context name
+  "summary": "..."  // conversation summary
 }
 ```
 
@@ -147,9 +147,9 @@ Payload: (empty)
 
 ```json
 {
-  "prompt": "original"  // original prompt
-  "response": "LLM's"  // LLM's response
-  "context_name": "active"  // active context name
+  "prompt": "...",  // original prompt
+  "response": "...",  // LLM's response
+  "context_name": "..."  // active context name
 }
 ```
 
@@ -157,8 +157,8 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "active"  // active context name
-  "summary": "conversation"  // conversation summary
+  "context_name": "...",  // active context name
+  "summary": "...",  // conversation summary
   "flock_goals": []  // array of {flock, goals} objects
 }
 ```
@@ -176,8 +176,8 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "active"  // active context name
-  "summary": "conversation"  // conversation summary
+  "context_name": "...",  // active context name
+  "summary": "...",  // conversation summary
   "flock_goals": []  // array of {flock, goals} objects
 }
 ```
@@ -195,7 +195,7 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "name"  // name of the tool being called
+  "tool_name": "...",  // name of the tool being called
   "arguments": {}  // tool arguments object
 }
 ```
@@ -203,8 +203,8 @@ Payload: (empty)
 **Can return:**
 ```json
 {
-  "arguments": {}  // modified arguments
-  "block": true  // set true to block execution
+  "arguments": {},  // modified arguments
+  "block": false,  // set true to block execution
   "message": "..."  // message shown when blocked
 }
 ```
@@ -213,9 +213,9 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "name"  // name of the tool that ran
-  "arguments": {}  // tool arguments object
-  "result": "tool"  // tool output
+  "tool_name": "...",  // name of the tool that ran
+  "arguments": {},  // tool arguments object
+  "result": "...",  // tool output
   "cached": false  // true if output was cached due to size
 }
 ```
@@ -224,17 +224,17 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "name"  // name of the tool that ran
-  "arguments": {}  // tool arguments object
-  "output": "raw"  // raw tool output
+  "tool_name": "...",  // name of the tool that ran
+  "arguments": {},  // tool arguments object
+  "output": "..."  // raw tool output
 }
 ```
 
 **Can return:**
 ```json
 {
-  "output": "..."  // modified output
-  "block": true  // set true to replace output entirely
+  "output": "...",  // modified output
+  "block": false,  // set true to replace output entirely
   "message": "..."  // replacement message shown to LLM when blocked
 }
 ```
@@ -243,10 +243,10 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "name"  // name of the tool that ran
-  "arguments": {}  // tool arguments object
-  "output": "original"  // original output after pre_tool_output modifications
-  "final_output": "what"  // what the LLM will see (may be truncated if cached)
+  "tool_name": "...",  // name of the tool that ran
+  "arguments": {},  // tool arguments object
+  "output": "...",  // original output after pre_tool_output modifications
+  "final_output": "...",  // what the LLM will see (may be truncated if cached)
   "cached": false  // true if output was cached
 }
 ```
@@ -255,9 +255,9 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "active"  // active context name
-  "tools": []  // array of {name, type} tool objects
-  "fuel_remaining": 0  // remaining tool-call budget
+  "context_name": "...",  // active context name
+  "tools": [],  // array of {name, type} tool objects
+  "fuel_remaining": 0,  // remaining tool-call budget
   "fuel_total": 0  // total fuel budget
 }
 ```
@@ -265,7 +265,7 @@ Payload: (empty)
 **Can return:**
 ```json
 {
-  "exclude": []  // tool names to remove (union across hooks)
+  "exclude": [],  // tool names to remove (union across hooks)
   "include": []  // allowlist: only these tools remain (intersection across hooks)
 }
 ```
@@ -276,9 +276,9 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "active"  // active context name
-  "request_body": {}  // full request body (model, messages, tools, etc.)
-  "fuel_remaining": 0  // remaining tool-call budget
+  "context_name": "...",  // active context name
+  "request_body": {},  // full request body (model, messages, tools, etc.)
+  "fuel_remaining": 0,  // remaining tool-call budget
   "fuel_total": 0  // total fuel budget
 }
 ```
@@ -296,18 +296,18 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "active"  // active context name
-  "fuel_remaining": 0  // remaining tool-call budget
-  "fuel_total": 0  // total fuel budget
-  "current_fallback": "current"  // current fallback target (call_agent or call_user)
-  "message": "user"  // user message for this loop
+  "context_name": "...",  // active context name
+  "fuel_remaining": 0,  // remaining tool-call budget
+  "fuel_total": 0,  // total fuel budget
+  "current_fallback": "...",  // current fallback target (call_agent or call_user)
+  "message": "..."  // user message for this loop
 }
 ```
 
 **Can return:**
 ```json
 {
-  "fallback": "..."  // override fallback: call_agent or call_user
+  "fallback": "...",  // override fallback: call_agent or call_user
   "fuel": 0  // set fuel_remaining to this value
 }
 ```
@@ -316,10 +316,10 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "active"  // active context name
-  "fuel_remaining": 0  // remaining tool-call budget
-  "fuel_total": 0  // total fuel budget
-  "current_fallback": "current"  // current fallback target
+  "context_name": "...",  // active context name
+  "fuel_remaining": 0,  // remaining tool-call budget
+  "fuel_total": 0,  // total fuel budget
+  "current_fallback": "...",  // current fallback target
   "tool_calls": []  // array of {name, arguments} for tools that ran
 }
 ```
@@ -327,7 +327,7 @@ Payload: (empty)
 **Can return:**
 ```json
 {
-  "fallback": "..."  // override fallback: call_agent or call_user
+  "fallback": "...",  // override fallback: call_agent or call_user
   "fuel_delta": 0  // adjust fuel by this amount (positive adds, negative consumes, saturating)
 }
 ```
@@ -338,15 +338,15 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "file_head,"  // file_head, file_tail, or file_lines
-  "path": "absolute"  // absolute path being read
+  "tool_name": "...",  // file_head, file_tail, or file_lines
+  "path": "..."  // absolute path being read
 }
 ```
 
 **Can return:**
 ```json
 {
-  "denied": true  // set true to block the read
+  "denied": false,  // set true to block the read
   "reason": "..."  // reason shown when denied
 }
 ```
@@ -357,16 +357,16 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "write_file"  // write_file or file_edit
-  "path": "absolute"  // absolute path being written
-  "content": "file"  // file content (null for file_edit)
+  "tool_name": "...",  // write_file or file_edit
+  "path": "...",  // absolute path being written
+  "content": "..."  // file content (null for file_edit)
 }
 ```
 
 **Can return:**
 ```json
 {
-  "denied": true  // set true to block the write
+  "denied": false,  // set true to block the write
   "reason": "..."  // reason shown when denied
 }
 ```
@@ -377,15 +377,15 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "tool_name"  // shell_exec
-  "command": "shell"  // shell command string
+  "tool_name": "...",  // shell_exec
+  "command": "..."  // shell command string
 }
 ```
 
 **Can return:**
 ```json
 {
-  "denied": true  // set true to block execution
+  "denied": false,  // set true to block execution
   "reason": "..."  // reason shown when denied
 }
 ```
@@ -396,17 +396,17 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "tool_name"  // fetch_url
-  "url": "URL"  // URL being fetched
-  "safety": "safety"  // sensitive
-  "reason": "loopback"  // loopback address, private network address, cloud metadata endpoint, or could not parse URL
+  "tool_name": "...",  // fetch_url
+  "url": "...",  // URL being fetched
+  "safety": "...",  // sensitive
+  "reason": "..."  // loopback address, private network address, cloud metadata endpoint, or could not parse URL
 }
 ```
 
 **Can return:**
 ```json
 {
-  "denied": true  // set true to block the fetch
+  "denied": false,  // set true to block the fetch
   "reason": "..."  // reason shown when denied
 }
 ```
@@ -417,10 +417,10 @@ Payload: (empty)
 
 ```json
 {
-  "system_prompt": "system"  // system prompt for sub-agent
-  "input": "input"  // input content to process
-  "model": "model"  // model identifier
-  "temperature": 0  // sampling temperature
+  "system_prompt": "...",  // system prompt for sub-agent
+  "input": "...",  // input content to process
+  "model": "...",  // model identifier
+  "temperature": 0,  // sampling temperature
   "max_tokens": 0  // max tokens for response
 }
 ```
@@ -428,8 +428,8 @@ Payload: (empty)
 **Can return:**
 ```json
 {
-  "response": "..."  // pre-computed response to use instead of LLM call
-  "block": true  // set true to block the sub-agent call
+  "response": "...",  // pre-computed response to use instead of LLM call
+  "block": false,  // set true to block the sub-agent call
   "message": "..."  // message shown when blocked
 }
 ```
@@ -438,10 +438,10 @@ Payload: (empty)
 
 ```json
 {
-  "system_prompt": "system"  // system prompt used
-  "input": "input"  // input content
-  "model": "model"  // model identifier
-  "response": "sub-agent's"  // sub-agent's response
+  "system_prompt": "...",  // system prompt used
+  "input": "...",  // input content
+  "model": "...",  // model identifier
+  "response": "..."  // sub-agent's response
 }
 ```
 
@@ -449,10 +449,10 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "tool"  // tool whose output is being cached
-  "arguments": {}  // tool arguments
-  "content": "full"  // full output content
-  "char_count": 0  // character count of content
+  "tool_name": "...",  // tool whose output is being cached
+  "arguments": {},  // tool arguments
+  "content": "...",  // full output content
+  "char_count": 0,  // character count of content
   "line_count": 0  // line count of content
 }
 ```
@@ -468,9 +468,9 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "tool"  // tool whose output was cached
-  "cache_id": "filename"  // filename under vfs:///sys/tool_cache/<context>/
-  "output_size": 0  // size of cached output in bytes
+  "tool_name": "...",  // tool whose output was cached
+  "cache_id": "...",  // filename under vfs:///sys/tool_cache/<context>/
+  "output_size": 0,  // size of cached output in bytes
   "preview_size": 0  // size of preview shown to LLM
 }
 ```
@@ -481,17 +481,17 @@ Payload: (empty)
 
 ```json
 {
-  "from": "sending"  // sending context name
-  "to": "recipient"  // recipient context name
-  "content": "message"  // message content
-  "context_name": "active"  // active context name
+  "from": "...",  // sending context name
+  "to": "...",  // recipient context name
+  "content": "...",  // message content
+  "context_name": "..."  // active context name
 }
 ```
 
 **Can return:**
 ```json
 {
-  "delivered": true  // set true to claim delivery was handled
+  "delivered": false,  // set true to claim delivery was handled
   "via": "..."  // delivery mechanism name (for logging)
 }
 ```
@@ -500,11 +500,11 @@ Payload: (empty)
 
 ```json
 {
-  "from": "sending"  // sending context name
-  "to": "recipient"  // recipient context name
-  "content": "message"  // message content
-  "context_name": "active"  // active context name
-  "delivery_result": "delivery"  // delivery outcome description
+  "from": "...",  // sending context name
+  "to": "...",  // recipient context name
+  "content": "...",  // message content
+  "context_name": "...",  // active context name
+  "delivery_result": "..."  // delivery outcome description
 }
 ```
 
@@ -512,9 +512,9 @@ Payload: (empty)
 
 ```json
 {
-  "path": "relative"  // relative path of indexed file
-  "lang": "detected"  // detected language
-  "symbol_count": 0  // number of symbols indexed
+  "path": "...",  // relative path of indexed file
+  "lang": "...",  // detected language
+  "symbol_count": 0,  // number of symbols indexed
   "ref_count": 0  // number of references indexed
 }
 ```
@@ -523,10 +523,10 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "write_file"  // write_file or file_edit
-  "path": "VFS"  // VFS path being written
-  "content": "new"  // new content (null for file_edit)
-  "caller": "context"  // context initiating the write
+  "tool_name": "...",  // write_file or file_edit
+  "path": "...",  // VFS path being written
+  "content": "...",  // new content (null for file_edit)
+  "caller": "..."  // context initiating the write
 }
 ```
 
@@ -536,9 +536,9 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "write_file"  // write_file or file_edit
-  "path": "VFS"  // VFS path that was written
-  "caller": "context"  // context that initiated the write
+  "tool_name": "...",  // write_file or file_edit
+  "path": "...",  // VFS path that was written
+  "caller": "..."  // context that initiated the write
 }
 ```
 
@@ -548,9 +548,9 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "context"  // context being cleared
-  "message_count": 0  // number of messages before clear
-  "summary": "existing"  // existing conversation summary
+  "context_name": "...",  // context being cleared
+  "message_count": 0,  // number of messages before clear
+  "summary": "..."  // existing conversation summary
 }
 ```
 
@@ -558,9 +558,9 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "context"  // context that was cleared
-  "message_count": 0  // message count before clear
-  "summary": "summary"  // summary before clear
+  "context_name": "...",  // context that was cleared
+  "message_count": 0,  // message count before clear
+  "summary": "..."  // summary before clear
 }
 ```
 
@@ -568,9 +568,9 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "context"  // context being compacted
-  "message_count": 0  // number of messages before compact
-  "summary": "conversation"  // conversation summary
+  "context_name": "...",  // context being compacted
+  "message_count": 0,  // number of messages before compact
+  "summary": "..."  // conversation summary
 }
 ```
 
@@ -578,9 +578,9 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "context"  // context that was compacted
-  "message_count": 0  // message count before compact
-  "summary": "conversation"  // conversation summary
+  "context_name": "...",  // context that was compacted
+  "message_count": 0,  // message count before compact
+  "summary": "..."  // conversation summary
 }
 ```
 
@@ -588,10 +588,10 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "context"  // context being compacted
-  "message_count": 0  // total message count
-  "non_system_count": 0  // non-system message count
-  "summary": "conversation"  // conversation summary
+  "context_name": "...",  // context being compacted
+  "message_count": 0,  // total message count
+  "non_system_count": 0,  // non-system message count
+  "summary": "..."  // conversation summary
 }
 ```
 
@@ -599,10 +599,10 @@ Payload: (empty)
 
 ```json
 {
-  "context_name": "context"  // context that was compacted
-  "message_count": 0  // message count after archiving
-  "messages_archived": 0  // number of messages archived
-  "summary": "updated"  // updated summary
+  "context_name": "...",  // context that was compacted
+  "message_count": 0,  // message count after archiving
+  "messages_archived": 0,  // number of messages archived
+  "summary": "..."  // updated summary
 }
 ```
 

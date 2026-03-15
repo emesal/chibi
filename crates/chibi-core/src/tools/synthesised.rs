@@ -313,6 +313,10 @@ pub(crate) const HARNESS_DOCS_MODULE: &str = r#"
 (define-library (harness docs)
   (import (scheme base))
   (export hooks-docs harness-tools-docs)
+  ;; Both bindings are pre-defined at top level by HARNESS_PREAMBLE (evaluated
+  ;; before module registration), so this library intentionally re-exports
+  ;; top-level bindings without defining them locally. Same pattern as
+  ;; HARNESS_HOOKS_MODULE re-exporting the top-level `register-hook`.
   (begin #t))
 "#;
 
