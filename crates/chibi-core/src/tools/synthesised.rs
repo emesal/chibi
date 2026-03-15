@@ -297,16 +297,20 @@ pub(crate) const HARNESS_HOOKS_MODULE: &str = r#"
 
 /// Top-level scheme preamble evaluated in every synthesised tool context.
 ///
-/// Defines `%tool-registry%` and the `define-tool` syntax at the top level
-/// so user source can call `(define-tool ...)` and rust can read the result
-/// via `ctx.evaluate("%tool-registry%")` after evaluation.
+/// Defines `%tool-registry%`, `%hook-registry%`, `%context-name%`, `define-tool`,
+/// `register-hook`, and `harness-tools-docs` at the top level.
 ///
-/// `define-tool` also re-exports itself so `(import (harness tools))` provides
-/// it — the module re-export is handled by this preamble's `define-tool` being
-/// in scope before the import.
+/// `harness-tools-docs` is a docs alist (same convention as `introspect-docs`) covering
+/// the public harness API. Call `(describe harness-tools-docs)` or
+/// `(module-doc harness-tools-docs 'define-tool)` to retrieve usage docs.
+/// Note: `(describe X)` takes an alist directly, not a symbol.
+///
+/// `define-tool` must be top-level (not inside a library) so its `set!` of
+/// `%tool-registry%` affects the top-level binding that rust reads post-evaluation.
 ///
 /// Mutation site: if `define-tool` syntax changes, update `extract_multi_tools`
-/// which parses `%tool-registry%` entries.
+/// which parses `%tool-registry%` entries. If `harness-tools-docs` entries change,
+/// update `chibi.md` accordingly.
 #[cfg(feature = "synthesised-tools")]
 pub(crate) const HARNESS_PREAMBLE: &str = r#"
 (import (scheme base))
@@ -323,6 +327,16 @@ pub(crate) const HARNESS_PREAMBLE: &str = r#"
 ;; name of the calling context — mutated by execute_synthesised before each call.
 ;; plugins read this to resolve /home/<ctx>/... VFS paths.
 (define %context-name% "")
+
+;; docs alist for public harness APIs — use (describe harness-tools-docs) or
+;; (module-doc harness-tools-docs 'define-tool) to look up usage.
+;; follows the same convention as introspect-docs, json-docs, etc.
+;; note: (describe X) takes an alist directly, NOT a symbol.
+(define harness-tools-docs
+  '((__module__ . "harness tools")
+    (define-tool . "macro: (define-tool name (description DESC) (parameters PARAMS-ALIST) (execute (lambda (args) ...))) — registers a persistent tool; args is ((\"key\" . val) ...) alist")
+    (call-tool . "procedure: (call-tool NAME ARGS-ALIST) -> string — invoke another registered tool; NAME is a string, ARGS-ALIST is ((\"key\" . \"val\") ...)")
+    (register-hook . "procedure: (register-hook HOOK-SYMBOL HANDLER) — register a hook callback; HOOK-SYMBOL e.g. 'pre_vfs_write, HANDLER is (lambda (payload) ...)")))
 
 ;; registers a tool: appends to %tool-registry% in definition order (LIFO via cons).
 ;; rust reads %tool-registry% after evaluation; non-empty → multi-tool mode.
