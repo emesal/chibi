@@ -51,6 +51,7 @@
 - runtime API docs available in every context: (describe harness-tools-docs)
   - or: (module-doc harness-tools-docs 'define-tool) for a specific entry
   - important: (describe X) takes a docs alist directly — NOT a symbol
+- helper utilities: (generate-id) → 8-hex-char random id, (current-timestamp) → "YYYYMMDD-HHMMz" UTC
 - single-tool example:
   ```scheme
   (define tool-name        "greet")

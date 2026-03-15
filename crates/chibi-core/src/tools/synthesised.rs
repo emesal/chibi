@@ -336,7 +336,9 @@ pub(crate) const HARNESS_PREAMBLE: &str = r#"
   '((__module__ . "harness tools")
     (define-tool . "macro: (define-tool name (description DESC) (parameters PARAMS-ALIST) (execute (lambda (args) ...))) — registers a persistent tool; args is ((\"key\" . val) ...) alist")
     (call-tool . "procedure: (call-tool NAME ARGS-ALIST) -> string — invoke another registered tool; NAME is a string, ARGS-ALIST is ((\"key\" . \"val\") ...)")
-    (register-hook . "procedure: (register-hook HOOK-SYMBOL HANDLER) — register a hook callback; HOOK-SYMBOL e.g. 'pre_vfs_write, HANDLER is (lambda (payload) ...)")))
+    (register-hook . "procedure: (register-hook HOOK-SYMBOL HANDLER) — register a hook callback; HOOK-SYMBOL e.g. 'pre_vfs_write, HANDLER is (lambda (payload) ...)")
+    (generate-id . "procedure: (generate-id) -> string — returns an 8-hex-char random identifier (uuid v4 prefix)")
+    (current-timestamp . "procedure: (current-timestamp) -> string — returns current UTC time as \"YYYYMMDD-HHMMz\"")))
 
 ;; registers a tool: appends to %tool-registry% in definition order (LIFO via cons).
 ;; rust reads %tool-registry% after evaluation; non-empty → multi-tool mode.
