@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CommandEvent"],"struct":["NoopSink"],"trait":["OutputSink"]};

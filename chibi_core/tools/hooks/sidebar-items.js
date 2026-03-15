@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["TEIN_HOOK_GUARD"],"enum":["HookPoint"],"fn":["execute_hook"],"struct":["TeinHookContext"]};

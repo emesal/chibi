@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["LANG_MAP"],"fn":["detect_language","insert_refs","insert_symbols","update_index"],"struct":["IndexOptions","IndexStats"]};

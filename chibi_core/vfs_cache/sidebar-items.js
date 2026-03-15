@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["extract_preview_content","generate_cache_id","should_cache","truncated_message","vfs_path_for","vfs_uri_for"]};

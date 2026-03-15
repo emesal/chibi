@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MIGRATIONS"],"fn":["apply_migrations","open_db"],"struct":["Migration"]};

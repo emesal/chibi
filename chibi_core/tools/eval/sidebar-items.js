@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SCHEME_EVAL_TOOL_NAME"],"fn":["build_eval_context","evict_eval_context","get_or_create_context","register_eval_tools","run_scheme"],"static":["EVAL_CONTEXTS","EVAL_TOOL_DEFS"],"type":["EvalContextMap"]};

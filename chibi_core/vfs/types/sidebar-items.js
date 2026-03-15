@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["VfsEntryKind"],"struct":["VfsEntry","VfsMetadata"]};

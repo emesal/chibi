@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ROLLING_COMPACT_DECISION_TEMPLATE","ROLLING_COMPACT_UPDATE_TEMPLATE"],"fn":["collect_tool_call_ids","compact_context_by_name","compact_context_with_llm","compact_context_with_llm_internal","compact_context_with_llm_manual","drop_count","filter_messages","rolling_compact"]};

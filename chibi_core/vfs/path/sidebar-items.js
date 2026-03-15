@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["VFS_URI_SCHEME"],"struct":["VfsPath"]};
