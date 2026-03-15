@@ -37,3 +37,35 @@
     - (foreign-types) ; all type names in this context
     - (foreign-methods "counter") ; method names for a specific type
     - (foreign-type obj) ; type name of a foreign value
+
+**synthesised tools**
+- write a .scm file to the VFS under /tools/ to create a persistent tool callable by the LLM
+  - /tools/shared/ for tools available to all contexts
+  - /tools/home/<context>/ private to this context
+- same prelude as scheme_eval — all standard modules pre-imported, no explicit (import ...) needed
+- for single-tool format, define: tool-name, tool-description, tool-parameters, (tool-execute args)
+- multi-tool format: use (import (harness tools)) and the define-tool macro
+- (assoc "key" args) extracts call arguments; keys are strings, not symbols
+- call-tool invokes other registered tools: (call-tool "name" '(("arg" . "val")))
+- tools register automatically on write — no restart needed, live on next turn
+- single-tool example:
+  ```scheme
+  (define tool-name        "greet")
+  (define tool-description "greets someone by name")
+  (define tool-parameters
+    '((name . ((type . "string") (description . "the name to greet")))))
+  (define (tool-execute args)
+    (string-append "hello, " (cdr (assoc "name" args)) "!"))
+  ```
+- multi-tool example (define-tool):
+  ```scheme
+  (import (harness tools))
+  (define-tool greet
+    (description "greets someone")
+    (parameters '((name . ((type . "string") (description . "the name")))))
+    (execute (lambda (args)
+      (string-append "hello, " (cdr (assoc "name" args)) "!"))))
+  ```
+- deploy with: write_file {"path": "vfs:///tools/shared/my_tool.scm", "content": "..."}
+
+
