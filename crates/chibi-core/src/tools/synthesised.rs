@@ -295,14 +295,38 @@ pub(crate) const HARNESS_HOOKS_MODULE: &str = r#"
     #t))
 "#;
 
+/// Scheme source for the `(harness docs)` module.
+///
+/// Re-exports `hooks-docs` and `harness-tools-docs` from their top-level
+/// preamble bindings. Both bindings are defined in `HARNESS_PREAMBLE` at the
+/// top level (not inside a library) so they are accessible before any imports,
+/// and this module provides the canonical named import path.
+///
+/// `hooks-docs` covers all hook points with payload/return contracts.
+/// `harness-tools-docs` covers define-tool, call-tool, register-hook, etc.
+///
+/// Canonical usage: `(import (harness docs))` then `(describe hooks-docs)`.
+/// Note: `(module-exports '(harness docs))` will error — runtime-registered
+/// modules are absent from tein's build-time MODULE_EXPORTS table.
+#[cfg(feature = "synthesised-tools")]
+pub(crate) const HARNESS_DOCS_MODULE: &str = r#"
+(define-library (harness docs)
+  (import (scheme base))
+  (export hooks-docs harness-tools-docs)
+  (begin #t))
+"#;
+
 /// Top-level scheme preamble evaluated in every synthesised tool context.
 ///
 /// Defines `%tool-registry%`, `%hook-registry%`, `%context-name%`, `define-tool`,
-/// `register-hook`, and `harness-tools-docs` at the top level.
+/// `register-hook`, `harness-tools-docs`, and `hooks-docs` at the top level.
 ///
-/// `harness-tools-docs` is a docs alist (same convention as `introspect-docs`) covering
-/// the public harness API. Call `(describe harness-tools-docs)` or
-/// `(module-doc harness-tools-docs 'define-tool)` to retrieve usage docs.
+/// `hooks-docs` is generated from `HOOK_METADATA` — the canonical single source
+/// of truth for hook contracts. `harness-tools-docs` covers the harness API.
+/// Both are re-exported via `(harness docs)` as the canonical access path.
+///
+/// Call `(import (harness docs))` then `(describe hooks-docs)` to list all hooks,
+/// or `(module-doc hooks-docs 'pre_message)` for a specific hook's contract.
 /// Note: `(describe X)` takes an alist directly, not a symbol.
 ///
 /// `define-tool` must be top-level (not inside a library) so its `set!` of
@@ -310,9 +334,15 @@ pub(crate) const HARNESS_HOOKS_MODULE: &str = r#"
 ///
 /// Mutation site: if `define-tool` syntax changes, update `extract_multi_tools`
 /// which parses `%tool-registry%` entries. If `harness-tools-docs` entries change,
-/// update `chibi.md` accordingly.
+/// update `chibi.md` and `AGENTS.md` accordingly.
+///
+/// Built once via `LazyLock` since `hooks-docs` is generated at runtime from
+/// `HOOK_METADATA`. The allocation is reused across all context builds.
 #[cfg(feature = "synthesised-tools")]
-pub(crate) const HARNESS_PREAMBLE: &str = r#"
+pub(crate) static HARNESS_PREAMBLE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let hooks_docs_alist = crate::tools::hooks::generate_hooks_docs_alist();
+    format!(
+        r#"
 (import (scheme base))
 
 ;; accumulates define-tool entries. each entry is a list:
@@ -328,8 +358,8 @@ pub(crate) const HARNESS_PREAMBLE: &str = r#"
 ;; plugins read this to resolve /home/<ctx>/... VFS paths.
 (define %context-name% "")
 
-;; docs alist for public harness APIs — use (describe harness-tools-docs) or
-;; (module-doc harness-tools-docs 'define-tool) to look up usage.
+;; docs alist for public harness APIs — use (import (harness docs)) then
+;; (describe harness-tools-docs) or (module-doc harness-tools-docs 'define-tool).
 ;; follows the same convention as introspect-docs, json-docs, etc.
 ;; note: (describe X) takes an alist directly, NOT a symbol.
 (define harness-tools-docs
@@ -339,6 +369,12 @@ pub(crate) const HARNESS_PREAMBLE: &str = r#"
     (register-hook . "procedure: (register-hook HOOK-SYMBOL HANDLER) — register a hook callback; HOOK-SYMBOL e.g. 'pre_vfs_write, HANDLER is (lambda (payload) ...)")
     (generate-id . "procedure: (generate-id) -> string — returns an 8-hex-char random identifier (uuid v4 prefix)")
     (current-timestamp . "procedure: (current-timestamp) -> string — returns current UTC time as \"YYYYMMDD-HHMMz\"")))
+
+;; docs alist for all hook points — use (import (harness docs)) then
+;; (describe hooks-docs) to list all hooks, or (module-doc hooks-docs 'pre_message).
+;; generated from HOOK_METADATA (hooks.rs) — single source of truth.
+(define hooks-docs
+  {hooks_docs_alist})
 
 ;; registers a tool: appends to %tool-registry% in definition order (LIFO via cons).
 ;; rust reads %tool-registry% after evaluation; non-empty → multi-tool mode.
@@ -360,7 +396,10 @@ pub(crate) const HARNESS_PREAMBLE: &str = r#"
   (set! %hook-registry%
     (cons (list (symbol->string hook-name) handler)
           %hook-registry%)))
-"#;
+"#,
+        hooks_docs_alist = hooks_docs_alist,
+    )
+});
 
 // --- thread-local bridge state -----------------------------------------------
 
@@ -840,11 +879,13 @@ fn build_tein_context(
         ctx.define_fn_variadic("call-tool", __tein_call_tool_fn)?;
         ctx.define_fn_variadic("generate-id", __tein_generate_id_fn)?;
         ctx.define_fn_variadic("current-timestamp", __tein_current_timestamp_fn)?;
-        ctx.evaluate(HARNESS_PREAMBLE)?;
+        ctx.evaluate(&HARNESS_PREAMBLE)?;
         ctx.register_module(HARNESS_TOOLS_MODULE)
             .map_err(|e| tein::Error::EvalError(format!("harness module: {e}")))?;
         ctx.register_module(HARNESS_HOOKS_MODULE)
             .map_err(|e| tein::Error::EvalError(format!("harness hooks module: {e}")))?;
+        ctx.register_module(HARNESS_DOCS_MODULE)
+            .map_err(|e| tein::Error::EvalError(format!("harness docs module: {e}")))?;
         // (harness io) — privileged direct IO, available at Unsandboxed tier only.
         // Sandboxed contexts will get a module-not-found error on (import (harness io)).
         if tier == crate::config::SandboxTier::Unsandboxed {
@@ -944,7 +985,8 @@ pub(crate) const EVAL_PRELUDE: &str = r#"
         (srfi 132)
         (srfi 133)
         (chibi match)
-        (harness tools))
+        (harness tools)
+        (harness docs))
 
 ;; R5RS aliases — LLMs reach for these instinctively
 (define exact->inexact inexact)
@@ -1732,6 +1774,28 @@ mod tests {
             );
             assert_eq!(cap.stdout, "42", "stdout should be 42 ({tier:?})");
             assert!(cap.stderr.is_empty(), "stderr should be empty ({tier:?})");
+        }
+    }
+
+    #[test]
+    fn test_harness_docs_module_available_both_tiers() {
+        // (import (harness docs)) must succeed in both sandboxed and unsandboxed contexts,
+        // and both hooks-docs and harness-tools-docs must be bound and non-empty.
+        for tier in [
+            crate::config::SandboxTier::Sandboxed,
+            crate::config::SandboxTier::Unsandboxed,
+        ] {
+            let (session, _) =
+                build_tein_context(String::new(), tier).expect("session should build");
+
+            let hooks_docs_ok = session
+                .evaluate("(and (pair? hooks-docs) (pair? harness-tools-docs))")
+                .expect("evaluate pair checks");
+            assert_eq!(
+                hooks_docs_ok,
+                tein::Value::Boolean(true),
+                "hooks-docs and harness-tools-docs must be pairs in {tier:?} context"
+            );
         }
     }
 

@@ -576,6 +576,122 @@ mod tests {
         }
     }
 
+    // --- (harness docs) module tests ---
+
+    #[test]
+    fn test_harness_docs_available_sandboxed() {
+        // (import (harness docs)) must succeed in sandboxed context
+        let (session, _) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(import (harness docs)) #t")
+            .expect("import (harness docs)");
+        assert_eq!(result, tein::Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_harness_docs_hooks_docs_bound_sandboxed() {
+        // hooks-docs must be a non-empty pair in sandboxed context
+        let (session, _) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(pair? hooks-docs)")
+            .expect("evaluate pair?");
+        assert_eq!(result, tein::Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_harness_docs_harness_tools_docs_bound() {
+        // harness-tools-docs must still be accessible after (harness docs) import
+        let (session, _) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(pair? harness-tools-docs)")
+            .expect("evaluate pair?");
+        assert_eq!(result, tein::Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_hooks_docs_module_doc() {
+        // (module-doc hooks-docs 'pre_message) must return a doc string
+        let (session, _) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(module-doc hooks-docs 'pre_message)")
+            .expect("evaluate module-doc");
+        match result {
+            tein::Value::String(s) => {
+                assert!(
+                    !s.is_empty(),
+                    "module-doc hooks-docs pre_message must be non-empty"
+                );
+                assert!(
+                    s.contains("message") || s.contains("prompt"),
+                    "expected pre_message doc to mention message or prompt: {s}"
+                );
+            }
+            other => panic!("expected string from module-doc, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_hooks_docs_describe_mentions_hooks() {
+        // (describe hooks-docs) must mention known hook names
+        let (session, _) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(describe hooks-docs)")
+            .expect("evaluate describe");
+        match result {
+            tein::Value::String(s) => {
+                assert!(
+                    s.contains("pre_message") && s.contains("post_tool"),
+                    "describe hooks-docs must mention pre_message and post_tool: {s}"
+                );
+            }
+            other => panic!("expected string from describe, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_hooks_docs_markdown_freshness() {
+        // The generated hook reference section must match what's in docs/hooks.md.
+        // Run `just generate-docs` to regenerate after changing HOOK_METADATA.
+        use crate::tools::generate_hooks_markdown;
+
+        let generated = generate_hooks_markdown();
+
+        // Find docs/hooks.md relative to the manifest directory
+        let hooks_md_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("docs/hooks.md");
+
+        let hooks_md = std::fs::read_to_string(&hooks_md_path)
+            .unwrap_or_else(|_| panic!("could not read {}", hooks_md_path.display()));
+
+        const BEGIN_MARKER: &str =
+            "<!-- BEGIN GENERATED HOOK REFERENCE — do not edit, run `just generate-docs` -->";
+        const END_MARKER: &str = "<!-- END GENERATED HOOK REFERENCE -->";
+
+        let begin_pos = hooks_md.find(BEGIN_MARKER).unwrap_or_else(|| {
+            panic!("BEGIN GENERATED marker not found in docs/hooks.md — run `just generate-docs`")
+        });
+        let end_pos = hooks_md.find(END_MARKER).unwrap_or_else(|| {
+            panic!("END GENERATED marker not found in docs/hooks.md — run `just generate-docs`")
+        });
+
+        let existing = &hooks_md[begin_pos + BEGIN_MARKER.len()..end_pos];
+        let expected = format!("\n{generated}\n");
+
+        assert_eq!(
+            existing, expected,
+            "docs/hooks.md generated section is stale — run `just generate-docs` to update"
+        );
+    }
+
     #[test]
     fn test_evict_eval_context() {
         // Insert a context, evict it, verify it's gone and a fresh one is created.

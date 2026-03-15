@@ -121,7 +121,9 @@ pub fn require_str_param(args: &serde_json::Value, name: &str) -> io::Result<Str
     })
 }
 
-// Re-export hook execution
+// Re-export hook execution and docs generation
+#[cfg(feature = "synthesised-tools")]
+pub use hooks::generate_hooks_markdown;
 pub use hooks::{TeinHookContext, execute_hook};
 
 // Re-export plugin functions
