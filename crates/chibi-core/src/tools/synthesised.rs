@@ -841,6 +841,9 @@ fn build_tein_context(
             ctx.register_module(HARNESS_IO_MODULE)
                 .map_err(|e| tein::Error::EvalError(format!("harness io module: {e}")))?;
         }
+        // Standard prelude — must run after all modules are registered (EVAL_PRELUDE
+        // imports (harness tools), which is only available post-register_module).
+        ctx.evaluate(EVAL_PRELUDE)?;
         // Wire stdout/stderr capture ports. The SharedWriter clones share the
         // same Arc buffers that TeinSession reads from. Ports persist across
         // evaluations (confirmed by tein test suite).
@@ -894,6 +897,43 @@ pub(crate) fn build_sandboxed_harness_context() -> io::Result<(TeinSession, std:
 {
     build_tein_context(String::new(), crate::config::SandboxTier::Sandboxed)
 }
+
+/// Standard prelude evaluated in every tein context (synthesised tools and `scheme_eval`).
+///
+/// Auto-imports the standard module set so the LLM can use them without explicit
+/// `(import ...)` statements. Evaluated after `HARNESS_PREAMBLE` and before user source.
+///
+/// Mutation site: `eval.rs` `EVAL_PRELUDE` has been removed — this is the single source
+/// of truth. Update tests in `eval.rs` if the module set changes.
+#[cfg(feature = "synthesised-tools")]
+pub(crate) const EVAL_PRELUDE: &str = r#"
+(import (scheme base)
+        (scheme write)
+        (scheme read)
+        (scheme char)
+        (scheme case-lambda)
+        (scheme inexact)
+        (scheme complex)
+        (tein json)
+        (tein safe-regexp)
+        (tein docs)
+        (tein introspect)
+        (srfi 1)
+        (srfi 27)
+        (srfi 69)
+        (srfi 95)
+        (srfi 125)
+        (srfi 128)
+        (srfi 130)
+        (srfi 132)
+        (srfi 133)
+        (chibi match)
+        (harness tools))
+
+;; R5RS aliases — LLMs reach for these instinctively
+(define exact->inexact inexact)
+(define inexact->exact exact)
+"#;
 
 /// Load one or more synthesised tools from scheme source.
 ///

@@ -14,38 +14,6 @@ use std::sync::{Arc, LazyLock, Mutex};
 use super::registry::{ToolCategory, ToolRegistry};
 use super::{BuiltinToolDef, Tool, ToolPropertyDef};
 
-/// Scheme prelude evaluated once when a context is created.
-/// Auto-imports the standard module set so the LLM can use them immediately.
-#[cfg(feature = "synthesised-tools")]
-const EVAL_PRELUDE: &str = r#"
-(import (scheme base)
-        (scheme write)
-        (scheme read)
-        (scheme char)
-        (scheme case-lambda)
-        (scheme inexact)
-        (scheme complex)
-        (tein json)
-        (tein safe-regexp)
-        (tein docs)
-        (tein introspect)
-        (srfi 1)
-        (srfi 27)
-        (srfi 69)
-        (srfi 95)
-        (srfi 125)
-        (srfi 128)
-        (srfi 130)
-        (srfi 132)
-        (srfi 133)
-        (chibi match)
-        (harness tools))
-
-;; R5RS aliases — LLMs reach for these instinctively
-(define exact->inexact inexact)
-(define inexact->exact exact)
-"#;
-
 /// Process-global store of persistent tein sessions, keyed by chibi context name.
 /// Each entry is `(Arc<TeinSession>, worker_thread_id)`.
 /// `TeinSession` wraps `ThreadLocalContext` with stdout/stderr capture.
@@ -111,16 +79,13 @@ pub static EVAL_TOOL_DEFS: &[BuiltinToolDef] = &[BuiltinToolDef {
 
 /// Build a sandboxed tein session for `scheme_eval`.
 ///
-/// Delegates to `synthesised::build_sandboxed_harness_context` for the FFI
-/// bridge setup, then evaluates `EVAL_PRELUDE` to pre-import standard modules.
+/// Delegates to `synthesised::build_sandboxed_harness_context`, which now
+/// includes `EVAL_PRELUDE` in `build_tein_context` — no separate prelude step.
 /// Returns `(Arc<TeinSession>, worker_thread_id)`.
 #[cfg(feature = "synthesised-tools")]
 fn build_eval_context() -> io::Result<(Arc<super::synthesised::TeinSession>, std::thread::ThreadId)>
 {
     let (session, tid) = super::synthesised::build_sandboxed_harness_context()?;
-    session
-        .evaluate(EVAL_PRELUDE)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("eval prelude: {e}")))?;
     Ok((Arc::new(session), tid))
 }
 

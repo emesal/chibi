@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.10.8] - 2026-03-14
+## [0.10.9] - 2026-03-15
 
 ### Bug Fixes
 
@@ -183,6 +183,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Update CHANGELOG for v0.10.7 ([`739b809`](https://github.com/emesal/chibi/commit/739b809c50ed9aaacef1cdfc51f2a370d74e167b))
 
+- Update CHANGELOG for v0.10.8 ([`f170528`](https://github.com/emesal/chibi/commit/f17052828a193fcc6f5f2fac04500059eade0c55))
+
 
 ### Features
 
@@ -293,6 +295,10 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Tein stdout/stderr capture via TeinSession and with_capture ([`9b1becf`](https://github.com/emesal/chibi/commit/9b1becf4f26c571343e0662bb82b7aea56e1bc15))
 
 - Update eval tests for structured output, add capture tests ([`5cbb2ed`](https://github.com/emesal/chibi/commit/5cbb2ed041304de0ed3490c589aceec91878af77))
+
+- Shared eval prelude for synth tools + system prompt discoverability ([`bb81683`](https://github.com/emesal/chibi/commit/bb816830d862d3cba4d55c1b9377d8859b1129ec))
+
+- Shared eval prelude for synth tools + system prompt discoverability (#226) ([`9f876c4`](https://github.com/emesal/chibi/commit/9f876c4a3114c661ac245f1d1997565e246d82fd))
 
 
 ### Refactoring
