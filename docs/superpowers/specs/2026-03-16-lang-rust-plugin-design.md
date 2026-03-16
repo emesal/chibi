@@ -16,7 +16,7 @@ Chibi's indexer can walk source trees and store file metadata, but without langu
 
 ### Schema Mode
 
-`lang_rust --schema` outputs:
+`lang_rust --schema` outputs the following and exits 0:
 
 ```json
 {
@@ -43,6 +43,8 @@ Chibi's indexer can walk source trees and store file metadata, but without langu
 ```
 
 ### Execution Mode
+
+**Note:** In the current core, the indexer dispatches one file per invocation (a new process each time). The `files` array always contains exactly one element. Batch dispatch is a future optimisation; the plugin should handle arrays of any length regardless.
 
 Input (JSON on stdin):
 
@@ -109,6 +111,7 @@ Output (JSON on stdout):
 | tree-sitter node kind | emitted symbol kind | can be parent? |
 |---|---|---|
 | `function_item` | `function` | no |
+| `function_signature_item` | `function` | no |
 | `struct_item` | `struct` | yes (fields) |
 | `enum_item` | `enum` | yes (variants) |
 | `enum_variant` | `variant` | no |
@@ -122,21 +125,23 @@ Output (JSON on stdout):
 | `macro_definition` | `macro` | no |
 | `field_declaration` | `field` | no |
 
+`function_signature_item` covers trait method declarations without default bodies (e.g. `fn bar(&self);` inside a trait). Both `function_item` (has body) and `function_signature_item` (no body) emit kind `"function"`.
+
+**Note:** Tuple struct fields (in `ordered_field_declaration_list`) are not covered by `field_declaration` and are not extracted in v1.
+
 ### Parent Stack
 
 When we enter a parent-capable node, push its name onto a stack. Children emitted while inside that node set `parent` to the stack top. Pop on exit. Handles arbitrary nesting:
 
-```rust
-mod outer {
-    struct Foo {
-        x: i32,  // parent: "Foo"
-    }           // parent: "outer"
-}
+```
+mod outer          → parent: null
+  struct Foo       → parent: "outer"
+    field x: i32   → parent: "Foo"
 ```
 
 ### Impl Block Naming
 
-`impl` blocks don't have a single name — they're `impl Type` or `impl Trait for Type`. The symbol name is the type name (or `Trait for Type`). Methods inside set their `parent` to this name.
+`impl` blocks don't have a single name — they're `impl Type` or `impl Trait for Type`. The symbol name is the type name (or `Trait for Type`). Generic parameters are stripped: `impl<T> Foo<T>` → name `"Foo"`, `impl<T: Display> ToString for T` → name `"ToString for T"`. Methods inside set their `parent` to this name.
 
 ### Visibility Extraction
 
@@ -152,7 +157,9 @@ tree-sitter-rust exposes a `visibility_modifier` child node:
 
 ### Signature Extraction
 
-The signature is the declaration line without the body. For a function: everything from visibility through the return type, excluding the `{ ... }` block. Extracted by taking the source text from node start up to (but not including) the `block` / `declaration_list` / `field_declaration_list` child, trimmed.
+The signature is the declaration line without the body. For a function: everything from visibility through the return type, excluding the body block. Extracted by taking the source text from node start up to (but not including) the first body child, trimmed.
+
+Body child node kinds to exclude: `block`, `declaration_list`, `field_declaration_list`, `enum_variant_list`, `ordered_field_declaration_list`. A robust fallback: stop at whichever child starts the body (first child whose kind ends in `_list` or is `block`).
 
 ## Reference Extraction
 
@@ -170,7 +177,7 @@ use std::io::Result as IoResult;
 //  → { from_line: 1, to_name: "std::io::Result", kind: "import" }
 ```
 
-For grouped imports (`{A, B}`), one ref per leaf. For glob imports (`use foo::*`), a single ref to `foo::*`.
+For grouped imports (`{A, B}`), one ref per leaf. Nested grouped imports (`use std::{collections::{HashMap, BTreeMap}, io::Read}`) are walked recursively to reach all leaves. For glob imports (`use foo::*`), a single ref to `foo::*`. Bare `use_list` without a path prefix (e.g. `use {std, core}`) is legal but rare; handled the same way (each leaf becomes a ref).
 
 ### Not in v1
 
@@ -197,13 +204,15 @@ plugins/
 
 ```toml
 [dependencies]
-tree-sitter = "0.24"
-tree-sitter-rust = "0.23"
+tree-sitter = "0.24"       # verify compat with tree-sitter-rust at impl time
+tree-sitter-rust = "0.23"  # may need matching tree-sitter version
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
 Minimal — no async, no tokio, no chibi-core dependency. Communication is purely through the JSON contract.
+
+**Note on versions:** tree-sitter's rust bindings had breaking changes between 0.22 and 0.24 (the `Language` type changed). Verify that the `tree-sitter-rust` crate version targets the same `tree-sitter` major version at implementation time.
 
 ### Installation
 
@@ -213,16 +222,18 @@ Minimal — no async, no tokio, no chibi-core dependency. Communication is purel
 
 Currently `insert_symbols` in `chibi-core/src/index/indexer.rs` writes `parent_id: NULL` regardless of the `parent` field in plugin output.
 
-### Two-Pass Insert
+### Two-Pass Insert with Line-Range Containment
 
-1. **First pass:** Insert all symbols for the file, collecting a `name → id` map.
-2. **Second pass:** For any symbol with a non-null `parent` field, `UPDATE symbols SET parent_id = ? WHERE id = ?` using the map lookup.
+A single file can have multiple symbols with the same name (e.g. `struct Parser` and `impl Parser`), so name-based parent lookup is ambiguous. Instead, we use **line-range containment**: for each child with a non-null `parent`, find the nearest enclosing parent-capable symbol whose name matches and whose `[line_start, line_end]` range contains the child.
 
-Scoped to a single file's symbols within the same transaction. If a `parent` name doesn't resolve, log a warning and leave `parent_id` NULL — same graceful degradation pattern as the rest of the indexer.
+1. **First pass:** Insert all symbols for the file, collecting a vec of `(id, name, kind, line_start, line_end, parent_name)`.
+2. **Second pass:** For each symbol with a non-null `parent_name`, find the matching parent by: name equals `parent_name` AND parent's line range contains child's line range. `UPDATE symbols SET parent_id = ? WHERE id = ?`.
+
+Scoped to a single file's symbols within the same transaction. If a parent doesn't resolve (no containing match), log a warning and leave `parent_id` NULL — same graceful degradation pattern as the rest of the indexer.
 
 **Why two-pass:** Symbols in plugin output aren't guaranteed parent-before-child order. Two-pass handles any ordering without needing a topological sort.
 
-**Size:** ~15-20 lines in `insert_symbols`. Backwards-compatible — plugins that don't emit `parent` work exactly as before.
+**Size:** ~20-25 lines in `insert_symbols`. Backwards-compatible — plugins that don't emit `parent` work exactly as before.
 
 ## Testing Strategy
 
