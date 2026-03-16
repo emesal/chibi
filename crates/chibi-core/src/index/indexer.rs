@@ -278,13 +278,29 @@ pub fn update_index(
 }
 
 /// Insert symbols from plugin output into the database. Returns count of symbols added.
+/// Insert symbols from plugin output into the database. Returns count of symbols added.
+///
+/// Uses a two-pass approach for parent resolution:
+/// 1. Insert all symbols with parent_id NULL, collecting (id, name, line_start, line_end, parent_name).
+/// 2. For each symbol with a parent name, find the matching parent by name + line-range containment
+///    and UPDATE parent_id.
 fn insert_symbols(conn: &Connection, file_id: i64, output: &serde_json::Value) -> u32 {
     let symbols = match output.get("symbols").and_then(|v| v.as_array()) {
         Some(arr) => arr,
         None => return 0,
     };
 
+    // First pass: insert all symbols, collect metadata for parent resolution.
+    struct SymMeta {
+        id: i64,
+        name: String,
+        line_start: i64,
+        line_end: i64,
+        parent_name: Option<String>,
+    }
+    let mut metas: Vec<SymMeta> = Vec::new();
     let mut count = 0u32;
+
     for sym in symbols {
         let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
@@ -292,21 +308,57 @@ fn insert_symbols(conn: &Connection, file_id: i64, output: &serde_json::Value) -
         let line_end = sym.get("line_end").and_then(|v| v.as_i64()).unwrap_or(0);
         let signature = sym.get("signature").and_then(|v| v.as_str());
         let visibility = sym.get("visibility").and_then(|v| v.as_str());
+        let parent_name = sym.get("parent").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-        // Note: parent_id resolution (matching parent name → id) deferred to phase 6
-        // when we have a proper protocol. For now, parent_id is NULL.
         let result = conn.execute(
             "INSERT INTO symbols (file_id, name, kind, line_start, line_end, signature, visibility)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![
-                file_id, name, kind, line_start, line_end, signature, visibility
-            ],
+            rusqlite::params![file_id, name, kind, line_start, line_end, signature, visibility],
         );
 
         if result.is_ok() {
+            let id = conn.last_insert_rowid();
+            metas.push(SymMeta {
+                id,
+                name: name.to_string(),
+                line_start,
+                line_end,
+                parent_name,
+            });
             count += 1;
         }
     }
+
+    // Second pass: resolve parent_id via line-range containment.
+    for meta in &metas {
+        if let Some(ref parent_name) = meta.parent_name {
+            // Find the nearest enclosing parent: name matches AND parent's line range contains child.
+            let parent_id = metas
+                .iter()
+                .filter(|p| {
+                    p.name == *parent_name
+                        && p.line_start <= meta.line_start
+                        && p.line_end >= meta.line_end
+                        && p.id != meta.id
+                })
+                // Nearest enclosing = smallest containing range.
+                .min_by_key(|p| p.line_end - p.line_start)
+                .map(|p| p.id);
+
+            if let Some(pid) = parent_id {
+                let _ = conn.execute(
+                    "UPDATE symbols SET parent_id = ?1 WHERE id = ?2",
+                    rusqlite::params![pid, meta.id],
+                );
+            } else {
+                eprintln!(
+                    "index: unresolved parent \"{}\" for symbol \"{}\" at line {}",
+                    parent_name, meta.name, meta.line_start
+                );
+            }
+        }
+    }
+
     count
 }
 
@@ -576,5 +628,124 @@ mod tests {
             let path = format!("file.{}", ext);
             assert_eq!(detect_language(Path::new(&path)), Some(*expected));
         }
+    }
+
+    #[test]
+    fn insert_symbols_resolves_parent_id() {
+        let (conn, dir) = setup_temp_project();
+        let _ = dir;
+
+        conn.execute(
+            "INSERT INTO files (path, lang, mtime, size) VALUES ('test.rs', 'rust', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        let output = serde_json::json!({
+            "symbols": [
+                {"name": "Parser", "kind": "struct", "line_start": 1, "line_end": 10},
+                {"name": "input", "kind": "field", "line_start": 2, "line_end": 2, "parent": "Parser"},
+                {"name": "Parser", "kind": "impl", "line_start": 12, "line_end": 25},
+                {"name": "new", "kind": "function", "line_start": 13, "line_end": 20, "parent": "Parser"}
+            ]
+        });
+
+        insert_symbols(&conn, 1, &output);
+
+        // "input" (field at line 2) should have parent_id pointing to "Parser" (struct at lines 1-10).
+        let field_parent: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM symbols WHERE name = 'input' AND kind = 'field'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let struct_id: i64 = conn
+            .query_row(
+                "SELECT id FROM symbols WHERE name = 'Parser' AND kind = 'struct'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(field_parent, Some(struct_id));
+
+        // "new" (function at line 13) should have parent_id pointing to "Parser" (impl at lines 12-25),
+        // NOT the struct at lines 1-10 (which doesn't contain line 13).
+        let fn_parent: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM symbols WHERE name = 'new' AND kind = 'function'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let impl_id: i64 = conn
+            .query_row(
+                "SELECT id FROM symbols WHERE name = 'Parser' AND kind = 'impl'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fn_parent, Some(impl_id));
+    }
+
+    #[test]
+    fn insert_symbols_no_parent_still_works() {
+        let (conn, dir) = setup_temp_project();
+        let _ = dir;
+
+        conn.execute(
+            "INSERT INTO files (path, lang, mtime, size) VALUES ('test.rs', 'rust', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        let output = serde_json::json!({
+            "symbols": [
+                {"name": "main", "kind": "function", "line_start": 1, "line_end": 5}
+            ]
+        });
+
+        let count = insert_symbols(&conn, 1, &output);
+        assert_eq!(count, 1);
+
+        let parent_id: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM symbols WHERE name = 'main'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(parent_id, None);
+    }
+
+    #[test]
+    fn insert_symbols_unresolvable_parent_stays_null() {
+        let (conn, dir) = setup_temp_project();
+        let _ = dir;
+
+        conn.execute(
+            "INSERT INTO files (path, lang, mtime, size) VALUES ('test.rs', 'rust', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        // Parent "Nonexistent" doesn't match any symbol — should gracefully leave parent_id NULL.
+        let output = serde_json::json!({
+            "symbols": [
+                {"name": "orphan", "kind": "function", "line_start": 1, "line_end": 5, "parent": "Nonexistent"}
+            ]
+        });
+
+        let count = insert_symbols(&conn, 1, &output);
+        assert_eq!(count, 1);
+
+        let parent_id: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM symbols WHERE name = 'orphan'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(parent_id, None);
     }
 }
