@@ -278,7 +278,6 @@ pub fn update_index(
 }
 
 /// Insert symbols from plugin output into the database. Returns count of symbols added.
-/// Insert symbols from plugin output into the database. Returns count of symbols added.
 ///
 /// Uses a two-pass approach for parent resolution:
 /// 1. Insert all symbols with parent_id NULL, collecting (id, name, line_start, line_end, parent_name).
