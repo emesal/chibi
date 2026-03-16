@@ -307,12 +307,17 @@ fn insert_symbols(conn: &Connection, file_id: i64, output: &serde_json::Value) -
         let line_end = sym.get("line_end").and_then(|v| v.as_i64()).unwrap_or(0);
         let signature = sym.get("signature").and_then(|v| v.as_str());
         let visibility = sym.get("visibility").and_then(|v| v.as_str());
-        let parent_name = sym.get("parent").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let parent_name = sym
+            .get("parent")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let result = conn.execute(
             "INSERT INTO symbols (file_id, name, kind, line_start, line_end, signature, visibility)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![file_id, name, kind, line_start, line_end, signature, visibility],
+            rusqlite::params![
+                file_id, name, kind, line_start, line_end, signature, visibility
+            ],
         );
 
         if result.is_ok() {
