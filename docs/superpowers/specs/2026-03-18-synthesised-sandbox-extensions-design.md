@@ -18,7 +18,7 @@ The current signature is `(source, vfs_path, registry, tier)` with ~30+ call sit
 This means:
 - `load_tools_from_source_with_tier` is removed. The existing `load_tools_from_source` (currently a convenience wrapper that passes `Sandboxed`) is replaced with a new version that takes `&ToolsConfig` and resolves tier + http + env internally.
 - `load_tool_from_source` (singular, convenience wrapper expecting exactly one tool) delegates to the new `load_tools_from_source`. Its signature stays the same — it already doesn't take a tier param.
-- `scan_zone` and `reload_tool_from_content` simplify (they currently resolve tier then pass it — now they just pass `tools_config` through)
+- `scan_zone` and `reload_tool_from_content` simplify: both now call `load_tools_from_source(source, path, registry, tools_config)` directly, which resolves tier, HTTP prefixes, and env internally. They no longer call `resolve_tier` themselves
 - `build_tein_context` gains `http_prefixes: Option<Vec<String>>` and `env_vars: Option<Vec<(String, String)>>` parameters (resolved values, not config)
 - `build_sandboxed_harness_context` (used by `eval.rs`) passes `None`/`None` for the new parameters — eval contexts don't get HTTP or env forwarding
 
@@ -269,6 +269,22 @@ Resolution priority:
 - Tool declares `tool-http-allow`, no config, `trust_declared: true` → declared prefixes used.
 - Tool doesn't declare `tool-http-allow`, config has `"trust-declared"` → no HTTP access (nothing to trust).
 
+## `ToolsConfig::merge_local` Semantics
+
+`merge_local` explicitly constructs `ToolsConfig` with named fields. Adding `http` and `env` will break compilation unless updated.
+
+**Design:** `http` and `env` are global-only — they control sandbox plumbing at tool load time, not per-context runtime behaviour. `merge_local` passes through the global value (ignores local):
+
+```rust
+ToolsConfig {
+    // ... existing fields ...
+    http: self.http.clone(),
+    env: self.env.clone(),
+}
+```
+
+If per-context overrides are ever needed, merge logic can be added later.
+
 ## File Change Summary
 
 | File | Changes |
@@ -277,8 +293,8 @@ Resolution priority:
 | `crates/chibi-core/src/config.rs` | `HttpConfig`, `HttpAllow`, `HttpAllowResult` types; `http` and `env` fields on `ToolsConfig`; `resolve_http_allow`, `resolve_http_allow_with_declared`, `resolve_env` methods |
 | `crates/chibi-core/src/tools/synthesised.rs` | `HARNESS_PREAMBLE` syntax-rules expansion; `extract_single_tool`/`extract_multi_tools` read category, summary_params, tool-http-allow; `build_tein_context` gains http_prefixes + env_vars params; `build_sandboxed_harness_context` passes `None`/`None`; `load_tools_from_source_with_tier` removed, `load_tools_from_source` rewritten (takes `&ToolsConfig`); `load_tool_from_source` unchanged (delegates to new `load_tools_from_source`); two-phase load for trust-declared HTTP; `scan_zone`/`reload_tool_from_content` simplified |
 | `crates/chibi-core/src/api/send.rs` | `ToolCategory::Network` arm: no-URL fallback using `tool_call_summary` |
-| `crates/chibi-core/src/tools/registry.rs` | `ToolCategory` string mapping helper (e.g. `from_str`) |
-| `crates/chibi-core/src/tools/hooks.rs` | ~15 test call sites: `load_tools_from_source_with_tier` → `load_tools_from_source` with `&ToolsConfig::default()` |
+| `crates/chibi-core/src/tools/registry.rs` | `ToolCategory::from_category_str(s: &str) -> ToolCategory` — maps category strings to variants, unknown → `Synthesised` (symmetric with existing `as_str()`) |
+| `crates/chibi-core/src/tools/hooks.rs` | ~15 test call sites: `load_tools_from_source_with_tier` → `load_tools_from_source` with `&ToolsConfig::default()`; update `PreFetchUrl` `HOOK_METADATA` payload_fields to document the `no_url` variant (add `summary` as optional field, note that `url`/`reason` are absent when `safety == "no_url"`) |
 
 ## Commit Plan
 
