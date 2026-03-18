@@ -1038,28 +1038,19 @@ pub(crate) const EVAL_PRELUDE: &str = r#"
 ///
 /// Registers `(harness tools)` and `call-tool` in every context.
 #[cfg(feature = "synthesised-tools")]
+/// Load one or more synthesised tools from scheme source.
+///
+/// Resolves sandbox tier from `tools_config` using longest-prefix match on
+/// `vfs_path`. Evaluates `source` in a tein context configured accordingly.
+#[cfg(feature = "synthesised-tools")]
 pub fn load_tools_from_source(
     source: &str,
     vfs_path: &VfsPath,
     registry: &Arc<RwLock<ToolRegistry>>,
-) -> io::Result<Vec<Tool>> {
-    load_tools_from_source_with_tier(
-        source,
-        vfs_path,
-        registry,
-        crate::config::SandboxTier::Sandboxed,
-    )
-}
-
-/// Like `load_tools_from_source` but with an explicit sandbox tier.
-#[cfg(feature = "synthesised-tools")]
-pub fn load_tools_from_source_with_tier(
-    source: &str,
-    vfs_path: &VfsPath,
-    registry: &Arc<RwLock<ToolRegistry>>,
-    tier: crate::config::SandboxTier,
+    tools_config: &crate::config::ToolsConfig,
 ) -> io::Result<Vec<Tool>> {
     let source_owned = source.to_string();
+    let tier = tools_config.resolve_tier(vfs_path.as_str());
 
     let (session, worker_thread_id) = build_tein_context(source_owned, tier)?;
 
@@ -1079,6 +1070,7 @@ pub fn load_tools_from_source_with_tier(
 
 /// Load a single synthesised tool from scheme source (convenience wrapper).
 ///
+/// Uses `ToolsConfig::default()` (sandboxed tier, no HTTP/env overrides).
 /// Calls `load_tools_from_source` and expects exactly one tool. Returns an
 /// error if the source defines multiple tools via `define-tool`.
 #[cfg(feature = "synthesised-tools")]
@@ -1087,7 +1079,12 @@ pub fn load_tool_from_source(
     vfs_path: &VfsPath,
     registry: &Arc<RwLock<ToolRegistry>>,
 ) -> io::Result<Tool> {
-    let mut tools = load_tools_from_source(source, vfs_path, registry)?;
+    let mut tools = load_tools_from_source(
+        source,
+        vfs_path,
+        registry,
+        &crate::config::ToolsConfig::default(),
+    )?;
     match tools.len() {
         1 => Ok(tools.remove(0)),
         n => Err(io::Error::new(
@@ -1456,8 +1453,7 @@ async fn scan_zone(
         let Ok(source_str) = String::from_utf8(source) else {
             continue;
         };
-        let tier = tools_config.resolve_tier(file_path.as_str());
-        if let Ok(tools) = load_tools_from_source_with_tier(&source_str, &file_path, registry, tier)
+        if let Ok(tools) = load_tools_from_source(&source_str, &file_path, registry, tools_config)
         {
             let mut reg = registry.write().unwrap();
             for tool in tools {
@@ -1492,8 +1488,7 @@ pub fn reload_tool_from_content(
     let Ok(source_str) = std::str::from_utf8(content) else {
         return;
     };
-    let tier = tools_config.resolve_tier(path.as_str());
-    if let Ok(tools) = load_tools_from_source_with_tier(source_str, path, registry, tier) {
+    if let Ok(tools) = load_tools_from_source(source_str, path, registry, tools_config) {
         let mut reg = registry.write().unwrap();
         // unregister all previous tools from this path
         let old_names = reg.find_all_by_vfs_path(path);
@@ -1882,6 +1877,16 @@ mod tests {
         Arc::new(RwLock::new(ToolRegistry::new()))
     }
 
+    /// Build a `ToolsConfig` that maps `vfs_path` to the given tier.
+    fn config_with_tier(vfs_path: &str, tier: u8) -> crate::config::ToolsConfig {
+        let mut tiers = std::collections::HashMap::new();
+        tiers.insert(vfs_path.to_string(), tier);
+        crate::config::ToolsConfig {
+            tiers: Some(tiers),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_convention_category() {
         let source = r#"
@@ -1894,12 +1899,7 @@ mod tests {
 "#;
         let path = VfsPath::new("/tools/shared/conv_cat.scm").unwrap();
         let registry = make_registry();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
         assert_eq!(tools[0].category, ToolCategory::Network);
     }
@@ -1916,12 +1916,7 @@ mod tests {
 "#;
         let path = VfsPath::new("/tools/shared/conv_sp.scm").unwrap();
         let registry = make_registry();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
         assert_eq!(tools[0].summary_params, vec!["path", "mode"]);
     }
@@ -1937,12 +1932,7 @@ mod tests {
 "#;
         let path = VfsPath::new("/tools/shared/plain.scm").unwrap();
         let registry = make_registry();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
         assert_eq!(tools[0].category, ToolCategory::Synthesised);
         assert!(tools[0].summary_params.is_empty());
@@ -1960,12 +1950,7 @@ mod tests {
 "#;
         let path = VfsPath::new("/tools/shared/cat.scm").unwrap();
         let registry = make_registry();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].category, ToolCategory::Network);
@@ -1983,12 +1968,7 @@ mod tests {
 "#;
         let path = VfsPath::new("/tools/shared/sp.scm").unwrap();
         let registry = make_registry();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].summary_params, vec!["ticker", "qty"]);
@@ -2007,12 +1987,7 @@ mod tests {
 "#;
         let path = VfsPath::new("/tools/shared/both.scm").unwrap();
         let registry = make_registry();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].category, ToolCategory::Network);
@@ -2031,12 +2006,7 @@ mod tests {
 "#;
         let path = VfsPath::new("/tools/shared/unk.scm").unwrap();
         let registry = make_registry();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
         assert_eq!(tools[0].category, ToolCategory::Synthesised);
     }
@@ -2058,12 +2028,7 @@ mod tests {
 "#;
         let path = VfsPath::new("/tools/shared/multi.scm").unwrap();
         let registry = make_registry();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].category, ToolCategory::FsRead);
@@ -2590,7 +2555,7 @@ mod tests {
     fn test_load_multiple_tools_from_define_tool() {
         let registry = make_registry();
         let vfs_path = VfsPath::new("/tools/shared/multi.scm").unwrap();
-        let tools = load_tools_from_source(MULTI_TOOL_SOURCE, &vfs_path, &registry).unwrap();
+        let tools = load_tools_from_source(MULTI_TOOL_SOURCE, &vfs_path, &registry, &crate::config::ToolsConfig::default()).unwrap();
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].name, "greet");
         assert_eq!(tools[1].name, "farewell");
@@ -2600,7 +2565,7 @@ mod tests {
     fn test_load_tools_backwards_compat_single_tool() {
         let registry = make_registry();
         let vfs_path = VfsPath::new("/tools/shared/old.scm").unwrap();
-        let tools = load_tools_from_source(SCAN_TOOL, &vfs_path, &registry).unwrap();
+        let tools = load_tools_from_source(SCAN_TOOL, &vfs_path, &registry, &crate::config::ToolsConfig::default()).unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "scan_hello");
     }
@@ -2661,12 +2626,7 @@ mod tests {
 "#;
         let vfs_path = VfsPath::new("/tools/shared/bad.scm").unwrap();
         let registry = make_registry();
-        let result = load_tools_from_source_with_tier(
-            source,
-            &vfs_path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        );
+        let result = load_tools_from_source(source, &vfs_path, &registry, &crate::config::ToolsConfig::default());
         assert!(
             result.is_err(),
             "sandboxed tier should reject (scheme regex)"
@@ -2685,12 +2645,7 @@ mod tests {
         let vfs_path = VfsPath::new("/tools/shared/full.scm").unwrap();
         let registry = make_registry();
         // tier 2 — no sandboxing; just verify it loads without error
-        let result = load_tools_from_source_with_tier(
-            source,
-            &vfs_path,
-            &registry,
-            crate::config::SandboxTier::Unsandboxed,
-        );
+        let result = load_tools_from_source(source, &vfs_path, &registry, &config_with_tier(vfs_path.as_str(), 2));
         assert!(result.is_ok(), "unsandboxed tier should allow loading");
     }
 
@@ -2722,7 +2677,7 @@ mod tests {
     fn test_tasks_plugin_loads() {
         let registry = make_registry();
         let path = VfsPath::new("/tools/shared/tasks.scm").unwrap();
-        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry).unwrap();
+        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry, &crate::config::ToolsConfig::default()).unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         for expected in &[
             "task_create",
@@ -2748,12 +2703,7 @@ mod tests {
     fn test_history_plugin_loads() {
         let registry = make_registry();
         let path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
-            HISTORY_PLUGIN,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Unsandboxed,
-        )
+        let tools = load_tools_from_source(HISTORY_PLUGIN, &path, &registry, &config_with_tier(path.as_str(), 2))
         .unwrap();
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -2785,12 +2735,7 @@ mod tests {
     fn test_history_plugin_registers_hook() {
         let registry = make_registry();
         let path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
-            HISTORY_PLUGIN,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Unsandboxed,
-        )
+        let tools = load_tools_from_source(HISTORY_PLUGIN, &path, &registry, &config_with_tier(path.as_str(), 2))
         .unwrap();
 
         // At least one tool should carry the pre_vfs_write hook binding.
@@ -2862,7 +2807,7 @@ mod tests {
 (define (tool-execute args) %context-name%)
 "#;
         let path = VfsPath::new("/tools/shared/ctx_test.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry).unwrap();
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default()).unwrap();
         {
             let mut reg = registry.write().unwrap();
             for t in tools {
@@ -2888,7 +2833,7 @@ mod tests {
         let (chibi, _tmp) = create_test_chibi();
         let registry = chibi.registry.clone();
         let path = VfsPath::new("/tools/shared/tasks.scm").unwrap();
-        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry).unwrap();
+        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry, &crate::config::ToolsConfig::default()).unwrap();
         {
             let mut reg = registry.write().unwrap();
             for t in tools {
@@ -3016,12 +2961,7 @@ mod tests {
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/test-hooks.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
 
         assert_eq!(tools.len(), 1);
@@ -3063,12 +3003,7 @@ mod tests {
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/test-invalid.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
 
         assert_eq!(tools.len(), 1);
@@ -3101,7 +3036,7 @@ mod tests {
 (define (tool-execute args) (error "intentional boom"))
 "#;
         let path = VfsPath::new("/tools/shared/error_test.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry).unwrap();
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default()).unwrap();
         {
             let mut reg = registry.write().unwrap();
             for t in tools {
@@ -3144,11 +3079,11 @@ mod tests {
         source: &str,
     ) -> String {
         let path = VfsPath::new("/tools/shared/io_test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
         {
@@ -3406,12 +3341,7 @@ mod tests {
 "#;
         let vfs_path = VfsPath::new("/tools/shared/io_test.scm").unwrap();
         let registry = make_registry();
-        let result = load_tools_from_source_with_tier(
-            source,
-            &vfs_path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        );
+        let result = load_tools_from_source(source, &vfs_path, &registry, &crate::config::ToolsConfig::default());
         assert!(
             result.is_err(),
             "sandboxed tier should not have (harness io)"
@@ -3431,12 +3361,7 @@ mod tests {
 "#;
         let vfs_path = VfsPath::new("/tools/shared/io_test.scm").unwrap();
         let registry = make_registry();
-        let result = load_tools_from_source_with_tier(
-            source,
-            &vfs_path,
-            &registry,
-            crate::config::SandboxTier::Unsandboxed,
-        );
+        let result = load_tools_from_source(source, &vfs_path, &registry, &config_with_tier(vfs_path.as_str(), 2));
         assert!(
             result.is_ok(),
             "unsandboxed tier should have (harness io): {:?}",
@@ -3465,12 +3390,7 @@ mod tests {
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/multi-hooks.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            &registry,
-            crate::config::SandboxTier::Sandboxed,
-        )
+        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
         .unwrap();
 
         assert_eq!(tools.len(), 2);
