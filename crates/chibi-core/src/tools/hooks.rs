@@ -2058,7 +2058,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
         .unwrap();
 
         let data = serde_json::json!({"event": "start"});
@@ -2130,7 +2135,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/noop.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
         .unwrap();
 
         let results =
@@ -2162,7 +2172,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/modify.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
         .unwrap();
 
         let results = execute_hook(
@@ -2195,7 +2210,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/selective.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
         .unwrap();
 
         // fire on_end — tool is registered for on_start only
@@ -2221,7 +2241,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/error.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
         .unwrap();
 
         // should not error — failed hooks are skipped silently
@@ -2268,7 +2293,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/tein.scm").unwrap();
-        let mut tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
+        let mut tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
         .unwrap();
         tools.insert(0, plugin_tool);
 
@@ -2304,7 +2334,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/reentrancy.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
         .unwrap();
 
         // Simulate re-entrancy: mark on_start as already-in-progress
@@ -2347,7 +2382,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/guard-cleanup.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &crate::config::ToolsConfig::default())
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
         .unwrap();
 
         // First call — fires normally
@@ -2454,7 +2494,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/bridge-test.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &config_with_tier(path.as_str(), 2))
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &config_with_tier(path.as_str(), 2),
+        )
         .unwrap();
 
         let tein_ctx = TeinHookContext {
@@ -2522,7 +2567,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/no-bridge-test.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &config_with_tier(path.as_str(), 2))
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &config_with_tier(path.as_str(), 2),
+        )
         .unwrap();
 
         // No TeinHookContext → bridge not set
@@ -2566,7 +2616,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/io-hook-test.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &config_with_tier(path.as_str(), 2))
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &config_with_tier(path.as_str(), 2),
+        )
         .unwrap();
 
         let tein_ctx = TeinHookContext {
@@ -2633,7 +2688,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/counter-hook-test.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry, &config_with_tier(path.as_str(), 2))
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &config_with_tier(path.as_str(), 2),
+        )
         .unwrap();
 
         let tein_ctx = TeinHookContext {
@@ -2709,7 +2769,12 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
-        let tools = load_tools_from_source(source, &plugin_path, &registry, &config_with_tier(plugin_path.as_str(), 2))
+        let tools = load_tools_from_source(
+            source,
+            &plugin_path,
+            &registry,
+            &config_with_tier(plugin_path.as_str(), 2),
+        )
         .unwrap();
 
         let tein_ctx = TeinHookContext {
@@ -2754,7 +2819,12 @@ echo 'OK'
         // Load history plugin
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source(HISTORY_PLUGIN, &plugin_path, &registry, &config_with_tier(plugin_path.as_str(), 2))
+        let tools = load_tools_from_source(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            &config_with_tier(plugin_path.as_str(), 2),
+        )
         .unwrap();
 
         let tein_ctx = TeinHookContext {
@@ -2808,7 +2878,12 @@ echo 'OK'
 
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source(HISTORY_PLUGIN, &plugin_path, &registry, &config_with_tier(plugin_path.as_str(), 2))
+        let tools = load_tools_from_source(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            &config_with_tier(plugin_path.as_str(), 2),
+        )
         .unwrap();
 
         let tein_ctx = TeinHookContext {
@@ -2884,7 +2959,12 @@ echo 'OK'
         // Load history plugin
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source(HISTORY_PLUGIN, &plugin_path, &registry, &config_with_tier(plugin_path.as_str(), 2))
+        let tools = load_tools_from_source(
+            HISTORY_PLUGIN,
+            &plugin_path,
+            &registry,
+            &config_with_tier(plugin_path.as_str(), 2),
+        )
         .unwrap();
 
         // Register tools so dispatch_impl can find them

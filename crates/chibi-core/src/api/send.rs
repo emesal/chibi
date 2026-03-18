@@ -1139,7 +1139,9 @@ async fn execute_tool_pure(
                 } else {
                     let safety = tools::classify_url(url);
                     if let Some(ref policy) = resolved_config.url_policy {
-                        if tools::evaluate_url_policy(url, &safety, policy) == tools::UrlAction::Deny {
+                        if tools::evaluate_url_policy(url, &safety, policy)
+                            == tools::UrlAction::Deny
+                        {
                             let reason = match &safety {
                                 tools::UrlSafety::Sensitive(cat) => cat.to_string(),
                                 tools::UrlSafety::Safe => "denied by URL policy".to_string(),
