@@ -249,7 +249,7 @@ To avoid the cost when no `tool-http-allow` is declared, phase 1 checks for the 
   pub enum HttpAllowResult {
       Prefixes(Vec<String>),   // explicit config prefixes — use directly
       NeedDeclared,            // trust-declared applies — need tool's declared prefixes
-      None,                    // no HTTP access
+      NoAccess,                // no HTTP access
   }
   ```
 - **`ToolsConfig::resolve_http_allow_with_declared`** (`config.rs`): takes `(vfs_path, declared: &[String])` → `Option<Vec<String>>`. Called in phase 2 when `NeedDeclared` and tool declares prefixes.
