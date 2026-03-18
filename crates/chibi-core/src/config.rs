@@ -723,6 +723,27 @@ impl ToolsConfig {
                 .collect()
         })
     }
+
+    /// Resolve HTTP prefixes with tool-declared fallback.
+    ///
+    /// Called after reading `tool-http-allow` from the tool source.
+    /// Uses `resolve_http_allow` internally:
+    /// - `Prefixes(p)` → `Some(p)` (explicit config wins, declared ignored)
+    /// - `NeedDeclared` + non-empty declared → `Some(declared.to_vec())`
+    /// - `NeedDeclared` + empty declared → `None`
+    /// - `NoAccess` → `None`
+    #[cfg(feature = "synthesised-tools")]
+    pub fn resolve_http_allow_with_declared(
+        &self,
+        vfs_path: &str,
+        declared: &[String],
+    ) -> Option<Vec<String>> {
+        match self.resolve_http_allow(vfs_path) {
+            HttpAllowResult::Prefixes(p) => Some(p),
+            HttpAllowResult::NeedDeclared if !declared.is_empty() => Some(declared.to_vec()),
+            _ => None,
+        }
+    }
 }
 
 /// Known builtin plugin paths that default to unsandboxed tier.
@@ -1919,7 +1940,10 @@ mod tests {
     #[test]
     fn test_resolve_env_longest_prefix() {
         let mut env = std::collections::HashMap::new();
-        env.insert("/tools/shared/".to_string(), vec!["GENERAL_KEY".to_string()]);
+        env.insert(
+            "/tools/shared/".to_string(),
+            vec!["GENERAL_KEY".to_string()],
+        );
         env.insert(
             "/tools/shared/t212.scm".to_string(),
             vec!["CHIBI_TEST_ENV_SPECIFIC_1".to_string()],
@@ -1937,6 +1961,96 @@ mod tests {
             vars,
             vec![("CHIBI_TEST_ENV_SPECIFIC_1".to_string(), "val".to_string())]
         );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_with_declared_trust_per_path() {
+        let mut allow = std::collections::HashMap::new();
+        allow.insert(
+            "/tools/shared/".to_string(),
+            HttpAllow::TrustDeclared("trust-declared".to_string()),
+        );
+        let config = ToolsConfig {
+            http: Some(HttpConfig {
+                allow: Some(allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let declared = vec!["https://api.example.com/".to_string()];
+        let result =
+            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        assert_eq!(result, Some(vec!["https://api.example.com/".to_string()]));
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_with_declared_explicit_wins() {
+        let mut allow = std::collections::HashMap::new();
+        allow.insert(
+            "/tools/shared/t212.scm".to_string(),
+            HttpAllow::Prefixes(vec!["https://explicit.com/".to_string()]),
+        );
+        let config = ToolsConfig {
+            http: Some(HttpConfig {
+                allow: Some(allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let declared = vec!["https://ignored.com/".to_string()];
+        let result =
+            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        assert_eq!(result, Some(vec!["https://explicit.com/".to_string()]));
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_with_declared_global_trust() {
+        let config = ToolsConfig {
+            http: Some(HttpConfig {
+                trust_declared: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let declared = vec!["https://api.example.com/".to_string()];
+        let result =
+            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        assert_eq!(result, Some(vec!["https://api.example.com/".to_string()]));
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_with_declared_no_trust() {
+        let config = ToolsConfig::default();
+        let declared = vec!["https://api.example.com/".to_string()];
+        let result =
+            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        assert_eq!(result, None);
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_with_declared_empty_declared() {
+        let mut allow = std::collections::HashMap::new();
+        allow.insert(
+            "/tools/shared/".to_string(),
+            HttpAllow::TrustDeclared("trust-declared".to_string()),
+        );
+        let config = ToolsConfig {
+            http: Some(HttpConfig {
+                allow: Some(allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let declared: Vec<String> = vec![];
+        let result =
+            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        // trust-declared but nothing declared → no access
+        assert_eq!(result, None);
     }
 
     #[cfg(feature = "synthesised-tools")]
