@@ -1563,15 +1563,9 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
-    /// Build a `ToolsConfig` that maps `vfs_path` to the given tier.
     #[cfg(feature = "synthesised-tools")]
     fn config_with_tier(vfs_path: &str, tier: u8) -> crate::config::ToolsConfig {
-        let mut tiers = std::collections::HashMap::new();
-        tiers.insert(vfs_path.to_string(), tier);
-        crate::config::ToolsConfig {
-            tiers: Some(tiers),
-            ..Default::default()
-        }
+        crate::config::test_helpers::config_with_tier(vfs_path, tier)
     }
 
     // All 31 hook points for testing

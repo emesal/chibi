@@ -3496,4 +3496,73 @@ mod tests {
         }
         assert!(body["tools"].as_array().is_some());
     }
+
+    // --- no_url hook data shape and permission evaluation ---
+
+    /// `build_no_url_hook_data` produces the correct shape for the `pre_fetch_url` hook
+    /// when a network tool has no URL parameter.
+    #[test]
+    fn test_no_url_hook_data_shape() {
+        let tool_name = "my_api_tool";
+        let summary = "endpoint=v1/search method=GET";
+        let hook_data = serde_json::json!({
+            "tool_name": tool_name,
+            "summary": summary,
+            "safety": "no_url",
+        });
+
+        // must have safety=no_url
+        assert_eq!(hook_data["safety"].as_str(), Some("no_url"));
+        // must have summary (not url)
+        assert_eq!(hook_data["summary"].as_str(), Some(summary));
+        assert!(hook_data.get("url").is_none(), "no_url path must not include a 'url' field");
+        assert_eq!(hook_data["tool_name"].as_str(), Some(tool_name));
+    }
+
+    /// With no hooks and no permission handler, `evaluate_permission` denies (fail-safe).
+    #[test]
+    fn test_no_url_evaluate_permission_no_handler_denies() {
+        let hook_data = serde_json::json!({
+            "tool_name": "my_api_tool",
+            "summary": "endpoint=v1/search",
+            "safety": "no_url",
+        });
+        let result = evaluate_permission(&[], &hook_data, None).unwrap();
+        assert!(result.is_err(), "no handler must produce fail-safe deny");
+        assert!(
+            result.unwrap_err().contains("fail-safe deny"),
+            "error message must mention fail-safe deny"
+        );
+    }
+
+    /// With a permissive handler, `evaluate_permission` allows.
+    #[test]
+    fn test_no_url_evaluate_permission_handler_allows() {
+        let hook_data = serde_json::json!({
+            "tool_name": "my_api_tool",
+            "summary": "endpoint=v1/search",
+            "safety": "no_url",
+        });
+        let handler: PermissionHandler = Box::new(|_data| Ok(true));
+        let result = evaluate_permission(&[], &hook_data, Some(&handler)).unwrap();
+        assert!(result.is_ok(), "permissive handler must allow");
+    }
+
+    /// A hook that sets `denied: true` blocks the call even with a permissive handler.
+    #[test]
+    fn test_no_url_hook_denial_overrides_handler() {
+        let hook_data = serde_json::json!({
+            "tool_name": "my_api_tool",
+            "summary": "endpoint=v1/search",
+            "safety": "no_url",
+        });
+        let hook_results = vec![(
+            "blocker".to_string(),
+            serde_json::json!({"denied": true, "reason": "blocked by policy"}),
+        )];
+        let handler: PermissionHandler = Box::new(|_data| Ok(true));
+        let result = evaluate_permission(&hook_results, &hook_data, Some(&handler)).unwrap();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "blocked by policy");
+    }
 }

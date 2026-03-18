@@ -368,7 +368,7 @@ pub(crate) static HARNESS_PREAMBLE: std::sync::LazyLock<String> = std::sync::Laz
 ;; note: (describe X) takes an alist directly, NOT a symbol.
 (define harness-tools-docs
   '((__module__ . "harness tools")
-    (define-tool . "macro: (define-tool name (description DESC) (parameters PARAMS-ALIST) (execute (lambda (args) ...))) — registers a persistent tool; args is ((\"key\" . val) ...) alist")
+    (define-tool . "macro: (define-tool name (description DESC) [(category CAT)] [(summary-params (PARAM ...))] (parameters PARAMS-ALIST) (execute (lambda (args) ...))) — registers a persistent tool; args is ((\"key\" . val) ...) alist. Optional: category is a string like \"network\" or \"shell\"; summary-params is a list of parameter names used to build the permission-prompt summary for network tools without a URL parameter.")
     (call-tool . "procedure: (call-tool NAME ARGS-ALIST) -> string — invoke another registered tool; NAME is a string, ARGS-ALIST is ((\"key\" . \"val\") ...)")
     (register-hook . "procedure: (register-hook HOOK-SYMBOL HANDLER) — register a hook callback; HOOK-SYMBOL e.g. 'pre_vfs_write, HANDLER is (lambda (payload) ...)")
     (generate-id . "procedure: (generate-id) -> string — returns an 8-hex-char random identifier (uuid v4 prefix)")
@@ -969,6 +969,10 @@ fn build_tein_context(
             // with_vfs_shadows() enables shadow modules (e.g. scheme/process-context,
             // scheme/file) in non-sandboxed contexts. Required for (chibi diff) and
             // other library modules that depend on scheme/process-context.
+            //
+            // `http_prefixes` is intentionally not applied here: unsandboxed contexts
+            // have unrestricted network access already, so an allowlist would be redundant.
+            // (A config entry under [tools.http.allow] for an unsandboxed path has no effect.)
             let mut builder = Context::builder().standard_env().with_vfs_shadows();
             if let Some(ref vars) = env_vars {
                 let refs: Vec<(&str, &str)> =
@@ -1925,14 +1929,8 @@ mod tests {
         Arc::new(RwLock::new(ToolRegistry::new()))
     }
 
-    /// Build a `ToolsConfig` that maps `vfs_path` to the given tier.
     fn config_with_tier(vfs_path: &str, tier: u8) -> crate::config::ToolsConfig {
-        let mut tiers = std::collections::HashMap::new();
-        tiers.insert(vfs_path.to_string(), tier);
-        crate::config::ToolsConfig {
-            tiers: Some(tiers),
-            ..Default::default()
-        }
+        crate::config::test_helpers::config_with_tier(vfs_path, tier)
     }
 
     #[test]

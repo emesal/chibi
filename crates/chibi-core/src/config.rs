@@ -451,6 +451,10 @@ pub enum HttpAllow {
     /// Explicit list of allowed URL prefixes.
     Prefixes(Vec<String>),
     /// The string `"trust-declared"` — trust the tool's own `tool-http-allow` binding.
+    ///
+    /// Note: `serde(untagged)` means any non-list TOML value deserialises as this variant,
+    /// so the string is validated at resolution time (`resolve_http_allow`), not at parse time.
+    /// Unknown strings trigger a warning and fall through to `NoAccess` — safe default.
     TrustDeclared(String),
 }
 
@@ -565,6 +569,8 @@ impl ToolsConfig {
     /// - `exclude`: local appends to global (deduplicated)
     /// - `exclude_categories`: local appends to global (deduplicated)
     /// - `tiers`: local overrides global (local entries win per path)
+    /// - `http`: global-only; local value is ignored (HTTP access is a global security boundary)
+    /// - `env`: global-only; local value is ignored (env exposure is a global security boundary)
     pub fn merge_local(&self, local: &ToolsConfig) -> ToolsConfig {
         let include = if local.include.is_some() {
             local.include.clone()
@@ -1426,6 +1432,23 @@ impl ResolvedConfig {
                 .map_err(|e| format!("override '{}={}': {}", key, value, e))?;
         }
         Ok(())
+    }
+}
+
+/// Test helpers shared across crates — gated so they don't ship in production.
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use super::ToolsConfig;
+
+    /// Build a `ToolsConfig` that maps `vfs_path` to the given tier.
+    /// Tier 1 = sandboxed, tier 2 = unsandboxed.
+    pub(crate) fn config_with_tier(vfs_path: &str, tier: u8) -> ToolsConfig {
+        let mut tiers = std::collections::HashMap::new();
+        tiers.insert(vfs_path.to_string(), tier);
+        ToolsConfig {
+            tiers: Some(tiers),
+            ..Default::default()
+        }
     }
 }
 
