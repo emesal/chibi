@@ -430,6 +430,42 @@ pub enum SandboxTier {
     Unsandboxed,
 }
 
+/// HTTP access configuration for synthesised tools.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct HttpConfig {
+    /// Per-path HTTP prefix allowlists. Longest-prefix match on VFS path.
+    /// Values are either a list of URL prefixes or the string `"trust-declared"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow: Option<std::collections::HashMap<String, HttpAllow>>,
+    /// Global toggle for trusting tool-declared HTTP prefixes.
+    /// When `true`, tools that declare `tool-http-allow` get those prefixes
+    /// even without an explicit `[tools.http.allow]` entry. Default: `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_declared: Option<bool>,
+}
+
+/// Per-path HTTP allowlist entry — either explicit prefixes or trust delegation.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum HttpAllow {
+    /// Explicit list of allowed URL prefixes.
+    Prefixes(Vec<String>),
+    /// The string `"trust-declared"` — trust the tool's own `tool-http-allow` binding.
+    TrustDeclared(String),
+}
+
+/// Result of resolving HTTP allowlist for a VFS path.
+#[cfg(feature = "synthesised-tools")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum HttpAllowResult {
+    /// Explicit config prefixes — use directly.
+    Prefixes(Vec<String>),
+    /// Trust-declared applies — caller should read tool's declared prefixes.
+    NeedDeclared,
+    /// No HTTP access configured.
+    NoAccess,
+}
+
 /// Tool filtering configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ToolsConfig {
@@ -456,6 +492,13 @@ pub struct ToolsConfig {
     /// ```
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiers: Option<std::collections::HashMap<String, u8>>,
+    /// HTTP access configuration for synthesised tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<HttpConfig>,
+    /// Environment variable forwarding for synthesised tools.
+    /// Keys are VFS path prefixes, values are lists of env var names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::HashMap<String, Vec<String>>>,
 }
 
 /// VFS (virtual file system) configuration.
@@ -549,6 +592,8 @@ impl ToolsConfig {
                 &local.exclude_categories,
             ),
             tiers,
+            http: self.http.clone(),
+            env: self.env.clone(),
         }
     }
 
