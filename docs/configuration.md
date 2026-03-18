@@ -677,6 +677,39 @@ Tier resolution uses prefix matching: the longest matching prefix wins. If no pr
 
 For dynamic tool filtering based on context or other conditions, use the `pre_api_tools` hook. See [Hooks documentation](hooks.md).
 
+### HTTP Allow List (`[tools.http]`)
+
+Control which URLs sandboxed synthesised tools may access. Configured globally in `config.toml` only — `[tools.http]` in `local.toml` is ignored (HTTP access is a global security boundary).
+
+```toml
+[tools.http.allow]
+# path prefix → allowlist entry
+# Option 1: explicit URL prefix list
+"/tools/shared/weather.scm" = ["https://api.openweathermap.org/"]
+
+# Option 2: trust the tool's own `tool-http-allow` declaration
+"/tools/home/mycontext/fetch.scm" = "trust-declared"
+```
+
+With `"trust-declared"`, chibi reads the tool's top-level `tool-http-allow` binding (a Scheme list of URL prefix strings) and uses those as the allowlist. This lets tool authors declare their own prefixes without requiring a config change.
+
+Allowlist resolution uses prefix matching: the longest matching VFS path prefix wins. Unsandboxed tools have unrestricted network access regardless of this config.
+
+### Environment Variable Exposure (`[tools.env]`)
+
+Control which environment variables are injected into sandboxed synthesised tools. Configured globally in `config.toml` only — `[tools.env]` in `local.toml` is ignored.
+
+```toml
+[tools.env]
+# path prefix → list of env var names to expose
+"/tools/shared/weather.scm" = ["WEATHER_API_KEY"]
+"/tools/home/mycontext"     = ["MY_TOKEN", "MY_SECRET"]
+```
+
+At evaluation time, the listed env vars are read from the process environment and injected into the tein context as Scheme string bindings. Variables not present in the environment are silently omitted.
+
+Resolution uses longest-prefix matching on VFS path, same as `[tools.tiers]`.
+
 ## Storage Configuration
 
 Configure transcript partitioning in `~/.chibi/config.toml`:

@@ -325,6 +325,21 @@ Use `(import (harness tools))` to access the `define-tool` macro. A single file 
     (string-append "Goodbye, " (cdr (assoc "name" args)) "!"))))
 ```
 
+Optional keywords `category` and `summary-params` can follow `description`:
+
+```scheme
+(define-tool fetch-data
+  (description "Fetch data from an API endpoint")
+  (category "network")
+  (summary-params ("endpoint" "method"))
+  (parameters '((endpoint . ((type . "string") (description . "API endpoint path")))
+                (method   . ((type . "string") (description . "HTTP method")))))
+  (execute (lambda (args) ...)))
+```
+
+- **`category`** — string: `"network"`, `"shell"`, or `"synthesised"` (default). Network tools fire `pre_fetch_url` before execution.
+- **`summary-params`** — list of parameter names used to build the human-readable permission-prompt summary for network tools that have no `url` parameter.
+
 ### `(harness tools)` Module
 
 The `(harness tools)` module exposes:

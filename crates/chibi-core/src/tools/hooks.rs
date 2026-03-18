@@ -653,28 +653,33 @@ pub(crate) const HOOK_METADATA: &[HookMeta] = &[
     HookMeta {
         point: HookPoint::PreFetchUrl,
         category: "url_security",
-        description: "fires before fetching a sensitive URL (loopback, private, cloud metadata); deny-only",
+        description: "fires before fetching a sensitive URL or invoking a network-category tool without a URL; deny-only",
         can_modify: true,
         payload_fields: &[
             FieldMeta {
                 name: "tool_name",
                 typ: "string",
-                description: "fetch_url",
+                description: "name of the tool making the network call",
             },
             FieldMeta {
                 name: "url",
                 typ: "string",
-                description: "URL being fetched",
+                description: "URL being fetched (absent when safety is \"no_url\")",
             },
             FieldMeta {
                 name: "safety",
                 typ: "string",
-                description: "sensitive",
+                description: "\"sensitive\" for URL-based calls, \"no_url\" for network tools without a URL parameter",
             },
             FieldMeta {
                 name: "reason",
                 typ: "string",
-                description: "loopback address, private network address, cloud metadata endpoint, or could not parse URL",
+                description: "classification reason (absent when safety is \"no_url\")",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "human-readable summary from summary_params (present only when safety is \"no_url\")",
             },
         ],
         return_fields: &[
@@ -1558,6 +1563,11 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
+    #[cfg(feature = "synthesised-tools")]
+    fn config_with_tier(vfs_path: &str, tier: u8) -> crate::config::ToolsConfig {
+        crate::config::test_helpers::config_with_tier(vfs_path, tier)
+    }
+
     // All 31 hook points for testing
     const ALL_HOOKS: &[(&str, HookPoint)] = &[
         ("pre_message", HookPoint::PreMessage),
@@ -2025,7 +2035,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_execute_hook_dispatches_to_synthesised() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2042,11 +2052,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -2105,7 +2115,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_empty_list_return_is_noop() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2119,11 +2129,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/noop.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -2140,7 +2150,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_json_object_return() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2156,11 +2166,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/modify.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -2180,7 +2190,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_skips_unregistered_hook_point() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2194,11 +2204,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/selective.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -2211,7 +2221,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_error_in_callback_skipped() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2225,11 +2235,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/error.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -2243,7 +2253,7 @@ echo 'OK'
     #[cfg(all(feature = "synthesised-tools", unix))]
     fn test_mixed_plugin_and_tein_hooks() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2277,11 +2287,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/tein.scm").unwrap();
-        let mut tools = load_tools_from_source_with_tier(
+        let mut tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
         tools.insert(0, plugin_tool);
@@ -2304,7 +2314,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_reentrancy_guard_skips_tein_callbacks() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2318,11 +2328,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/reentrancy.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -2352,7 +2362,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_reentrancy_guard_cleared_after_dispatch() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2366,11 +2376,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/guard-cleanup.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -2441,7 +2451,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_call_tool_with_tein_ctx_sets_bridge() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2478,11 +2488,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/bridge-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -2522,7 +2532,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_call_tool_without_tein_ctx_no_bridge() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -2551,11 +2561,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/no-bridge-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -2579,7 +2589,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_harness_io_vfs_write() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -2600,11 +2610,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/io-hook-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -2645,7 +2655,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_io_does_not_trigger_hooks() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -2672,11 +2682,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/counter-hook-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -2730,7 +2740,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_pre_vfs_write_hook_io_write_works() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -2753,11 +2763,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &plugin_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(plugin_path.as_str(), 2),
         )
         .unwrap();
 
@@ -2786,7 +2796,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_history_snapshot_on_write() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -2803,11 +2813,11 @@ echo 'OK'
         // Load history plugin
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             HISTORY_PLUGIN,
             &plugin_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(plugin_path.as_str(), 2),
         )
         .unwrap();
 
@@ -2853,7 +2863,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_history_pruning() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -2862,11 +2872,11 @@ echo 'OK'
 
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             HISTORY_PLUGIN,
             &plugin_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(plugin_path.as_str(), 2),
         )
         .unwrap();
 
@@ -2926,7 +2936,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_history_diff_tool() {
         use crate::tools::registry::{ToolCallContext, ToolRegistry};
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -2943,11 +2953,11 @@ echo 'OK'
         // Load history plugin
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             HISTORY_PLUGIN,
             &plugin_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(plugin_path.as_str(), 2),
         )
         .unwrap();
 

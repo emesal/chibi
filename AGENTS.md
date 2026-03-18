@@ -63,6 +63,10 @@ LLM communication is delegated to ratatoskr; `gateway.rs` bridges chibi's types 
 - Synthesised tools: `(harness tools)` module provides `call-tool` and `define-tool`. `(harness hooks)` module provides `register-hook`. `HARNESS_PREAMBLE` defines `%tool-registry%`, `%hook-registry%`, `define-tool`, and `register-hook` at top level (not inside the library) so `set!` can mutate them and rust can read them post-eval.
 - `ToolImpl::Synthesised` has `exec_binding` field: `"tool-execute"` for convention format, `"%tool-execute-{name}%"` for `define-tool` multi-tool files.
 - `reload_tool_from_content` and `scan_and_register` require `&ToolsConfig` for tier resolution. Pass `&ToolsConfig::default()` when no tier overrides needed.
+- `load_tools_from_source` takes `&ToolsConfig` (not a tier param). Tests use `&ToolsConfig::default()` for sandboxed, or `config_with_tier(path, 2)` for unsandboxed. `load_tool_from_source` (singular) still takes no config param — uses default internally.
+- `ToolCategory::from_category_str` maps category strings from scheme tools to variants. Unknown strings → `Synthesised`.
+- `HttpAllowResult::NeedDeclared` triggers two-phase context build: phase 1 evaluates source without HTTP to read `tool-http-allow`, phase 2 rebuilds with trusted prefixes.
+- `PreFetchUrl` hook fires with `safety: "no_url"` and `summary` field (no `url`/`reason`) for network-category tools without a URL parameter.
 - `call-tool` bridge uses one global mutex: `BRIDGE_CALL_CTX` (set/cleared per execute via `CallContextGuard`). Registry is embedded in `ToolImpl::Synthesised` and passed through `execute_synthesised` — no longer a separate global. Reason: tein runs scheme on a dedicated worker thread; thread-locals set on the caller thread would be invisible there.
 - `ToolImpl::Synthesised` carries `registry: Arc<RwLock<ToolRegistry>>` so `call-tool` can dispatch to any registered tool from the tein worker thread without thread-local state.
 - Harness also exposes `%context-name%` (mutable binding, injected per call), `(generate-id)` (8 hex chars, uuid v4), and `(current-timestamp)` (`YYYYMMDD-HHMMz` UTC).

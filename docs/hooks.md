@@ -61,7 +61,7 @@ Chibi supports a hooks system that allows plugins to register for lifecycle even
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_fetch_url` | fires before fetching a sensitive URL (loopback, private, cloud metadata); deny-only | Yes |
+| `pre_fetch_url` | fires before fetching a sensitive URL or invoking a network-category tool without a URL; deny-only | Yes |
 
 ### Sub-Agent Lifecycle
 
@@ -396,10 +396,11 @@ Payload: (empty)
 
 ```json
 {
-  "tool_name": "...",  // fetch_url
-  "url": "...",  // URL being fetched
-  "safety": "...",  // sensitive
-  "reason": "..."  // loopback address, private network address, cloud metadata endpoint, or could not parse URL
+  "tool_name": "...",  // name of the tool making the network call
+  "url": "...",  // URL being fetched (absent when safety is "no_url")
+  "safety": "...",  // "sensitive" for URL-based calls, "no_url" for network tools without a URL parameter
+  "reason": "...",  // classification reason (absent when safety is "no_url")
+  "summary": "..."  // human-readable summary from summary_params (present only when safety is "no_url")
 }
 ```
 
