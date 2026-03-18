@@ -1209,6 +1209,29 @@ fn extract_multi_tools(
             )));
         }
 
+        // category (index 4, optional — absent in 4-element legacy entries)
+        let category = if fields.len() > 4 {
+            fields[4]
+                .as_string()
+                .map(|s| ToolCategory::from_category_str(s))
+                .unwrap_or(ToolCategory::Synthesised)
+        } else {
+            ToolCategory::Synthesised
+        };
+
+        // summary_params (index 5, optional)
+        let summary_params = if fields.len() > 5 {
+            match &fields[5] {
+                Value::List(items) => items
+                    .iter()
+                    .filter_map(|v| v.as_string().map(|s| s.to_string()))
+                    .collect(),
+                _ => vec![],
+            }
+        } else {
+            vec![]
+        };
+
         // reject names that would produce invalid Scheme identifiers when
         // embedded in `%tool-execute-{name}%` (whitespace or parentheses break
         // the symbol syntax)
@@ -1226,7 +1249,7 @@ fn extract_multi_tools(
         let exec_binding = format!("%tool-execute-{name}%");
         // scheme-escape name before interpolating into a string literal
         let name_escaped = scheme_escape_string(&name);
-        // %tool-registry% entries are (name desc params handler).
+        // %tool-registry% entries are (name desc params handler ...).
         // use list-ref to extract the handler (index 3) for this tool by name.
         // list-ref is in (scheme base) which the preamble already imports.
         context
@@ -1247,7 +1270,7 @@ fn extract_multi_tools(
             parameters,
             hooks: hooks.clone(),
             metadata: ToolMetadata::new(),
-            summary_params: vec![],
+            summary_params,
             r#impl: ToolImpl::Synthesised {
                 vfs_path: vfs_path.clone(),
                 exec_binding: exec_binding.clone(),
@@ -1256,7 +1279,7 @@ fn extract_multi_tools(
                 worker_thread_id,
                 hook_bindings: hook_bindings.clone(),
             },
-            category: ToolCategory::Synthesised,
+            category,
         });
     }
 
@@ -1834,6 +1857,128 @@ mod tests {
 
     fn make_registry() -> Arc<RwLock<ToolRegistry>> {
         Arc::new(RwLock::new(ToolRegistry::new()))
+    }
+
+    #[test]
+    fn test_define_tool_category() {
+        let source = r#"
+(import (scheme base))
+(define-tool net_fetch
+  (description "fetches stuff")
+  (category "network")
+  (parameters '())
+  (execute (lambda (args) "ok")))
+"#;
+        let path = VfsPath::new("/tools/shared/cat.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].category, ToolCategory::Network);
+    }
+
+    #[test]
+    fn test_define_tool_summary_params() {
+        let source = r#"
+(import (scheme base))
+(define-tool my_action
+  (description "does things")
+  (summary-params '("ticker" "qty"))
+  (parameters '())
+  (execute (lambda (args) "ok")))
+"#;
+        let path = VfsPath::new("/tools/shared/sp.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].summary_params, vec!["ticker", "qty"]);
+    }
+
+    #[test]
+    fn test_define_tool_category_and_summary_params() {
+        let source = r#"
+(import (scheme base))
+(define-tool trade
+  (description "places a trade")
+  (category "network")
+  (summary-params '("ticker" "quantity"))
+  (parameters '())
+  (execute (lambda (args) "ok")))
+"#;
+        let path = VfsPath::new("/tools/shared/both.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].category, ToolCategory::Network);
+        assert_eq!(tools[0].summary_params, vec!["ticker", "quantity"]);
+    }
+
+    #[test]
+    fn test_define_tool_unknown_category() {
+        let source = r#"
+(import (scheme base))
+(define-tool unknown_cat
+  (description "unknown category")
+  (category "banana")
+  (parameters '())
+  (execute (lambda (args) "ok")))
+"#;
+        let path = VfsPath::new("/tools/shared/unk.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        assert_eq!(tools[0].category, ToolCategory::Synthesised);
+    }
+
+    #[test]
+    fn test_define_tool_multi_different_categories() {
+        let source = r#"
+(import (scheme base))
+(define-tool reader
+  (description "reads files")
+  (category "fs_read")
+  (parameters '())
+  (execute (lambda (args) "read")))
+(define-tool writer
+  (description "writes files")
+  (category "fs_write")
+  (parameters '())
+  (execute (lambda (args) "write")))
+"#;
+        let path = VfsPath::new("/tools/shared/multi.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].category, ToolCategory::FsRead);
+        assert_eq!(tools[1].category, ToolCategory::FsWrite);
     }
 
     const SCAN_TOOL: &str = r#"
