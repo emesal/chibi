@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_summary_table","collect_from_dir","collect_tasks","compute_blocked","inject_before_last_user","parse_task"],"struct":["TaskMeta"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ResolvedPath"],"fn":["resolve_tool_path"]};

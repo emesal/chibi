@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CLI_AFTER_HELP"],"fn":["check_context_pair","expand_attached_args","extract_string_pair","parse","parse_inspectable","read_prompt_from_pipe","read_prompt_interactive"],"struct":["Cli","PluginInvocation"],"trait":["InspectableExt"]};

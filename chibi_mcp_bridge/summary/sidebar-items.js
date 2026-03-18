@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["BACKOFF_BASE","BACKOFF_MAX","MAX_ATTEMPTS","MCP_TOOL_SUMMARY_TEMPLATE"],"fn":["fill_cache_gaps","generate_summary"]};

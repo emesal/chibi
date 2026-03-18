@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SHELL_EXEC_TOOL_NAME"],"fn":["execute_shell_exec","execute_shell_tool","register_shell_tools"],"static":["SHELL_TOOL_DEFS"]};

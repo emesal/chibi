@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ToolCategory","ToolImpl"],"struct":["ToolCall","ToolCallContext","ToolRegistry"],"type":["BoxFuture","ToolHandler"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["REGISTRY_PATH"],"enum":["ScmChangeKind"],"struct":["Vfs","VfsBuilder"],"type":["ScmChangeCallback"]};

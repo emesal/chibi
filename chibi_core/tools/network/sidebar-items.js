@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["FETCH_URL_TOOL_NAME"],"fn":["execute_fetch_url","execute_network_tool","register_network_tools"],"static":["NETWORK_TOOL_DEFS"]};

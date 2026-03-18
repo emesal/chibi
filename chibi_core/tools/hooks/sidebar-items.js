@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["HOOK_METADATA","TEIN_HOOK_GUARD"],"enum":["HookPoint"],"fn":["execute_hook","generate_hooks_docs_alist","generate_hooks_markdown"],"struct":["FieldMeta","HookMeta","HookPointIter","TeinHookContext"]};

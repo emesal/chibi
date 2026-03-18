@@ -1,0 +1,1 @@
+rd_("echibijchibi_corejchibi_jsonA`chibi_mcp_bridge")

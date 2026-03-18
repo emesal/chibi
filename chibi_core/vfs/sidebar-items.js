@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ScmChangeKind"],"mod":["backend","caller","contexts_backend","flock","local","path","permissions","tools_backend","types","vfs"],"struct":["Vfs","VfsBuilder"],"type":["ScmChangeCallback"]};

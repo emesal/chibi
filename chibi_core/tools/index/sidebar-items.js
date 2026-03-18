@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["INDEX_QUERY_TOOL_NAME","INDEX_STATUS_TOOL_NAME","INDEX_UPDATE_TOOL_NAME"],"fn":["execute_index_query","execute_index_status","execute_index_tool","execute_index_update","register_index_tools"],"static":["INDEX_TOOL_DEFS"]};
