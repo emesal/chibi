@@ -896,6 +896,7 @@ fn build_tein_context(
     source: String,
     tier: crate::config::SandboxTier,
     http_prefixes: Option<Vec<String>>,
+    env_vars: Option<Vec<(String, String)>>,
 ) -> io::Result<(TeinSession, std::thread::ThreadId)> {
     let worker_thread_id = Arc::new(std::sync::Mutex::new(None::<std::thread::ThreadId>));
     let tid_capture = Arc::clone(&worker_thread_id);
@@ -957,13 +958,23 @@ fn build_tein_context(
                 let refs: Vec<&str> = prefixes.iter().map(|s| s.as_str()).collect();
                 builder = builder.http_allow(&refs);
             }
+            if let Some(ref vars) = env_vars {
+                let refs: Vec<(&str, &str)> =
+                    vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                builder = builder.environment_variables(&refs);
+            }
             builder.build_managed(init)
         }
         crate::config::SandboxTier::Unsandboxed => {
             // with_vfs_shadows() enables shadow modules (e.g. scheme/process-context,
             // scheme/file) in non-sandboxed contexts. Required for (chibi diff) and
             // other library modules that depend on scheme/process-context.
-            let builder = Context::builder().standard_env().with_vfs_shadows();
+            let mut builder = Context::builder().standard_env().with_vfs_shadows();
+            if let Some(ref vars) = env_vars {
+                let refs: Vec<(&str, &str)> =
+                    vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                builder = builder.environment_variables(&refs);
+            }
             builder.build_managed(init)
         }
     }
@@ -990,7 +1001,7 @@ fn build_tein_context(
 #[cfg(feature = "synthesised-tools")]
 pub(crate) fn build_sandboxed_harness_context() -> io::Result<(TeinSession, std::thread::ThreadId)>
 {
-    build_tein_context(String::new(), crate::config::SandboxTier::Sandboxed, None)
+    build_tein_context(String::new(), crate::config::SandboxTier::Sandboxed, None, None)
 }
 
 /// Standard prelude evaluated in every tein context (synthesised tools and `scheme_eval`).
@@ -1050,8 +1061,10 @@ pub fn load_tools_from_source(
         crate::config::HttpAllowResult::Prefixes(p) => Some(p),
         _ => None, // NeedDeclared and NoAccess handled in chunk 6
     };
+    let env_vars = tools_config.resolve_env(vfs_path.as_str());
 
-    let (session, worker_thread_id) = build_tein_context(source_owned, tier, http_prefixes)?;
+    let (session, worker_thread_id) =
+        build_tein_context(source_owned, tier, http_prefixes, env_vars)?;
 
     // check if define-tool was used (%tool-registry% is non-empty list)
     let multi = session.evaluate("%tool-registry%").ok();
@@ -1837,7 +1850,7 @@ mod tests {
             crate::config::SandboxTier::Sandboxed,
         ] {
             let (session, _) =
-                build_tein_context(String::new(), tier, None).expect("session should build");
+                build_tein_context(String::new(), tier, None, None).expect("session should build");
             let cap = session.with_capture(|ctx| ctx.evaluate("(display 42)"));
             assert!(
                 cap.value.is_ok(),
@@ -1858,7 +1871,7 @@ mod tests {
             crate::config::SandboxTier::Unsandboxed,
         ] {
             let (session, _) =
-                build_tein_context(String::new(), tier, None).expect("session should build");
+                build_tein_context(String::new(), tier, None, None).expect("session should build");
 
             let hooks_docs_ok = session
                 .evaluate("(and (pair? hooks-docs) (pair? harness-tools-docs))")
