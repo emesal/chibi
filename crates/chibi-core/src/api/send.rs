@@ -3515,7 +3515,10 @@ mod tests {
         assert_eq!(hook_data["safety"].as_str(), Some("no_url"));
         // must have summary (not url)
         assert_eq!(hook_data["summary"].as_str(), Some(summary));
-        assert!(hook_data.get("url").is_none(), "no_url path must not include a 'url' field");
+        assert!(
+            hook_data.get("url").is_none(),
+            "no_url path must not include a 'url' field"
+        );
         assert_eq!(hook_data["tool_name"].as_str(), Some(tool_name));
     }
 
