@@ -653,28 +653,33 @@ pub(crate) const HOOK_METADATA: &[HookMeta] = &[
     HookMeta {
         point: HookPoint::PreFetchUrl,
         category: "url_security",
-        description: "fires before fetching a sensitive URL (loopback, private, cloud metadata); deny-only",
+        description: "fires before fetching a sensitive URL or invoking a network-category tool without a URL; deny-only",
         can_modify: true,
         payload_fields: &[
             FieldMeta {
                 name: "tool_name",
                 typ: "string",
-                description: "fetch_url",
+                description: "name of the tool making the network call",
             },
             FieldMeta {
                 name: "url",
                 typ: "string",
-                description: "URL being fetched",
+                description: "URL being fetched (absent when safety is \"no_url\")",
             },
             FieldMeta {
                 name: "safety",
                 typ: "string",
-                description: "sensitive",
+                description: "\"sensitive\" for URL-based calls, \"no_url\" for network tools without a URL parameter",
             },
             FieldMeta {
                 name: "reason",
                 typ: "string",
-                description: "loopback address, private network address, cloud metadata endpoint, or could not parse URL",
+                description: "classification reason (absent when safety is \"no_url\")",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "human-readable summary from summary_params (present only when safety is \"no_url\")",
             },
         ],
         return_fields: &[
