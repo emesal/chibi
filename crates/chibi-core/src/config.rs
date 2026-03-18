@@ -1979,8 +1979,7 @@ mod tests {
             ..Default::default()
         };
         let declared = vec!["https://api.example.com/".to_string()];
-        let result =
-            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        let result = config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
         assert_eq!(result, Some(vec!["https://api.example.com/".to_string()]));
     }
 
@@ -2000,8 +1999,7 @@ mod tests {
             ..Default::default()
         };
         let declared = vec!["https://ignored.com/".to_string()];
-        let result =
-            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        let result = config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
         assert_eq!(result, Some(vec!["https://explicit.com/".to_string()]));
     }
 
@@ -2016,8 +2014,7 @@ mod tests {
             ..Default::default()
         };
         let declared = vec!["https://api.example.com/".to_string()];
-        let result =
-            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        let result = config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
         assert_eq!(result, Some(vec!["https://api.example.com/".to_string()]));
     }
 
@@ -2026,8 +2023,7 @@ mod tests {
     fn test_resolve_http_allow_with_declared_no_trust() {
         let config = ToolsConfig::default();
         let declared = vec!["https://api.example.com/".to_string()];
-        let result =
-            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        let result = config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
         assert_eq!(result, None);
     }
 
@@ -2047,8 +2043,7 @@ mod tests {
             ..Default::default()
         };
         let declared: Vec<String> = vec![];
-        let result =
-            config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
+        let result = config.resolve_http_allow_with_declared("/tools/shared/t212.scm", &declared);
         // trust-declared but nothing declared → no access
         assert_eq!(result, None);
     }
