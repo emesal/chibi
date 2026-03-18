@@ -1114,23 +1114,18 @@ async fn execute_tool_pure(
             }
             ToolCategory::Network => {
                 let url = args.get_str("url").unwrap_or("");
-                let safety = tools::classify_url(url);
-                if let Some(ref policy) = resolved_config.url_policy {
-                    if tools::evaluate_url_policy(url, &safety, policy) == tools::UrlAction::Deny {
-                        let reason = match &safety {
-                            tools::UrlSafety::Sensitive(cat) => cat.to_string(),
-                            tools::UrlSafety::Safe => "denied by URL policy".to_string(),
-                        };
-                        Some(format!("Permission denied: {}", reason))
-                    } else {
-                        None
-                    }
-                } else if let tools::UrlSafety::Sensitive(category) = &safety {
+                if url.is_empty() {
+                    // No URL parameter — use summary_params for the permission prompt.
+                    let summary = tools::tool_call_summary(
+                        &registry.read().unwrap(),
+                        &tool_call.name,
+                        &tool_call.arguments,
+                    )
+                    .unwrap_or_default();
                     let hook_data = json!({
                         "tool_name": tool_call.name,
-                        "url": url,
-                        "safety": "sensitive",
-                        "reason": category.to_string(),
+                        "summary": summary,
+                        "safety": "no_url",
                     });
                     check_permission(
                         plugin_tools,
@@ -1142,7 +1137,36 @@ async fn execute_tool_pure(
                     .err()
                     .map(|r| format!("Permission denied: {}", r))
                 } else {
-                    None
+                    let safety = tools::classify_url(url);
+                    if let Some(ref policy) = resolved_config.url_policy {
+                        if tools::evaluate_url_policy(url, &safety, policy) == tools::UrlAction::Deny {
+                            let reason = match &safety {
+                                tools::UrlSafety::Sensitive(cat) => cat.to_string(),
+                                tools::UrlSafety::Safe => "denied by URL policy".to_string(),
+                            };
+                            Some(format!("Permission denied: {}", reason))
+                        } else {
+                            None
+                        }
+                    } else if let tools::UrlSafety::Sensitive(category) = &safety {
+                        let hook_data = json!({
+                            "tool_name": tool_call.name,
+                            "url": url,
+                            "safety": "sensitive",
+                            "reason": category.to_string(),
+                        });
+                        check_permission(
+                            plugin_tools,
+                            tools::HookPoint::PreFetchUrl,
+                            &hook_data,
+                            permission_handler,
+                            tein_ctx,
+                        )?
+                        .err()
+                        .map(|r| format!("Permission denied: {}", r))
+                    } else {
+                        None
+                    }
                 }
             }
             ToolCategory::Flow => {
