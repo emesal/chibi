@@ -670,9 +670,7 @@ impl ToolsConfig {
         }
 
         match best {
-            Some((_, HttpAllow::Prefixes(prefixes))) => {
-                HttpAllowResult::Prefixes(prefixes.clone())
-            }
+            Some((_, HttpAllow::Prefixes(prefixes))) => HttpAllowResult::Prefixes(prefixes.clone()),
             Some((_, HttpAllow::TrustDeclared(s))) if s == "trust-declared" => {
                 HttpAllowResult::NeedDeclared
             }
@@ -691,6 +689,39 @@ impl ToolsConfig {
                 }
             }
         }
+    }
+
+    /// Resolve environment variable forwarding for a synthesised tool.
+    ///
+    /// Uses longest-prefix match on `[tools.env]` entries. Reads the listed
+    /// var names from the real process environment, returning name+value pairs.
+    /// Vars not set in the process are silently skipped.
+    ///
+    /// Returns `None` when no config entry matches (distinct from `Some(vec![])`
+    /// which means "config matched but no vars were set").
+    #[cfg(feature = "synthesised-tools")]
+    pub fn resolve_env(&self, vfs_path: &str) -> Option<Vec<(String, String)>> {
+        let env_map = self.env.as_ref()?;
+
+        let mut best: Option<(&str, &Vec<String>)> = None;
+        for (pattern, var_names) in env_map {
+            if vfs_path.starts_with(pattern.as_str()) {
+                match best {
+                    None => best = Some((pattern, var_names)),
+                    Some((prev, _)) if pattern.len() > prev.len() => {
+                        best = Some((pattern, var_names));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        best.map(|(_, var_names)| {
+            var_names
+                .iter()
+                .filter_map(|name| std::env::var(name).ok().map(|val| (name.clone(), val)))
+                .collect()
+        })
     }
 }
 
@@ -1847,6 +1878,65 @@ mod tests {
     fn test_vfs_config_custom_backend() {
         let config: Config = toml::from_str("[vfs]\nbackend = \"fossil\"").unwrap();
         assert_eq!(config.vfs.backend, "fossil");
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_env_present() {
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "/tools/shared/t212.scm".to_string(),
+            vec![
+                "CHIBI_TEST_ENV_KEY_1".to_string(),
+                "CHIBI_TEST_ENV_MISSING_1".to_string(),
+            ],
+        );
+        let config = ToolsConfig {
+            env: Some(env),
+            ..Default::default()
+        };
+        // SAFETY: using unique env var name to avoid parallel test collision
+        unsafe { std::env::set_var("CHIBI_TEST_ENV_KEY_1", "secret123") };
+        let result = config.resolve_env("/tools/shared/t212.scm");
+        unsafe { std::env::remove_var("CHIBI_TEST_ENV_KEY_1") };
+
+        let vars = result.unwrap();
+        assert_eq!(
+            vars,
+            vec![("CHIBI_TEST_ENV_KEY_1".to_string(), "secret123".to_string())]
+        );
+        // CHIBI_TEST_ENV_MISSING_1 was not set, so it's skipped
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_env_no_config() {
+        let config = ToolsConfig::default();
+        assert!(config.resolve_env("/tools/shared/t212.scm").is_none());
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_env_longest_prefix() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("/tools/shared/".to_string(), vec!["GENERAL_KEY".to_string()]);
+        env.insert(
+            "/tools/shared/t212.scm".to_string(),
+            vec!["CHIBI_TEST_ENV_SPECIFIC_1".to_string()],
+        );
+        let config = ToolsConfig {
+            env: Some(env),
+            ..Default::default()
+        };
+        unsafe { std::env::set_var("CHIBI_TEST_ENV_SPECIFIC_1", "val") };
+        let result = config.resolve_env("/tools/shared/t212.scm");
+        unsafe { std::env::remove_var("CHIBI_TEST_ENV_SPECIFIC_1") };
+
+        let vars = result.unwrap();
+        assert_eq!(
+            vars,
+            vec![("CHIBI_TEST_ENV_SPECIFIC_1".to_string(), "val".to_string())]
+        );
     }
 
     #[cfg(feature = "synthesised-tools")]
