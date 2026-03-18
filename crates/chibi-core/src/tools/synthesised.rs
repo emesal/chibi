@@ -383,13 +383,42 @@ pub(crate) static HARNESS_PREAMBLE: std::sync::LazyLock<String> = std::sync::Laz
 ;; registers a tool: appends to %tool-registry% in definition order (LIFO via cons).
 ;; rust reads %tool-registry% after evaluation; non-empty → multi-tool mode.
 (define-syntax define-tool
-  (syntax-rules (description parameters execute)
+  (syntax-rules (description category summary-params parameters execute)
+    ;; pattern 1: baseline (no category, no summary-params)
     ((define-tool name
        (description desc)
        (parameters params)
        (execute handler))
      (set! %tool-registry%
-       (cons (list (symbol->string 'name) desc params handler)
+       (cons (list (symbol->string 'name) desc params handler #f #f)
+             %tool-registry%)))
+    ;; pattern 2: category only
+    ((define-tool name
+       (description desc)
+       (category cat)
+       (parameters params)
+       (execute handler))
+     (set! %tool-registry%
+       (cons (list (symbol->string 'name) desc params handler cat #f)
+             %tool-registry%)))
+    ;; pattern 3: summary-params only
+    ((define-tool name
+       (description desc)
+       (summary-params sp)
+       (parameters params)
+       (execute handler))
+     (set! %tool-registry%
+       (cons (list (symbol->string 'name) desc params handler #f sp)
+             %tool-registry%)))
+    ;; pattern 4: category + summary-params
+    ((define-tool name
+       (description desc)
+       (category cat)
+       (summary-params sp)
+       (parameters params)
+       (execute handler))
+     (set! %tool-registry%
+       (cons (list (symbol->string 'name) desc params handler cat sp)
              %tool-registry%)))))
 
 ;; registers a hook handler for a given hook point.
