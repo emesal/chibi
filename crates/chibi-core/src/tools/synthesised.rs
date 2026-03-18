@@ -1001,7 +1001,12 @@ fn build_tein_context(
 #[cfg(feature = "synthesised-tools")]
 pub(crate) fn build_sandboxed_harness_context() -> io::Result<(TeinSession, std::thread::ThreadId)>
 {
-    build_tein_context(String::new(), crate::config::SandboxTier::Sandboxed, None, None)
+    build_tein_context(
+        String::new(),
+        crate::config::SandboxTier::Sandboxed,
+        None,
+        None,
+    )
 }
 
 /// Standard prelude evaluated in every tein context (synthesised tools and `scheme_eval`).
@@ -1057,14 +1062,46 @@ pub fn load_tools_from_source(
 ) -> io::Result<Vec<Tool>> {
     let source_owned = source.to_string();
     let tier = tools_config.resolve_tier(vfs_path.as_str());
-    let http_prefixes = match tools_config.resolve_http_allow(vfs_path.as_str()) {
-        crate::config::HttpAllowResult::Prefixes(p) => Some(p),
-        _ => None, // NeedDeclared and NoAccess handled in chunk 6
-    };
     let env_vars = tools_config.resolve_env(vfs_path.as_str());
 
+    let http_result = tools_config.resolve_http_allow(vfs_path.as_str());
+    let http_prefixes = match &http_result {
+        crate::config::HttpAllowResult::Prefixes(p) => Some(p.clone()),
+        _ => None, // NeedDeclared resolved after phase 1
+    };
+
     let (session, worker_thread_id) =
-        build_tein_context(source_owned, tier, http_prefixes, env_vars)?;
+        build_tein_context(source_owned.clone(), tier, http_prefixes, env_vars.clone())?;
+
+    // Phase 2: trust-declared HTTP — read tool-http-allow, rebuild if needed
+    let (session, worker_thread_id) =
+        if matches!(http_result, crate::config::HttpAllowResult::NeedDeclared) {
+            // Read tool-http-allow binding from phase 1 session
+            let declared = session
+                .evaluate("tool-http-allow")
+                .ok()
+                .and_then(|v| match v {
+                    Value::List(items) => Some(
+                        items
+                            .iter()
+                            .filter_map(|i| i.as_string().map(|s| s.to_string()))
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            if let Some(trusted_prefixes) =
+                tools_config.resolve_http_allow_with_declared(vfs_path.as_str(), &declared)
+            {
+                // Rebuild with the trusted prefixes
+                build_tein_context(source_owned, tier, Some(trusted_prefixes), env_vars)?
+            } else {
+                (session, worker_thread_id)
+            }
+        } else {
+            (session, worker_thread_id)
+        };
 
     // check if define-tool was used (%tool-registry% is non-empty list)
     let multi = session.evaluate("%tool-registry%").ok();
@@ -2084,6 +2121,37 @@ mod tests {
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].category, ToolCategory::FsRead);
         assert_eq!(tools[1].category, ToolCategory::FsWrite);
+    }
+
+    #[test]
+    fn test_trust_declared_reads_tool_http_allow() {
+        let source = r#"
+(import (scheme base))
+(define tool-http-allow '("https://api.example.com/"))
+(define tool-name "http_tool")
+(define tool-description "uses HTTP")
+(define tool-category "network")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let path = VfsPath::new("/tools/shared/http.scm").unwrap();
+        let registry = make_registry();
+        let mut allow = std::collections::HashMap::new();
+        allow.insert(
+            "/tools/shared/".to_string(),
+            crate::config::HttpAllow::TrustDeclared("trust-declared".to_string()),
+        );
+        let config = crate::config::ToolsConfig {
+            http: Some(crate::config::HttpConfig {
+                allow: Some(allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Should load successfully — two-phase build trusts the declared prefixes
+        let tools = load_tools_from_source(source, &path, &registry, &config).unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].category, ToolCategory::Network);
     }
 
     const SCAN_TOOL: &str = r#"
