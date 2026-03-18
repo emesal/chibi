@@ -630,6 +630,68 @@ impl ToolsConfig {
         }
         SandboxTier::Sandboxed
     }
+
+    /// Resolve HTTP prefix allowlist for a synthesised tool at the given VFS path.
+    ///
+    /// Uses longest-prefix match on `[tools.http.allow]` entries.
+    /// Returns `HttpAllowResult::Prefixes` for explicit lists,
+    /// `HttpAllowResult::NeedDeclared` for `"trust-declared"` entries,
+    /// `HttpAllowResult::NoAccess` when no entry matches.
+    #[cfg(feature = "synthesised-tools")]
+    pub fn resolve_http_allow(&self, vfs_path: &str) -> HttpAllowResult {
+        let http = match &self.http {
+            Some(h) => h,
+            None => return HttpAllowResult::NoAccess,
+        };
+        let allow_map = match &http.allow {
+            Some(m) => m,
+            None => {
+                // No per-path entries — check global trust_declared
+                return if http.trust_declared.unwrap_or(false) {
+                    HttpAllowResult::NeedDeclared
+                } else {
+                    HttpAllowResult::NoAccess
+                };
+            }
+        };
+
+        // Longest-prefix match
+        let mut best: Option<(&str, &HttpAllow)> = None;
+        for (pattern, entry) in allow_map {
+            if vfs_path.starts_with(pattern.as_str()) {
+                match best {
+                    None => best = Some((pattern, entry)),
+                    Some((prev, _)) if pattern.len() > prev.len() => {
+                        best = Some((pattern, entry));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        match best {
+            Some((_, HttpAllow::Prefixes(prefixes))) => {
+                HttpAllowResult::Prefixes(prefixes.clone())
+            }
+            Some((_, HttpAllow::TrustDeclared(s))) if s == "trust-declared" => {
+                HttpAllowResult::NeedDeclared
+            }
+            Some((pattern, HttpAllow::TrustDeclared(s))) => {
+                eprintln!(
+                    "warning: [tools.http.allow] {pattern:?}: unrecognised value {s:?}, ignoring"
+                );
+                HttpAllowResult::NoAccess
+            }
+            None => {
+                // Check global trust_declared
+                if http.trust_declared.unwrap_or(false) {
+                    HttpAllowResult::NeedDeclared
+                } else {
+                    HttpAllowResult::NoAccess
+                }
+            }
+        }
+    }
 }
 
 /// Known builtin plugin paths that default to unsandboxed tier.
@@ -1785,5 +1847,121 @@ mod tests {
     fn test_vfs_config_custom_backend() {
         let config: Config = toml::from_str("[vfs]\nbackend = \"fossil\"").unwrap();
         assert_eq!(config.vfs.backend, "fossil");
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_explicit_prefixes() {
+        let mut allow = std::collections::HashMap::new();
+        allow.insert(
+            "/tools/shared/t212.scm".to_string(),
+            HttpAllow::Prefixes(vec!["https://demo.trading212.com/".to_string()]),
+        );
+        let config = ToolsConfig {
+            http: Some(HttpConfig {
+                allow: Some(allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.resolve_http_allow("/tools/shared/t212.scm"),
+            HttpAllowResult::Prefixes(vec!["https://demo.trading212.com/".to_string()]),
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_longest_prefix() {
+        let mut allow = std::collections::HashMap::new();
+        allow.insert(
+            "/tools/shared/".to_string(),
+            HttpAllow::Prefixes(vec!["https://general.com/".to_string()]),
+        );
+        allow.insert(
+            "/tools/shared/t212.scm".to_string(),
+            HttpAllow::Prefixes(vec!["https://specific.com/".to_string()]),
+        );
+        let config = ToolsConfig {
+            http: Some(HttpConfig {
+                allow: Some(allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.resolve_http_allow("/tools/shared/t212.scm"),
+            HttpAllowResult::Prefixes(vec!["https://specific.com/".to_string()]),
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_no_config() {
+        let config = ToolsConfig::default();
+        assert_eq!(
+            config.resolve_http_allow("/tools/shared/t212.scm"),
+            HttpAllowResult::NoAccess,
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_trust_declared() {
+        let mut allow = std::collections::HashMap::new();
+        allow.insert(
+            "/tools/shared/".to_string(),
+            HttpAllow::TrustDeclared("trust-declared".to_string()),
+        );
+        let config = ToolsConfig {
+            http: Some(HttpConfig {
+                allow: Some(allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.resolve_http_allow("/tools/shared/t212.scm"),
+            HttpAllowResult::NeedDeclared,
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_global_trust_no_path_match() {
+        let config = ToolsConfig {
+            http: Some(HttpConfig {
+                trust_declared: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // no [tools.http.allow] entries at all, but global trust_declared = true
+        assert_eq!(
+            config.resolve_http_allow("/tools/shared/t212.scm"),
+            HttpAllowResult::NeedDeclared,
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_resolve_http_allow_unknown_string() {
+        let mut allow = std::collections::HashMap::new();
+        allow.insert(
+            "/tools/shared/".to_string(),
+            HttpAllow::TrustDeclared("typo-declared".to_string()),
+        );
+        let config = ToolsConfig {
+            http: Some(HttpConfig {
+                allow: Some(allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // unknown string → treated as None
+        assert_eq!(
+            config.resolve_http_allow("/tools/shared/t212.scm"),
+            HttpAllowResult::NoAccess,
+        );
     }
 }
