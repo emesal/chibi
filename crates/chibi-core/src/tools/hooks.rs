@@ -6,7 +6,7 @@
 use super::Tool;
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
-use strum::{AsRefStr, EnumString};
+use strum::{AsRefStr, EnumIter, EnumString};
 
 #[cfg(feature = "synthesised-tools")]
 use std::cell::RefCell;
@@ -25,7 +25,7 @@ thread_local! {
 }
 
 /// Hook points where tools can register to be called
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, AsRefStr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, EnumIter, AsRefStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum HookPoint {
     PreMessage,
@@ -61,6 +61,1287 @@ pub enum HookPoint {
     PostIndexFile, // After a file is indexed (observe: path, lang, symbol_count, ref_count)
     PreVfsWrite,   // Before a VFS file write (advisory, non-blocking; observe-and-snapshot)
     PostVfsWrite,  // After a successful VFS file write (observe only)
+}
+
+// --- hook metadata for discoverability ---
+
+/// Describes one field in a hook's payload or return value.
+#[cfg(feature = "synthesised-tools")]
+pub(crate) struct FieldMeta {
+    pub name: &'static str,
+    /// Schematic type string: "string", "number", "bool", "object", "array"
+    pub typ: &'static str,
+    pub description: &'static str,
+}
+
+/// Metadata for one hook point — the canonical single source of truth for
+/// hook contracts. Used to generate `hooks-docs` (scheme alist) and
+/// `docs/hooks.md` (markdown reference section).
+#[cfg(feature = "synthesised-tools")]
+pub(crate) struct HookMeta {
+    pub point: HookPoint,
+    /// Grouping category: "session", "message", "system_prompt", "tool",
+    /// "api", "agentic", "file_permission", "url_security", "agent",
+    /// "cache", "message_delivery", "index", "vfs_write", "context"
+    pub category: &'static str,
+    /// One-line description of when the hook fires.
+    pub description: &'static str,
+    /// Whether the hook callback can return values that modify behaviour.
+    pub can_modify: bool,
+    pub payload_fields: &'static [FieldMeta],
+    /// Empty slice for observe-only hooks.
+    pub return_fields: &'static [FieldMeta],
+    /// Extra context or caveats; empty string if none.
+    pub notes: &'static str,
+}
+
+#[cfg(feature = "synthesised-tools")]
+pub(crate) const HOOK_METADATA: &[HookMeta] = &[
+    HookMeta {
+        point: HookPoint::OnStart,
+        category: "session",
+        description: "fires when chibi starts, before any processing",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "chibi_home",
+                typ: "string",
+                description: "chibi home directory path",
+            },
+            FieldMeta {
+                name: "project_root",
+                typ: "string",
+                description: "project root directory path",
+            },
+            FieldMeta {
+                name: "tool_count",
+                typ: "number",
+                description: "number of loaded tools",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::OnEnd,
+        category: "session",
+        description: "fires when chibi exits, after all processing",
+        can_modify: false,
+        payload_fields: &[],
+        return_fields: &[],
+        notes: "receives empty payload",
+    },
+    HookMeta {
+        point: HookPoint::PreMessage,
+        category: "message",
+        description: "fires before sending a prompt to the LLM",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "prompt",
+                typ: "string",
+                description: "the user's prompt",
+            },
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "conversation summary",
+            },
+        ],
+        return_fields: &[FieldMeta {
+            name: "prompt",
+            typ: "string",
+            description: "modified prompt",
+        }],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostMessage,
+        category: "message",
+        description: "fires after receiving the LLM response",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "prompt",
+                typ: "string",
+                description: "original prompt",
+            },
+            FieldMeta {
+                name: "response",
+                typ: "string",
+                description: "LLM's response",
+            },
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PreSystemPrompt,
+        category: "system_prompt",
+        description: "fires before building the system prompt; can inject content",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "conversation summary",
+            },
+            FieldMeta {
+                name: "flock_goals",
+                typ: "array",
+                description: "array of {flock, goals} objects",
+            },
+        ],
+        return_fields: &[FieldMeta {
+            name: "inject",
+            typ: "string",
+            description: "content to add to system prompt",
+        }],
+        notes: "flock_goals replaced the old goals field; todos field removed (use VFS task files)",
+    },
+    HookMeta {
+        point: HookPoint::PostSystemPrompt,
+        category: "system_prompt",
+        description: "fires after building the system prompt; can inject content",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "conversation summary",
+            },
+            FieldMeta {
+                name: "flock_goals",
+                typ: "array",
+                description: "array of {flock, goals} objects",
+            },
+        ],
+        return_fields: &[FieldMeta {
+            name: "inject",
+            typ: "string",
+            description: "content to add to system prompt",
+        }],
+        notes: "same payload/return as pre_system_prompt",
+    },
+    HookMeta {
+        point: HookPoint::PreTool,
+        category: "tool",
+        description: "fires before executing a tool; can modify arguments or block",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "name of the tool being called",
+            },
+            FieldMeta {
+                name: "arguments",
+                typ: "object",
+                description: "tool arguments object",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "arguments",
+                typ: "object",
+                description: "modified arguments",
+            },
+            FieldMeta {
+                name: "block",
+                typ: "bool",
+                description: "set true to block execution",
+            },
+            FieldMeta {
+                name: "message",
+                typ: "string",
+                description: "message shown when blocked",
+            },
+        ],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostTool,
+        category: "tool",
+        description: "fires after executing a tool; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "name of the tool that ran",
+            },
+            FieldMeta {
+                name: "arguments",
+                typ: "object",
+                description: "tool arguments object",
+            },
+            FieldMeta {
+                name: "result",
+                typ: "string",
+                description: "tool output",
+            },
+            FieldMeta {
+                name: "cached",
+                typ: "bool",
+                description: "true if output was cached due to size",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PreToolOutput,
+        category: "tool",
+        description: "fires after tool returns, before caching decisions; can modify or block output",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "name of the tool that ran",
+            },
+            FieldMeta {
+                name: "arguments",
+                typ: "object",
+                description: "tool arguments object",
+            },
+            FieldMeta {
+                name: "output",
+                typ: "string",
+                description: "raw tool output",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "output",
+                typ: "string",
+                description: "modified output",
+            },
+            FieldMeta {
+                name: "block",
+                typ: "bool",
+                description: "set true to replace output entirely",
+            },
+            FieldMeta {
+                name: "message",
+                typ: "string",
+                description: "replacement message shown to LLM when blocked",
+            },
+        ],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostToolOutput,
+        category: "tool",
+        description: "fires after tool output processing and caching; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "name of the tool that ran",
+            },
+            FieldMeta {
+                name: "arguments",
+                typ: "object",
+                description: "tool arguments object",
+            },
+            FieldMeta {
+                name: "output",
+                typ: "string",
+                description: "original output after pre_tool_output modifications",
+            },
+            FieldMeta {
+                name: "final_output",
+                typ: "string",
+                description: "what the LLM will see (may be truncated if cached)",
+            },
+            FieldMeta {
+                name: "cached",
+                typ: "bool",
+                description: "true if output was cached",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PreApiTools,
+        category: "api",
+        description: "fires before tools are sent to the API; can filter tools",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+            FieldMeta {
+                name: "tools",
+                typ: "array",
+                description: "array of {name, type} tool objects",
+            },
+            FieldMeta {
+                name: "fuel_remaining",
+                typ: "number",
+                description: "remaining tool-call budget",
+            },
+            FieldMeta {
+                name: "fuel_total",
+                typ: "number",
+                description: "total fuel budget",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "exclude",
+                typ: "array",
+                description: "tool names to remove (union across hooks)",
+            },
+            FieldMeta {
+                name: "include",
+                typ: "array",
+                description: "allowlist: only these tools remain (intersection across hooks)",
+            },
+        ],
+        notes: "include/exclude are mutually exclusive per response; excludes union, includes intersect across multiple hooks",
+    },
+    HookMeta {
+        point: HookPoint::PreApiRequest,
+        category: "api",
+        description: "fires after tool filtering, before HTTP request; can modify request body",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+            FieldMeta {
+                name: "request_body",
+                typ: "object",
+                description: "full request body (model, messages, tools, etc.)",
+            },
+            FieldMeta {
+                name: "fuel_remaining",
+                typ: "number",
+                description: "remaining tool-call budget",
+            },
+            FieldMeta {
+                name: "fuel_total",
+                typ: "number",
+                description: "total fuel budget",
+            },
+        ],
+        return_fields: &[FieldMeta {
+            name: "request_body",
+            typ: "object",
+            description: "fields to merge into request body (partial override)",
+        }],
+        notes: "returned fields are merged, not replaced; cache_prompt and exclude_from_output are chibi-internal field names",
+    },
+    HookMeta {
+        point: HookPoint::PreAgenticLoop,
+        category: "agentic",
+        description: "fires before each agentic loop iteration; can override fallback and fuel",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+            FieldMeta {
+                name: "fuel_remaining",
+                typ: "number",
+                description: "remaining tool-call budget",
+            },
+            FieldMeta {
+                name: "fuel_total",
+                typ: "number",
+                description: "total fuel budget",
+            },
+            FieldMeta {
+                name: "current_fallback",
+                typ: "string",
+                description: "current fallback target (call_agent or call_user)",
+            },
+            FieldMeta {
+                name: "message",
+                typ: "string",
+                description: "user message for this loop",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "fallback",
+                typ: "string",
+                description: "override fallback: call_agent or call_user",
+            },
+            FieldMeta {
+                name: "fuel",
+                typ: "number",
+                description: "set fuel_remaining to this value",
+            },
+        ],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostToolBatch,
+        category: "agentic",
+        description: "fires after processing a batch of tool calls; can override fallback and adjust fuel",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+            FieldMeta {
+                name: "fuel_remaining",
+                typ: "number",
+                description: "remaining tool-call budget",
+            },
+            FieldMeta {
+                name: "fuel_total",
+                typ: "number",
+                description: "total fuel budget",
+            },
+            FieldMeta {
+                name: "current_fallback",
+                typ: "string",
+                description: "current fallback target",
+            },
+            FieldMeta {
+                name: "tool_calls",
+                typ: "array",
+                description: "array of {name, arguments} for tools that ran",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "fallback",
+                typ: "string",
+                description: "override fallback: call_agent or call_user",
+            },
+            FieldMeta {
+                name: "fuel_delta",
+                typ: "number",
+                description: "adjust fuel by this amount (positive adds, negative consumes, saturating)",
+            },
+        ],
+        notes: "post_tool_batch output > pre_agentic_loop output > config fallback; last hook to set fallback wins",
+    },
+    HookMeta {
+        point: HookPoint::PreFileRead,
+        category: "file_permission",
+        description: "fires before reading a file outside allowed paths; deny-only permission protocol",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "file_head, file_tail, or file_lines",
+            },
+            FieldMeta {
+                name: "path",
+                typ: "string",
+                description: "absolute path being read",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "denied",
+                typ: "bool",
+                description: "set true to block the read",
+            },
+            FieldMeta {
+                name: "reason",
+                typ: "string",
+                description: "reason shown when denied",
+            },
+        ],
+        notes: "fail-safe deny if no handler; empty {} response falls through to frontend handler",
+    },
+    HookMeta {
+        point: HookPoint::PreFileWrite,
+        category: "file_permission",
+        description: "fires before write_file or file_edit; deny-only permission protocol",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "write_file or file_edit",
+            },
+            FieldMeta {
+                name: "path",
+                typ: "string",
+                description: "absolute path being written",
+            },
+            FieldMeta {
+                name: "content",
+                typ: "string",
+                description: "file content (null for file_edit)",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "denied",
+                typ: "bool",
+                description: "set true to block the write",
+            },
+            FieldMeta {
+                name: "reason",
+                typ: "string",
+                description: "reason shown when denied",
+            },
+        ],
+        notes: "fail-safe deny if no permission handler configured",
+    },
+    HookMeta {
+        point: HookPoint::PreShellExec,
+        category: "file_permission",
+        description: "fires before shell_exec; deny-only permission protocol",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "shell_exec",
+            },
+            FieldMeta {
+                name: "command",
+                typ: "string",
+                description: "shell command string",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "denied",
+                typ: "bool",
+                description: "set true to block execution",
+            },
+            FieldMeta {
+                name: "reason",
+                typ: "string",
+                description: "reason shown when denied",
+            },
+        ],
+        notes: "same deny-only protocol as pre_file_read and pre_file_write",
+    },
+    HookMeta {
+        point: HookPoint::PreFetchUrl,
+        category: "url_security",
+        description: "fires before fetching a sensitive URL or invoking a network-category tool without a URL; deny-only",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "name of the tool making the network call",
+            },
+            FieldMeta {
+                name: "url",
+                typ: "string",
+                description: "URL being fetched (absent when safety is \"no_url\")",
+            },
+            FieldMeta {
+                name: "safety",
+                typ: "string",
+                description: "\"sensitive\" for URL-based calls, \"no_url\" for network tools without a URL parameter",
+            },
+            FieldMeta {
+                name: "reason",
+                typ: "string",
+                description: "classification reason (absent when safety is \"no_url\")",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "human-readable summary from summary_params (present only when safety is \"no_url\")",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "denied",
+                typ: "bool",
+                description: "set true to block the fetch",
+            },
+            FieldMeta {
+                name: "reason",
+                typ: "string",
+                description: "reason shown when denied",
+            },
+        ],
+        notes: "only fires when no url_policy is configured; url_policy is authoritative when set",
+    },
+    HookMeta {
+        point: HookPoint::PreSpawnAgent,
+        category: "agent",
+        description: "fires before a sub-agent LLM call; can intercept/replace or block",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "system_prompt",
+                typ: "string",
+                description: "system prompt for sub-agent",
+            },
+            FieldMeta {
+                name: "input",
+                typ: "string",
+                description: "input content to process",
+            },
+            FieldMeta {
+                name: "model",
+                typ: "string",
+                description: "model identifier",
+            },
+            FieldMeta {
+                name: "temperature",
+                typ: "number",
+                description: "sampling temperature",
+            },
+            FieldMeta {
+                name: "max_tokens",
+                typ: "number",
+                description: "max tokens for response",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "response",
+                typ: "string",
+                description: "pre-computed response to use instead of LLM call",
+            },
+            FieldMeta {
+                name: "block",
+                typ: "bool",
+                description: "set true to block the sub-agent call",
+            },
+            FieldMeta {
+                name: "message",
+                typ: "string",
+                description: "message shown when blocked",
+            },
+        ],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostSpawnAgent,
+        category: "agent",
+        description: "fires after sub-agent returns; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "system_prompt",
+                typ: "string",
+                description: "system prompt used",
+            },
+            FieldMeta {
+                name: "input",
+                typ: "string",
+                description: "input content",
+            },
+            FieldMeta {
+                name: "model",
+                typ: "string",
+                description: "model identifier",
+            },
+            FieldMeta {
+                name: "response",
+                typ: "string",
+                description: "sub-agent's response",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PreCacheOutput,
+        category: "cache",
+        description: "fires before caching a large tool output; can provide custom summary",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "tool whose output is being cached",
+            },
+            FieldMeta {
+                name: "arguments",
+                typ: "object",
+                description: "tool arguments",
+            },
+            FieldMeta {
+                name: "content",
+                typ: "string",
+                description: "full output content",
+            },
+            FieldMeta {
+                name: "char_count",
+                typ: "number",
+                description: "character count of content",
+            },
+            FieldMeta {
+                name: "line_count",
+                typ: "number",
+                description: "line count of content",
+            },
+        ],
+        return_fields: &[FieldMeta {
+            name: "summary",
+            typ: "string",
+            description: "custom summary to show LLM instead of full content",
+        }],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostCacheOutput,
+        category: "cache",
+        description: "fires after output is cached; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "tool whose output was cached",
+            },
+            FieldMeta {
+                name: "cache_id",
+                typ: "string",
+                description: "filename under vfs:///sys/tool_cache/<context>/",
+            },
+            FieldMeta {
+                name: "output_size",
+                typ: "number",
+                description: "size of cached output in bytes",
+            },
+            FieldMeta {
+                name: "preview_size",
+                typ: "number",
+                description: "size of preview shown to LLM",
+            },
+        ],
+        return_fields: &[],
+        notes: "access cached content with file_head/file_tail/file_lines using full vfs:// URI",
+    },
+    HookMeta {
+        point: HookPoint::PreSendMessage,
+        category: "message_delivery",
+        description: "fires before delivering an inter-context message; can claim delivery",
+        can_modify: true,
+        payload_fields: &[
+            FieldMeta {
+                name: "from",
+                typ: "string",
+                description: "sending context name",
+            },
+            FieldMeta {
+                name: "to",
+                typ: "string",
+                description: "recipient context name",
+            },
+            FieldMeta {
+                name: "content",
+                typ: "string",
+                description: "message content",
+            },
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+        ],
+        return_fields: &[
+            FieldMeta {
+                name: "delivered",
+                typ: "bool",
+                description: "set true to claim delivery was handled",
+            },
+            FieldMeta {
+                name: "via",
+                typ: "string",
+                description: "delivery mechanism name (for logging)",
+            },
+        ],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostSendMessage,
+        category: "message_delivery",
+        description: "fires after message delivery; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "from",
+                typ: "string",
+                description: "sending context name",
+            },
+            FieldMeta {
+                name: "to",
+                typ: "string",
+                description: "recipient context name",
+            },
+            FieldMeta {
+                name: "content",
+                typ: "string",
+                description: "message content",
+            },
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "active context name",
+            },
+            FieldMeta {
+                name: "delivery_result",
+                typ: "string",
+                description: "delivery outcome description",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostIndexFile,
+        category: "index",
+        description: "fires after a file is indexed by the code indexer; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "path",
+                typ: "string",
+                description: "relative path of indexed file",
+            },
+            FieldMeta {
+                name: "lang",
+                typ: "string",
+                description: "detected language",
+            },
+            FieldMeta {
+                name: "symbol_count",
+                typ: "number",
+                description: "number of symbols indexed",
+            },
+            FieldMeta {
+                name: "ref_count",
+                typ: "number",
+                description: "number of references indexed",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PreVfsWrite,
+        category: "vfs_write",
+        description: "fires before a VFS file write via tool dispatch; advisory, non-blocking",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "write_file or file_edit",
+            },
+            FieldMeta {
+                name: "path",
+                typ: "string",
+                description: "VFS path being written",
+            },
+            FieldMeta {
+                name: "content",
+                typ: "string",
+                description: "new content (null for file_edit)",
+            },
+            FieldMeta {
+                name: "caller",
+                typ: "string",
+                description: "context initiating the write",
+            },
+        ],
+        return_fields: &[],
+        notes: "only fires for context-initiated writes via send.rs; VfsCaller::System and (harness io) bypass this hook",
+    },
+    HookMeta {
+        point: HookPoint::PostVfsWrite,
+        category: "vfs_write",
+        description: "fires after a successful VFS file write via tool dispatch; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "tool_name",
+                typ: "string",
+                description: "write_file or file_edit",
+            },
+            FieldMeta {
+                name: "path",
+                typ: "string",
+                description: "VFS path that was written",
+            },
+            FieldMeta {
+                name: "caller",
+                typ: "string",
+                description: "context that initiated the write",
+            },
+        ],
+        return_fields: &[],
+        notes: "same caller restriction as pre_vfs_write",
+    },
+    HookMeta {
+        point: HookPoint::PreClear,
+        category: "context",
+        description: "fires before clearing a context; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "context being cleared",
+            },
+            FieldMeta {
+                name: "message_count",
+                typ: "number",
+                description: "number of messages before clear",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "existing conversation summary",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostClear,
+        category: "context",
+        description: "fires after clearing a context; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "context that was cleared",
+            },
+            FieldMeta {
+                name: "message_count",
+                typ: "number",
+                description: "message count before clear",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "summary before clear",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PreCompact,
+        category: "context",
+        description: "fires before full compaction; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "context being compacted",
+            },
+            FieldMeta {
+                name: "message_count",
+                typ: "number",
+                description: "number of messages before compact",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "conversation summary",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostCompact,
+        category: "context",
+        description: "fires after full compaction; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "context that was compacted",
+            },
+            FieldMeta {
+                name: "message_count",
+                typ: "number",
+                description: "message count before compact",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "conversation summary",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PreRollingCompact,
+        category: "context",
+        description: "fires before rolling compaction; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "context being compacted",
+            },
+            FieldMeta {
+                name: "message_count",
+                typ: "number",
+                description: "total message count",
+            },
+            FieldMeta {
+                name: "non_system_count",
+                typ: "number",
+                description: "non-system message count",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "conversation summary",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+    HookMeta {
+        point: HookPoint::PostRollingCompact,
+        category: "context",
+        description: "fires after rolling compaction; observe only",
+        can_modify: false,
+        payload_fields: &[
+            FieldMeta {
+                name: "context_name",
+                typ: "string",
+                description: "context that was compacted",
+            },
+            FieldMeta {
+                name: "message_count",
+                typ: "number",
+                description: "message count after archiving",
+            },
+            FieldMeta {
+                name: "messages_archived",
+                typ: "number",
+                description: "number of messages archived",
+            },
+            FieldMeta {
+                name: "summary",
+                typ: "string",
+                description: "updated summary",
+            },
+        ],
+        return_fields: &[],
+        notes: "",
+    },
+];
+
+#[cfg(feature = "synthesised-tools")]
+/// Generate a scheme alist string for `hooks-docs` injected into the tein runtime.
+///
+/// Follows the same convention as `introspect-docs`, `harness-tools-docs`, etc.
+/// Each key is the snake_case hook point name (as a symbol); the value is a
+/// multi-line human-readable string describing category, payload, and returns.
+///
+/// Mutation site: if `HookMeta` structure changes, update the format string below.
+pub(crate) fn generate_hooks_docs_alist() -> String {
+    let mut entries = String::new();
+    entries.push_str(
+        r#"'((__module__ . "hook points — lifecycle hooks for plugins and synthesised tools")"#,
+    );
+    entries.push('\n');
+
+    for meta in HOOK_METADATA {
+        let key = meta.point.as_ref(); // snake_case name from strum
+
+        let can_modify_str = if meta.can_modify { "yes" } else { "no" };
+
+        let payload_str: String = if meta.payload_fields.is_empty() {
+            "  payload: (none)".to_string()
+        } else {
+            let fields: Vec<String> = meta
+                .payload_fields
+                .iter()
+                .map(|f| format!("{} ({}): {}", f.name, f.typ, f.description))
+                .collect();
+            format!("  payload: {}", fields.join(", "))
+        };
+
+        let returns_str: String = if meta.return_fields.is_empty() {
+            "  returns: (observe only)".to_string()
+        } else {
+            let fields: Vec<String> = meta
+                .return_fields
+                .iter()
+                .map(|f| format!("{} ({}): {}", f.name, f.typ, f.description))
+                .collect();
+            format!("  returns: {}", fields.join(", "))
+        };
+
+        let notes_str = if meta.notes.is_empty() {
+            String::new()
+        } else {
+            format!("\n  note: {}", meta.notes)
+        };
+
+        // Escape backslashes and double-quotes for scheme string literals.
+        let value = format!(
+            "category: {} | {} | can modify: {}\n{}\n{}{}",
+            meta.category, meta.description, can_modify_str, payload_str, returns_str, notes_str,
+        );
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        entries.push_str(&format!("    ({key} . \"{escaped}\")\n"));
+    }
+
+    entries.push(')');
+    entries
+}
+
+#[cfg(feature = "synthesised-tools")]
+/// Generate the hook reference section for `docs/hooks.md`.
+///
+/// Produces the content that belongs between the `BEGIN GENERATED` and
+/// `END GENERATED` markers. Category-grouped tables followed by per-hook
+/// payload/return details (JSON blocks).
+///
+/// Mutation site: if table format or per-hook detail format changes, update
+/// the freshness test in the test suite and re-run `just generate-docs`.
+pub fn generate_hooks_markdown() -> String {
+    use std::collections::BTreeMap;
+
+    // Ordered category display names
+    let category_order = [
+        ("session", "Session Lifecycle"),
+        ("message", "Message Lifecycle"),
+        ("system_prompt", "System Prompt Lifecycle"),
+        ("tool", "Tool Lifecycle"),
+        ("api", "API Request Lifecycle"),
+        ("agentic", "Agentic Loop Lifecycle"),
+        ("file_permission", "File Permission"),
+        ("url_security", "URL Security"),
+        ("agent", "Sub-Agent Lifecycle"),
+        ("cache", "Tool Output Caching"),
+        ("message_delivery", "Message Delivery"),
+        ("index", "Index Lifecycle"),
+        ("vfs_write", "VFS Write Lifecycle"),
+        ("context", "Context Lifecycle"),
+    ];
+
+    // Group hooks by category preserving HOOK_METADATA order within each group
+    let mut by_category: BTreeMap<&str, Vec<&HookMeta>> = BTreeMap::new();
+    for meta in HOOK_METADATA {
+        by_category.entry(meta.category).or_default().push(meta);
+    }
+
+    let mut out = String::new();
+    out.push_str("## Hook Points\n");
+
+    // Tables per category
+    for (cat_key, cat_display) in &category_order {
+        let Some(hooks) = by_category.get(cat_key) else {
+            continue;
+        };
+        out.push('\n');
+        out.push_str(&format!("### {cat_display}\n\n"));
+        out.push_str("| Hook | When | Can Modify |\n");
+        out.push_str("|------|------|------------|\n");
+        for meta in hooks {
+            let key = meta.point.as_ref();
+            let can_modify = if meta.can_modify { "Yes" } else { "No" };
+            out.push_str(&format!(
+                "| `{key}` | {} | {can_modify} |\n",
+                meta.description
+            ));
+        }
+    }
+
+    // Per-hook detail sections
+    out.push_str("\n## Hook Data by Type\n");
+    for meta in HOOK_METADATA {
+        let key = meta.point.as_ref();
+        out.push('\n');
+        out.push_str(&format!("### {key}\n\n"));
+
+        // Emit a JSON block for a slice of FieldMeta entries.
+        // Commas appear after the value (before the // comment) so the output
+        // is syntactically valid JSON once comments are stripped. The last
+        // field has no comma. String fields use "..." as a placeholder;
+        // the description comment provides the semantic context.
+        fn json_block(fields: &[FieldMeta]) -> String {
+            let last = fields.len().saturating_sub(1);
+            let lines: Vec<String> = fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    let example = match f.typ {
+                        "string" => "\"...\"".to_string(),
+                        "number" => "0".to_string(),
+                        "bool" => "false".to_string(),
+                        "array" => "[]".to_string(),
+                        "object" => "{}".to_string(),
+                        _ => "null".to_string(),
+                    };
+                    let comma = if i < last { "," } else { "" };
+                    format!(
+                        "  \"{}\": {}{}  // {}",
+                        f.name, example, comma, f.description
+                    )
+                })
+                .collect();
+            format!("```json\n{{\n{}\n}}\n```\n", lines.join("\n"))
+        }
+
+        // Payload JSON block
+        if meta.payload_fields.is_empty() {
+            out.push_str("Payload: (empty)\n");
+        } else {
+            out.push_str(&json_block(meta.payload_fields));
+        }
+
+        if !meta.return_fields.is_empty() {
+            out.push_str("\n**Can return:**\n");
+            out.push_str(&json_block(meta.return_fields));
+        }
+
+        if !meta.notes.is_empty() {
+            out.push_str(&format!("\n> **Note:** {}\n", meta.notes));
+        }
+    }
+
+    out
 }
 
 /// Context needed to set up `BRIDGE_CALL_CTX` during tein hook dispatch,
@@ -282,6 +1563,11 @@ pub fn execute_hook(
 mod tests {
     use super::*;
 
+    #[cfg(feature = "synthesised-tools")]
+    fn config_with_tier(vfs_path: &str, tier: u8) -> crate::config::ToolsConfig {
+        crate::config::test_helpers::config_with_tier(vfs_path, tier)
+    }
+
     // All 31 hook points for testing
     const ALL_HOOKS: &[(&str, HookPoint)] = &[
         ("pre_message", HookPoint::PreMessage),
@@ -348,6 +1634,139 @@ mod tests {
         for (s, _) in ALL_HOOKS {
             let hook = s.parse::<HookPoint>().unwrap();
             assert_eq!(hook.as_ref(), *s);
+        }
+    }
+
+    // --- hook metadata tests ---
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_hook_metadata_completeness() {
+        // Every HookPoint variant must have an entry in HOOK_METADATA.
+        // Adding a variant without metadata will fail this test.
+        use strum::IntoEnumIterator;
+
+        let meta_points: std::collections::HashSet<HookPoint> =
+            HOOK_METADATA.iter().map(|m| m.point).collect();
+
+        let mut missing = Vec::new();
+        for variant in HookPoint::iter() {
+            if !meta_points.contains(&variant) {
+                missing.push(variant.as_ref().to_string());
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "HookPoint variants missing from HOOK_METADATA: {missing:?}"
+        );
+        assert_eq!(
+            HOOK_METADATA.len(),
+            HookPoint::iter().count(),
+            "HOOK_METADATA has duplicate entries or wrong count"
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_hook_metadata_categories_valid() {
+        // Every HOOK_METADATA entry's category must appear in generate_hooks_markdown's
+        // category_order. Without this, a mismatched category string is silently
+        // dropped from the generated markdown.
+        let category_order = [
+            "session",
+            "message",
+            "system_prompt",
+            "tool",
+            "api",
+            "agentic",
+            "file_permission",
+            "url_security",
+            "agent",
+            "cache",
+            "message_delivery",
+            "index",
+            "vfs_write",
+            "context",
+        ];
+        let valid: std::collections::HashSet<&str> = category_order.iter().copied().collect();
+        let mut bad = Vec::new();
+        for meta in HOOK_METADATA {
+            if !valid.contains(meta.category) {
+                bad.push(format!("{}: {:?}", meta.point.as_ref(), meta.category));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "HOOK_METADATA entries with unknown category (will be silently dropped from generated docs): {bad:?}"
+        );
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_generate_hooks_docs_alist_contains_all_hooks() {
+        use strum::IntoEnumIterator;
+
+        let alist = generate_hooks_docs_alist();
+        // Must start with the standard alist form
+        assert!(
+            alist.starts_with("'("),
+            "alist must start with quote+paren: {alist}"
+        );
+
+        // Every hook's snake_case name must appear as a key
+        for variant in HookPoint::iter() {
+            let key = variant.as_ref();
+            assert!(
+                alist.contains(&format!("({key} . ")),
+                "hooks-docs alist missing key: {key}"
+            );
+        }
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_hooks_docs_in_scheme_context() {
+        let (session, _) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+
+        // hooks-docs must be a non-empty pair
+        let is_pair = session
+            .evaluate("(pair? hooks-docs)")
+            .expect("evaluate pair?");
+        assert_eq!(is_pair, tein::Value::Boolean(true));
+
+        // (describe hooks-docs) must return a string mentioning pre_message
+        let described = session
+            .evaluate("(describe hooks-docs)")
+            .expect("evaluate describe");
+        match described {
+            tein::Value::String(s) => {
+                assert!(
+                    s.contains("pre_message"),
+                    "describe hooks-docs should mention pre_message: {s}"
+                );
+            }
+            other => panic!("expected string from describe, got: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "synthesised-tools")]
+    #[test]
+    fn test_module_doc_hooks_docs_pre_message() {
+        let (session, _) =
+            crate::tools::synthesised::build_sandboxed_harness_context().expect("build context");
+        let result = session
+            .evaluate("(module-doc hooks-docs 'pre_message)")
+            .expect("evaluate");
+        match result {
+            tein::Value::String(s) => {
+                assert!(
+                    s.contains("message") || s.contains("prompt"),
+                    "expected pre_message doc string, got: {s}"
+                );
+            }
+            other => panic!("expected string, got: {other:?}"),
         }
     }
 
@@ -616,7 +2035,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_execute_hook_dispatches_to_synthesised() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -633,11 +2052,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -696,7 +2115,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_empty_list_return_is_noop() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -710,11 +2129,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/noop.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -731,7 +2150,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_json_object_return() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -747,11 +2166,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/modify.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -771,7 +2190,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_skips_unregistered_hook_point() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -785,11 +2204,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/selective.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -802,7 +2221,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_error_in_callback_skipped() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -816,11 +2235,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/error.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -834,7 +2253,7 @@ echo 'OK'
     #[cfg(all(feature = "synthesised-tools", unix))]
     fn test_mixed_plugin_and_tein_hooks() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -868,11 +2287,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/tein.scm").unwrap();
-        let mut tools = load_tools_from_source_with_tier(
+        let mut tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
         tools.insert(0, plugin_tool);
@@ -895,7 +2314,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_reentrancy_guard_skips_tein_callbacks() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -909,11 +2328,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/reentrancy.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -943,7 +2362,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_reentrancy_guard_cleared_after_dispatch() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -957,11 +2376,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/guard-cleanup.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -1032,7 +2451,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_call_tool_with_tein_ctx_sets_bridge() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -1069,11 +2488,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/bridge-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -1113,7 +2532,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     fn test_tein_hook_call_tool_without_tein_ctx_no_bridge() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::VfsPath;
         use std::sync::{Arc, RwLock};
 
@@ -1142,11 +2561,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/no-bridge-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -1170,7 +2589,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_harness_io_vfs_write() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -1191,11 +2610,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/io-hook-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -1236,7 +2655,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_tein_hook_io_does_not_trigger_hooks() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -1263,11 +2682,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/counter-hook-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -1321,7 +2740,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_pre_vfs_write_hook_io_write_works() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -1344,11 +2763,11 @@ echo 'OK'
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/hook-test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &plugin_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(plugin_path.as_str(), 2),
         )
         .unwrap();
 
@@ -1377,7 +2796,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_history_snapshot_on_write() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -1394,11 +2813,11 @@ echo 'OK'
         // Load history plugin
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             HISTORY_PLUGIN,
             &plugin_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(plugin_path.as_str(), 2),
         )
         .unwrap();
 
@@ -1444,7 +2863,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_history_pruning() {
         use crate::tools::registry::ToolRegistry;
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -1453,11 +2872,11 @@ echo 'OK'
 
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             HISTORY_PLUGIN,
             &plugin_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(plugin_path.as_str(), 2),
         )
         .unwrap();
 
@@ -1517,7 +2936,7 @@ echo 'OK'
     #[cfg(feature = "synthesised-tools")]
     async fn test_history_diff_tool() {
         use crate::tools::registry::{ToolCallContext, ToolRegistry};
-        use crate::tools::synthesised::load_tools_from_source_with_tier;
+        use crate::tools::synthesised::load_tools_from_source;
         use crate::vfs::{VfsCaller, VfsPath};
         use std::sync::{Arc, RwLock};
 
@@ -1534,11 +2953,11 @@ echo 'OK'
         // Load history plugin
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let plugin_path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             HISTORY_PLUGIN,
             &plugin_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(plugin_path.as_str(), 2),
         )
         .unwrap();
 

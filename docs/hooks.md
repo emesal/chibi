@@ -2,114 +2,612 @@
 
 Chibi supports a hooks system that allows plugins to register for lifecycle events. Hooks can observe events or modify data as it flows through the system.
 
+<!-- BEGIN GENERATED HOOK REFERENCE — do not edit, run `just generate-docs` -->
 ## Hook Points
 
 ### Session Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `on_start` | When chibi starts (before any processing) | No |
-| `on_end` | When chibi exits (after all processing) | No |
+| `on_start` | fires when chibi starts, before any processing | No |
+| `on_end` | fires when chibi exits, after all processing | No |
 
 ### Message Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_message` | Before sending a prompt to the LLM | Yes (prompt) |
-| `post_message` | After receiving LLM response | No |
+| `pre_message` | fires before sending a prompt to the LLM | Yes |
+| `post_message` | fires after receiving the LLM response | No |
 
 ### System Prompt Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_system_prompt` | Before building system prompt | Yes (inject content) |
-| `post_system_prompt` | After building system prompt | Yes (inject content) |
+| `pre_system_prompt` | fires before building the system prompt; can inject content | Yes |
+| `post_system_prompt` | fires after building the system prompt; can inject content | Yes |
 
 ### Tool Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_tool` | Before executing a tool | Yes (arguments, can block) |
-| `post_tool` | After executing a tool | No |
-| `pre_tool_output` | After tool execution, before caching | Yes (output, can block/replace) |
-| `post_tool_output` | After tool output is processed | No |
+| `pre_tool` | fires before executing a tool; can modify arguments or block | Yes |
+| `post_tool` | fires after executing a tool; observe only | No |
+| `pre_tool_output` | fires after tool returns, before caching decisions; can modify or block output | Yes |
+| `post_tool_output` | fires after tool output processing and caching; observe only | No |
 
 ### API Request Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_api_tools` | Before tools are sent to API | Yes (filter tools) |
-| `pre_api_request` | Before API request is sent | Yes (modify request body) |
+| `pre_api_tools` | fires before tools are sent to the API; can filter tools | Yes |
+| `pre_api_request` | fires after tool filtering, before HTTP request; can modify request body | Yes |
 
 ### Agentic Loop Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_agentic_loop` | Before entering the tool loop (each iteration) | Yes (fallback target, fuel) |
-| `post_tool_batch` | After processing a batch of tool calls | Yes (fallback target, fuel delta) |
+| `pre_agentic_loop` | fires before each agentic loop iteration; can override fallback and fuel | Yes |
+| `post_tool_batch` | fires after processing a batch of tool calls; can override fallback and adjust fuel | Yes |
 
-### File Read Permission
-
-| Hook | When | Can Modify |
-|------|------|------------|
-| `pre_file_read` | Before reading a file outside `file_tools_allowed_paths` | Yes (approve/deny, fail-safe deny if no handler) |
-
-### File Write Permission
+### File Permission
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_file_write` | Before `write_file`/`file_edit` execution | Yes (approve/deny, fail-safe deny if no hook registered) |
+| `pre_file_read` | fires before reading a file outside allowed paths; deny-only permission protocol | Yes |
+| `pre_file_write` | fires before write_file or file_edit; deny-only permission protocol | Yes |
+| `pre_shell_exec` | fires before shell_exec; deny-only permission protocol | Yes |
 
 ### URL Security
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_fetch_url` | Before fetching a sensitive URL (loopback, private network, cloud metadata) | Yes (approve/deny, fail-safe deny if no handler) |
+| `pre_fetch_url` | fires before fetching a sensitive URL or invoking a network-category tool without a URL; deny-only | Yes |
 
 ### Sub-Agent Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_spawn_agent` | Before a sub-agent LLM call | Yes (can provide response or block) |
-| `post_spawn_agent` | After sub-agent returns | No |
+| `pre_spawn_agent` | fires before a sub-agent LLM call; can intercept/replace or block | Yes |
+| `post_spawn_agent` | fires after sub-agent returns; observe only | No |
 
 ### Tool Output Caching
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_cache_output` | Before caching large tool output | Yes (can provide custom summary) |
-| `post_cache_output` | After output is cached | No |
+| `pre_cache_output` | fires before caching a large tool output; can provide custom summary | Yes |
+| `post_cache_output` | fires after output is cached; observe only | No |
 
 ### Message Delivery
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_send_message` | Before delivering inter-context message | Yes (can claim delivery) |
-| `post_send_message` | After message delivery | No |
+| `pre_send_message` | fires before delivering an inter-context message; can claim delivery | Yes |
+| `post_send_message` | fires after message delivery; observe only | No |
 
 ### Index Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `post_index_file` | After a file is indexed by the code indexer | No |
+| `post_index_file` | fires after a file is indexed by the code indexer; observe only | No |
 
 ### VFS Write Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_vfs_write` | Before a VFS file write (advisory, non-blocking) | No |
-| `post_vfs_write` | After a successful VFS file write | No |
+| `pre_vfs_write` | fires before a VFS file write via tool dispatch; advisory, non-blocking | No |
+| `post_vfs_write` | fires after a successful VFS file write via tool dispatch; observe only | No |
 
 ### Context Lifecycle
 
 | Hook | When | Can Modify |
 |------|------|------------|
-| `pre_clear` | Before clearing context | No |
-| `post_clear` | After clearing context | No |
-| `pre_compact` | Before full compaction | No |
-| `post_compact` | After full compaction | No |
-| `pre_rolling_compact` | Before rolling compaction | No |
-| `post_rolling_compact` | After rolling compaction | No |
+| `pre_clear` | fires before clearing a context; observe only | No |
+| `post_clear` | fires after clearing a context; observe only | No |
+| `pre_compact` | fires before full compaction; observe only | No |
+| `post_compact` | fires after full compaction; observe only | No |
+| `pre_rolling_compact` | fires before rolling compaction; observe only | No |
+| `post_rolling_compact` | fires after rolling compaction; observe only | No |
+
+## Hook Data by Type
+
+### on_start
+
+```json
+{
+  "chibi_home": "...",  // chibi home directory path
+  "project_root": "...",  // project root directory path
+  "tool_count": 0  // number of loaded tools
+}
+```
+
+### on_end
+
+Payload: (empty)
+
+> **Note:** receives empty payload
+
+### pre_message
+
+```json
+{
+  "prompt": "...",  // the user's prompt
+  "context_name": "...",  // active context name
+  "summary": "..."  // conversation summary
+}
+```
+
+**Can return:**
+```json
+{
+  "prompt": "..."  // modified prompt
+}
+```
+
+### post_message
+
+```json
+{
+  "prompt": "...",  // original prompt
+  "response": "...",  // LLM's response
+  "context_name": "..."  // active context name
+}
+```
+
+### pre_system_prompt
+
+```json
+{
+  "context_name": "...",  // active context name
+  "summary": "...",  // conversation summary
+  "flock_goals": []  // array of {flock, goals} objects
+}
+```
+
+**Can return:**
+```json
+{
+  "inject": "..."  // content to add to system prompt
+}
+```
+
+> **Note:** flock_goals replaced the old goals field; todos field removed (use VFS task files)
+
+### post_system_prompt
+
+```json
+{
+  "context_name": "...",  // active context name
+  "summary": "...",  // conversation summary
+  "flock_goals": []  // array of {flock, goals} objects
+}
+```
+
+**Can return:**
+```json
+{
+  "inject": "..."  // content to add to system prompt
+}
+```
+
+> **Note:** same payload/return as pre_system_prompt
+
+### pre_tool
+
+```json
+{
+  "tool_name": "...",  // name of the tool being called
+  "arguments": {}  // tool arguments object
+}
+```
+
+**Can return:**
+```json
+{
+  "arguments": {},  // modified arguments
+  "block": false,  // set true to block execution
+  "message": "..."  // message shown when blocked
+}
+```
+
+### post_tool
+
+```json
+{
+  "tool_name": "...",  // name of the tool that ran
+  "arguments": {},  // tool arguments object
+  "result": "...",  // tool output
+  "cached": false  // true if output was cached due to size
+}
+```
+
+### pre_tool_output
+
+```json
+{
+  "tool_name": "...",  // name of the tool that ran
+  "arguments": {},  // tool arguments object
+  "output": "..."  // raw tool output
+}
+```
+
+**Can return:**
+```json
+{
+  "output": "...",  // modified output
+  "block": false,  // set true to replace output entirely
+  "message": "..."  // replacement message shown to LLM when blocked
+}
+```
+
+### post_tool_output
+
+```json
+{
+  "tool_name": "...",  // name of the tool that ran
+  "arguments": {},  // tool arguments object
+  "output": "...",  // original output after pre_tool_output modifications
+  "final_output": "...",  // what the LLM will see (may be truncated if cached)
+  "cached": false  // true if output was cached
+}
+```
+
+### pre_api_tools
+
+```json
+{
+  "context_name": "...",  // active context name
+  "tools": [],  // array of {name, type} tool objects
+  "fuel_remaining": 0,  // remaining tool-call budget
+  "fuel_total": 0  // total fuel budget
+}
+```
+
+**Can return:**
+```json
+{
+  "exclude": [],  // tool names to remove (union across hooks)
+  "include": []  // allowlist: only these tools remain (intersection across hooks)
+}
+```
+
+> **Note:** include/exclude are mutually exclusive per response; excludes union, includes intersect across multiple hooks
+
+### pre_api_request
+
+```json
+{
+  "context_name": "...",  // active context name
+  "request_body": {},  // full request body (model, messages, tools, etc.)
+  "fuel_remaining": 0,  // remaining tool-call budget
+  "fuel_total": 0  // total fuel budget
+}
+```
+
+**Can return:**
+```json
+{
+  "request_body": {}  // fields to merge into request body (partial override)
+}
+```
+
+> **Note:** returned fields are merged, not replaced; cache_prompt and exclude_from_output are chibi-internal field names
+
+### pre_agentic_loop
+
+```json
+{
+  "context_name": "...",  // active context name
+  "fuel_remaining": 0,  // remaining tool-call budget
+  "fuel_total": 0,  // total fuel budget
+  "current_fallback": "...",  // current fallback target (call_agent or call_user)
+  "message": "..."  // user message for this loop
+}
+```
+
+**Can return:**
+```json
+{
+  "fallback": "...",  // override fallback: call_agent or call_user
+  "fuel": 0  // set fuel_remaining to this value
+}
+```
+
+### post_tool_batch
+
+```json
+{
+  "context_name": "...",  // active context name
+  "fuel_remaining": 0,  // remaining tool-call budget
+  "fuel_total": 0,  // total fuel budget
+  "current_fallback": "...",  // current fallback target
+  "tool_calls": []  // array of {name, arguments} for tools that ran
+}
+```
+
+**Can return:**
+```json
+{
+  "fallback": "...",  // override fallback: call_agent or call_user
+  "fuel_delta": 0  // adjust fuel by this amount (positive adds, negative consumes, saturating)
+}
+```
+
+> **Note:** post_tool_batch output > pre_agentic_loop output > config fallback; last hook to set fallback wins
+
+### pre_file_read
+
+```json
+{
+  "tool_name": "...",  // file_head, file_tail, or file_lines
+  "path": "..."  // absolute path being read
+}
+```
+
+**Can return:**
+```json
+{
+  "denied": false,  // set true to block the read
+  "reason": "..."  // reason shown when denied
+}
+```
+
+> **Note:** fail-safe deny if no handler; empty {} response falls through to frontend handler
+
+### pre_file_write
+
+```json
+{
+  "tool_name": "...",  // write_file or file_edit
+  "path": "...",  // absolute path being written
+  "content": "..."  // file content (null for file_edit)
+}
+```
+
+**Can return:**
+```json
+{
+  "denied": false,  // set true to block the write
+  "reason": "..."  // reason shown when denied
+}
+```
+
+> **Note:** fail-safe deny if no permission handler configured
+
+### pre_shell_exec
+
+```json
+{
+  "tool_name": "...",  // shell_exec
+  "command": "..."  // shell command string
+}
+```
+
+**Can return:**
+```json
+{
+  "denied": false,  // set true to block execution
+  "reason": "..."  // reason shown when denied
+}
+```
+
+> **Note:** same deny-only protocol as pre_file_read and pre_file_write
+
+### pre_fetch_url
+
+```json
+{
+  "tool_name": "...",  // name of the tool making the network call
+  "url": "...",  // URL being fetched (absent when safety is "no_url")
+  "safety": "...",  // "sensitive" for URL-based calls, "no_url" for network tools without a URL parameter
+  "reason": "...",  // classification reason (absent when safety is "no_url")
+  "summary": "..."  // human-readable summary from summary_params (present only when safety is "no_url")
+}
+```
+
+**Can return:**
+```json
+{
+  "denied": false,  // set true to block the fetch
+  "reason": "..."  // reason shown when denied
+}
+```
+
+> **Note:** only fires when no url_policy is configured; url_policy is authoritative when set
+
+### pre_spawn_agent
+
+```json
+{
+  "system_prompt": "...",  // system prompt for sub-agent
+  "input": "...",  // input content to process
+  "model": "...",  // model identifier
+  "temperature": 0,  // sampling temperature
+  "max_tokens": 0  // max tokens for response
+}
+```
+
+**Can return:**
+```json
+{
+  "response": "...",  // pre-computed response to use instead of LLM call
+  "block": false,  // set true to block the sub-agent call
+  "message": "..."  // message shown when blocked
+}
+```
+
+### post_spawn_agent
+
+```json
+{
+  "system_prompt": "...",  // system prompt used
+  "input": "...",  // input content
+  "model": "...",  // model identifier
+  "response": "..."  // sub-agent's response
+}
+```
+
+### pre_cache_output
+
+```json
+{
+  "tool_name": "...",  // tool whose output is being cached
+  "arguments": {},  // tool arguments
+  "content": "...",  // full output content
+  "char_count": 0,  // character count of content
+  "line_count": 0  // line count of content
+}
+```
+
+**Can return:**
+```json
+{
+  "summary": "..."  // custom summary to show LLM instead of full content
+}
+```
+
+### post_cache_output
+
+```json
+{
+  "tool_name": "...",  // tool whose output was cached
+  "cache_id": "...",  // filename under vfs:///sys/tool_cache/<context>/
+  "output_size": 0,  // size of cached output in bytes
+  "preview_size": 0  // size of preview shown to LLM
+}
+```
+
+> **Note:** access cached content with file_head/file_tail/file_lines using full vfs:// URI
+
+### pre_send_message
+
+```json
+{
+  "from": "...",  // sending context name
+  "to": "...",  // recipient context name
+  "content": "...",  // message content
+  "context_name": "..."  // active context name
+}
+```
+
+**Can return:**
+```json
+{
+  "delivered": false,  // set true to claim delivery was handled
+  "via": "..."  // delivery mechanism name (for logging)
+}
+```
+
+### post_send_message
+
+```json
+{
+  "from": "...",  // sending context name
+  "to": "...",  // recipient context name
+  "content": "...",  // message content
+  "context_name": "...",  // active context name
+  "delivery_result": "..."  // delivery outcome description
+}
+```
+
+### post_index_file
+
+```json
+{
+  "path": "...",  // relative path of indexed file
+  "lang": "...",  // detected language
+  "symbol_count": 0,  // number of symbols indexed
+  "ref_count": 0  // number of references indexed
+}
+```
+
+### pre_vfs_write
+
+```json
+{
+  "tool_name": "...",  // write_file or file_edit
+  "path": "...",  // VFS path being written
+  "content": "...",  // new content (null for file_edit)
+  "caller": "..."  // context initiating the write
+}
+```
+
+> **Note:** only fires for context-initiated writes via send.rs; VfsCaller::System and (harness io) bypass this hook
+
+### post_vfs_write
+
+```json
+{
+  "tool_name": "...",  // write_file or file_edit
+  "path": "...",  // VFS path that was written
+  "caller": "..."  // context that initiated the write
+}
+```
+
+> **Note:** same caller restriction as pre_vfs_write
+
+### pre_clear
+
+```json
+{
+  "context_name": "...",  // context being cleared
+  "message_count": 0,  // number of messages before clear
+  "summary": "..."  // existing conversation summary
+}
+```
+
+### post_clear
+
+```json
+{
+  "context_name": "...",  // context that was cleared
+  "message_count": 0,  // message count before clear
+  "summary": "..."  // summary before clear
+}
+```
+
+### pre_compact
+
+```json
+{
+  "context_name": "...",  // context being compacted
+  "message_count": 0,  // number of messages before compact
+  "summary": "..."  // conversation summary
+}
+```
+
+### post_compact
+
+```json
+{
+  "context_name": "...",  // context that was compacted
+  "message_count": 0,  // message count before compact
+  "summary": "..."  // conversation summary
+}
+```
+
+### pre_rolling_compact
+
+```json
+{
+  "context_name": "...",  // context being compacted
+  "message_count": 0,  // total message count
+  "non_system_count": 0,  // non-system message count
+  "summary": "..."  // conversation summary
+}
+```
+
+### post_rolling_compact
+
+```json
+{
+  "context_name": "...",  // context that was compacted
+  "message_count": 0,  // message count after archiving
+  "messages_archived": 0,  // number of messages archived
+  "summary": "..."  // updated summary
+}
+```
+
+<!-- END GENERATED HOOK REFERENCE -->
 
 ## Registering for Hooks
 
@@ -174,590 +672,6 @@ When a hook fires, registered plugins are called with:
 
 - `CHIBI_HOOK` env var - Hook point name (e.g., "pre_message")
 - stdin - JSON data about the event
-
-## Hook Data by Type
-
-### on_start
-
-```json
-{
-  "chibi_home": "/home/user/.chibi",
-  "project_root": "/home/user/project",
-  "tool_count": 15
-}
-```
-
-### on_end
-
-```json
-{}
-```
-
-`on_end` receives an empty payload.
-
-### pre_message
-
-```json
-{
-  "prompt": "user's prompt",
-  "context_name": "default",
-  "summary": "conversation summary..."
-}
-```
-
-**Can return:**
-```json
-{
-  "prompt": "modified prompt"
-}
-```
-
-### post_message
-
-```json
-{
-  "prompt": "original prompt",
-  "response": "LLM's response",
-  "context_name": "default"
-}
-```
-
-### pre_system_prompt / post_system_prompt
-
-```json
-{
-  "context_name": "default",
-  "summary": "conversation summary...",
-  "flock_goals": [
-    {"flock": "site:<site_id>", "goals": "site-wide goals..."},
-    {"flock": "myteam", "goals": "team goals..."}
-  ]
-}
-```
-
-> **Breaking changes:** the `goals` field was replaced by `flock_goals` (array) in the flocks migration. each entry is `{"flock": "<name>", "goals": "<content>"}`. the array is empty if no flocks have goals set. the `todos` field was removed in the structured-tasks migration (#186); tasks are now VFS-backed `.task` files injected ephemerally into the message stream rather than exposed via hook payloads.
-
-**Can return:**
-```json
-{
-  "inject": "content to add to system prompt"
-}
-```
-
-### pre_api_tools
-
-Called before tools are sent to the API. Allows dynamic filtering of which tools the LLM can use.
-
-```json
-{
-  "context_name": "default",
-  "tools": [
-    {"name": "update_reflection", "type": "builtin"},
-    {"name": "file_head", "type": "file"},
-    {"name": "my_plugin", "type": "plugin"}
-  ],
-  "fuel_remaining": 30,
-  "fuel_total": 30
-}
-```
-
-Tool types are:
-- `builtin`: update_reflection, update_goals, read_context, flock_join, flock_leave, flock_list
-- `file`: file_head, file_tail, file_lines, file_grep, write_file
-- `agent`: spawn_agent, retrieve_content
-- `plugin`: Tools loaded from the plugins directory
-
-**Can return (to filter tools):**
-```json
-{
-  "exclude": ["file_grep", "my_plugin"]
-}
-```
-
-Or to use allowlist mode:
-```json
-{
-  "include": ["update_reflection", "update_goals"]
-}
-```
-
-When multiple hooks respond:
-- Includes are **intersected** (most restrictive wins)
-- Excludes are **unioned** (all excluded tools are removed)
-
-### pre_api_request
-
-Called after tools are filtered but before the HTTP request is sent. Allows modification of any part of the request body.
-
-```json
-{
-  "context_name": "default",
-  "request_body": {
-    "model": "anthropic/claude-sonnet-4",
-    "messages": [...],
-    "tools": [...],
-    "stream": true,
-    "temperature": 0.7,
-    "cache_prompt": true,
-    ...
-  },
-  "fuel_remaining": 30,
-  "fuel_total": 30
-}
-```
-
-> **Note on field names:** The request body reflects chibi's internal representation. Some fields differ from raw OpenAI/OpenRouter API names: prompt caching appears as `cache_prompt`; reasoning exclude appears as `exclude_from_output`. These are the field names to use when overriding via this hook.
-
-**Can return (to modify request):**
-```json
-{
-  "request_body": {
-    "temperature": 0.3,
-    "max_tokens": 2000
-  }
-}
-```
-
-Returned fields are **merged** into the request body, not replaced entirely. This allows targeted modifications without needing to echo back the entire body. Modifications are applied to the actual API call — not just to logging.
-
-### pre_agentic_loop
-
-Called before each iteration of the agentic loop (including re-entries on agent continuation). Allows plugins to override the fallback handoff target and adjust the fuel budget.
-
-```json
-{
-  "context_name": "default",
-  "fuel_remaining": 30,
-  "fuel_total": 30,
-  "current_fallback": "call_agent",
-  "message": "user's message here"
-}
-```
-
-**Can return (to override fallback):**
-```json
-{
-  "fallback": "call_user"
-}
-```
-
-Valid fallback values are `"call_agent"` (continue processing) or `"call_user"` (return to user).
-
-**Can return (to set fuel):**
-```json
-{
-  "fuel": 50
-}
-```
-
-Sets `fuel_remaining` to the given value. Plugins can inspect the current `fuel_remaining` in the hook data and decide whether to top up, cap, or reset the budget.
-
-### post_tool_batch
-
-Called after processing a batch of tool calls, before deciding whether to continue or return. Allows plugins to override the fallback and adjust fuel based on which tools were called.
-
-```json
-{
-  "context_name": "default",
-  "fuel_remaining": 28,
-  "fuel_total": 30,
-  "current_fallback": "call_agent",
-  "tool_calls": [
-    {"name": "file_head", "arguments": {"path": "Cargo.toml"}},
-    {"name": "update_goals", "arguments": {"content": "..."}}
-  ]
-}
-```
-
-**Can return (to override fallback):**
-```json
-{
-  "fallback": "call_user"
-}
-```
-
-**Can return (to adjust fuel):**
-```json
-{
-  "fuel_delta": -5
-}
-```
-
-Positive values add fuel (saturating), negative values consume fuel (saturating to 0). Use this to make certain tool patterns cost more or less fuel.
-
-**Priority:** `post_tool_batch` output > `pre_agentic_loop` output > config fallback. Each `post_tool_batch` hook can keep overriding, so the last hook to set a fallback wins.
-
-### pre_tool
-
-```json
-{
-  "tool_name": "file_head",
-  "arguments": {"path": "/etc/passwd"}
-}
-```
-
-**Can return:**
-```json
-{
-  "arguments": {"path": "/safe/path"}
-}
-```
-
-Or to block execution:
-```json
-{
-  "block": true,
-  "message": "This operation is not allowed"
-}
-```
-
-### post_tool
-
-```json
-{
-  "tool_name": "file_head",
-  "arguments": {"path": "Cargo.toml"},
-  "result": "file contents...",
-  "cached": false
-}
-```
-
-Note: `cached` is `true` if the output was cached due to size.
-
-### pre_tool_output
-
-Called immediately after a tool returns its output, before any caching decisions. Can modify or replace the output entirely.
-
-```json
-{
-  "tool_name": "file_head",
-  "arguments": {"path": "Cargo.toml"},
-  "output": "raw tool output..."
-}
-```
-
-**Can return (to modify output):**
-```json
-{
-  "output": "modified output..."
-}
-```
-
-Or to block/replace entirely:
-```json
-{
-  "block": true,
-  "message": "Replacement message shown to LLM"
-}
-```
-
-### post_tool_output
-
-Called after tool output processing (including any pre_tool_output modifications and caching decisions). Observe only.
-
-```json
-{
-  "tool_name": "file_head",
-  "arguments": {"path": "Cargo.toml"},
-  "output": "original output (after pre_tool_output modifications)",
-  "final_output": "what the LLM will see (may be truncated if cached)",
-  "cached": false
-}
-```
-
-### pre_cache_output
-
-Called before caching a large tool output. Can provide a custom summary.
-
-```json
-{
-  "tool_name": "fetch_url",
-  "arguments": {"url": "https://example.com"},
-  "content": "full output content...",
-  "char_count": 50000,
-  "line_count": 1200
-}
-```
-
-**Can return (to provide custom summary):**
-```json
-{
-  "summary": "Custom summary of the content..."
-}
-```
-
-### post_cache_output
-
-Notification after output has been cached to VFS.
-
-```json
-{
-  "tool_name": "fetch_url",
-  "cache_id": "fetch_url_abc123_def456",
-  "output_size": 50000,
-  "preview_size": 800
-}
-```
-
-`cache_id` is the filename under `vfs:///sys/tool_cache/<context>/`. access cached content with `file_head`, `file_tail`, `file_lines`, `file_grep` using the full URI.
-
-### pre_send_message
-
-```json
-{
-  "from": "default",
-  "to": "research",
-  "content": "message content",
-  "context_name": "default"
-}
-```
-
-**Can return (to claim delivery):**
-```json
-{
-  "delivered": true,
-  "via": "external-service"
-}
-```
-
-### post_send_message
-
-```json
-{
-  "from": "default",
-  "to": "research",
-  "content": "message content",
-  "context_name": "default",
-  "delivery_result": "Message delivered to 'research' via local inbox"
-}
-```
-
-### pre_file_read
-
-Called before `file_head`, `file_tail`, or `file_lines` reads a file **outside** `file_tools_allowed_paths`. Reads inside allowed paths (defaults to cwd) proceed without prompting. Uses the **deny-only** permission protocol: plugins can block, otherwise falls through to the frontend's permission handler. Fail-safe denied if no handler is configured.
-
-```json
-{
-  "tool_name": "file_head",
-  "path": "/etc/passwd"
-}
-```
-
-**To deny:**
-```json
-{
-  "denied": true,
-  "reason": "Path not allowed"
-}
-```
-
-**No opinion (falls through to frontend handler):**
-```json
-{}
-```
-
-### pre_file_write
-
-Called before `write_file` or `file_edit` execution. Uses the **deny-only** permission protocol: plugins act as security gates that can block specific operations. If no plugin denies the operation, it falls through to the frontend's permission handler (e.g. interactive TTY prompt). If no permission handler is configured, operations are fail-safe denied.
-
-```json
-{
-  "tool_name": "write_file",
-  "path": "/home/user/project/file.txt",
-  "content": "file content here"
-}
-```
-
-**To deny:**
-```json
-{
-  "denied": true,
-  "reason": "Path not allowed"
-}
-```
-
-**No opinion (falls through to frontend handler):**
-```json
-{}
-```
-
-### pre_shell_exec
-
-Called before `shell_exec` execution. Uses the same **deny-only** permission protocol as `pre_file_write`.
-
-```json
-{
-  "tool_name": "shell_exec",
-  "command": "ls -la"
-}
-```
-
-**To deny:**
-```json
-{
-  "denied": true,
-  "reason": "Command not allowed"
-}
-```
-
-**No opinion (falls through to frontend handler):**
-```json
-{}
-```
-
-### pre_fetch_url
-
-Called before fetching a URL classified as sensitive (loopback, private network, cloud metadata endpoint, or unparseable). Uses the same **deny-only** permission protocol as `pre_file_read` and `pre_file_write`. Only fires when no `url_policy` is configured — if a policy is set, it is authoritative and this hook is not called.
-
-```json
-{
-  "tool_name": "fetch_url",
-  "url": "http://localhost:8080/api",
-  "safety": "sensitive",
-  "reason": "loopback address"
-}
-```
-
-Possible `reason` values: `"loopback address"`, `"private network address"`, `"link-local address"`, `"cloud metadata endpoint"`, `"could not parse URL"`.
-
-**To deny:**
-```json
-{
-  "denied": true,
-  "reason": "Local URLs not permitted"
-}
-```
-
-**No opinion (falls through to frontend handler):**
-```json
-{}
-```
-
-### pre_spawn_agent
-
-Called before a sub-agent LLM call (from `spawn_agent` or `retrieve_content` tools). Can intercept and replace the call entirely, or block it.
-
-```json
-{
-  "system_prompt": "You are a summarizer...",
-  "input": "Content to process...",
-  "model": "anthropic/claude-sonnet-4",
-  "temperature": 0.7,
-  "max_tokens": 4096
-}
-```
-
-**Can return (to replace the LLM call):**
-```json
-{
-  "response": "Pre-computed or cached response"
-}
-```
-
-Or to block:
-```json
-{
-  "block": true,
-  "message": "Sub-agent calls are not allowed in this context"
-}
-```
-
-### post_spawn_agent
-
-```json
-{
-  "system_prompt": "You are a summarizer...",
-  "input": "Content to process...",
-  "model": "anthropic/claude-sonnet-4",
-  "response": "The sub-agent's response..."
-}
-```
-
-### pre_clear / post_clear
-
-```json
-{
-  "context_name": "default",
-  "message_count": 10,
-  "summary": "existing summary..."
-}
-```
-
-### pre_compact / post_compact
-
-```json
-{
-  "context_name": "default",
-  "message_count": 20,
-  "summary": "conversation summary..."
-}
-```
-
-### pre_rolling_compact / post_rolling_compact
-
-```json
-{
-  "context_name": "default",
-  "message_count": 50,
-  "non_system_count": 48,
-  "summary": "conversation summary..."
-}
-```
-
-For `post_rolling_compact`:
-```json
-{
-  "context_name": "default",
-  "message_count": 25,
-  "messages_archived": 25,
-  "summary": "updated summary..."
-}
-```
-
-### post_index_file
-
-Fired after a file is successfully indexed by the code indexer. Observe only.
-
-```json
-{
-  "path": "src/main.rs",
-  "lang": "rust",
-  "symbol_count": 42,
-  "ref_count": 17
-}
-```
-
-### pre_vfs_write
-
-Fired before a VFS file write (via `write_file` or `file_edit`). Advisory and non-blocking — cannot prevent the write. Intended for observe-and-snapshot use cases (e.g. the file history plugin).
-
-> **Note:** Only fires for writes initiated via tool dispatch (i.e. context-initiated writes). Writes from `VfsCaller::System` and `(harness io)` bypass `send.rs` entirely and do not trigger this hook.
-
-```json
-{
-  "tool_name": "write_file",
-  "path": "vfs:///shared/tool.scm",
-  "content": "new content here",
-  "caller": "my-context"
-}
-```
-
-The `content` field is `null` for `file_edit` calls (which use `operation`/`old`/`new` params rather than a full content replacement).
-
-### post_vfs_write
-
-Fired after a VFS file write completes successfully. Observe only.
-
-> **Note:** Same caller restriction as `pre_vfs_write` — only fires for context-initiated writes via tool dispatch.
-
-```json
-{
-  "tool_name": "write_file",
-  "path": "vfs:///shared/tool.scm",
-  "caller": "my-context"
-}
-```
-
 ## Example Hook Plugin
 
 A minimal hook plugin that logs events:

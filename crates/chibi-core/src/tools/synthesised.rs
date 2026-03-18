@@ -295,20 +295,58 @@ pub(crate) const HARNESS_HOOKS_MODULE: &str = r#"
     #t))
 "#;
 
+/// Scheme source for the `(harness docs)` module.
+///
+/// Re-exports `hooks-docs` and `harness-tools-docs` from their top-level
+/// preamble bindings. Both bindings are defined in `HARNESS_PREAMBLE` at the
+/// top level (not inside a library) so they are accessible before any imports,
+/// and this module provides the canonical named import path.
+///
+/// `hooks-docs` covers all hook points with payload/return contracts.
+/// `harness-tools-docs` covers define-tool, call-tool, register-hook, etc.
+///
+/// Canonical usage: `(import (harness docs))` then `(describe hooks-docs)`.
+/// Note: `(module-exports '(harness docs))` will error — runtime-registered
+/// modules are absent from tein's build-time MODULE_EXPORTS table.
+#[cfg(feature = "synthesised-tools")]
+pub(crate) const HARNESS_DOCS_MODULE: &str = r#"
+(define-library (harness docs)
+  (import (scheme base))
+  (export hooks-docs harness-tools-docs)
+  ;; Both bindings are pre-defined at top level by HARNESS_PREAMBLE (evaluated
+  ;; before module registration), so this library intentionally re-exports
+  ;; top-level bindings without defining them locally. Same pattern as
+  ;; HARNESS_HOOKS_MODULE re-exporting the top-level `register-hook`.
+  (begin #t))
+"#;
+
 /// Top-level scheme preamble evaluated in every synthesised tool context.
 ///
-/// Defines `%tool-registry%` and the `define-tool` syntax at the top level
-/// so user source can call `(define-tool ...)` and rust can read the result
-/// via `ctx.evaluate("%tool-registry%")` after evaluation.
+/// Defines `%tool-registry%`, `%hook-registry%`, `%context-name%`, `define-tool`,
+/// `register-hook`, `harness-tools-docs`, and `hooks-docs` at the top level.
 ///
-/// `define-tool` also re-exports itself so `(import (harness tools))` provides
-/// it — the module re-export is handled by this preamble's `define-tool` being
-/// in scope before the import.
+/// `hooks-docs` is generated from `HOOK_METADATA` — the canonical single source
+/// of truth for hook contracts. `harness-tools-docs` covers the harness API.
+/// Both are re-exported via `(harness docs)` as the canonical access path.
+///
+/// Call `(import (harness docs))` then `(describe hooks-docs)` to list all hooks,
+/// or `(module-doc hooks-docs 'pre_message)` for a specific hook's contract.
+/// Note: `(describe X)` takes an alist directly, not a symbol.
+///
+/// `define-tool` must be top-level (not inside a library) so its `set!` of
+/// `%tool-registry%` affects the top-level binding that rust reads post-evaluation.
 ///
 /// Mutation site: if `define-tool` syntax changes, update `extract_multi_tools`
-/// which parses `%tool-registry%` entries.
+/// which parses `%tool-registry%` entries. If `harness-tools-docs` entries change,
+/// update `chibi.md` and `AGENTS.md` accordingly.
+///
+/// Built once via `LazyLock` since `hooks-docs` is generated at runtime from
+/// `HOOK_METADATA`. The allocation is reused across all context builds.
 #[cfg(feature = "synthesised-tools")]
-pub(crate) const HARNESS_PREAMBLE: &str = r#"
+pub(crate) static HARNESS_PREAMBLE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let hooks_docs_alist = crate::tools::hooks::generate_hooks_docs_alist();
+    format!(
+        r#"
 (import (scheme base))
 
 ;; accumulates define-tool entries. each entry is a list:
@@ -324,16 +362,63 @@ pub(crate) const HARNESS_PREAMBLE: &str = r#"
 ;; plugins read this to resolve /home/<ctx>/... VFS paths.
 (define %context-name% "")
 
+;; docs alist for public harness APIs — use (import (harness docs)) then
+;; (describe harness-tools-docs) or (module-doc harness-tools-docs 'define-tool).
+;; follows the same convention as introspect-docs, json-docs, etc.
+;; note: (describe X) takes an alist directly, NOT a symbol.
+(define harness-tools-docs
+  '((__module__ . "harness tools")
+    (define-tool . "macro: (define-tool name (description DESC) [(category CAT)] [(summary-params (PARAM ...))] (parameters PARAMS-ALIST) (execute (lambda (args) ...))) — registers a persistent tool; args is ((\"key\" . val) ...) alist. Optional: category is a string like \"network\" or \"shell\"; summary-params is a list of parameter names used to build the permission-prompt summary for network tools without a URL parameter.")
+    (call-tool . "procedure: (call-tool NAME ARGS-ALIST) -> string — invoke another registered tool; NAME is a string, ARGS-ALIST is ((\"key\" . \"val\") ...)")
+    (register-hook . "procedure: (register-hook HOOK-SYMBOL HANDLER) — register a hook callback; HOOK-SYMBOL e.g. 'pre_vfs_write, HANDLER is (lambda (payload) ...)")
+    (generate-id . "procedure: (generate-id) -> string — returns an 8-hex-char random identifier (uuid v4 prefix)")
+    (current-timestamp . "procedure: (current-timestamp) -> string — returns current UTC time as \"YYYYMMDD-HHMMz\"")))
+
+;; docs alist for all hook points — use (import (harness docs)) then
+;; (describe hooks-docs) to list all hooks, or (module-doc hooks-docs 'pre_message).
+;; generated from HOOK_METADATA (hooks.rs) — single source of truth.
+(define hooks-docs
+  {hooks_docs_alist})
+
 ;; registers a tool: appends to %tool-registry% in definition order (LIFO via cons).
 ;; rust reads %tool-registry% after evaluation; non-empty → multi-tool mode.
 (define-syntax define-tool
-  (syntax-rules (description parameters execute)
+  (syntax-rules (description category summary-params parameters execute)
+    ;; pattern 1: baseline (no category, no summary-params)
     ((define-tool name
        (description desc)
        (parameters params)
        (execute handler))
      (set! %tool-registry%
-       (cons (list (symbol->string 'name) desc params handler)
+       (cons (list (symbol->string 'name) desc params handler #f #f)
+             %tool-registry%)))
+    ;; pattern 2: category only
+    ((define-tool name
+       (description desc)
+       (category cat)
+       (parameters params)
+       (execute handler))
+     (set! %tool-registry%
+       (cons (list (symbol->string 'name) desc params handler cat #f)
+             %tool-registry%)))
+    ;; pattern 3: summary-params only
+    ((define-tool name
+       (description desc)
+       (summary-params sp)
+       (parameters params)
+       (execute handler))
+     (set! %tool-registry%
+       (cons (list (symbol->string 'name) desc params handler #f sp)
+             %tool-registry%)))
+    ;; pattern 4: category + summary-params
+    ((define-tool name
+       (description desc)
+       (category cat)
+       (summary-params sp)
+       (parameters params)
+       (execute handler))
+     (set! %tool-registry%
+       (cons (list (symbol->string 'name) desc params handler cat sp)
              %tool-registry%)))))
 
 ;; registers a hook handler for a given hook point.
@@ -344,7 +429,10 @@ pub(crate) const HARNESS_PREAMBLE: &str = r#"
   (set! %hook-registry%
     (cons (list (symbol->string hook-name) handler)
           %hook-registry%)))
-"#;
+"#,
+        hooks_docs_alist = hooks_docs_alist,
+    )
+});
 
 // --- thread-local bridge state -----------------------------------------------
 
@@ -807,6 +895,8 @@ fn secs_to_ymdhmz(mut s: u64) -> (u32, u32, u32, u32, u32) {
 fn build_tein_context(
     source: String,
     tier: crate::config::SandboxTier,
+    http_prefixes: Option<Vec<String>>,
+    env_vars: Option<Vec<(String, String)>>,
 ) -> io::Result<(TeinSession, std::thread::ThreadId)> {
     let worker_thread_id = Arc::new(std::sync::Mutex::new(None::<std::thread::ThreadId>));
     let tid_capture = Arc::clone(&worker_thread_id);
@@ -824,11 +914,13 @@ fn build_tein_context(
         ctx.define_fn_variadic("call-tool", __tein_call_tool_fn)?;
         ctx.define_fn_variadic("generate-id", __tein_generate_id_fn)?;
         ctx.define_fn_variadic("current-timestamp", __tein_current_timestamp_fn)?;
-        ctx.evaluate(HARNESS_PREAMBLE)?;
+        ctx.evaluate(&HARNESS_PREAMBLE)?;
         ctx.register_module(HARNESS_TOOLS_MODULE)
             .map_err(|e| tein::Error::EvalError(format!("harness module: {e}")))?;
         ctx.register_module(HARNESS_HOOKS_MODULE)
             .map_err(|e| tein::Error::EvalError(format!("harness hooks module: {e}")))?;
+        ctx.register_module(HARNESS_DOCS_MODULE)
+            .map_err(|e| tein::Error::EvalError(format!("harness docs module: {e}")))?;
         // (harness io) — privileged direct IO, available at Unsandboxed tier only.
         // Sandboxed contexts will get a module-not-found error on (import (harness io)).
         if tier == crate::config::SandboxTier::Unsandboxed {
@@ -857,19 +949,37 @@ fn build_tein_context(
     };
 
     let ctx = match tier {
-        crate::config::SandboxTier::Sandboxed => Context::builder()
-            .standard_env()
-            .sandboxed(Modules::Safe)
-            .step_limit(10_000_000)
-            .build_managed(init),
+        crate::config::SandboxTier::Sandboxed => {
+            let mut builder = Context::builder()
+                .standard_env()
+                .sandboxed(Modules::Safe)
+                .step_limit(10_000_000);
+            if let Some(ref prefixes) = http_prefixes {
+                let refs: Vec<&str> = prefixes.iter().map(|s| s.as_str()).collect();
+                builder = builder.http_allow(&refs);
+            }
+            if let Some(ref vars) = env_vars {
+                let refs: Vec<(&str, &str)> =
+                    vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                builder = builder.environment_variables(&refs);
+            }
+            builder.build_managed(init)
+        }
         crate::config::SandboxTier::Unsandboxed => {
             // with_vfs_shadows() enables shadow modules (e.g. scheme/process-context,
             // scheme/file) in non-sandboxed contexts. Required for (chibi diff) and
             // other library modules that depend on scheme/process-context.
-            Context::builder()
-                .standard_env()
-                .with_vfs_shadows()
-                .build_managed(init)
+            //
+            // `http_prefixes` is intentionally not applied here: unsandboxed contexts
+            // have unrestricted network access already, so an allowlist would be redundant.
+            // (A config entry under [tools.http.allow] for an unsandboxed path has no effect.)
+            let mut builder = Context::builder().standard_env().with_vfs_shadows();
+            if let Some(ref vars) = env_vars {
+                let refs: Vec<(&str, &str)> =
+                    vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                builder = builder.environment_variables(&refs);
+            }
+            builder.build_managed(init)
         }
     }
     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("tein init: {e}")))?;
@@ -895,7 +1005,12 @@ fn build_tein_context(
 #[cfg(feature = "synthesised-tools")]
 pub(crate) fn build_sandboxed_harness_context() -> io::Result<(TeinSession, std::thread::ThreadId)>
 {
-    build_tein_context(String::new(), crate::config::SandboxTier::Sandboxed)
+    build_tein_context(
+        String::new(),
+        crate::config::SandboxTier::Sandboxed,
+        None,
+        None,
+    )
 }
 
 /// Standard prelude evaluated in every tein context (synthesised tools and `scheme_eval`).
@@ -928,7 +1043,8 @@ pub(crate) const EVAL_PRELUDE: &str = r#"
         (srfi 132)
         (srfi 133)
         (chibi match)
-        (harness tools))
+        (harness tools)
+        (harness docs))
 
 ;; R5RS aliases — LLMs reach for these instinctively
 (define exact->inexact inexact)
@@ -937,40 +1053,59 @@ pub(crate) const EVAL_PRELUDE: &str = r#"
 
 /// Load one or more synthesised tools from scheme source.
 ///
-/// If the source uses `(define-tool ...)` macro, returns all defined tools.
-/// If it uses the convention format (`tool-name`, `tool-description`, etc.),
-/// returns a single tool. Backwards-compatible with both formats.
-///
-/// Evaluates `source` in a tein context configured by `tier`:
-/// - `SandboxTier::Sandboxed` (default): safe module subset, step limit.
-/// - `SandboxTier::Unsandboxed`: full R7RS, no step limit (trusted tools).
-///
-/// Registers `(harness tools)` and `call-tool` in every context.
+/// Resolves sandbox tier from `tools_config` using longest-prefix match on
+/// `vfs_path`. Evaluates `source` in a tein context configured accordingly.
+/// Supports both convention format (`tool-name`, `tool-execute`, etc.) and
+/// `define-tool` multi-tool format; backwards-compatible with both.
 #[cfg(feature = "synthesised-tools")]
 pub fn load_tools_from_source(
     source: &str,
     vfs_path: &VfsPath,
     registry: &Arc<RwLock<ToolRegistry>>,
-) -> io::Result<Vec<Tool>> {
-    load_tools_from_source_with_tier(
-        source,
-        vfs_path,
-        registry,
-        crate::config::SandboxTier::Sandboxed,
-    )
-}
-
-/// Like `load_tools_from_source` but with an explicit sandbox tier.
-#[cfg(feature = "synthesised-tools")]
-pub fn load_tools_from_source_with_tier(
-    source: &str,
-    vfs_path: &VfsPath,
-    registry: &Arc<RwLock<ToolRegistry>>,
-    tier: crate::config::SandboxTier,
+    tools_config: &crate::config::ToolsConfig,
 ) -> io::Result<Vec<Tool>> {
     let source_owned = source.to_string();
+    let tier = tools_config.resolve_tier(vfs_path.as_str());
+    let env_vars = tools_config.resolve_env(vfs_path.as_str());
 
-    let (session, worker_thread_id) = build_tein_context(source_owned, tier)?;
+    let http_result = tools_config.resolve_http_allow(vfs_path.as_str());
+    let http_prefixes = match &http_result {
+        crate::config::HttpAllowResult::Prefixes(p) => Some(p.clone()),
+        _ => None, // NeedDeclared resolved after phase 1
+    };
+
+    let (session, worker_thread_id) =
+        build_tein_context(source_owned.clone(), tier, http_prefixes, env_vars.clone())?;
+
+    // Phase 2: trust-declared HTTP — read tool-http-allow, rebuild if needed
+    let (session, worker_thread_id) =
+        if matches!(http_result, crate::config::HttpAllowResult::NeedDeclared) {
+            // Read tool-http-allow binding from phase 1 session
+            let declared = session
+                .evaluate("tool-http-allow")
+                .ok()
+                .and_then(|v| match v {
+                    Value::List(items) => Some(
+                        items
+                            .iter()
+                            .filter_map(|i| i.as_string().map(|s| s.to_string()))
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            if let Some(trusted_prefixes) =
+                tools_config.resolve_http_allow_with_declared(vfs_path.as_str(), &declared)
+            {
+                // Rebuild with the trusted prefixes
+                build_tein_context(source_owned, tier, Some(trusted_prefixes), env_vars)?
+            } else {
+                (session, worker_thread_id)
+            }
+        } else {
+            (session, worker_thread_id)
+        };
 
     // check if define-tool was used (%tool-registry% is non-empty list)
     let multi = session.evaluate("%tool-registry%").ok();
@@ -988,6 +1123,7 @@ pub fn load_tools_from_source_with_tier(
 
 /// Load a single synthesised tool from scheme source (convenience wrapper).
 ///
+/// Uses `ToolsConfig::default()` (sandboxed tier, no HTTP/env overrides).
 /// Calls `load_tools_from_source` and expects exactly one tool. Returns an
 /// error if the source defines multiple tools via `define-tool`.
 #[cfg(feature = "synthesised-tools")]
@@ -996,7 +1132,12 @@ pub fn load_tool_from_source(
     vfs_path: &VfsPath,
     registry: &Arc<RwLock<ToolRegistry>>,
 ) -> io::Result<Tool> {
-    let mut tools = load_tools_from_source(source, vfs_path, registry)?;
+    let mut tools = load_tools_from_source(
+        source,
+        vfs_path,
+        registry,
+        &crate::config::ToolsConfig::default(),
+    )?;
     match tools.len() {
         1 => Ok(tools.remove(0)),
         n => Err(io::Error::new(
@@ -1037,6 +1178,29 @@ fn extract_single_tool(
         ));
     }
 
+    // optional: tool-category
+    let category = session
+        .evaluate("tool-category")
+        .ok()
+        .and_then(|v| v.as_string().map(|s| s.to_string()))
+        .map(|s| ToolCategory::from_category_str(&s))
+        .unwrap_or(ToolCategory::Synthesised);
+
+    // optional: tool-summary-params
+    let summary_params = session
+        .evaluate("tool-summary-params")
+        .ok()
+        .and_then(|v| match v {
+            Value::List(items) => Some(
+                items
+                    .iter()
+                    .filter_map(|i| i.as_string().map(|s| s.to_string()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default();
+
     let (hooks, hook_bindings) = extract_hook_registrations(&session)?;
     let context = Arc::new(session);
     Ok(Tool {
@@ -1045,7 +1209,7 @@ fn extract_single_tool(
         parameters,
         hooks,
         metadata: ToolMetadata::new(),
-        summary_params: vec![],
+        summary_params,
         r#impl: ToolImpl::Synthesised {
             vfs_path: vfs_path.clone(),
             exec_binding: "tool-execute".to_string(),
@@ -1054,7 +1218,7 @@ fn extract_single_tool(
             worker_thread_id,
             hook_bindings,
         },
-        category: ToolCategory::Synthesised,
+        category,
     })
 }
 
@@ -1118,6 +1282,29 @@ fn extract_multi_tools(
             )));
         }
 
+        // category (index 4, optional — absent in 4-element legacy entries)
+        let category = if fields.len() > 4 {
+            fields[4]
+                .as_string()
+                .map(ToolCategory::from_category_str)
+                .unwrap_or(ToolCategory::Synthesised)
+        } else {
+            ToolCategory::Synthesised
+        };
+
+        // summary_params (index 5, optional)
+        let summary_params = if fields.len() > 5 {
+            match &fields[5] {
+                Value::List(items) => items
+                    .iter()
+                    .filter_map(|v| v.as_string().map(|s| s.to_string()))
+                    .collect(),
+                _ => vec![],
+            }
+        } else {
+            vec![]
+        };
+
         // reject names that would produce invalid Scheme identifiers when
         // embedded in `%tool-execute-{name}%` (whitespace or parentheses break
         // the symbol syntax)
@@ -1135,7 +1322,7 @@ fn extract_multi_tools(
         let exec_binding = format!("%tool-execute-{name}%");
         // scheme-escape name before interpolating into a string literal
         let name_escaped = scheme_escape_string(&name);
-        // %tool-registry% entries are (name desc params handler).
+        // %tool-registry% entries are (name desc params handler ...).
         // use list-ref to extract the handler (index 3) for this tool by name.
         // list-ref is in (scheme base) which the preamble already imports.
         context
@@ -1156,7 +1343,7 @@ fn extract_multi_tools(
             parameters,
             hooks: hooks.clone(),
             metadata: ToolMetadata::new(),
-            summary_params: vec![],
+            summary_params,
             r#impl: ToolImpl::Synthesised {
                 vfs_path: vfs_path.clone(),
                 exec_binding: exec_binding.clone(),
@@ -1165,7 +1352,7 @@ fn extract_multi_tools(
                 worker_thread_id,
                 hook_bindings: hook_bindings.clone(),
             },
-            category: ToolCategory::Synthesised,
+            category,
         });
     }
 
@@ -1319,9 +1506,7 @@ async fn scan_zone(
         let Ok(source_str) = String::from_utf8(source) else {
             continue;
         };
-        let tier = tools_config.resolve_tier(file_path.as_str());
-        if let Ok(tools) = load_tools_from_source_with_tier(&source_str, &file_path, registry, tier)
-        {
+        if let Ok(tools) = load_tools_from_source(&source_str, &file_path, registry, tools_config) {
             let mut reg = registry.write().unwrap();
             for tool in tools {
                 reg.register(tool);
@@ -1355,8 +1540,7 @@ pub fn reload_tool_from_content(
     let Ok(source_str) = std::str::from_utf8(content) else {
         return;
     };
-    let tier = tools_config.resolve_tier(path.as_str());
-    if let Ok(tools) = load_tools_from_source_with_tier(source_str, path, registry, tier) {
+    if let Ok(tools) = load_tools_from_source(source_str, path, registry, tools_config) {
         let mut reg = registry.write().unwrap();
         // unregister all previous tools from this path
         let old_names = reg.find_all_by_vfs_path(path);
@@ -1707,7 +1891,7 @@ mod tests {
             crate::config::SandboxTier::Sandboxed,
         ] {
             let (session, _) =
-                build_tein_context(String::new(), tier).expect("session should build");
+                build_tein_context(String::new(), tier, None, None).expect("session should build");
             let cap = session.with_capture(|ctx| ctx.evaluate("(display 42)"));
             assert!(
                 cap.value.is_ok(),
@@ -1719,8 +1903,253 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_harness_docs_module_available_both_tiers() {
+        // (import (harness docs)) must succeed in both sandboxed and unsandboxed contexts,
+        // and both hooks-docs and harness-tools-docs must be bound and non-empty.
+        for tier in [
+            crate::config::SandboxTier::Sandboxed,
+            crate::config::SandboxTier::Unsandboxed,
+        ] {
+            let (session, _) =
+                build_tein_context(String::new(), tier, None, None).expect("session should build");
+
+            let hooks_docs_ok = session
+                .evaluate("(and (pair? hooks-docs) (pair? harness-tools-docs))")
+                .expect("evaluate pair checks");
+            assert_eq!(
+                hooks_docs_ok,
+                tein::Value::Boolean(true),
+                "hooks-docs and harness-tools-docs must be pairs in {tier:?} context"
+            );
+        }
+    }
+
     fn make_registry() -> Arc<RwLock<ToolRegistry>> {
         Arc::new(RwLock::new(ToolRegistry::new()))
+    }
+
+    fn config_with_tier(vfs_path: &str, tier: u8) -> crate::config::ToolsConfig {
+        crate::config::test_helpers::config_with_tier(vfs_path, tier)
+    }
+
+    #[test]
+    fn test_convention_category() {
+        let source = r#"
+(import (scheme base))
+(define tool-name "net_tool")
+(define tool-description "a network tool")
+(define tool-category "network")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let path = VfsPath::new("/tools/shared/conv_cat.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(tools[0].category, ToolCategory::Network);
+    }
+
+    #[test]
+    fn test_convention_summary_params() {
+        let source = r#"
+(import (scheme base))
+(define tool-name "summ_tool")
+(define tool-description "has summary params")
+(define tool-summary-params '("path" "mode"))
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let path = VfsPath::new("/tools/shared/conv_sp.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(tools[0].summary_params, vec!["path", "mode"]);
+    }
+
+    #[test]
+    fn test_convention_defaults() {
+        let source = r#"
+(import (scheme base))
+(define tool-name "plain_tool")
+(define tool-description "no extras")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let path = VfsPath::new("/tools/shared/plain.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(tools[0].category, ToolCategory::Synthesised);
+        assert!(tools[0].summary_params.is_empty());
+    }
+
+    #[test]
+    fn test_define_tool_category() {
+        let source = r#"
+(import (scheme base))
+(define-tool net_fetch
+  (description "fetches stuff")
+  (category "network")
+  (parameters '())
+  (execute (lambda (args) "ok")))
+"#;
+        let path = VfsPath::new("/tools/shared/cat.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].category, ToolCategory::Network);
+    }
+
+    #[test]
+    fn test_define_tool_summary_params() {
+        let source = r#"
+(import (scheme base))
+(define-tool my_action
+  (description "does things")
+  (summary-params '("ticker" "qty"))
+  (parameters '())
+  (execute (lambda (args) "ok")))
+"#;
+        let path = VfsPath::new("/tools/shared/sp.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].summary_params, vec!["ticker", "qty"]);
+    }
+
+    #[test]
+    fn test_define_tool_category_and_summary_params() {
+        let source = r#"
+(import (scheme base))
+(define-tool trade
+  (description "places a trade")
+  (category "network")
+  (summary-params '("ticker" "quantity"))
+  (parameters '())
+  (execute (lambda (args) "ok")))
+"#;
+        let path = VfsPath::new("/tools/shared/both.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].category, ToolCategory::Network);
+        assert_eq!(tools[0].summary_params, vec!["ticker", "quantity"]);
+    }
+
+    #[test]
+    fn test_define_tool_unknown_category() {
+        let source = r#"
+(import (scheme base))
+(define-tool unknown_cat
+  (description "unknown category")
+  (category "banana")
+  (parameters '())
+  (execute (lambda (args) "ok")))
+"#;
+        let path = VfsPath::new("/tools/shared/unk.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(tools[0].category, ToolCategory::Synthesised);
+    }
+
+    #[test]
+    fn test_define_tool_multi_different_categories() {
+        let source = r#"
+(import (scheme base))
+(define-tool reader
+  (description "reads files")
+  (category "fs_read")
+  (parameters '())
+  (execute (lambda (args) "read")))
+(define-tool writer
+  (description "writes files")
+  (category "fs_write")
+  (parameters '())
+  (execute (lambda (args) "write")))
+"#;
+        let path = VfsPath::new("/tools/shared/multi.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].category, ToolCategory::FsRead);
+        assert_eq!(tools[1].category, ToolCategory::FsWrite);
+    }
+
+    #[test]
+    fn test_trust_declared_reads_tool_http_allow() {
+        let source = r#"
+(import (scheme base))
+(define tool-http-allow '("https://api.example.com/"))
+(define tool-name "http_tool")
+(define tool-description "uses HTTP")
+(define tool-category "network")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let path = VfsPath::new("/tools/shared/http.scm").unwrap();
+        let registry = make_registry();
+        let mut allow = std::collections::HashMap::new();
+        allow.insert(
+            "/tools/shared/".to_string(),
+            crate::config::HttpAllow::TrustDeclared("trust-declared".to_string()),
+        );
+        let config = crate::config::ToolsConfig {
+            http: Some(crate::config::HttpConfig {
+                allow: Some(allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Should load successfully — two-phase build trusts the declared prefixes
+        let tools = load_tools_from_source(source, &path, &registry, &config).unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].category, ToolCategory::Network);
     }
 
     const SCAN_TOOL: &str = r#"
@@ -2243,7 +2672,13 @@ mod tests {
     fn test_load_multiple_tools_from_define_tool() {
         let registry = make_registry();
         let vfs_path = VfsPath::new("/tools/shared/multi.scm").unwrap();
-        let tools = load_tools_from_source(MULTI_TOOL_SOURCE, &vfs_path, &registry).unwrap();
+        let tools = load_tools_from_source(
+            MULTI_TOOL_SOURCE,
+            &vfs_path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].name, "greet");
         assert_eq!(tools[1].name, "farewell");
@@ -2253,7 +2688,13 @@ mod tests {
     fn test_load_tools_backwards_compat_single_tool() {
         let registry = make_registry();
         let vfs_path = VfsPath::new("/tools/shared/old.scm").unwrap();
-        let tools = load_tools_from_source(SCAN_TOOL, &vfs_path, &registry).unwrap();
+        let tools = load_tools_from_source(
+            SCAN_TOOL,
+            &vfs_path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "scan_hello");
     }
@@ -2314,11 +2755,11 @@ mod tests {
 "#;
         let vfs_path = VfsPath::new("/tools/shared/bad.scm").unwrap();
         let registry = make_registry();
-        let result = load_tools_from_source_with_tier(
+        let result = load_tools_from_source(
             source,
             &vfs_path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         );
         assert!(
             result.is_err(),
@@ -2338,11 +2779,11 @@ mod tests {
         let vfs_path = VfsPath::new("/tools/shared/full.scm").unwrap();
         let registry = make_registry();
         // tier 2 — no sandboxing; just verify it loads without error
-        let result = load_tools_from_source_with_tier(
+        let result = load_tools_from_source(
             source,
             &vfs_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(vfs_path.as_str(), 2),
         );
         assert!(result.is_ok(), "unsandboxed tier should allow loading");
     }
@@ -2375,7 +2816,13 @@ mod tests {
     fn test_tasks_plugin_loads() {
         let registry = make_registry();
         let path = VfsPath::new("/tools/shared/tasks.scm").unwrap();
-        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry).unwrap();
+        let tools = load_tools_from_source(
+            TASKS_PLUGIN,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         for expected in &[
             "task_create",
@@ -2401,11 +2848,11 @@ mod tests {
     fn test_history_plugin_loads() {
         let registry = make_registry();
         let path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             HISTORY_PLUGIN,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -2438,11 +2885,11 @@ mod tests {
     fn test_history_plugin_registers_hook() {
         let registry = make_registry();
         let path = VfsPath::new("/tools/shared/history.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             HISTORY_PLUGIN,
             &path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(path.as_str(), 2),
         )
         .unwrap();
 
@@ -2515,7 +2962,13 @@ mod tests {
 (define (tool-execute args) %context-name%)
 "#;
         let path = VfsPath::new("/tools/shared/ctx_test.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry).unwrap();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
         {
             let mut reg = registry.write().unwrap();
             for t in tools {
@@ -2541,7 +2994,13 @@ mod tests {
         let (chibi, _tmp) = create_test_chibi();
         let registry = chibi.registry.clone();
         let path = VfsPath::new("/tools/shared/tasks.scm").unwrap();
-        let tools = load_tools_from_source(TASKS_PLUGIN, &path, &registry).unwrap();
+        let tools = load_tools_from_source(
+            TASKS_PLUGIN,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
         {
             let mut reg = registry.write().unwrap();
             for t in tools {
@@ -2669,11 +3128,11 @@ mod tests {
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/test-hooks.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -2716,11 +3175,11 @@ mod tests {
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/test-invalid.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 
@@ -2754,7 +3213,13 @@ mod tests {
 (define (tool-execute args) (error "intentional boom"))
 "#;
         let path = VfsPath::new("/tools/shared/error_test.scm").unwrap();
-        let tools = load_tools_from_source(source, &path, &registry).unwrap();
+        let tools = load_tools_from_source(
+            source,
+            &path,
+            &registry,
+            &crate::config::ToolsConfig::default(),
+        )
+        .unwrap();
         {
             let mut reg = registry.write().unwrap();
             for t in tools {
@@ -2797,13 +3262,9 @@ mod tests {
         source: &str,
     ) -> String {
         let path = VfsPath::new("/tools/shared/io_test.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
-            source,
-            &path,
-            registry,
-            crate::config::SandboxTier::Unsandboxed,
-        )
-        .unwrap();
+        let tools =
+            load_tools_from_source(source, &path, registry, &config_with_tier(path.as_str(), 2))
+                .unwrap();
         {
             let mut reg = registry.write().unwrap();
             for t in tools {
@@ -3059,11 +3520,11 @@ mod tests {
 "#;
         let vfs_path = VfsPath::new("/tools/shared/io_test.scm").unwrap();
         let registry = make_registry();
-        let result = load_tools_from_source_with_tier(
+        let result = load_tools_from_source(
             source,
             &vfs_path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         );
         assert!(
             result.is_err(),
@@ -3084,11 +3545,11 @@ mod tests {
 "#;
         let vfs_path = VfsPath::new("/tools/shared/io_test.scm").unwrap();
         let registry = make_registry();
-        let result = load_tools_from_source_with_tier(
+        let result = load_tools_from_source(
             source,
             &vfs_path,
             &registry,
-            crate::config::SandboxTier::Unsandboxed,
+            &config_with_tier(vfs_path.as_str(), 2),
         );
         assert!(
             result.is_ok(),
@@ -3118,11 +3579,11 @@ mod tests {
 "#;
         let registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let path = VfsPath::new("/tools/shared/multi-hooks.scm").unwrap();
-        let tools = load_tools_from_source_with_tier(
+        let tools = load_tools_from_source(
             source,
             &path,
             &registry,
-            crate::config::SandboxTier::Sandboxed,
+            &crate::config::ToolsConfig::default(),
         )
         .unwrap();
 

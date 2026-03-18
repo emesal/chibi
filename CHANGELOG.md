@@ -3,7 +3,7 @@
 All notable changes to chibi are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.10.9] - 2026-03-15
+## [0.10.10] - 2026-03-18
 
 ### Bug Fixes
 
@@ -65,6 +65,10 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - **hooks:** Address code review issues in tein hook registration ([`6200db9`](https://github.com/emesal/chibi/commit/6200db968e5b9326dd89f96ff1fe2f374a367b2b))
 
+- Valid JSON in generated hooks.md + category validation test ([`2cb8239`](https://github.com/emesal/chibi/commit/2cb8239139ba74f0cc4fa258772f181585e11a4b))
+
+- **index:** Remove duplicated doc comment on insert_symbols ([`2229620`](https://github.com/emesal/chibi/commit/22296202dc2f63c31f8a55633147411cce3c1996))
+
 
 ### Chores
 
@@ -91,6 +95,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Note task-dirs virtual file in AGENTS.md quirks ([`3cb77a2`](https://github.com/emesal/chibi/commit/3cb77a262ddb1fd4b781405ea55e010ded4d5d45))
 
 - Fix clippy non_minimal_cfg warnings in hooks.rs ([`399a4c8`](https://github.com/emesal/chibi/commit/399a4c8b41d0d455da1ec975d3685ffdde008bd7))
+
+- Lint fixes for synth tool discoverability changes ([`aad3e33`](https://github.com/emesal/chibi/commit/aad3e33d2c9069fec900e35e6f5b95e00790656a))
 
 
 ### Documentation
@@ -184,6 +190,34 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Update CHANGELOG for v0.10.7 ([`739b809`](https://github.com/emesal/chibi/commit/739b809c50ed9aaacef1cdfc51f2a370d74e167b))
 
 - Update CHANGELOG for v0.10.8 ([`f170528`](https://github.com/emesal/chibi/commit/f17052828a193fcc6f5f2fac04500059eade0c55))
+
+- Update CHANGELOG for v0.10.9 ([`e07ccb1`](https://github.com/emesal/chibi/commit/e07ccb1117273e6ed5967cd3e8f2bb7f4dd2e349))
+
+- Add synth tool discoverability implementation plan ([`0f88e7d`](https://github.com/emesal/chibi/commit/0f88e7d94dcf020d31905e570466c50590e33596))
+
+- Add harness-tools-docs runtime discovery to chibi.md system prompt ([`0af75ae`](https://github.com/emesal/chibi/commit/0af75ae746948db3a5c12bc60251f88a96d03539))
+
+- Add harness-tools-docs discoverability notes to AGENTS.md ([`e6643e6`](https://github.com/emesal/chibi/commit/e6643e6bbe77749f004b3afb9f578890995b7935))
+
+- Add hook discoverability design spec ([`fb93864`](https://github.com/emesal/chibi/commit/fb938645a5be0fabca3ddbd9dbcbe72420a9e175))
+
+- **agents:** Add lang_rust + insert_symbols parent resolution quirks ([`eddc81e`](https://github.com/emesal/chibi/commit/eddc81ebb44482bd9ce7fc27709996ca3be47eb3))
+
+- Design spec for synthesised tool sandbox extensions (#230) ([`ce0c162`](https://github.com/emesal/chibi/commit/ce0c162da46c0c8d851d9adac93b4f800780bff4))
+
+- Address spec review findings for #230 ([`2da4a76`](https://github.com/emesal/chibi/commit/2da4a76df332bafc0c83bfe29d25670fb747566e))
+
+- Address second spec review findings for #230 ([`ec722ba`](https://github.com/emesal/chibi/commit/ec722ba8a1cc90e67f5d3e9f8f231699e28137a4))
+
+- Address plan review findings for #230 ([`c72dcc0`](https://github.com/emesal/chibi/commit/c72dcc05e1c16e5611ff28a6637aeed12c389942))
+
+- Fix resolve_http_allow early-return bug and test param format (#230) ([`b7f0849`](https://github.com/emesal/chibi/commit/b7f084968cf24a85519bc5349fdfd259dcdc4e97))
+
+- **hooks:** Update PreFetchUrl metadata for no_url variant (#230) ([`dd3c453`](https://github.com/emesal/chibi/commit/dd3c453afdec55ee13736f234cc2d196031024e7))
+
+- Update AGENTS.md with sandbox extension quirks (#230) ([`4b9cee7`](https://github.com/emesal/chibi/commit/4b9cee722581f7ac43a1c45110d77f4214923dd1))
+
+- Address code review findings (#230) ([`a696a82`](https://github.com/emesal/chibi/commit/a696a8280b84aedfa74a3fb745c70950901a8557))
 
 
 ### Features
@@ -300,6 +334,40 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 - Shared eval prelude for synth tools + system prompt discoverability (#226) ([`9f876c4`](https://github.com/emesal/chibi/commit/9f876c4a3114c661ac245f1d1997565e246d82fd))
 
+- Add harness-tools-docs alist to HARNESS_PREAMBLE for LLM introspection ([`ad07977`](https://github.com/emesal/chibi/commit/ad079772eec4f5c0d40b3c200a3f145a610e0b96))
+
+- Complete harness-tools-docs coverage and add module-doc test ([`b83da86`](https://github.com/emesal/chibi/commit/b83da86d92c164e0fe0c2d09e9a3642ebfd387de))
+
+- Add (harness docs) module with hooks-docs for hook discoverability ([`7cf2c2f`](https://github.com/emesal/chibi/commit/7cf2c2f7e6a5ff3ed1dbe347c6df3afb9033a820))
+
+- **index:** Resolve parent_id via line-range containment ([`90e38da`](https://github.com/emesal/chibi/commit/90e38dacec6623938622103a9c66c87651966836))
+
+- **index:** Resolve parent_id via line-range containment (#229) ([`55b29ce`](https://github.com/emesal/chibi/commit/55b29ceedea2ed8aefa70f8bcb2f031367e64536))
+
+- **registry:** Add ToolCategory::from_category_str (#230) ([`fdad961`](https://github.com/emesal/chibi/commit/fdad9615524d14df9abeb3822387f162ab1bfeea))
+
+- **synthesised:** Expand define-tool syntax-rules for category/summary-params (#230) ([`22a773b`](https://github.com/emesal/chibi/commit/22a773ba611ed548a986bd1fa13c58a4b8c28921))
+
+- **synthesised:** Extract_multi_tools reads category and summary_params (#230) ([`08e3b08`](https://github.com/emesal/chibi/commit/08e3b082669732228ce7ba24dde26d5cc74532c3))
+
+- **synthesised:** Extract_single_tool reads category and summary_params (#230) ([`b6f1ce9`](https://github.com/emesal/chibi/commit/b6f1ce93e359131b011d7ab3230a6eb427e1663d))
+
+- **send:** Network category no-URL fallback uses summary_params (#230) ([`aed6869`](https://github.com/emesal/chibi/commit/aed686986ea11d22dc5d76f9df3effcc5b0f92bf))
+
+- **config:** Add HttpConfig, HttpAllow types and ToolsConfig fields (#230) ([`83fd7eb`](https://github.com/emesal/chibi/commit/83fd7ebc3e0dda4d0b624829b015cbe00e341fba))
+
+- **config:** Resolve_http_allow with longest-prefix match (#230) ([`2e2c91b`](https://github.com/emesal/chibi/commit/2e2c91b02e6fda69e055285fe16038596e71af5e))
+
+- **synthesised:** Thread http_prefixes through build_tein_context (#230) ([`664167b`](https://github.com/emesal/chibi/commit/664167b5705bfdf7ea17c657617126f9148c2777))
+
+- **config:** Resolve_env with longest-prefix match (#230) ([`4291b2d`](https://github.com/emesal/chibi/commit/4291b2d6e80da13d25e8299c013bab3c6126ea8f))
+
+- **synthesised:** Thread env_vars through build_tein_context (#230) ([`915c069`](https://github.com/emesal/chibi/commit/915c06934712f0a0358d3e63e92e65e97ee4ae01))
+
+- **config:** Resolve_http_allow_with_declared for trust delegation (#230) ([`11ded5a`](https://github.com/emesal/chibi/commit/11ded5a3c4584448723d4ddc6b9b4f3b6e25a740))
+
+- **synthesised:** Two-phase load for trust-declared HTTP prefixes (#230) ([`6c99f8e`](https://github.com/emesal/chibi/commit/6c99f8e730a8b0bf99f04f5f52d39e11a99169d5))
+
 
 ### Refactoring
 
@@ -358,6 +426,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **eval:** Spawn_blocking for scheme execution to avoid stalling tokio ([`ee1ff8e`](https://github.com/emesal/chibi/commit/ee1ff8e85c8505e619fdc69ac7ea49ab5398ecdb))
 
 - Address code review feedback on stdout/stderr capture ([`04488be`](https://github.com/emesal/chibi/commit/04488befd32a39fb895ab56be06a93e692f12988))
+
+- **synthesised:** Load_tools_from_source takes &ToolsConfig (#230) ([`06c829a`](https://github.com/emesal/chibi/commit/06c829a5b4b0aa2b3ecf45c6b065516b0ffda49d))
 
 
 ### Tests
