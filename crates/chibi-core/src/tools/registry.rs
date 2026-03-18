@@ -623,18 +623,45 @@ mod tests {
 
     #[test]
     fn test_from_category_str() {
-        assert_eq!(ToolCategory::from_category_str("network"), ToolCategory::Network);
-        assert_eq!(ToolCategory::from_category_str("fs_read"), ToolCategory::FsRead);
-        assert_eq!(ToolCategory::from_category_str("fs_write"), ToolCategory::FsWrite);
-        assert_eq!(ToolCategory::from_category_str("shell"), ToolCategory::Shell);
-        assert_eq!(ToolCategory::from_category_str("memory"), ToolCategory::Memory);
+        assert_eq!(
+            ToolCategory::from_category_str("network"),
+            ToolCategory::Network
+        );
+        assert_eq!(
+            ToolCategory::from_category_str("fs_read"),
+            ToolCategory::FsRead
+        );
+        assert_eq!(
+            ToolCategory::from_category_str("fs_write"),
+            ToolCategory::FsWrite
+        );
+        assert_eq!(
+            ToolCategory::from_category_str("shell"),
+            ToolCategory::Shell
+        );
+        assert_eq!(
+            ToolCategory::from_category_str("memory"),
+            ToolCategory::Memory
+        );
         assert_eq!(ToolCategory::from_category_str("flow"), ToolCategory::Flow);
         assert_eq!(ToolCategory::from_category_str("vfs"), ToolCategory::Vfs);
-        assert_eq!(ToolCategory::from_category_str("index"), ToolCategory::Index);
+        assert_eq!(
+            ToolCategory::from_category_str("index"),
+            ToolCategory::Index
+        );
         assert_eq!(ToolCategory::from_category_str("eval"), ToolCategory::Eval);
-        assert_eq!(ToolCategory::from_category_str("synthesised"), ToolCategory::Synthesised);
+        assert_eq!(
+            ToolCategory::from_category_str("synthesised"),
+            ToolCategory::Synthesised
+        );
         // unknown → Synthesised
-        assert_eq!(ToolCategory::from_category_str("bogus"), ToolCategory::Synthesised);
-        assert_eq!(ToolCategory::from_category_str(""), ToolCategory::Synthesised);
+        assert_eq!(
+            ToolCategory::from_category_str("bogus"),
+            ToolCategory::Synthesised
+        );
+        assert_eq!(
+            ToolCategory::from_category_str(""),
+            ToolCategory::Synthesised
+        );
     }
 }

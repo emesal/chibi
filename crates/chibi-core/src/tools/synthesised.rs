@@ -1236,7 +1236,7 @@ fn extract_multi_tools(
         let category = if fields.len() > 4 {
             fields[4]
                 .as_string()
-                .map(|s| ToolCategory::from_category_str(s))
+                .map(ToolCategory::from_category_str)
                 .unwrap_or(ToolCategory::Synthesised)
         } else {
             ToolCategory::Synthesised
