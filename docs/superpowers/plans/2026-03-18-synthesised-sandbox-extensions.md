@@ -198,7 +198,7 @@ fn test_define_tool_summary_params() {
 (define-tool my_action
   (description "does things")
   (summary-params '("ticker" "qty"))
-  (parameters '(("ticker" . "string") ("qty" . "number")))
+  (parameters '())
   (execute (lambda (args) "ok")))
 "#;
     let path = VfsPath::new("/tools/shared/sp.scm").unwrap();
@@ -226,7 +226,7 @@ fn test_define_tool_category_and_summary_params() {
   (description "places a trade")
   (category "network")
   (summary-params '("ticker" "quantity"))
-  (parameters '(("ticker" . "string") ("quantity" . "number")))
+  (parameters '())
   (execute (lambda (args) "ok")))
 "#;
     let path = VfsPath::new("/tools/shared/both.scm").unwrap();
@@ -403,7 +403,7 @@ fn test_convention_summary_params() {
 (define tool-name "summ_tool")
 (define tool-description "has summary params")
 (define tool-summary-params '("path" "mode"))
-(define tool-parameters '(("path" . "string") ("mode" . "string")))
+(define tool-parameters '())
 (define (tool-execute args) "ok")
 "#;
     let path = VfsPath::new("/tools/shared/conv_sp.scm").unwrap();
@@ -1103,7 +1103,14 @@ pub fn resolve_http_allow(&self, vfs_path: &str) -> HttpAllowResult {
     };
     let allow_map = match &http.allow {
         Some(m) => m,
-        None => return HttpAllowResult::NoAccess,
+        None => {
+            // No per-path entries — check global trust_declared
+            return if http.trust_declared.unwrap_or(false) {
+                HttpAllowResult::NeedDeclared
+            } else {
+                HttpAllowResult::NoAccess
+            };
+        }
     };
 
     // Longest-prefix match
