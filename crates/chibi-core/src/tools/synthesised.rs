@@ -1128,6 +1128,29 @@ fn extract_single_tool(
         ));
     }
 
+    // optional: tool-category
+    let category = session
+        .evaluate("tool-category")
+        .ok()
+        .and_then(|v| v.as_string().map(|s| s.to_string()))
+        .map(|s| ToolCategory::from_category_str(&s))
+        .unwrap_or(ToolCategory::Synthesised);
+
+    // optional: tool-summary-params
+    let summary_params = session
+        .evaluate("tool-summary-params")
+        .ok()
+        .and_then(|v| match v {
+            Value::List(items) => Some(
+                items
+                    .iter()
+                    .filter_map(|i| i.as_string().map(|s| s.to_string()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default();
+
     let (hooks, hook_bindings) = extract_hook_registrations(&session)?;
     let context = Arc::new(session);
     Ok(Tool {
@@ -1136,7 +1159,7 @@ fn extract_single_tool(
         parameters,
         hooks,
         metadata: ToolMetadata::new(),
-        summary_params: vec![],
+        summary_params,
         r#impl: ToolImpl::Synthesised {
             vfs_path: vfs_path.clone(),
             exec_binding: "tool-execute".to_string(),
@@ -1145,7 +1168,7 @@ fn extract_single_tool(
             worker_thread_id,
             hook_bindings,
         },
-        category: ToolCategory::Synthesised,
+        category,
     })
 }
 
@@ -1857,6 +1880,72 @@ mod tests {
 
     fn make_registry() -> Arc<RwLock<ToolRegistry>> {
         Arc::new(RwLock::new(ToolRegistry::new()))
+    }
+
+    #[test]
+    fn test_convention_category() {
+        let source = r#"
+(import (scheme base))
+(define tool-name "net_tool")
+(define tool-description "a network tool")
+(define tool-category "network")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let path = VfsPath::new("/tools/shared/conv_cat.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        assert_eq!(tools[0].category, ToolCategory::Network);
+    }
+
+    #[test]
+    fn test_convention_summary_params() {
+        let source = r#"
+(import (scheme base))
+(define tool-name "summ_tool")
+(define tool-description "has summary params")
+(define tool-summary-params '("path" "mode"))
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let path = VfsPath::new("/tools/shared/conv_sp.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        assert_eq!(tools[0].summary_params, vec!["path", "mode"]);
+    }
+
+    #[test]
+    fn test_convention_defaults() {
+        let source = r#"
+(import (scheme base))
+(define tool-name "plain_tool")
+(define tool-description "no extras")
+(define tool-parameters '())
+(define (tool-execute args) "ok")
+"#;
+        let path = VfsPath::new("/tools/shared/plain.scm").unwrap();
+        let registry = make_registry();
+        let tools = load_tools_from_source_with_tier(
+            source,
+            &path,
+            &registry,
+            crate::config::SandboxTier::Sandboxed,
+        )
+        .unwrap();
+        assert_eq!(tools[0].category, ToolCategory::Synthesised);
+        assert!(tools[0].summary_params.is_empty());
     }
 
     #[test]
